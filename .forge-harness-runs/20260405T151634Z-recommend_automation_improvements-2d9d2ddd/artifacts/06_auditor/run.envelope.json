@@ -1,0 +1,148 @@
+{
+  "role_name": "auditor",
+  "provider": "claude_code",
+  "model": "sonnet",
+  "access": "read",
+  "ok": true,
+  "exit_code": 0,
+  "duration_sec": 157.426,
+  "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+  "command": [
+    "/Users/spensermcconnell/.local/bin/claude",
+    "-p",
+    "<prompt omitted>",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema omitted>",
+    "--tools",
+    "Read",
+    "--allowedTools",
+    "Read",
+    "--model",
+    "sonnet",
+    "--effort",
+    "high"
+  ],
+  "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/response.txt",
+  "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/error.txt",
+  "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/prompt.txt",
+  "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/schema.json",
+  "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/structured_output.json",
+  "structured_output": {
+    "verdict": "revise",
+    "summary": "All four recommendations are factually supported by the actual workflow files. Recs 2, 3, and 4 are grounded in unambiguous, binary code differences (missing concurrency block, missing `continue-on-error: true`, missing `setFailed` guard). Rec 1 is sound in principle but slightly underdetermined in its proposed fix. The primary defect is severe confidence miscalibration on Recs 3 and 4\u2014both assigned \u22640.44 despite the code evidence being explicit and unambiguous\u2014which misrepresents the strength of those findings. The `strengths` and `uncertainties` arrays are empty despite clear candidates for both, and Rec 1's proposed change lacks specificity around failure modes.",
+    "workspace_write_intent": "none",
+    "issues": [
+      {
+        "severity": "medium",
+        "kind": "missing_evidence",
+        "title": "Confidence miscalibration on Recs 3 and 4 misrepresents strength of unambiguous code evidence",
+        "evidence": "Rec 3 (confidence 0.44): codex-cli-update-snapshot.yml:540 has `continue-on-error: true` on the PR step; claude-code-update-snapshot.yml:339 does not \u2014 this is a binary, one-line verifiable difference. Rec 4 (confidence 0.41): codex-cli-release-watch.yml:73-77 calls `core.setFailed` for corrupt semver; claude-code-release-watch.yml:45-53 does not \u2014 equally unambiguous. Neither finding involves uncertain inference; both are direct code comparisons with no ambiguity.",
+        "repair_hint": "Raise Rec 3 confidence to \u22650.85 and Rec 4 to \u22650.80. Reserve low confidence scores for claims that require runtime observation or inferred behavior, not for claims directly falsifiable by reading two file sections side-by-side. Add a sentence citing the exact line and key that differs."
+      },
+      {
+        "severity": "low",
+        "kind": "missing_evidence",
+        "title": "Rec 1 proposed fix is underdetermined \u2014 no API endpoint, no failure-mode handling specified",
+        "evidence": "The proposed change says 'call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit.' It does not specify which REST endpoint to use (e.g., `GET /repos/{owner}/{repo}/branches/{branch}` vs. `GET /repos/{owner}/{repo}/pulls?head=...`), what to do if the check itself fails transiently, or how to handle a stale branch with no open PR (abandoned automation branch scenario).",
+        "repair_hint": "Add the specific GitHub REST endpoint (e.g., `github.rest.repos.getBranch` wrapped in try/catch for 404) and clarify that a 404 means proceed with dispatch while other errors should surface via `core.setFailed` rather than silently continuing."
+      },
+      {
+        "severity": "low",
+        "kind": "missing_evidence",
+        "title": "Empty `strengths` and `uncertainties` arrays omit relevant observations",
+        "evidence": "The prior analysis returns `strengths: []` and `uncertainties: []`. Observable strengths exist: the Codex watcher already has a well-structured candidate-vs-validated guard (lines 63-89) that prevents most redundant dispatches, and the Codex snapshot workflow already correctly uploads artifacts before the best-effort PR step (lines 521-532). Observable uncertainties exist: Rec 1 depends on `latest_validated.txt` being updated only on PR merge to main/staging, not on automation branch push; the analysis does not verify this assumption against how `create-pull-request@v6` + the merge process interact.",
+        "repair_hint": "Populate `strengths` with at least the Codex watcher's existing guard and the Codex snapshot's artifact-upload-before-PR pattern. Populate `uncertainties` with the assumption about when `latest_validated.txt` is updated and whether the branch-check API call could introduce a new failure mode in the watcher."
+      }
+    ],
+    "missing_topics": [],
+    "grounding_score": 0.86,
+    "actionability_score": 0.78,
+    "scope_compliance_score": 0.96,
+    "confidence": 0.88
+  },
+  "raw_meta": {
+    "requested_provider": "claude_code",
+    "resolved_provider": "claude_code",
+    "provider_type": "result",
+    "mapped_role": "review",
+    "family": "claude_code",
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 154092,
+    "duration_api_ms": 154059,
+    "num_turns": 10,
+    "stop_reason": "end_turn",
+    "session_id": "0e6faea4-a8df-40cd-a969-078805cec7a7",
+    "total_cost_usd": 0.35370555000000004,
+    "usage": {
+      "input_tokens": 8,
+      "output_tokens": 7559
+    },
+    "modelUsage": {
+      "claude-sonnet-4-6": {
+        "inputTokens": 8,
+        "outputTokens": 7559,
+        "cacheReadInputTokens": 196601,
+        "cacheCreationInputTokens": 48351,
+        "webSearchRequests": 0,
+        "costUSD": 0.35370555000000004,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000
+      }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "uuid": "d32dd994-96f0-409b-97bf-589b69d7ee5e",
+    "provider_family": "claude_code",
+    "provider_subtype": "success",
+    "provider_is_error": false,
+    "provider_duration_ms": 154092,
+    "provider_duration_api_ms": 154059,
+    "provider_num_turns": 10,
+    "provider_stop_reason": "end_turn",
+    "provider_session_id": "0e6faea4-a8df-40cd-a969-078805cec7a7",
+    "provider_total_cost_usd": 0.35370555000000004,
+    "provider_usage": {
+      "input_tokens": 8,
+      "cache_creation_input_tokens": 48351,
+      "cache_read_input_tokens": 196601,
+      "output_tokens": 7559,
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 48351,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "",
+      "iterations": [],
+      "speed": "standard"
+    },
+    "provider_modelUsage": {
+      "claude-sonnet-4-6": {
+        "inputTokens": 8,
+        "outputTokens": 7559,
+        "cacheReadInputTokens": 196601,
+        "cacheCreationInputTokens": 48351,
+        "webSearchRequests": 0,
+        "costUSD": 0.35370555000000004,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000
+      }
+    },
+    "provider_permission_denials": [],
+    "provider_terminal_reason": "completed",
+    "provider_fast_mode_state": "off",
+    "provider_uuid": "d32dd994-96f0-409b-97bf-589b69d7ee5e"
+  },
+  "error": null,
+  "stage_index": 6,
+  "requested_access": "read",
+  "effective_access": "read"
+}

@@ -1,0 +1,55 @@
+{
+  "status": "done",
+  "summary": "Release-watch workflows keep redispatching the same Codex (stable-minus-one candidate) and Claude Code versions until the pending automation branch merges, yet the snapshot jobs lack concurrency or failure isolation\u2014wasting runners and, for Claude Code, outright failing when the branch already exists.",
+  "confidence": 0.64,
+  "workspace_write_intent": "none",
+  "recommendations": [
+    {
+      "classification": "risk",
+      "priority": "high",
+      "title": "Skip dispatch when the automation branch or PR for that version already exists",
+      "rationale": "Both release-watch scripts only compare upstream versions with `latest_validated` (Codex even picks the stable-minus-one candidate via `const candidate = (stable[1] ?? stable[0])`, lines 56\u201168) before dispatching. They never ask GitHub whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already exists, so the scheduled job keeps launching multi-target snapshot runs every day until humans merge the first PR. That burns macOS/Linux/Windows runners repeatedly and, for Claude Code, the redundant runs fail at the PR step because the branch already exists.",
+      "evidence": [
+        ".github/workflows/codex-cli-release-watch.yml:45-108",
+        ".github/workflows/claude-code-release-watch.yml:38-66",
+        ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+        ".github/workflows/claude-code-update-snapshot.yml:339-352"
+      ],
+      "proposed_change": "Inside each release-watch script, before `createWorkflowDispatch`, call the GitHub API (e.g., `repos.getBranch` or `search.issuesAndPullRequests`) to see whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has a branch or open PR. If it exists, log and exit without dispatching; otherwise proceed. This keeps exactly one automation run per candidate release while still respecting the existing `latest_validated` and stable-minus-one semantics.",
+      "confidence": 0.58
+    },
+    {
+      "classification": "recommendation",
+      "priority": "medium",
+      "title": "Add per-version concurrency groups to the snapshot workflows",
+      "rationale": "Neither snapshot workflow declares `concurrency`, yet each run downloads multi\u2011GB artifacts for three platforms and writes to deterministic branches (`automation/codex-cli-${version}` / `automation/claude-code-${version}`). When two manual or scheduled dispatches overlap for the same version they race through the entire build matrix before one is rejected at the branch push step. Enforcing a `${{ github.workflow }}-${{ inputs.version }}` concurrency group would serialize those expensive jobs and keep runners available for other pipelines, while still allowing different versions to run in parallel.",
+      "evidence": [
+        ".github/workflows/codex-cli-update-snapshot.yml:1-37",
+        ".github/workflows/claude-code-update-snapshot.yml:1-37",
+        ".github/workflows/claude-code-update-snapshot.yml:300-352"
+      ],
+      "proposed_change": "Add to both workflows near the top:\n```\nconcurrency:\n  group: ${{ github.workflow }}-${{ inputs.version }}\n  cancel-in-progress: false\n```\nOptionally add a second `${{ github.workflow }}-latest` guard for manual reruns so superseded attempts get cancelled. This keeps at most one run per version alive while letting different versions run concurrently.",
+      "confidence": 0.55
+    },
+    {
+      "classification": "risk",
+      "priority": "medium",
+      "title": "Make the Claude Code PR creation step best-effort like Codex",
+      "rationale": "Once a duplicate Claude Code run reaches `peter-evans/create-pull-request`, it hard-fails the workflow because the branch already exists (no `continue-on-error`). Codex explicitly marks the analogous step `continue-on-error: true`, so the workflow finishes and keeps artifacts even if branch updates race. Aligning Claude Code with Codex prevents otherwise successful builds from being marked red only because a previous automation branch is still open.",
+      "evidence": [
+        ".github/workflows/claude-code-update-snapshot.yml:339-352",
+        ".github/workflows/codex-cli-update-snapshot.yml:539-549"
+      ],
+      "proposed_change": "Wrap the `claude-code-update-snapshot.yml` \u201cCreate update PR\u201d step with `continue-on-error: true` (or catch known branch-exists exit codes) so the workflow reports success when all artifact work finished but the branch already exists. Optionally log a note directing maintainers to update the existing PR instead of inspecting a failed run.",
+      "confidence": 0.5
+    }
+  ],
+  "strengths": [],
+  "uncertainties": [],
+  "files_reviewed": [
+    ".github/workflows/codex-cli-release-watch.yml",
+    ".github/workflows/claude-code-release-watch.yml",
+    ".github/workflows/codex-cli-update-snapshot.yml",
+    ".github/workflows/claude-code-update-snapshot.yml"
+  ]
+}

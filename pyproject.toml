@@ -1,0 +1,117 @@
+[tool.poetry]
+name = "forge"
+version = "1.2.0"
+description = "Modular AI Agent System with hot-swappable models and LangGraph orchestration"
+authors = ["Spenser McConnell <me@spensermcconnell.com>"]
+readme = "README.md"
+packages = [{include = "anvil"}]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+# Core dependencies
+pydantic = "^2.5.2"
+pyyaml = "^6.0.1"
+python-dotenv = "^1.0.0"
+
+# Common ML dependencies that should work with all providers - NOT optional
+filelock = ">=3.12.0"  # Required by many ML libraries
+fsspec = ">=2023.10.0"  # File system operations used by many packages
+huggingface-hub = ">=0.34.0,<1.0"  # Used by transformers and others
+tokenizers = ">=0.22.2"  # Used by transformers and others
+tqdm = ">=4.66.0"  # Progress bars used by many packages
+tenacity = ">=8.0.0"  # Used by many libraries
+jsonpatch = ">=1.33"  # Used by langchain
+orjson = ">=3.9.0"  # Used by langchain
+
+# LangChain ecosystem - these are optional but powerful
+langgraph = "^1.0.5"
+langgraph-checkpoint = "^3.0.1"
+langgraph-checkpoint-sqlite = "^3.0.1"
+langchain-core = {version = "^1.2.7", optional = true}
+langchain = {version = "^1.2.3", optional = true}
+langchain-openai = "^1.1.7"  # For OpenAI models
+langchain-anthropic = "^1.3.1"  # For Anthropic models
+
+# Model providers - all optional to allow selective installation
+openai = "^2.15.0"
+anthropic = ">=0.26.0,<1.0.0"
+transformers = {version = ">=4.57.3,<5.0.0", optional = true}
+torch = {version = "^2.9.1", optional = true}
+accelerate = {version = "^1.12.0", optional = true}
+llama-cpp-python = {version = "^0.3.16", optional = true}
+
+# API and CLI
+fastapi = {version = "^0.128.0", optional = true}
+uvicorn = {version = "^0.40.0", optional = true}
+typer = {version = "^0.21.1", optional = true}
+rich = {version = "^14.2.0", optional = true}
+
+# RL components
+skrl = {version = "^1.4.3", optional = true}  # Reinforcement learning library
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+pytest-cov = "^7.0.0"
+black = "^25.12.0"
+isort = "^7.0.0"
+mypy = "^1.19.1"
+ruff = "^0.14.11"
+pytest-asyncio = "^1.3.0"
+types-pyyaml = "^6.0.12.20250915"
+
+[tool.poetry.extras]
+langgraph = ["langgraph", "langchain-core", "langchain"]
+openai = ["openai", "langchain-openai"]
+anthropic = ["anthropic", "langchain-anthropic"]
+transformers = ["transformers", "torch", "accelerate"]
+llama-cpp = ["llama-cpp-python"]
+api = ["fastapi", "uvicorn"]
+cli = ["typer", "rich"]
+rl = ["skrl"]
+all = [
+    "langgraph", "langchain-core", "langchain", "langchain-openai", "langchain-anthropic",
+    "openai", "anthropic", "transformers", "torch", "accelerate", "llama-cpp-python",
+    "fastapi", "uvicorn", "typer", "rich",
+    "skrl"
+]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+extend-exclude = "(^|/)(archived|models/hf)/"
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip_glob = ["archived/*", "models/hf/*"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+ignore_missing_imports = true
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = ["anvil.providers.huggingface", "anvil.providers.llama_cpp"]
+ignore_errors = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = ["archived"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
+ignore = ["E402", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+asyncio_mode = "auto"

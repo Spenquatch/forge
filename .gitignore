@@ -1,0 +1,14 @@
+models/
+.env
+.ruff_cache/
+__pycache__/
+.venv/
+.python-version
+.DS_Store
+.vscode/
+.claude/
+.pytest_cache/
+*.log
+.mypy_cache
+.mcp.json
+archived

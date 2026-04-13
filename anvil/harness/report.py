@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def _render_policy_list(items: list[str]) -> str:
+    if not items:
+        return "none"
+    return ", ".join(items)
+
+
+def render_report(summary: dict[str, Any]) -> str:
+    lines: list[str] = []
+    verdicts = summary.get("verdicts") or {}
+    task = summary.get("task") or {}
+    validator_summary = summary.get("validator_summary") or {}
+    run_details = summary.get("run_details") or {}
+
+    lines.append(f"# Mini Frontier Harness Report: {summary.get('run_id', 'run')}")
+    lines.append("")
+    lines.append(f"- Verdict: **{summary.get('verdict', 'unknown')}**")
+    if verdicts:
+        lines.append(f"- Content verdict: `{verdicts.get('content_verdict', 'unknown')}`")
+        lines.append(f"- Validator verdict: `{verdicts.get('validator_verdict', 'unknown')}`")
+        lines.append(f"- Policy verdict: `{verdicts.get('policy_verdict', 'unknown')}`")
+        lines.append(f"- Config verdict: `{verdicts.get('config_verdict', 'unknown')}`")
+    lines.append(f"- Task ID: `{task.get('id', 'task')}`")
+    lines.append(f"- Task kind: `{task.get('task_kind', 'unknown')}`")
+    lines.append(f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})")
+    lines.append(f"- Workspace: `{summary.get('workspace')}`")
+    final_artifact = (summary.get("artifacts") or {}).get("final_artifact")
+    final_artifact_kind = (summary.get("artifacts") or {}).get("final_artifact_kind")
+    if final_artifact:
+        lines.append(f"- Primary deliverable: `{final_artifact_kind}` → `{final_artifact}`")
+    lines.append("")
+
+    if summary.get("final_summary"):
+        lines.append("## Final Summary")
+        lines.append("")
+        lines.append(summary["final_summary"])
+        lines.append("")
+
+    if run_details:
+        lines.append("## Run Details")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(run_details, indent=2, sort_keys=False))
+        lines.append("```")
+        lines.append("")
+
+    if summary.get("warnings"):
+        lines.append("## Warnings")
+        lines.append("")
+        for warning in summary["warnings"]:
+            lines.append(f"- {warning}")
+        lines.append("")
+
+    policy = summary.get("workspace_write_policy") or {}
+    lines.append("## Workspace Write Policy")
+    lines.append("")
+    lines.append(f"- Mode: `{policy.get('mode', 'unknown')}`")
+    lines.append(f"- Allowed paths: {_render_policy_list(policy.get('allowed_paths', []))}")
+    lines.append(f"- Denied paths: {_render_policy_list(policy.get('denied_paths', []))}")
+    lines.append(f"- Allow untracked files: `{policy.get('allow_untracked')}`")
+    lines.append(f"- Allow renames: `{policy.get('allow_renames')}`")
+    lines.append(f"- Allow deletions: `{policy.get('allow_deletions')}`")
+    max_touched = policy.get('max_touched_files')
+    lines.append(f"- Max touched files: `{max_touched if max_touched is not None else 'unlimited'}`")
+    lines.append(f"- Require clean start: `{policy.get('require_clean_start')}`")
+    ignored = summary.get("workspace_policy_ignored_rel_paths") or []
+    lines.append(f"- Ignored harness-artifact paths: {_render_policy_list(ignored)}")
+    review_requirements = task.get("review_requirements") or {}
+    if task.get("task_kind") == "analysis_review":
+        lines.append(f"- Require evidence per recommendation: `{review_requirements.get('require_evidence_per_recommendation')}`")
+        lines.append(f"- Require classification: `{review_requirements.get('require_classification')}`")
+        lines.append(f"- Require priority: `{review_requirements.get('require_priority')}`")
+        lines.append(f"- Minimum recommendations: `{review_requirements.get('min_recommendations')}`")
+    lines.append("")
+
+    checks = summary.get("workspace_policy_checks", [])
+    lines.append("## Workspace Policy Checks")
+    lines.append("")
+    if not checks:
+        lines.append("No workspace policy checks were recorded.")
+        lines.append("")
+    else:
+        for check in checks:
+            outcome = "PASS" if check.get("ok") else "FAIL"
+            lines.append(f"### {check.get('checkpoint')} — {outcome}")
+            lines.append("")
+            lines.append(f"- Touched files: {_render_policy_list(check.get('touched_files', []))}")
+            if check.get("modified_files"):
+                lines.append(f"- Modified files: {_render_policy_list(check.get('modified_files', []))}")
+            if check.get("added_files"):
+                lines.append(f"- Added files: {_render_policy_list(check.get('added_files', []))}")
+            if check.get("deleted_files"):
+                lines.append(f"- Deleted files: {_render_policy_list(check.get('deleted_files', []))}")
+            if check.get("renamed_files"):
+                rename_text = ", ".join(
+                    f"{item.get('from')} -> {item.get('to')}" for item in check.get("renamed_files", [])
+                )
+                lines.append(f"- Renamed files: {rename_text}")
+            if check.get("new_untracked_files"):
+                lines.append(
+                    f"- New untracked files: {_render_policy_list(check.get('new_untracked_files', []))}"
+                )
+            if check.get("violations"):
+                lines.append("- Violations:")
+                for violation in check.get("violations", []):
+                    lines.append(f"  - {violation}")
+            if check.get("notes"):
+                lines.append("- Notes:")
+                for note in check.get("notes", []):
+                    lines.append(f"  - {note}")
+            lines.append("")
+
+    lines.append("## Validators")
+    lines.append("")
+    lines.append(f"- Total validator executions: `{validator_summary.get('total_runs', 0)}`")
+    lines.append(f"- Latest round verdict: `{validator_summary.get('latest_round_verdict', 'not_configured')}`")
+    if validator_summary.get("status_counts"):
+        lines.append(f"- Status counts: `{json.dumps(validator_summary.get('status_counts'), sort_keys=True)}`")
+    if validator_summary.get("required_status_counts"):
+        lines.append(
+            f"- Required status counts: `{json.dumps(validator_summary.get('required_status_counts'), sort_keys=True)}`"
+        )
+    lines.append("")
+
+    validator_rounds = summary.get("validator_rounds", [])
+    if not validator_rounds:
+        lines.append("No validators configured or run.")
+        lines.append("")
+    else:
+        for round_data in validator_rounds:
+            lines.append(f"### Round {round_data.get('round_index')}")
+            lines.append("")
+            for item in round_data.get("results", []):
+                required = "required" if item.get("required") else "optional"
+                lines.append(
+                    f"- **{item.get('name')}** — {item.get('status')} — exit `{item.get('exit_code') if item.get('exit_code') is not None else 'n/a'}` — {required}"
+                )
+                if item.get("skip_reason"):
+                    lines.append(f"  - reason: {item.get('skip_reason')}")
+                if item.get("missing_paths"):
+                    lines.append(f"  - missing paths: {_render_policy_list(item.get('missing_paths', []))}")
+                if item.get("missing_binaries"):
+                    lines.append(f"  - missing binaries: {_render_policy_list(item.get('missing_binaries', []))}")
+                if item.get("error"):
+                    lines.append(f"  - error: {item.get('error')}")
+            lines.append("")
+
+    drafts = summary.get("drafts", [])
+    if drafts:
+        lines.append("## Draft Selection")
+        lines.append("")
+        lines.append(f"- Best draft ID: `{summary.get('best_draft_id')}`")
+        lines.append(f"- Selected draft ID: `{summary.get('selected_draft_id')}`")
+        lines.append("")
+        for draft in drafts:
+            lines.append(f"### {draft.get('draft_id')} — {draft.get('review_status')}")
+            lines.append("")
+            lines.append(f"- Role: `{draft.get('role_name')}`")
+            lines.append(f"- Round: `{draft.get('round_index')}`")
+            issue_counts = draft.get('issue_counts') or {}
+            if issue_counts:
+                lines.append(f"- Issue counts: `{json.dumps(issue_counts, sort_keys=True)}`")
+            scores = draft.get('scores') or {}
+            if scores:
+                lines.append(f"- Scores: `{json.dumps(scores, sort_keys=True)}`")
+            if draft.get('summary'):
+                lines.append(f"- Summary: {draft.get('summary')}")
+            lines.append("")
+
+    lines.append("## Agent Stages")
+    lines.append("")
+    for stage in summary.get("agent_stages", []):
+        title = f"{stage.get('stage_index'):02d}. {stage.get('role_name')}"
+        lines.append(f"### {title}")
+        lines.append("")
+        lines.append(f"- Provider: `{stage.get('provider')}`")
+        lines.append(f"- Model: `{stage.get('model')}`")
+        lines.append(f"- Requested access: `{stage.get('requested_access', stage.get('access'))}`")
+        lines.append(f"- Effective access: `{stage.get('effective_access', stage.get('access'))}`")
+        if stage.get("access_override_reason"):
+            lines.append(f"- Access override: {stage.get('access_override_reason')}")
+        lines.append(f"- OK: `{stage.get('ok')}`")
+        lines.append(f"- Exit code: `{stage.get('exit_code')}`")
+        lines.append(f"- Duration: `{stage.get('duration_sec')}` seconds")
+        if stage.get("error"):
+            lines.append(f"- Error: {stage.get('error')}")
+        structured = stage.get("structured_output") or {}
+        if structured:
+            lines.append("")
+            lines.append("Structured output:")
+            lines.append("")
+            lines.append("```json")
+            lines.append(json.dumps(structured, indent=2, sort_keys=False))
+            lines.append("```")
+        lines.append("")
+
+    git_final = summary.get("final_git_snapshot") or {}
+    if git_final.get("is_git"):
+        lines.append("## Final Git Snapshot")
+        lines.append("")
+        lines.append(f"- Branch: `{git_final.get('branch')}`")
+        lines.append(f"- HEAD: `{git_final.get('head')}`")
+        changed = summary.get("changed_files", [])
+        lines.append(f"- Changed files: {', '.join(changed) if changed else 'none'}")
+        lines.append("")
+        diff_stat = git_final.get("diff_stat", "").strip()
+        lines.append("```text")
+        lines.append(diff_stat or "no unstaged diff")
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"

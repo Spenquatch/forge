@@ -1,0 +1,1811 @@
+{
+  "run_id": "20260405T151634Z-recommend_automation_improvements-2d9d2ddd",
+  "thread_id": null,
+  "workspace": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+  "config_path": "config/models.yaml",
+  "task": {
+    "id": "recommend_automation_improvements",
+    "objective": "Analyze and recommend improvements for the CI/CD automation that triggers for new Claude Code and Codex releases in the target repository.\n",
+    "workspace_write_policy": {
+      "mode": "forbid",
+      "allowed_paths": [],
+      "denied_paths": [],
+      "allow_untracked": false,
+      "allow_renames": false,
+      "allow_deletions": false,
+      "max_touched_files": 0,
+      "require_clean_start": false
+    },
+    "task_kind": "analysis_review",
+    "acceptance": [
+      "The recommendations should enhance the automation reliability and efficiency.",
+      "The task should focus on CI/CD processes related to Claude Code and Codex releases.",
+      "Each recommendation should be grounded in concrete repository evidence.",
+      "Do not modify files in the target workspace."
+    ],
+    "constraints": [
+      "Provide clear, actionable recommendations for CI/CD automation improvements.",
+      "Avoid refactoring unrelated code or features.",
+      "Preserve existing public behavior outside the scope of CI/CD automation improvements."
+    ],
+    "context": "Use the repository state in the target workspace as ground truth.\nFocus on CI/CD automation related to Claude Code and Codex releases.\n",
+    "notes": "This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade\nany write-capable stage to effective read-only access and fail the run if repo files are changed.\nThe analysis_review_v1 strategy is the preferred fit for this task.\n",
+    "files_hint": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml",
+      ".github/workflows/codex-cli-update-snapshot.yml",
+      ".github/workflows/claude-code-update-snapshot.yml"
+    ],
+    "prompt_addendum": "",
+    "review_requirements": {
+      "require_evidence_per_recommendation": true,
+      "require_classification": true,
+      "require_priority": true,
+      "min_recommendations": 2
+    }
+  },
+  "strategy_name": "analysis-review-codex-claude",
+  "strategy_kind": "analysis_review_v1",
+  "warnings": [],
+  "errors": [],
+  "verdict": "best_effort_exhausted",
+  "verdicts": {
+    "run_verdict": "best_effort_exhausted",
+    "content_verdict": "best_effort_exhausted",
+    "validator_verdict": "not_configured",
+    "policy_verdict": "pass",
+    "config_verdict": "pass"
+  },
+  "final_summary": "Analysis-review loop completed after 2 revision round(s). Final reviewer verdict: revise. grounding_score=0.86 actionability_score=0.78 scope_compliance_score=0.96 Open reviewer issues: 3. The harness used its available review loops but still did not meet the stop criteria.",
+  "failure_details": null,
+  "run_details": {
+    "revisions_completed": 2,
+    "review_policy": {
+      "min_loops": 1,
+      "max_loops": 2,
+      "always_run_first_revision": true,
+      "stop_when": {
+        "max_open_medium_issues": 0,
+        "min_grounding_score": 0.8,
+        "min_actionability_score": 0.75,
+        "min_scope_compliance_score": 0.85
+      }
+    },
+    "final_review": {
+      "verdict": "revise",
+      "summary": "All four recommendations are factually supported by the actual workflow files. Recs 2, 3, and 4 are grounded in unambiguous, binary code differences (missing concurrency block, missing `continue-on-error: true`, missing `setFailed` guard). Rec 1 is sound in principle but slightly underdetermined in its proposed fix. The primary defect is severe confidence miscalibration on Recs 3 and 4\u2014both assigned \u22640.44 despite the code evidence being explicit and unambiguous\u2014which misrepresents the strength of those findings. The `strengths` and `uncertainties` arrays are empty despite clear candidates for both, and Rec 1's proposed change lacks specificity around failure modes.",
+      "workspace_write_intent": "none",
+      "issues": [
+        {
+          "severity": "medium",
+          "kind": "missing_evidence",
+          "title": "Confidence miscalibration on Recs 3 and 4 misrepresents strength of unambiguous code evidence",
+          "evidence": "Rec 3 (confidence 0.44): codex-cli-update-snapshot.yml:540 has `continue-on-error: true` on the PR step; claude-code-update-snapshot.yml:339 does not \u2014 this is a binary, one-line verifiable difference. Rec 4 (confidence 0.41): codex-cli-release-watch.yml:73-77 calls `core.setFailed` for corrupt semver; claude-code-release-watch.yml:45-53 does not \u2014 equally unambiguous. Neither finding involves uncertain inference; both are direct code comparisons with no ambiguity.",
+          "repair_hint": "Raise Rec 3 confidence to \u22650.85 and Rec 4 to \u22650.80. Reserve low confidence scores for claims that require runtime observation or inferred behavior, not for claims directly falsifiable by reading two file sections side-by-side. Add a sentence citing the exact line and key that differs."
+        },
+        {
+          "severity": "low",
+          "kind": "missing_evidence",
+          "title": "Rec 1 proposed fix is underdetermined \u2014 no API endpoint, no failure-mode handling specified",
+          "evidence": "The proposed change says 'call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit.' It does not specify which REST endpoint to use (e.g., `GET /repos/{owner}/{repo}/branches/{branch}` vs. `GET /repos/{owner}/{repo}/pulls?head=...`), what to do if the check itself fails transiently, or how to handle a stale branch with no open PR (abandoned automation branch scenario).",
+          "repair_hint": "Add the specific GitHub REST endpoint (e.g., `github.rest.repos.getBranch` wrapped in try/catch for 404) and clarify that a 404 means proceed with dispatch while other errors should surface via `core.setFailed` rather than silently continuing."
+        },
+        {
+          "severity": "low",
+          "kind": "missing_evidence",
+          "title": "Empty `strengths` and `uncertainties` arrays omit relevant observations",
+          "evidence": "The prior analysis returns `strengths: []` and `uncertainties: []`. Observable strengths exist: the Codex watcher already has a well-structured candidate-vs-validated guard (lines 63-89) that prevents most redundant dispatches, and the Codex snapshot workflow already correctly uploads artifacts before the best-effort PR step (lines 521-532). Observable uncertainties exist: Rec 1 depends on `latest_validated.txt` being updated only on PR merge to main/staging, not on automation branch push; the analysis does not verify this assumption against how `create-pull-request@v6` + the merge process interact.",
+          "repair_hint": "Populate `strengths` with at least the Codex watcher's existing guard and the Codex snapshot's artifact-upload-before-PR pattern. Populate `uncertainties` with the assumption about when `latest_validated.txt` is updated and whether the branch-check API call could introduce a new failure mode in the watcher."
+        }
+      ],
+      "missing_topics": [],
+      "grounding_score": 0.86,
+      "actionability_score": 0.78,
+      "scope_compliance_score": 0.96,
+      "confidence": 0.88
+    },
+    "final_analysis": {
+      "status": "done",
+      "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+      "confidence": 0.6,
+      "workspace_write_intent": "none",
+      "recommendations": [
+        {
+          "classification": "risk",
+          "priority": "high",
+          "title": "Skip release-watch dispatch when the automation branch or PR already exists",
+          "rationale": "Both watchers dispatch as soon as they find a newer upstream build, but neither one checks whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has an open branch/PR. When maintainers take a few days to land the automation branch, the nightly cron keeps launching the same expensive snapshot workflow, wasting runners and piling up redundant PR attempts.",
+          "evidence": [
+            ".github/workflows/codex-cli-release-watch.yml:45-108",
+            ".github/workflows/claude-code-release-watch.yml:38-66"
+          ],
+          "proposed_change": "Before `createWorkflowDispatch`, call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit so only one automation run stays active per release.",
+          "confidence": 0.53
+        },
+        {
+          "classification": "recommendation",
+          "priority": "medium",
+          "title": "Add per-version concurrency groups to both snapshot workflows",
+          "rationale": "`codex-cli-update-snapshot.yml` and `claude-code-update-snapshot.yml` kick off long artifact builds and then push deterministic results to version-named branches, but neither declares `concurrency`. If two manual reruns or overlapping release-watch dispatches fire for the same version, they race all the way to the push/PR step before Git rejects one as a non-fast-forward, burning macOS/Linux/Windows minutes for no benefit.",
+          "evidence": [
+            ".github/workflows/codex-cli-update-snapshot.yml:1-80",
+            ".github/workflows/codex-cli-update-snapshot.yml:500-549",
+            ".github/workflows/claude-code-update-snapshot.yml:1-80",
+            ".github/workflows/claude-code-update-snapshot.yml:300-352"
+          ],
+          "proposed_change": "Define `concurrency: group: ${{ github.workflow }}-${{ inputs.version }}, cancel-in-progress: false` (optionally a second `${{ github.workflow }}-latest` guard) near the top of both workflows so only one run per version proceeds while different versions can still run in parallel.",
+          "confidence": 0.46
+        },
+        {
+          "classification": "risk",
+          "priority": "medium",
+          "title": "Make Claude Code\u0019s PR creation step best-effort like Codex to absorb branch push races",
+          "rationale": "Codex explicitly marks the `peter-evans/create-pull-request@v6` step `continue-on-error: true`, so a concurrent run that loses the push race finishes green after uploading artifacts. Claude Code runs the same action without that guard; when two dispatches push to `automation/claude-code-${version}` simultaneously, whichever GitHub job loses the non-fast-forward push reports the workflow as failed even though artifacts and validations succeeded.",
+          "evidence": [
+            ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+            ".github/workflows/claude-code-update-snapshot.yml:300-352"
+          ],
+          "proposed_change": "Mirror Codex by adding `continue-on-error: true` (or catching the non-fast-forward exit code) around the Claude Code PR step and log a message pointing maintainers to update the existing automation PR instead of re-running the whole workflow.",
+          "confidence": 0.44
+        },
+        {
+          "classification": "risk",
+          "priority": "medium",
+          "title": "Add a corruption guard for `latest_validated` in the Claude Code watcher",
+          "rationale": "The Codex watcher refuses to dispatch if `cli_manifests/codex/latest_validated.txt` fails strict semver parsing, preventing bad/empty files from triggering uncontrolled automation. Claude Code merely logs the raw value and proceeds whenever `latestValidated` is null, meaning a corrupt or missing pointer causes the workflow to treat the upstream `stable` value as automatically newer and fire every night\u2014even if that version already shipped.",
+          "evidence": [
+            ".github/workflows/codex-cli-release-watch.yml:72-89",
+            ".github/workflows/claude-code-release-watch.yml:45-53"
+          ],
+          "proposed_change": "Port the Codex guard: after reading `cli_manifests/claude_code/latest_validated.txt`, validate it with `parseStrictStableSemver` and call `core.setFailed` if parsing fails so the automation stops instead of redispatching on corrupt metadata.",
+          "confidence": 0.41
+        }
+      ],
+      "strengths": [],
+      "uncertainties": [],
+      "files_reviewed": [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+        ".github/workflows/claude-code-update-snapshot.yml"
+      ]
+    }
+  },
+  "validator_summary": {
+    "total_runs": 0,
+    "status_counts": {},
+    "required_status_counts": {},
+    "latest_round_verdict": "not_configured"
+  },
+  "workspace_write_policy": {
+    "mode": "forbid",
+    "allowed_paths": [],
+    "denied_paths": [],
+    "allow_untracked": false,
+    "allow_renames": false,
+    "allow_deletions": false,
+    "max_touched_files": 0,
+    "require_clean_start": false
+  },
+  "workspace_policy_ignored_rel_paths": [],
+  "workspace_policy_checks": [
+    {
+      "checkpoint": "after_proposer",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    },
+    {
+      "checkpoint": "after_critic",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    },
+    {
+      "checkpoint": "after_reviser_round_1",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    },
+    {
+      "checkpoint": "after_auditor",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    },
+    {
+      "checkpoint": "after_reviser_round_2",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    },
+    {
+      "checkpoint": "after_auditor",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    },
+    {
+      "checkpoint": "final",
+      "final": true,
+      "policy_mode": "forbid",
+      "touched_files": [],
+      "modified_files": [],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [],
+      "notes": [],
+      "ok": true
+    }
+  ],
+  "final_workspace_policy_evaluation": {
+    "checkpoint": "final",
+    "final": true,
+    "policy_mode": "forbid",
+    "touched_files": [],
+    "modified_files": [],
+    "added_files": [],
+    "deleted_files": [],
+    "renamed_files": [],
+    "new_untracked_files": [],
+    "violations": [],
+    "notes": [],
+    "ok": true
+  },
+  "agent_stages": [
+    {
+      "role_name": "proposer",
+      "provider": "codex_cli",
+      "model": "gpt-5-codex",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 69.849,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/Users/spensermcconnell/.nvm/versions/node/v22.16.0/bin/codex",
+        "exec",
+        "--ephemeral",
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--model",
+        "gpt-5-codex",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "--output-schema",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j6p3yo9h/schema.json",
+        "-o",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j6p3yo9h/structured_output.json",
+        "-"
+      ],
+      "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/response.txt",
+      "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/error.txt",
+      "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/schema.json",
+      "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/structured_output.json",
+      "structured_output": {
+        "status": "done",
+        "summary": "Found weak guards around the Codex/Claude Code release automation that can trigger redundant or branch-misaligned runs, plus missing concurrency controls in the heavy snapshot workflows.",
+        "confidence": 0.53,
+        "workspace_write_intent": "none",
+        "recommendations": [
+          {
+            "classification": "risk",
+            "priority": "high",
+            "title": "Skip dispatch when the same version already has an automation branch/PR",
+            "rationale": "Both release-watch jobs only compare the upstream stable tag against `latest_validated.txt`, so the scheduler will dispatch every day until the new version is actually validated. During that window multiple identical `automation/*-${version}` runs fight over the same branch and PR, consuming runners and often failing before any maintainer can review the first PR.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:60-108",
+              ".github/workflows/claude-code-release-watch.yml:45-66",
+              ".github/workflows/codex-cli-update-snapshot.yml:539-549",
+              ".github/workflows/claude-code-update-snapshot.yml:340-352"
+            ],
+            "proposed_change": "Before calling `createWorkflowDispatch`, query the repo for an open PR or branch named `automation/codex-cli-${version}` or `automation/claude-code-${version}` (via the REST API or `git ls-remote`). If one exists, log and exit instead of dispatching. This keeps only one automation run per upstream release until it is merged/validated.",
+            "confidence": 0.45
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Dispatch update workflows from `staging` instead of whichever ref triggered the watch",
+            "rationale": "The update workflows insist on checking out `staging` to keep automation branches aligned with that base, yet the release-watch scripts pass `context.ref` through to `createWorkflowDispatch`. A manual `workflow_dispatch` from a feature branch (or the default `main`) will therefore execute the whole automation using that branch\u2019s copy of `xtask` and scripts, diverging from what will run on `staging`.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:91-105",
+              ".github/workflows/claude-code-release-watch.yml:55-65",
+              ".github/workflows/codex-cli-update-snapshot.yml:20-37"
+            ],
+            "proposed_change": "Replace the computed `ref` in both release-watch workflows with a constant (`ref: \"staging\"`) so the dispatched run always uses the same branch that the workflow itself later checks out. Keep the manual `workflow_dispatch` entry point if engineers need to override the version, but pin the automation to the staging branch for reproducibility.",
+            "confidence": 0.52
+          },
+          {
+            "classification": "recommendation",
+            "priority": "medium",
+            "title": "Add concurrency groups around snapshot workflows to prevent overlapping runs",
+            "rationale": "Neither snapshot workflow declares `concurrency`, but both create deterministic automation branches (`automation/codex-cli-${version}` and `automation/claude-code-${version}`). When two dispatches for the same version overlap they will download multi-GB artifacts and then fail at PR creation because the branch already exists. A concurrency gate (per workflow/version) would keep the runners focused on the first run and avoid repeated failures.",
+            "evidence": [
+              ".github/workflows/codex-cli-update-snapshot.yml:1-37",
+              ".github/workflows/codex-cli-update-snapshot.yml:539-549",
+              ".github/workflows/claude-code-update-snapshot.yml:1-37",
+              ".github/workflows/claude-code-update-snapshot.yml:340-352"
+            ],
+            "proposed_change": "Declare `concurrency:\n  group: ${{ github.workflow }}-${{ inputs.version }}\n  cancel-in-progress: false` near the top of each snapshot workflow so only one run per version executes at a time; optionally add a broader `${{ github.workflow }}-latest` group to drop superseded manual dispatches.",
+            "confidence": 0.61
+          }
+        ],
+        "strengths": [],
+        "uncertainties": [],
+        "files_reviewed": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/claude-code-release-watch.yml",
+          ".github/workflows/codex-cli-update-snapshot.yml",
+          ".github/workflows/claude-code-update-snapshot.yml"
+        ]
+      },
+      "raw_meta": {
+        "requested_provider": "codex_cli",
+        "resolved_provider": "codex_cli",
+        "provider_type": "cli",
+        "mapped_role": "execute",
+        "family": "codex",
+        "thread_id": "019d5e37-9a62-75a0-bb67-f3043460c3fb",
+        "event_count": 40,
+        "item_type_counts": {
+          "command_execution": 17,
+          "reasoning": 2,
+          "agent_message": 1
+        },
+        "json_parse_errors": 0,
+        "raw_event_count": 40,
+        "schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j6p3yo9h/schema.json",
+        "output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j6p3yo9h/structured_output.json",
+        "usage": {
+          "input_tokens": 731048,
+          "output_tokens": 6081
+        },
+        "provider_family": "codex",
+        "provider_thread_id": "019d5e37-9a62-75a0-bb67-f3043460c3fb",
+        "provider_event_count": 40,
+        "provider_item_type_counts": {
+          "command_execution": 17,
+          "reasoning": 2,
+          "agent_message": 1
+        },
+        "provider_json_parse_errors": 0,
+        "provider_raw_event_count": 40,
+        "provider_schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j6p3yo9h/schema.json",
+        "provider_output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j6p3yo9h/structured_output.json"
+      },
+      "error": null,
+      "stage_index": 1,
+      "requested_access": "read",
+      "effective_access": "read"
+    },
+    {
+      "role_name": "critic",
+      "provider": "claude_code",
+      "model": "sonnet",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 149.937,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/Users/spensermcconnell/.local/bin/claude",
+        "-p",
+        "<prompt omitted>",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "<schema omitted>",
+        "--tools",
+        "Read",
+        "--allowedTools",
+        "Read",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high"
+      ],
+      "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/02_critic/response.txt",
+      "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/02_critic/error.txt",
+      "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/02_critic/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/02_critic/schema.json",
+      "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/02_critic/structured_output.json",
+      "structured_output": {
+        "verdict": "revise",
+        "summary": "Evidence line numbers are accurate and the three core issues identified (no duplicate-dispatch guard, ref not pinned to staging, no concurrency controls) are real. However, two medium-severity problems undermine the analysis: Recommendation 1 overclaims PR failure behavior that the existing `continue-on-error: true` and idempotent `create-pull-request` action already mitigate; and Recommendation 2 misattributes what the dispatching `ref` actually controls \u2014 the workspace contents (including xtask/scripts) are always checked out from `staging` regardless of the dispatch ref. Both issues require factual correction before the recommendations can be executed without misunderstanding the scope of the actual problem.",
+        "workspace_write_intent": "none",
+        "issues": [
+          {
+            "severity": "medium",
+            "kind": "overclaim",
+            "title": "Recommendation 1 overstates PR conflict risk; `continue-on-error` and idempotent action already mitigate this",
+            "evidence": "codex-cli-update-snapshot.yml line 540: `continue-on-error: true` on the PR creation step. `peter-evans/create-pull-request@v6` is idempotent \u2014 it pushes to an existing branch and updates the existing PR rather than creating a duplicate or failing. The analysis claim that runs 'fight over the same branch and PR, consuming runners and often failing' is unsupported. The real cost is redundant runner time and multi-GB artifact downloads, not PR creation failures.",
+            "repair_hint": "Restate the actual harm as wasted compute (parallel runs each download multi-GB artifacts and run tests for the same version). Remove or soften the 'often failing' language. Note that the codex workflow already has `continue-on-error: true` so PR conflicts are non-fatal for that workflow. The claude-code workflow lacks this guard, which is a relevant asymmetry worth noting."
+          },
+          {
+            "severity": "medium",
+            "kind": "factual_error",
+            "title": "Recommendation 2 incorrectly claims the dispatching `ref` controls which xtask/scripts run",
+            "evidence": "codex-cli-update-snapshot.yml line 36: `uses: actions/checkout@v4` with `ref: staging` (explicit). claude-code-update-snapshot.yml line 30: same pattern. Both workflows pin their worktree to `staging` unconditionally, so xtask, scripts, and manifests always come from `staging` regardless of the dispatching ref. What the dispatching `ref` actually controls is which version of the workflow definition file (the YAML itself \u2014 its steps, job structure, environment variables) is executed.",
+            "repair_hint": "Correct the rationale: the risk from passing a non-staging `ref` is that a feature-branch version of the workflow YAML could run (with different steps, different env variables, or different action versions), not that xtask or scripts from the wrong branch are used. The proposed fix (hardcode `ref: 'staging'`) remains correct, but the motivation must be updated to reflect that the workflow definition file is what diverges, not the build scripts."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "`continue-on-error` asymmetry between the two snapshot workflows not noted",
+            "evidence": "codex-cli-update-snapshot.yml line 540 has `continue-on-error: true` on PR creation. claude-code-update-snapshot.yml lines 339-352 have no such flag. This means overlapping runs for claude-code are more likely to produce failed workflow runs than overlapping codex runs. The concurrency recommendation (Rec 3) is stronger justification for claude-code than codex, but the analysis treats both identically.",
+            "repair_hint": "Call out the asymmetry explicitly: the concurrency group is especially important for claude-code-update-snapshot.yml where PR-step failures are not swallowed by `continue-on-error`."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "Codex watch two-tier stable-minus-one dispatch logic not explained, making the Rec 1 guard description slightly inaccurate",
+            "evidence": "codex-cli-release-watch.yml lines 56-58 and 63-89: the codex watch dispatches for `candidate` (stable-minus-one, i.e., `stable[1]`), not `latestStable`. It exits early if either `latestStable === latestValidated` OR `candidate === latestValidated`. The analysis description 'only compare the upstream stable tag against latest_validated.txt' misses the two-tier logic and the intentional use of stable-minus-one.",
+            "repair_hint": "Clarify that codex dispatches the stable-minus-one release as a validation candidate, not the newest stable. The guard already skips dispatch if the candidate matches validated; the gap is that it does not skip if a branch or PR for that same candidate is already open."
+          }
+        ],
+        "missing_topics": [
+          "continue-on-error asymmetry: codex PR step is best-effort; claude-code PR step is not \u2014 this changes the relative urgency of Rec 3 per workflow",
+          "Codex stable-minus-one candidate selection: the watch intentionally dispatches stable[1] not stable[0], which affects how the Rec 1 guard should be described and scoped",
+          "What the dispatching ref actually controls in createWorkflowDispatch (workflow YAML version vs workspace contents) \u2014 needs accurate description before the Rec 2 fix can be implemented correctly"
+        ],
+        "grounding_score": 0.7,
+        "actionability_score": 0.78,
+        "scope_compliance_score": 0.95,
+        "confidence": 0.87
+      },
+      "raw_meta": {
+        "requested_provider": "claude_code",
+        "resolved_provider": "claude_code",
+        "provider_type": "result",
+        "mapped_role": "critique",
+        "family": "claude_code",
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "duration_ms": 145626,
+        "duration_api_ms": 145570,
+        "num_turns": 10,
+        "stop_reason": "end_turn",
+        "session_id": "bc20b6d4-31e5-4165-99c8-a8f3a60ff444",
+        "total_cost_usd": 0.34996605000000003,
+        "usage": {
+          "input_tokens": 8,
+          "output_tokens": 7858
+        },
+        "modelUsage": {
+          "claude-sonnet-4-6": {
+            "inputTokens": 8,
+            "outputTokens": 7858,
+            "cacheReadInputTokens": 191486,
+            "cacheCreationInputTokens": 46567,
+            "webSearchRequests": 0,
+            "costUSD": 0.34996605000000003,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "uuid": "91636f3f-800b-405e-8d10-7af6236ba00f",
+        "provider_family": "claude_code",
+        "provider_subtype": "success",
+        "provider_is_error": false,
+        "provider_duration_ms": 145626,
+        "provider_duration_api_ms": 145570,
+        "provider_num_turns": 10,
+        "provider_stop_reason": "end_turn",
+        "provider_session_id": "bc20b6d4-31e5-4165-99c8-a8f3a60ff444",
+        "provider_total_cost_usd": 0.34996605000000003,
+        "provider_usage": {
+          "input_tokens": 8,
+          "cache_creation_input_tokens": 46567,
+          "cache_read_input_tokens": 191486,
+          "output_tokens": 7858,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 46567,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "provider_modelUsage": {
+          "claude-sonnet-4-6": {
+            "inputTokens": 8,
+            "outputTokens": 7858,
+            "cacheReadInputTokens": 191486,
+            "cacheCreationInputTokens": 46567,
+            "webSearchRequests": 0,
+            "costUSD": 0.34996605000000003,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "provider_permission_denials": [],
+        "provider_terminal_reason": "completed",
+        "provider_fast_mode_state": "off",
+        "provider_uuid": "91636f3f-800b-405e-8d10-7af6236ba00f"
+      },
+      "error": null,
+      "stage_index": 2,
+      "requested_access": "read",
+      "effective_access": "read"
+    },
+    {
+      "role_name": "reviser_round_1",
+      "provider": "codex_cli",
+      "model": "gpt-5-codex",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 83.35,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/Users/spensermcconnell/.nvm/versions/node/v22.16.0/bin/codex",
+        "exec",
+        "--ephemeral",
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--model",
+        "gpt-5-codex",
+        "-c",
+        "model_reasoning_effort=\"high\"",
+        "--output-schema",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-r9zkbe_2/schema.json",
+        "-o",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-r9zkbe_2/structured_output.json",
+        "-"
+      ],
+      "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/response.txt",
+      "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/error.txt",
+      "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/schema.json",
+      "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/structured_output.json",
+      "structured_output": {
+        "status": "done",
+        "summary": "Release-watch workflows keep redispatching the same Codex (stable-minus-one candidate) and Claude Code versions until the pending automation branch merges, yet the snapshot jobs lack concurrency or failure isolation\u2014wasting runners and, for Claude Code, outright failing when the branch already exists.",
+        "confidence": 0.64,
+        "workspace_write_intent": "none",
+        "recommendations": [
+          {
+            "classification": "risk",
+            "priority": "high",
+            "title": "Skip dispatch when the automation branch or PR for that version already exists",
+            "rationale": "Both release-watch scripts only compare upstream versions with `latest_validated` (Codex even picks the stable-minus-one candidate via `const candidate = (stable[1] ?? stable[0])`, lines 56\u201168) before dispatching. They never ask GitHub whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already exists, so the scheduled job keeps launching multi-target snapshot runs every day until humans merge the first PR. That burns macOS/Linux/Windows runners repeatedly and, for Claude Code, the redundant runs fail at the PR step because the branch already exists.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:45-108",
+              ".github/workflows/claude-code-release-watch.yml:38-66",
+              ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+              ".github/workflows/claude-code-update-snapshot.yml:339-352"
+            ],
+            "proposed_change": "Inside each release-watch script, before `createWorkflowDispatch`, call the GitHub API (e.g., `repos.getBranch` or `search.issuesAndPullRequests`) to see whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has a branch or open PR. If it exists, log and exit without dispatching; otherwise proceed. This keeps exactly one automation run per candidate release while still respecting the existing `latest_validated` and stable-minus-one semantics.",
+            "confidence": 0.58
+          },
+          {
+            "classification": "recommendation",
+            "priority": "medium",
+            "title": "Add per-version concurrency groups to the snapshot workflows",
+            "rationale": "Neither snapshot workflow declares `concurrency`, yet each run downloads multi\u2011GB artifacts for three platforms and writes to deterministic branches (`automation/codex-cli-${version}` / `automation/claude-code-${version}`). When two manual or scheduled dispatches overlap for the same version they race through the entire build matrix before one is rejected at the branch push step. Enforcing a `${{ github.workflow }}-${{ inputs.version }}` concurrency group would serialize those expensive jobs and keep runners available for other pipelines, while still allowing different versions to run in parallel.",
+            "evidence": [
+              ".github/workflows/codex-cli-update-snapshot.yml:1-37",
+              ".github/workflows/claude-code-update-snapshot.yml:1-37",
+              ".github/workflows/claude-code-update-snapshot.yml:300-352"
+            ],
+            "proposed_change": "Add to both workflows near the top:\n```\nconcurrency:\n  group: ${{ github.workflow }}-${{ inputs.version }}\n  cancel-in-progress: false\n```\nOptionally add a second `${{ github.workflow }}-latest` guard for manual reruns so superseded attempts get cancelled. This keeps at most one run per version alive while letting different versions run concurrently.",
+            "confidence": 0.55
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Make the Claude Code PR creation step best-effort like Codex",
+            "rationale": "Once a duplicate Claude Code run reaches `peter-evans/create-pull-request`, it hard-fails the workflow because the branch already exists (no `continue-on-error`). Codex explicitly marks the analogous step `continue-on-error: true`, so the workflow finishes and keeps artifacts even if branch updates race. Aligning Claude Code with Codex prevents otherwise successful builds from being marked red only because a previous automation branch is still open.",
+            "evidence": [
+              ".github/workflows/claude-code-update-snapshot.yml:339-352",
+              ".github/workflows/codex-cli-update-snapshot.yml:539-549"
+            ],
+            "proposed_change": "Wrap the `claude-code-update-snapshot.yml` \u201cCreate update PR\u201d step with `continue-on-error: true` (or catch known branch-exists exit codes) so the workflow reports success when all artifact work finished but the branch already exists. Optionally log a note directing maintainers to update the existing PR instead of inspecting a failed run.",
+            "confidence": 0.5
+          }
+        ],
+        "strengths": [],
+        "uncertainties": [],
+        "files_reviewed": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/claude-code-release-watch.yml",
+          ".github/workflows/codex-cli-update-snapshot.yml",
+          ".github/workflows/claude-code-update-snapshot.yml"
+        ]
+      },
+      "raw_meta": {
+        "requested_provider": "codex_cli",
+        "resolved_provider": "codex_cli",
+        "provider_type": "cli",
+        "mapped_role": "execute",
+        "family": "codex",
+        "thread_id": "019d5e3a-f578-7e63-8ef0-bb996bcaf9bc",
+        "event_count": 26,
+        "item_type_counts": {
+          "command_execution": 10,
+          "reasoning": 2,
+          "agent_message": 1
+        },
+        "json_parse_errors": 0,
+        "raw_event_count": 26,
+        "schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-r9zkbe_2/schema.json",
+        "output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-r9zkbe_2/structured_output.json",
+        "usage": {
+          "input_tokens": 395321,
+          "output_tokens": 8100
+        },
+        "provider_family": "codex",
+        "provider_thread_id": "019d5e3a-f578-7e63-8ef0-bb996bcaf9bc",
+        "provider_event_count": 26,
+        "provider_item_type_counts": {
+          "command_execution": 10,
+          "reasoning": 2,
+          "agent_message": 1
+        },
+        "provider_json_parse_errors": 0,
+        "provider_raw_event_count": 26,
+        "provider_schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-r9zkbe_2/schema.json",
+        "provider_output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-r9zkbe_2/structured_output.json"
+      },
+      "error": null,
+      "stage_index": 3,
+      "requested_access": "read",
+      "effective_access": "read"
+    },
+    {
+      "role_name": "auditor",
+      "provider": "claude_code",
+      "model": "sonnet",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 120.859,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/Users/spensermcconnell/.local/bin/claude",
+        "-p",
+        "<prompt omitted>",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "<schema omitted>",
+        "--tools",
+        "Read",
+        "--allowedTools",
+        "Read",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high"
+      ],
+      "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/04_auditor/response.txt",
+      "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/04_auditor/error.txt",
+      "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/04_auditor/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/04_auditor/schema.json",
+      "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/04_auditor/structured_output.json",
+      "structured_output": {
+        "verdict": "revise",
+        "summary": "The three recommendations are directionally valid and largely grounded in real code, but Recommendation 3 contains a factual overclaim about how `peter-evans/create-pull-request@v6` behaves on duplicate runs, the summary repeats that same overclaim, some evidence citations are imprecise, and a missing safety-asymmetry between the two release-watch workflows is not surfaced. All confirmed issues must be resolved before acceptance.",
+        "workspace_write_intent": "none",
+        "issues": [
+          {
+            "severity": "medium",
+            "kind": "factual_error",
+            "title": "Rec 3 rationale incorrectly claims create-pull-request hard-fails because the branch already exists",
+            "evidence": "claude-code-update-snapshot.yml:339-352 uses `peter-evans/create-pull-request@v6` with no `continue-on-error`. The analysis asserts 'the workflow because the branch already exists (no continue-on-error)'. However, create-pull-request@v6 is explicitly designed to be idempotent: if the automation branch already exists it pushes to it and updates the open PR rather than erroring. The real risk is a concurrent-run race (two runs pushing deterministic artifacts to the same ref simultaneously), not a deterministic hard-fail on branch existence. The failure mode described does not match the action's documented behavior.",
+            "repair_hint": "Replace the 'hard-fails because the branch already exists' rationale with the accurate risk: concurrent dispatches race on the same branch ref, and without continue-on-error one run will surface as red when the push is rejected due to a non-fast-forward conflict. Cite that Codex explicitly uses continue-on-error: true (line 540) as an intentional best-effort guard, and recommend the same guard for Claude Code for consistency and to avoid spurious red runs from race conditions."
+          },
+          {
+            "severity": "medium",
+            "kind": "overclaim",
+            "title": "Summary repeats the unsupported hard-fail claim",
+            "evidence": "The structured output summary states 'for Claude Code, outright failing when the branch already exists.' This flows directly from the Rec 3 rationale error above and will be seen by readers before they reach the recommendation body.",
+            "repair_hint": "Revise the summary to describe the actual asymmetry: Codex marks the PR step best-effort (continue-on-error: true) while Claude Code does not, creating inconsistent failure behavior if concurrent runs or rapid re-dispatches overlap."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "Rec 1 evidence citations include snapshot-workflow lines that do not directly prove the 'no branch-check' claim",
+            "evidence": "Rec 1 evidence includes codex-cli-update-snapshot.yml:533-549 and claude-code-update-snapshot.yml:339-352 (both are the PR-creation steps in the downstream snapshot workflow). These lines do not show the absence of a branch/PR existence check. The actual 'no check' evidence lives entirely in the two release-watch scripts (codex-cli-release-watch.yml:45-108 and claude-code-release-watch.yml:38-66). Citing unrelated downstream lines weakens traceability.",
+            "repair_hint": "Replace the snapshot-workflow citations in Rec 1 with only the release-watch lines (codex-cli-release-watch.yml:45-108 and claude-code-release-watch.yml:38-66) which contain the dispatch calls that lack a branch/PR existence guard."
+          },
+          {
+            "severity": "low",
+            "kind": "missed_issue",
+            "title": "Claude Code release-watch lacks the semver regression safety guard present in the Codex release-watch",
+            "evidence": "codex-cli-release-watch.yml:73-89 explicitly validates that the candidate semver is strictly newer than latest_validated before dispatching, exiting with setFailed if the format is invalid or candidate is older/equal. claude-code-release-watch.yml:50-53 only calls `cmpSemverDesc(stable, latestValidated) >= 0` (no NaN guard, no format validation of latestValidated). If cli_manifests/claude_code/latest_validated.txt is malformed, parseStrictStableSemver returns null, latestValidated is null, the >= 0 comparison is skipped entirely (null short-circuit), and the dispatch fires unconditionally.",
+            "repair_hint": "Add a recommendation noting that claude-code-release-watch.yml should mirror Codex's defensive guard: validate that latestValidatedRaw parses successfully and call setFailed if not, preventing unconditional dispatches when latest_validated.txt is corrupt or missing."
+          }
+        ],
+        "missing_topics": [
+          "Null-safety gap in claude-code-release-watch.yml when latest_validated.txt is malformed or absent"
+        ],
+        "grounding_score": 0.65,
+        "actionability_score": 0.82,
+        "scope_compliance_score": 0.92,
+        "confidence": 0.88
+      },
+      "raw_meta": {
+        "requested_provider": "claude_code",
+        "resolved_provider": "claude_code",
+        "provider_type": "result",
+        "mapped_role": "review",
+        "family": "claude_code",
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "duration_ms": 117782,
+        "duration_api_ms": 117720,
+        "num_turns": 11,
+        "stop_reason": "end_turn",
+        "session_id": "a8db462e-d83a-43b1-be1c-5e19ebca17e2",
+        "total_cost_usd": 0.3638544,
+        "usage": {
+          "input_tokens": 9,
+          "output_tokens": 6393
+        },
+        "modelUsage": {
+          "claude-sonnet-4-6": {
+            "inputTokens": 9,
+            "outputTokens": 6393,
+            "cacheReadInputTokens": 232558,
+            "cacheCreationInputTokens": 52844,
+            "webSearchRequests": 0,
+            "costUSD": 0.3638544,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "uuid": "96ce653d-9dce-453d-af0c-0cd81e970f36",
+        "provider_family": "claude_code",
+        "provider_subtype": "success",
+        "provider_is_error": false,
+        "provider_duration_ms": 117782,
+        "provider_duration_api_ms": 117720,
+        "provider_num_turns": 11,
+        "provider_stop_reason": "end_turn",
+        "provider_session_id": "a8db462e-d83a-43b1-be1c-5e19ebca17e2",
+        "provider_total_cost_usd": 0.3638544,
+        "provider_usage": {
+          "input_tokens": 9,
+          "cache_creation_input_tokens": 52844,
+          "cache_read_input_tokens": 232558,
+          "output_tokens": 6393,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 52844,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "provider_modelUsage": {
+          "claude-sonnet-4-6": {
+            "inputTokens": 9,
+            "outputTokens": 6393,
+            "cacheReadInputTokens": 232558,
+            "cacheCreationInputTokens": 52844,
+            "webSearchRequests": 0,
+            "costUSD": 0.3638544,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "provider_permission_denials": [],
+        "provider_terminal_reason": "completed",
+        "provider_fast_mode_state": "off",
+        "provider_uuid": "96ce653d-9dce-453d-af0c-0cd81e970f36"
+      },
+      "error": null,
+      "stage_index": 4,
+      "requested_access": "read",
+      "effective_access": "read"
+    },
+    {
+      "role_name": "reviser_round_2",
+      "provider": "codex_cli",
+      "model": "gpt-5-codex",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 28.708,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/Users/spensermcconnell/.nvm/versions/node/v22.16.0/bin/codex",
+        "exec",
+        "--ephemeral",
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--model",
+        "gpt-5-codex",
+        "-c",
+        "model_reasoning_effort=\"high\"",
+        "--output-schema",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-93dzym2t/schema.json",
+        "-o",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-93dzym2t/structured_output.json",
+        "-"
+      ],
+      "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/response.txt",
+      "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/error.txt",
+      "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/schema.json",
+      "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/structured_output.json",
+      "structured_output": {
+        "status": "done",
+        "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+        "confidence": 0.6,
+        "workspace_write_intent": "none",
+        "recommendations": [
+          {
+            "classification": "risk",
+            "priority": "high",
+            "title": "Skip release-watch dispatch when the automation branch or PR already exists",
+            "rationale": "Both watchers dispatch as soon as they find a newer upstream build, but neither one checks whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has an open branch/PR. When maintainers take a few days to land the automation branch, the nightly cron keeps launching the same expensive snapshot workflow, wasting runners and piling up redundant PR attempts.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:45-108",
+              ".github/workflows/claude-code-release-watch.yml:38-66"
+            ],
+            "proposed_change": "Before `createWorkflowDispatch`, call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit so only one automation run stays active per release.",
+            "confidence": 0.53
+          },
+          {
+            "classification": "recommendation",
+            "priority": "medium",
+            "title": "Add per-version concurrency groups to both snapshot workflows",
+            "rationale": "`codex-cli-update-snapshot.yml` and `claude-code-update-snapshot.yml` kick off long artifact builds and then push deterministic results to version-named branches, but neither declares `concurrency`. If two manual reruns or overlapping release-watch dispatches fire for the same version, they race all the way to the push/PR step before Git rejects one as a non-fast-forward, burning macOS/Linux/Windows minutes for no benefit.",
+            "evidence": [
+              ".github/workflows/codex-cli-update-snapshot.yml:1-80",
+              ".github/workflows/codex-cli-update-snapshot.yml:500-549",
+              ".github/workflows/claude-code-update-snapshot.yml:1-80",
+              ".github/workflows/claude-code-update-snapshot.yml:300-352"
+            ],
+            "proposed_change": "Define `concurrency: group: ${{ github.workflow }}-${{ inputs.version }}, cancel-in-progress: false` (optionally a second `${{ github.workflow }}-latest` guard) near the top of both workflows so only one run per version proceeds while different versions can still run in parallel.",
+            "confidence": 0.46
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Make Claude Code\u0019s PR creation step best-effort like Codex to absorb branch push races",
+            "rationale": "Codex explicitly marks the `peter-evans/create-pull-request@v6` step `continue-on-error: true`, so a concurrent run that loses the push race finishes green after uploading artifacts. Claude Code runs the same action without that guard; when two dispatches push to `automation/claude-code-${version}` simultaneously, whichever GitHub job loses the non-fast-forward push reports the workflow as failed even though artifacts and validations succeeded.",
+            "evidence": [
+              ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+              ".github/workflows/claude-code-update-snapshot.yml:300-352"
+            ],
+            "proposed_change": "Mirror Codex by adding `continue-on-error: true` (or catching the non-fast-forward exit code) around the Claude Code PR step and log a message pointing maintainers to update the existing automation PR instead of re-running the whole workflow.",
+            "confidence": 0.44
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Add a corruption guard for `latest_validated` in the Claude Code watcher",
+            "rationale": "The Codex watcher refuses to dispatch if `cli_manifests/codex/latest_validated.txt` fails strict semver parsing, preventing bad/empty files from triggering uncontrolled automation. Claude Code merely logs the raw value and proceeds whenever `latestValidated` is null, meaning a corrupt or missing pointer causes the workflow to treat the upstream `stable` value as automatically newer and fire every night\u2014even if that version already shipped.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:72-89",
+              ".github/workflows/claude-code-release-watch.yml:45-53"
+            ],
+            "proposed_change": "Port the Codex guard: after reading `cli_manifests/claude_code/latest_validated.txt`, validate it with `parseStrictStableSemver` and call `core.setFailed` if parsing fails so the automation stops instead of redispatching on corrupt metadata.",
+            "confidence": 0.41
+          }
+        ],
+        "strengths": [],
+        "uncertainties": [],
+        "files_reviewed": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/claude-code-release-watch.yml",
+          ".github/workflows/codex-cli-update-snapshot.yml",
+          ".github/workflows/claude-code-update-snapshot.yml"
+        ]
+      },
+      "raw_meta": {
+        "requested_provider": "codex_cli",
+        "resolved_provider": "codex_cli",
+        "provider_type": "cli",
+        "mapped_role": "execute",
+        "family": "codex",
+        "thread_id": "019d5e3e-14cd-7472-a414-62373cad01eb",
+        "event_count": 19,
+        "item_type_counts": {
+          "command_execution": 7,
+          "reasoning": 1,
+          "agent_message": 1
+        },
+        "json_parse_errors": 0,
+        "raw_event_count": 19,
+        "schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-93dzym2t/schema.json",
+        "output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-93dzym2t/structured_output.json",
+        "usage": {
+          "input_tokens": 266677,
+          "output_tokens": 2215
+        },
+        "provider_family": "codex",
+        "provider_thread_id": "019d5e3e-14cd-7472-a414-62373cad01eb",
+        "provider_event_count": 19,
+        "provider_item_type_counts": {
+          "command_execution": 7,
+          "reasoning": 1,
+          "agent_message": 1
+        },
+        "provider_json_parse_errors": 0,
+        "provider_raw_event_count": 19,
+        "provider_schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-93dzym2t/schema.json",
+        "provider_output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-93dzym2t/structured_output.json"
+      },
+      "error": null,
+      "stage_index": 5,
+      "requested_access": "read",
+      "effective_access": "read"
+    },
+    {
+      "role_name": "auditor",
+      "provider": "claude_code",
+      "model": "sonnet",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 157.426,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/Users/spensermcconnell/.local/bin/claude",
+        "-p",
+        "<prompt omitted>",
+        "--output-format",
+        "json",
+        "--json-schema",
+        "<schema omitted>",
+        "--tools",
+        "Read",
+        "--allowedTools",
+        "Read",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high"
+      ],
+      "stdout_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/response.txt",
+      "stderr_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/error.txt",
+      "prompt_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/schema.json",
+      "output_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/06_auditor/structured_output.json",
+      "structured_output": {
+        "verdict": "revise",
+        "summary": "All four recommendations are factually supported by the actual workflow files. Recs 2, 3, and 4 are grounded in unambiguous, binary code differences (missing concurrency block, missing `continue-on-error: true`, missing `setFailed` guard). Rec 1 is sound in principle but slightly underdetermined in its proposed fix. The primary defect is severe confidence miscalibration on Recs 3 and 4\u2014both assigned \u22640.44 despite the code evidence being explicit and unambiguous\u2014which misrepresents the strength of those findings. The `strengths` and `uncertainties` arrays are empty despite clear candidates for both, and Rec 1's proposed change lacks specificity around failure modes.",
+        "workspace_write_intent": "none",
+        "issues": [
+          {
+            "severity": "medium",
+            "kind": "missing_evidence",
+            "title": "Confidence miscalibration on Recs 3 and 4 misrepresents strength of unambiguous code evidence",
+            "evidence": "Rec 3 (confidence 0.44): codex-cli-update-snapshot.yml:540 has `continue-on-error: true` on the PR step; claude-code-update-snapshot.yml:339 does not \u2014 this is a binary, one-line verifiable difference. Rec 4 (confidence 0.41): codex-cli-release-watch.yml:73-77 calls `core.setFailed` for corrupt semver; claude-code-release-watch.yml:45-53 does not \u2014 equally unambiguous. Neither finding involves uncertain inference; both are direct code comparisons with no ambiguity.",
+            "repair_hint": "Raise Rec 3 confidence to \u22650.85 and Rec 4 to \u22650.80. Reserve low confidence scores for claims that require runtime observation or inferred behavior, not for claims directly falsifiable by reading two file sections side-by-side. Add a sentence citing the exact line and key that differs."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "Rec 1 proposed fix is underdetermined \u2014 no API endpoint, no failure-mode handling specified",
+            "evidence": "The proposed change says 'call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit.' It does not specify which REST endpoint to use (e.g., `GET /repos/{owner}/{repo}/branches/{branch}` vs. `GET /repos/{owner}/{repo}/pulls?head=...`), what to do if the check itself fails transiently, or how to handle a stale branch with no open PR (abandoned automation branch scenario).",
+            "repair_hint": "Add the specific GitHub REST endpoint (e.g., `github.rest.repos.getBranch` wrapped in try/catch for 404) and clarify that a 404 means proceed with dispatch while other errors should surface via `core.setFailed` rather than silently continuing."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "Empty `strengths` and `uncertainties` arrays omit relevant observations",
+            "evidence": "The prior analysis returns `strengths: []` and `uncertainties: []`. Observable strengths exist: the Codex watcher already has a well-structured candidate-vs-validated guard (lines 63-89) that prevents most redundant dispatches, and the Codex snapshot workflow already correctly uploads artifacts before the best-effort PR step (lines 521-532). Observable uncertainties exist: Rec 1 depends on `latest_validated.txt` being updated only on PR merge to main/staging, not on automation branch push; the analysis does not verify this assumption against how `create-pull-request@v6` + the merge process interact.",
+            "repair_hint": "Populate `strengths` with at least the Codex watcher's existing guard and the Codex snapshot's artifact-upload-before-PR pattern. Populate `uncertainties` with the assumption about when `latest_validated.txt` is updated and whether the branch-check API call could introduce a new failure mode in the watcher."
+          }
+        ],
+        "missing_topics": [],
+        "grounding_score": 0.86,
+        "actionability_score": 0.78,
+        "scope_compliance_score": 0.96,
+        "confidence": 0.88
+      },
+      "raw_meta": {
+        "requested_provider": "claude_code",
+        "resolved_provider": "claude_code",
+        "provider_type": "result",
+        "mapped_role": "review",
+        "family": "claude_code",
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "duration_ms": 154092,
+        "duration_api_ms": 154059,
+        "num_turns": 10,
+        "stop_reason": "end_turn",
+        "session_id": "0e6faea4-a8df-40cd-a969-078805cec7a7",
+        "total_cost_usd": 0.35370555000000004,
+        "usage": {
+          "input_tokens": 8,
+          "output_tokens": 7559
+        },
+        "modelUsage": {
+          "claude-sonnet-4-6": {
+            "inputTokens": 8,
+            "outputTokens": 7559,
+            "cacheReadInputTokens": 196601,
+            "cacheCreationInputTokens": 48351,
+            "webSearchRequests": 0,
+            "costUSD": 0.35370555000000004,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "uuid": "d32dd994-96f0-409b-97bf-589b69d7ee5e",
+        "provider_family": "claude_code",
+        "provider_subtype": "success",
+        "provider_is_error": false,
+        "provider_duration_ms": 154092,
+        "provider_duration_api_ms": 154059,
+        "provider_num_turns": 10,
+        "provider_stop_reason": "end_turn",
+        "provider_session_id": "0e6faea4-a8df-40cd-a969-078805cec7a7",
+        "provider_total_cost_usd": 0.35370555000000004,
+        "provider_usage": {
+          "input_tokens": 8,
+          "cache_creation_input_tokens": 48351,
+          "cache_read_input_tokens": 196601,
+          "output_tokens": 7559,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 48351,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "provider_modelUsage": {
+          "claude-sonnet-4-6": {
+            "inputTokens": 8,
+            "outputTokens": 7559,
+            "cacheReadInputTokens": 196601,
+            "cacheCreationInputTokens": 48351,
+            "webSearchRequests": 0,
+            "costUSD": 0.35370555000000004,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "provider_permission_denials": [],
+        "provider_terminal_reason": "completed",
+        "provider_fast_mode_state": "off",
+        "provider_uuid": "d32dd994-96f0-409b-97bf-589b69d7ee5e"
+      },
+      "error": null,
+      "stage_index": 6,
+      "requested_access": "read",
+      "effective_access": "read"
+    }
+  ],
+  "validator_rounds": [
+    {
+      "round_index": 0,
+      "results": []
+    }
+  ],
+  "initial_git_snapshot": {
+    "is_git": true,
+    "branch": "feat/agent-api-model-selection",
+    "head": "fcda1947219a48686836d0815aff4b4e273674f2",
+    "status_porcelain": "",
+    "status_entries": [],
+    "dirty_file_hashes": {},
+    "diff_stat": "",
+    "diff_name_status": "",
+    "ignored_rel_paths": []
+  },
+  "final_git_snapshot": {
+    "is_git": true,
+    "branch": "feat/agent-api-model-selection",
+    "head": "fcda1947219a48686836d0815aff4b4e273674f2",
+    "status_porcelain": "",
+    "status_entries": [],
+    "dirty_file_hashes": {},
+    "diff_stat": "",
+    "diff_name_status": "",
+    "ignored_rel_paths": []
+  },
+  "changed_files": [],
+  "artifacts": {
+    "run_dir": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd",
+    "report_md": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/REPORT.md",
+    "summary_json": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/summary.json",
+    "final_artifact": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/BEST_DRAFT.md",
+    "final_artifact_json": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/BEST_DRAFT.json",
+    "final_artifact_kind": "best_draft",
+    "best_draft_json": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/BEST_DRAFT.json",
+    "best_draft_md": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/BEST_DRAFT.md"
+  },
+  "final_answer": {
+    "status": "done",
+    "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+    "confidence": 0.6,
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Skip release-watch dispatch when the automation branch or PR already exists",
+        "rationale": "Both watchers dispatch as soon as they find a newer upstream build, but neither one checks whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has an open branch/PR. When maintainers take a few days to land the automation branch, the nightly cron keeps launching the same expensive snapshot workflow, wasting runners and piling up redundant PR attempts.",
+        "evidence": [
+          ".github/workflows/codex-cli-release-watch.yml:45-108",
+          ".github/workflows/claude-code-release-watch.yml:38-66"
+        ],
+        "proposed_change": "Before `createWorkflowDispatch`, call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit so only one automation run stays active per release.",
+        "confidence": 0.53
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Add per-version concurrency groups to both snapshot workflows",
+        "rationale": "`codex-cli-update-snapshot.yml` and `claude-code-update-snapshot.yml` kick off long artifact builds and then push deterministic results to version-named branches, but neither declares `concurrency`. If two manual reruns or overlapping release-watch dispatches fire for the same version, they race all the way to the push/PR step before Git rejects one as a non-fast-forward, burning macOS/Linux/Windows minutes for no benefit.",
+        "evidence": [
+          ".github/workflows/codex-cli-update-snapshot.yml:1-80",
+          ".github/workflows/codex-cli-update-snapshot.yml:500-549",
+          ".github/workflows/claude-code-update-snapshot.yml:1-80",
+          ".github/workflows/claude-code-update-snapshot.yml:300-352"
+        ],
+        "proposed_change": "Define `concurrency: group: ${{ github.workflow }}-${{ inputs.version }}, cancel-in-progress: false` (optionally a second `${{ github.workflow }}-latest` guard) near the top of both workflows so only one run per version proceeds while different versions can still run in parallel.",
+        "confidence": 0.46
+      },
+      {
+        "classification": "risk",
+        "priority": "medium",
+        "title": "Make Claude Code\u0019s PR creation step best-effort like Codex to absorb branch push races",
+        "rationale": "Codex explicitly marks the `peter-evans/create-pull-request@v6` step `continue-on-error: true`, so a concurrent run that loses the push race finishes green after uploading artifacts. Claude Code runs the same action without that guard; when two dispatches push to `automation/claude-code-${version}` simultaneously, whichever GitHub job loses the non-fast-forward push reports the workflow as failed even though artifacts and validations succeeded.",
+        "evidence": [
+          ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+          ".github/workflows/claude-code-update-snapshot.yml:300-352"
+        ],
+        "proposed_change": "Mirror Codex by adding `continue-on-error: true` (or catching the non-fast-forward exit code) around the Claude Code PR step and log a message pointing maintainers to update the existing automation PR instead of re-running the whole workflow.",
+        "confidence": 0.44
+      },
+      {
+        "classification": "risk",
+        "priority": "medium",
+        "title": "Add a corruption guard for `latest_validated` in the Claude Code watcher",
+        "rationale": "The Codex watcher refuses to dispatch if `cli_manifests/codex/latest_validated.txt` fails strict semver parsing, preventing bad/empty files from triggering uncontrolled automation. Claude Code merely logs the raw value and proceeds whenever `latestValidated` is null, meaning a corrupt or missing pointer causes the workflow to treat the upstream `stable` value as automatically newer and fire every night\u2014even if that version already shipped.",
+        "evidence": [
+          ".github/workflows/codex-cli-release-watch.yml:72-89",
+          ".github/workflows/claude-code-release-watch.yml:45-53"
+        ],
+        "proposed_change": "Port the Codex guard: after reading `cli_manifests/claude_code/latest_validated.txt`, validate it with `parseStrictStableSemver` and call `core.setFailed` if parsing fails so the automation stops instead of redispatching on corrupt metadata.",
+        "confidence": 0.41
+      }
+    ],
+    "strengths": [],
+    "uncertainties": [],
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml",
+      ".github/workflows/codex-cli-update-snapshot.yml",
+      ".github/workflows/claude-code-update-snapshot.yml"
+    ]
+  },
+  "created_at": "2026-04-05T15:26:46.624885+00:00",
+  "drafts": [
+    {
+      "draft_id": "draft-proposer",
+      "source_stage_id": "stage-01-proposer",
+      "role_name": "proposer",
+      "task_kind": "analysis_review",
+      "round_index": 0,
+      "text_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/response.txt",
+      "json_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/01_proposer/structured_output.json",
+      "summary": "Found weak guards around the Codex/Claude Code release automation that can trigger redundant or branch-misaligned runs, plus missing concurrency controls in the heavy snapshot workflows.",
+      "review_status": "candidate",
+      "scores": {
+        "grounding_score": 0.7,
+        "actionability_score": 0.78,
+        "scope_compliance_score": 0.95,
+        "confidence": 0.87
+      },
+      "issue_counts": {
+        "low": 2,
+        "medium": 2,
+        "high": 0,
+        "critical": 0,
+        "medium_or_higher": 2,
+        "required_validator_failures": 0,
+        "missing_topics": 3
+      },
+      "metadata": {
+        "stage_index": 1,
+        "requested_access": "read",
+        "effective_access": "read",
+        "payload": {
+          "status": "done",
+          "summary": "Found weak guards around the Codex/Claude Code release automation that can trigger redundant or branch-misaligned runs, plus missing concurrency controls in the heavy snapshot workflows.",
+          "confidence": 0.53,
+          "workspace_write_intent": "none",
+          "recommendations": [
+            {
+              "classification": "risk",
+              "priority": "high",
+              "title": "Skip dispatch when the same version already has an automation branch/PR",
+              "rationale": "Both release-watch jobs only compare the upstream stable tag against `latest_validated.txt`, so the scheduler will dispatch every day until the new version is actually validated. During that window multiple identical `automation/*-${version}` runs fight over the same branch and PR, consuming runners and often failing before any maintainer can review the first PR.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml:60-108",
+                ".github/workflows/claude-code-release-watch.yml:45-66",
+                ".github/workflows/codex-cli-update-snapshot.yml:539-549",
+                ".github/workflows/claude-code-update-snapshot.yml:340-352"
+              ],
+              "proposed_change": "Before calling `createWorkflowDispatch`, query the repo for an open PR or branch named `automation/codex-cli-${version}` or `automation/claude-code-${version}` (via the REST API or `git ls-remote`). If one exists, log and exit instead of dispatching. This keeps only one automation run per upstream release until it is merged/validated.",
+              "confidence": 0.45
+            },
+            {
+              "classification": "risk",
+              "priority": "medium",
+              "title": "Dispatch update workflows from `staging` instead of whichever ref triggered the watch",
+              "rationale": "The update workflows insist on checking out `staging` to keep automation branches aligned with that base, yet the release-watch scripts pass `context.ref` through to `createWorkflowDispatch`. A manual `workflow_dispatch` from a feature branch (or the default `main`) will therefore execute the whole automation using that branch\u2019s copy of `xtask` and scripts, diverging from what will run on `staging`.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml:91-105",
+                ".github/workflows/claude-code-release-watch.yml:55-65",
+                ".github/workflows/codex-cli-update-snapshot.yml:20-37"
+              ],
+              "proposed_change": "Replace the computed `ref` in both release-watch workflows with a constant (`ref: \"staging\"`) so the dispatched run always uses the same branch that the workflow itself later checks out. Keep the manual `workflow_dispatch` entry point if engineers need to override the version, but pin the automation to the staging branch for reproducibility.",
+              "confidence": 0.52
+            },
+            {
+              "classification": "recommendation",
+              "priority": "medium",
+              "title": "Add concurrency groups around snapshot workflows to prevent overlapping runs",
+              "rationale": "Neither snapshot workflow declares `concurrency`, but both create deterministic automation branches (`automation/codex-cli-${version}` and `automation/claude-code-${version}`). When two dispatches for the same version overlap they will download multi-GB artifacts and then fail at PR creation because the branch already exists. A concurrency gate (per workflow/version) would keep the runners focused on the first run and avoid repeated failures.",
+              "evidence": [
+                ".github/workflows/codex-cli-update-snapshot.yml:1-37",
+                ".github/workflows/codex-cli-update-snapshot.yml:539-549",
+                ".github/workflows/claude-code-update-snapshot.yml:1-37",
+                ".github/workflows/claude-code-update-snapshot.yml:340-352"
+              ],
+              "proposed_change": "Declare `concurrency:\n  group: ${{ github.workflow }}-${{ inputs.version }}\n  cancel-in-progress: false` near the top of each snapshot workflow so only one run per version executes at a time; optionally add a broader `${{ github.workflow }}-latest` group to drop superseded manual dispatches.",
+              "confidence": 0.61
+            }
+          ],
+          "strengths": [],
+          "uncertainties": [],
+          "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/codex-cli-update-snapshot.yml",
+            ".github/workflows/claude-code-update-snapshot.yml"
+          ]
+        },
+        "validator_round_index": 0,
+        "validator_results": [],
+        "review_stage_id": "stage-02-critic",
+        "review_payload": {
+          "verdict": "revise",
+          "summary": "Evidence line numbers are accurate and the three core issues identified (no duplicate-dispatch guard, ref not pinned to staging, no concurrency controls) are real. However, two medium-severity problems undermine the analysis: Recommendation 1 overclaims PR failure behavior that the existing `continue-on-error: true` and idempotent `create-pull-request` action already mitigate; and Recommendation 2 misattributes what the dispatching `ref` actually controls \u2014 the workspace contents (including xtask/scripts) are always checked out from `staging` regardless of the dispatch ref. Both issues require factual correction before the recommendations can be executed without misunderstanding the scope of the actual problem.",
+          "workspace_write_intent": "none",
+          "issues": [
+            {
+              "severity": "medium",
+              "kind": "overclaim",
+              "title": "Recommendation 1 overstates PR conflict risk; `continue-on-error` and idempotent action already mitigate this",
+              "evidence": "codex-cli-update-snapshot.yml line 540: `continue-on-error: true` on the PR creation step. `peter-evans/create-pull-request@v6` is idempotent \u2014 it pushes to an existing branch and updates the existing PR rather than creating a duplicate or failing. The analysis claim that runs 'fight over the same branch and PR, consuming runners and often failing' is unsupported. The real cost is redundant runner time and multi-GB artifact downloads, not PR creation failures.",
+              "repair_hint": "Restate the actual harm as wasted compute (parallel runs each download multi-GB artifacts and run tests for the same version). Remove or soften the 'often failing' language. Note that the codex workflow already has `continue-on-error: true` so PR conflicts are non-fatal for that workflow. The claude-code workflow lacks this guard, which is a relevant asymmetry worth noting."
+            },
+            {
+              "severity": "medium",
+              "kind": "factual_error",
+              "title": "Recommendation 2 incorrectly claims the dispatching `ref` controls which xtask/scripts run",
+              "evidence": "codex-cli-update-snapshot.yml line 36: `uses: actions/checkout@v4` with `ref: staging` (explicit). claude-code-update-snapshot.yml line 30: same pattern. Both workflows pin their worktree to `staging` unconditionally, so xtask, scripts, and manifests always come from `staging` regardless of the dispatching ref. What the dispatching `ref` actually controls is which version of the workflow definition file (the YAML itself \u2014 its steps, job structure, environment variables) is executed.",
+              "repair_hint": "Correct the rationale: the risk from passing a non-staging `ref` is that a feature-branch version of the workflow YAML could run (with different steps, different env variables, or different action versions), not that xtask or scripts from the wrong branch are used. The proposed fix (hardcode `ref: 'staging'`) remains correct, but the motivation must be updated to reflect that the workflow definition file is what diverges, not the build scripts."
+            },
+            {
+              "severity": "low",
+              "kind": "missing_evidence",
+              "title": "`continue-on-error` asymmetry between the two snapshot workflows not noted",
+              "evidence": "codex-cli-update-snapshot.yml line 540 has `continue-on-error: true` on PR creation. claude-code-update-snapshot.yml lines 339-352 have no such flag. This means overlapping runs for claude-code are more likely to produce failed workflow runs than overlapping codex runs. The concurrency recommendation (Rec 3) is stronger justification for claude-code than codex, but the analysis treats both identically.",
+              "repair_hint": "Call out the asymmetry explicitly: the concurrency group is especially important for claude-code-update-snapshot.yml where PR-step failures are not swallowed by `continue-on-error`."
+            },
+            {
+              "severity": "low",
+              "kind": "missing_evidence",
+              "title": "Codex watch two-tier stable-minus-one dispatch logic not explained, making the Rec 1 guard description slightly inaccurate",
+              "evidence": "codex-cli-release-watch.yml lines 56-58 and 63-89: the codex watch dispatches for `candidate` (stable-minus-one, i.e., `stable[1]`), not `latestStable`. It exits early if either `latestStable === latestValidated` OR `candidate === latestValidated`. The analysis description 'only compare the upstream stable tag against latest_validated.txt' misses the two-tier logic and the intentional use of stable-minus-one.",
+              "repair_hint": "Clarify that codex dispatches the stable-minus-one release as a validation candidate, not the newest stable. The guard already skips dispatch if the candidate matches validated; the gap is that it does not skip if a branch or PR for that same candidate is already open."
+            }
+          ],
+          "missing_topics": [
+            "continue-on-error asymmetry: codex PR step is best-effort; claude-code PR step is not \u2014 this changes the relative urgency of Rec 3 per workflow",
+            "Codex stable-minus-one candidate selection: the watch intentionally dispatches stable[1] not stable[0], which affects how the Rec 1 guard should be described and scoped",
+            "What the dispatching ref actually controls in createWorkflowDispatch (workflow YAML version vs workspace contents) \u2014 needs accurate description before the Rec 2 fix can be implemented correctly"
+          ],
+          "grounding_score": 0.7,
+          "actionability_score": 0.78,
+          "scope_compliance_score": 0.95,
+          "confidence": 0.87
+        },
+        "reviewer_role": "critic"
+      }
+    },
+    {
+      "draft_id": "draft-reviser_round_1",
+      "source_stage_id": "stage-03-reviser_round_1",
+      "role_name": "reviser_round_1",
+      "task_kind": "analysis_review",
+      "round_index": 1,
+      "text_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/response.txt",
+      "json_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/03_reviser_round_1/structured_output.json",
+      "summary": "Release-watch workflows keep redispatching the same Codex (stable-minus-one candidate) and Claude Code versions until the pending automation branch merges, yet the snapshot jobs lack concurrency or failure isolation\u2014wasting runners and, for Claude Code, outright failing when the branch already exists.",
+      "review_status": "candidate",
+      "scores": {
+        "grounding_score": 0.65,
+        "actionability_score": 0.82,
+        "scope_compliance_score": 0.92,
+        "confidence": 0.88
+      },
+      "issue_counts": {
+        "low": 2,
+        "medium": 2,
+        "high": 0,
+        "critical": 0,
+        "medium_or_higher": 2,
+        "required_validator_failures": 0,
+        "missing_topics": 1
+      },
+      "metadata": {
+        "stage_index": 3,
+        "requested_access": "read",
+        "effective_access": "read",
+        "payload": {
+          "status": "done",
+          "summary": "Release-watch workflows keep redispatching the same Codex (stable-minus-one candidate) and Claude Code versions until the pending automation branch merges, yet the snapshot jobs lack concurrency or failure isolation\u2014wasting runners and, for Claude Code, outright failing when the branch already exists.",
+          "confidence": 0.64,
+          "workspace_write_intent": "none",
+          "recommendations": [
+            {
+              "classification": "risk",
+              "priority": "high",
+              "title": "Skip dispatch when the automation branch or PR for that version already exists",
+              "rationale": "Both release-watch scripts only compare upstream versions with `latest_validated` (Codex even picks the stable-minus-one candidate via `const candidate = (stable[1] ?? stable[0])`, lines 56\u201168) before dispatching. They never ask GitHub whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already exists, so the scheduled job keeps launching multi-target snapshot runs every day until humans merge the first PR. That burns macOS/Linux/Windows runners repeatedly and, for Claude Code, the redundant runs fail at the PR step because the branch already exists.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml:45-108",
+                ".github/workflows/claude-code-release-watch.yml:38-66",
+                ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+                ".github/workflows/claude-code-update-snapshot.yml:339-352"
+              ],
+              "proposed_change": "Inside each release-watch script, before `createWorkflowDispatch`, call the GitHub API (e.g., `repos.getBranch` or `search.issuesAndPullRequests`) to see whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has a branch or open PR. If it exists, log and exit without dispatching; otherwise proceed. This keeps exactly one automation run per candidate release while still respecting the existing `latest_validated` and stable-minus-one semantics.",
+              "confidence": 0.58
+            },
+            {
+              "classification": "recommendation",
+              "priority": "medium",
+              "title": "Add per-version concurrency groups to the snapshot workflows",
+              "rationale": "Neither snapshot workflow declares `concurrency`, yet each run downloads multi\u2011GB artifacts for three platforms and writes to deterministic branches (`automation/codex-cli-${version}` / `automation/claude-code-${version}`). When two manual or scheduled dispatches overlap for the same version they race through the entire build matrix before one is rejected at the branch push step. Enforcing a `${{ github.workflow }}-${{ inputs.version }}` concurrency group would serialize those expensive jobs and keep runners available for other pipelines, while still allowing different versions to run in parallel.",
+              "evidence": [
+                ".github/workflows/codex-cli-update-snapshot.yml:1-37",
+                ".github/workflows/claude-code-update-snapshot.yml:1-37",
+                ".github/workflows/claude-code-update-snapshot.yml:300-352"
+              ],
+              "proposed_change": "Add to both workflows near the top:\n```\nconcurrency:\n  group: ${{ github.workflow }}-${{ inputs.version }}\n  cancel-in-progress: false\n```\nOptionally add a second `${{ github.workflow }}-latest` guard for manual reruns so superseded attempts get cancelled. This keeps at most one run per version alive while letting different versions run concurrently.",
+              "confidence": 0.55
+            },
+            {
+              "classification": "risk",
+              "priority": "medium",
+              "title": "Make the Claude Code PR creation step best-effort like Codex",
+              "rationale": "Once a duplicate Claude Code run reaches `peter-evans/create-pull-request`, it hard-fails the workflow because the branch already exists (no `continue-on-error`). Codex explicitly marks the analogous step `continue-on-error: true`, so the workflow finishes and keeps artifacts even if branch updates race. Aligning Claude Code with Codex prevents otherwise successful builds from being marked red only because a previous automation branch is still open.",
+              "evidence": [
+                ".github/workflows/claude-code-update-snapshot.yml:339-352",
+                ".github/workflows/codex-cli-update-snapshot.yml:539-549"
+              ],
+              "proposed_change": "Wrap the `claude-code-update-snapshot.yml` \u201cCreate update PR\u201d step with `continue-on-error: true` (or catch known branch-exists exit codes) so the workflow reports success when all artifact work finished but the branch already exists. Optionally log a note directing maintainers to update the existing PR instead of inspecting a failed run.",
+              "confidence": 0.5
+            }
+          ],
+          "strengths": [],
+          "uncertainties": [],
+          "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/codex-cli-update-snapshot.yml",
+            ".github/workflows/claude-code-update-snapshot.yml"
+          ]
+        },
+        "validator_round_index": 1,
+        "validator_results": [],
+        "review_stage_id": "stage-04-auditor",
+        "review_payload": {
+          "verdict": "revise",
+          "summary": "The three recommendations are directionally valid and largely grounded in real code, but Recommendation 3 contains a factual overclaim about how `peter-evans/create-pull-request@v6` behaves on duplicate runs, the summary repeats that same overclaim, some evidence citations are imprecise, and a missing safety-asymmetry between the two release-watch workflows is not surfaced. All confirmed issues must be resolved before acceptance.",
+          "workspace_write_intent": "none",
+          "issues": [
+            {
+              "severity": "medium",
+              "kind": "factual_error",
+              "title": "Rec 3 rationale incorrectly claims create-pull-request hard-fails because the branch already exists",
+              "evidence": "claude-code-update-snapshot.yml:339-352 uses `peter-evans/create-pull-request@v6` with no `continue-on-error`. The analysis asserts 'the workflow because the branch already exists (no continue-on-error)'. However, create-pull-request@v6 is explicitly designed to be idempotent: if the automation branch already exists it pushes to it and updates the open PR rather than erroring. The real risk is a concurrent-run race (two runs pushing deterministic artifacts to the same ref simultaneously), not a deterministic hard-fail on branch existence. The failure mode described does not match the action's documented behavior.",
+              "repair_hint": "Replace the 'hard-fails because the branch already exists' rationale with the accurate risk: concurrent dispatches race on the same branch ref, and without continue-on-error one run will surface as red when the push is rejected due to a non-fast-forward conflict. Cite that Codex explicitly uses continue-on-error: true (line 540) as an intentional best-effort guard, and recommend the same guard for Claude Code for consistency and to avoid spurious red runs from race conditions."
+            },
+            {
+              "severity": "medium",
+              "kind": "overclaim",
+              "title": "Summary repeats the unsupported hard-fail claim",
+              "evidence": "The structured output summary states 'for Claude Code, outright failing when the branch already exists.' This flows directly from the Rec 3 rationale error above and will be seen by readers before they reach the recommendation body.",
+              "repair_hint": "Revise the summary to describe the actual asymmetry: Codex marks the PR step best-effort (continue-on-error: true) while Claude Code does not, creating inconsistent failure behavior if concurrent runs or rapid re-dispatches overlap."
+            },
+            {
+              "severity": "low",
+              "kind": "missing_evidence",
+              "title": "Rec 1 evidence citations include snapshot-workflow lines that do not directly prove the 'no branch-check' claim",
+              "evidence": "Rec 1 evidence includes codex-cli-update-snapshot.yml:533-549 and claude-code-update-snapshot.yml:339-352 (both are the PR-creation steps in the downstream snapshot workflow). These lines do not show the absence of a branch/PR existence check. The actual 'no check' evidence lives entirely in the two release-watch scripts (codex-cli-release-watch.yml:45-108 and claude-code-release-watch.yml:38-66). Citing unrelated downstream lines weakens traceability.",
+              "repair_hint": "Replace the snapshot-workflow citations in Rec 1 with only the release-watch lines (codex-cli-release-watch.yml:45-108 and claude-code-release-watch.yml:38-66) which contain the dispatch calls that lack a branch/PR existence guard."
+            },
+            {
+              "severity": "low",
+              "kind": "missed_issue",
+              "title": "Claude Code release-watch lacks the semver regression safety guard present in the Codex release-watch",
+              "evidence": "codex-cli-release-watch.yml:73-89 explicitly validates that the candidate semver is strictly newer than latest_validated before dispatching, exiting with setFailed if the format is invalid or candidate is older/equal. claude-code-release-watch.yml:50-53 only calls `cmpSemverDesc(stable, latestValidated) >= 0` (no NaN guard, no format validation of latestValidated). If cli_manifests/claude_code/latest_validated.txt is malformed, parseStrictStableSemver returns null, latestValidated is null, the >= 0 comparison is skipped entirely (null short-circuit), and the dispatch fires unconditionally.",
+              "repair_hint": "Add a recommendation noting that claude-code-release-watch.yml should mirror Codex's defensive guard: validate that latestValidatedRaw parses successfully and call setFailed if not, preventing unconditional dispatches when latest_validated.txt is corrupt or missing."
+            }
+          ],
+          "missing_topics": [
+            "Null-safety gap in claude-code-release-watch.yml when latest_validated.txt is malformed or absent"
+          ],
+          "grounding_score": 0.65,
+          "actionability_score": 0.82,
+          "scope_compliance_score": 0.92,
+          "confidence": 0.88
+        },
+        "reviewer_role": "auditor"
+      }
+    },
+    {
+      "draft_id": "draft-reviser_round_2",
+      "source_stage_id": "stage-05-reviser_round_2",
+      "role_name": "reviser_round_2",
+      "task_kind": "analysis_review",
+      "round_index": 2,
+      "text_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/response.txt",
+      "json_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/structured_output.json",
+      "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+      "review_status": "best",
+      "scores": {
+        "grounding_score": 0.86,
+        "actionability_score": 0.78,
+        "scope_compliance_score": 0.96,
+        "confidence": 0.88
+      },
+      "issue_counts": {
+        "low": 2,
+        "medium": 1,
+        "high": 0,
+        "critical": 0,
+        "medium_or_higher": 1,
+        "required_validator_failures": 0,
+        "missing_topics": 0
+      },
+      "metadata": {
+        "stage_index": 5,
+        "requested_access": "read",
+        "effective_access": "read",
+        "payload": {
+          "status": "done",
+          "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+          "confidence": 0.6,
+          "workspace_write_intent": "none",
+          "recommendations": [
+            {
+              "classification": "risk",
+              "priority": "high",
+              "title": "Skip release-watch dispatch when the automation branch or PR already exists",
+              "rationale": "Both watchers dispatch as soon as they find a newer upstream build, but neither one checks whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has an open branch/PR. When maintainers take a few days to land the automation branch, the nightly cron keeps launching the same expensive snapshot workflow, wasting runners and piling up redundant PR attempts.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml:45-108",
+                ".github/workflows/claude-code-release-watch.yml:38-66"
+              ],
+              "proposed_change": "Before `createWorkflowDispatch`, call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit so only one automation run stays active per release.",
+              "confidence": 0.53
+            },
+            {
+              "classification": "recommendation",
+              "priority": "medium",
+              "title": "Add per-version concurrency groups to both snapshot workflows",
+              "rationale": "`codex-cli-update-snapshot.yml` and `claude-code-update-snapshot.yml` kick off long artifact builds and then push deterministic results to version-named branches, but neither declares `concurrency`. If two manual reruns or overlapping release-watch dispatches fire for the same version, they race all the way to the push/PR step before Git rejects one as a non-fast-forward, burning macOS/Linux/Windows minutes for no benefit.",
+              "evidence": [
+                ".github/workflows/codex-cli-update-snapshot.yml:1-80",
+                ".github/workflows/codex-cli-update-snapshot.yml:500-549",
+                ".github/workflows/claude-code-update-snapshot.yml:1-80",
+                ".github/workflows/claude-code-update-snapshot.yml:300-352"
+              ],
+              "proposed_change": "Define `concurrency: group: ${{ github.workflow }}-${{ inputs.version }}, cancel-in-progress: false` (optionally a second `${{ github.workflow }}-latest` guard) near the top of both workflows so only one run per version proceeds while different versions can still run in parallel.",
+              "confidence": 0.46
+            },
+            {
+              "classification": "risk",
+              "priority": "medium",
+              "title": "Make Claude Code\u0019s PR creation step best-effort like Codex to absorb branch push races",
+              "rationale": "Codex explicitly marks the `peter-evans/create-pull-request@v6` step `continue-on-error: true`, so a concurrent run that loses the push race finishes green after uploading artifacts. Claude Code runs the same action without that guard; when two dispatches push to `automation/claude-code-${version}` simultaneously, whichever GitHub job loses the non-fast-forward push reports the workflow as failed even though artifacts and validations succeeded.",
+              "evidence": [
+                ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+                ".github/workflows/claude-code-update-snapshot.yml:300-352"
+              ],
+              "proposed_change": "Mirror Codex by adding `continue-on-error: true` (or catching the non-fast-forward exit code) around the Claude Code PR step and log a message pointing maintainers to update the existing automation PR instead of re-running the whole workflow.",
+              "confidence": 0.44
+            },
+            {
+              "classification": "risk",
+              "priority": "medium",
+              "title": "Add a corruption guard for `latest_validated` in the Claude Code watcher",
+              "rationale": "The Codex watcher refuses to dispatch if `cli_manifests/codex/latest_validated.txt` fails strict semver parsing, preventing bad/empty files from triggering uncontrolled automation. Claude Code merely logs the raw value and proceeds whenever `latestValidated` is null, meaning a corrupt or missing pointer causes the workflow to treat the upstream `stable` value as automatically newer and fire every night\u2014even if that version already shipped.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml:72-89",
+                ".github/workflows/claude-code-release-watch.yml:45-53"
+              ],
+              "proposed_change": "Port the Codex guard: after reading `cli_manifests/claude_code/latest_validated.txt`, validate it with `parseStrictStableSemver` and call `core.setFailed` if parsing fails so the automation stops instead of redispatching on corrupt metadata.",
+              "confidence": 0.41
+            }
+          ],
+          "strengths": [],
+          "uncertainties": [],
+          "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/codex-cli-update-snapshot.yml",
+            ".github/workflows/claude-code-update-snapshot.yml"
+          ]
+        },
+        "validator_round_index": 2,
+        "validator_results": [],
+        "review_stage_id": "stage-06-auditor",
+        "review_payload": {
+          "verdict": "revise",
+          "summary": "All four recommendations are factually supported by the actual workflow files. Recs 2, 3, and 4 are grounded in unambiguous, binary code differences (missing concurrency block, missing `continue-on-error: true`, missing `setFailed` guard). Rec 1 is sound in principle but slightly underdetermined in its proposed fix. The primary defect is severe confidence miscalibration on Recs 3 and 4\u2014both assigned \u22640.44 despite the code evidence being explicit and unambiguous\u2014which misrepresents the strength of those findings. The `strengths` and `uncertainties` arrays are empty despite clear candidates for both, and Rec 1's proposed change lacks specificity around failure modes.",
+          "workspace_write_intent": "none",
+          "issues": [
+            {
+              "severity": "medium",
+              "kind": "missing_evidence",
+              "title": "Confidence miscalibration on Recs 3 and 4 misrepresents strength of unambiguous code evidence",
+              "evidence": "Rec 3 (confidence 0.44): codex-cli-update-snapshot.yml:540 has `continue-on-error: true` on the PR step; claude-code-update-snapshot.yml:339 does not \u2014 this is a binary, one-line verifiable difference. Rec 4 (confidence 0.41): codex-cli-release-watch.yml:73-77 calls `core.setFailed` for corrupt semver; claude-code-release-watch.yml:45-53 does not \u2014 equally unambiguous. Neither finding involves uncertain inference; both are direct code comparisons with no ambiguity.",
+              "repair_hint": "Raise Rec 3 confidence to \u22650.85 and Rec 4 to \u22650.80. Reserve low confidence scores for claims that require runtime observation or inferred behavior, not for claims directly falsifiable by reading two file sections side-by-side. Add a sentence citing the exact line and key that differs."
+            },
+            {
+              "severity": "low",
+              "kind": "missing_evidence",
+              "title": "Rec 1 proposed fix is underdetermined \u2014 no API endpoint, no failure-mode handling specified",
+              "evidence": "The proposed change says 'call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit.' It does not specify which REST endpoint to use (e.g., `GET /repos/{owner}/{repo}/branches/{branch}` vs. `GET /repos/{owner}/{repo}/pulls?head=...`), what to do if the check itself fails transiently, or how to handle a stale branch with no open PR (abandoned automation branch scenario).",
+              "repair_hint": "Add the specific GitHub REST endpoint (e.g., `github.rest.repos.getBranch` wrapped in try/catch for 404) and clarify that a 404 means proceed with dispatch while other errors should surface via `core.setFailed` rather than silently continuing."
+            },
+            {
+              "severity": "low",
+              "kind": "missing_evidence",
+              "title": "Empty `strengths` and `uncertainties` arrays omit relevant observations",
+              "evidence": "The prior analysis returns `strengths: []` and `uncertainties: []`. Observable strengths exist: the Codex watcher already has a well-structured candidate-vs-validated guard (lines 63-89) that prevents most redundant dispatches, and the Codex snapshot workflow already correctly uploads artifacts before the best-effort PR step (lines 521-532). Observable uncertainties exist: Rec 1 depends on `latest_validated.txt` being updated only on PR merge to main/staging, not on automation branch push; the analysis does not verify this assumption against how `create-pull-request@v6` + the merge process interact.",
+              "repair_hint": "Populate `strengths` with at least the Codex watcher's existing guard and the Codex snapshot's artifact-upload-before-PR pattern. Populate `uncertainties` with the assumption about when `latest_validated.txt` is updated and whether the branch-check API call could introduce a new failure mode in the watcher."
+            }
+          ],
+          "missing_topics": [],
+          "grounding_score": 0.86,
+          "actionability_score": 0.78,
+          "scope_compliance_score": 0.96,
+          "confidence": 0.88
+        },
+        "reviewer_role": "auditor"
+      }
+    }
+  ],
+  "best_draft_id": "draft-reviser_round_2",
+  "selected_draft_id": "draft-reviser_round_2",
+  "best_draft": {
+    "draft_id": "draft-reviser_round_2",
+    "source_stage_id": "stage-05-reviser_round_2",
+    "role_name": "reviser_round_2",
+    "task_kind": "analysis_review",
+    "round_index": 2,
+    "text_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/response.txt",
+    "json_path": "/Users/spensermcconnell/Downloads/forge 2/.forge-harness-runs/20260405T151634Z-recommend_automation_improvements-2d9d2ddd/artifacts/05_reviser_round_2/structured_output.json",
+    "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+    "review_status": "best",
+    "scores": {
+      "grounding_score": 0.86,
+      "actionability_score": 0.78,
+      "scope_compliance_score": 0.96,
+      "confidence": 0.88
+    },
+    "issue_counts": {
+      "low": 2,
+      "medium": 1,
+      "high": 0,
+      "critical": 0,
+      "medium_or_higher": 1,
+      "required_validator_failures": 0,
+      "missing_topics": 0
+    },
+    "metadata": {
+      "stage_index": 5,
+      "requested_access": "read",
+      "effective_access": "read",
+      "payload": {
+        "status": "done",
+        "summary": "Release-watch jobs still redispatch already-open Codex/Claude Code candidates every night, snapshot workflows can collide because they lack per-version concurrency, and the Claude Code watcher omits the semver corruption guard and best-effort PR handling that protect the Codex automation flow.",
+        "confidence": 0.6,
+        "workspace_write_intent": "none",
+        "recommendations": [
+          {
+            "classification": "risk",
+            "priority": "high",
+            "title": "Skip release-watch dispatch when the automation branch or PR already exists",
+            "rationale": "Both watchers dispatch as soon as they find a newer upstream build, but neither one checks whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has an open branch/PR. When maintainers take a few days to land the automation branch, the nightly cron keeps launching the same expensive snapshot workflow, wasting runners and piling up redundant PR attempts.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:45-108",
+              ".github/workflows/claude-code-release-watch.yml:38-66"
+            ],
+            "proposed_change": "Before `createWorkflowDispatch`, call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit so only one automation run stays active per release.",
+            "confidence": 0.53
+          },
+          {
+            "classification": "recommendation",
+            "priority": "medium",
+            "title": "Add per-version concurrency groups to both snapshot workflows",
+            "rationale": "`codex-cli-update-snapshot.yml` and `claude-code-update-snapshot.yml` kick off long artifact builds and then push deterministic results to version-named branches, but neither declares `concurrency`. If two manual reruns or overlapping release-watch dispatches fire for the same version, they race all the way to the push/PR step before Git rejects one as a non-fast-forward, burning macOS/Linux/Windows minutes for no benefit.",
+            "evidence": [
+              ".github/workflows/codex-cli-update-snapshot.yml:1-80",
+              ".github/workflows/codex-cli-update-snapshot.yml:500-549",
+              ".github/workflows/claude-code-update-snapshot.yml:1-80",
+              ".github/workflows/claude-code-update-snapshot.yml:300-352"
+            ],
+            "proposed_change": "Define `concurrency: group: ${{ github.workflow }}-${{ inputs.version }}, cancel-in-progress: false` (optionally a second `${{ github.workflow }}-latest` guard) near the top of both workflows so only one run per version proceeds while different versions can still run in parallel.",
+            "confidence": 0.46
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Make Claude Code\u0019s PR creation step best-effort like Codex to absorb branch push races",
+            "rationale": "Codex explicitly marks the `peter-evans/create-pull-request@v6` step `continue-on-error: true`, so a concurrent run that loses the push race finishes green after uploading artifacts. Claude Code runs the same action without that guard; when two dispatches push to `automation/claude-code-${version}` simultaneously, whichever GitHub job loses the non-fast-forward push reports the workflow as failed even though artifacts and validations succeeded.",
+            "evidence": [
+              ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+              ".github/workflows/claude-code-update-snapshot.yml:300-352"
+            ],
+            "proposed_change": "Mirror Codex by adding `continue-on-error: true` (or catching the non-fast-forward exit code) around the Claude Code PR step and log a message pointing maintainers to update the existing automation PR instead of re-running the whole workflow.",
+            "confidence": 0.44
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Add a corruption guard for `latest_validated` in the Claude Code watcher",
+            "rationale": "The Codex watcher refuses to dispatch if `cli_manifests/codex/latest_validated.txt` fails strict semver parsing, preventing bad/empty files from triggering uncontrolled automation. Claude Code merely logs the raw value and proceeds whenever `latestValidated` is null, meaning a corrupt or missing pointer causes the workflow to treat the upstream `stable` value as automatically newer and fire every night\u2014even if that version already shipped.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml:72-89",
+              ".github/workflows/claude-code-release-watch.yml:45-53"
+            ],
+            "proposed_change": "Port the Codex guard: after reading `cli_manifests/claude_code/latest_validated.txt`, validate it with `parseStrictStableSemver` and call `core.setFailed` if parsing fails so the automation stops instead of redispatching on corrupt metadata.",
+            "confidence": 0.41
+          }
+        ],
+        "strengths": [],
+        "uncertainties": [],
+        "files_reviewed": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/claude-code-release-watch.yml",
+          ".github/workflows/codex-cli-update-snapshot.yml",
+          ".github/workflows/claude-code-update-snapshot.yml"
+        ]
+      },
+      "validator_round_index": 2,
+      "validator_results": [],
+      "review_stage_id": "stage-06-auditor",
+      "review_payload": {
+        "verdict": "revise",
+        "summary": "All four recommendations are factually supported by the actual workflow files. Recs 2, 3, and 4 are grounded in unambiguous, binary code differences (missing concurrency block, missing `continue-on-error: true`, missing `setFailed` guard). Rec 1 is sound in principle but slightly underdetermined in its proposed fix. The primary defect is severe confidence miscalibration on Recs 3 and 4\u2014both assigned \u22640.44 despite the code evidence being explicit and unambiguous\u2014which misrepresents the strength of those findings. The `strengths` and `uncertainties` arrays are empty despite clear candidates for both, and Rec 1's proposed change lacks specificity around failure modes.",
+        "workspace_write_intent": "none",
+        "issues": [
+          {
+            "severity": "medium",
+            "kind": "missing_evidence",
+            "title": "Confidence miscalibration on Recs 3 and 4 misrepresents strength of unambiguous code evidence",
+            "evidence": "Rec 3 (confidence 0.44): codex-cli-update-snapshot.yml:540 has `continue-on-error: true` on the PR step; claude-code-update-snapshot.yml:339 does not \u2014 this is a binary, one-line verifiable difference. Rec 4 (confidence 0.41): codex-cli-release-watch.yml:73-77 calls `core.setFailed` for corrupt semver; claude-code-release-watch.yml:45-53 does not \u2014 equally unambiguous. Neither finding involves uncertain inference; both are direct code comparisons with no ambiguity.",
+            "repair_hint": "Raise Rec 3 confidence to \u22650.85 and Rec 4 to \u22650.80. Reserve low confidence scores for claims that require runtime observation or inferred behavior, not for claims directly falsifiable by reading two file sections side-by-side. Add a sentence citing the exact line and key that differs."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "Rec 1 proposed fix is underdetermined \u2014 no API endpoint, no failure-mode handling specified",
+            "evidence": "The proposed change says 'call the GitHub API (branches or search issues) for `automation/<tool>-${version}`; if a branch or PR already exists, log and exit.' It does not specify which REST endpoint to use (e.g., `GET /repos/{owner}/{repo}/branches/{branch}` vs. `GET /repos/{owner}/{repo}/pulls?head=...`), what to do if the check itself fails transiently, or how to handle a stale branch with no open PR (abandoned automation branch scenario).",
+            "repair_hint": "Add the specific GitHub REST endpoint (e.g., `github.rest.repos.getBranch` wrapped in try/catch for 404) and clarify that a 404 means proceed with dispatch while other errors should surface via `core.setFailed` rather than silently continuing."
+          },
+          {
+            "severity": "low",
+            "kind": "missing_evidence",
+            "title": "Empty `strengths` and `uncertainties` arrays omit relevant observations",
+            "evidence": "The prior analysis returns `strengths: []` and `uncertainties: []`. Observable strengths exist: the Codex watcher already has a well-structured candidate-vs-validated guard (lines 63-89) that prevents most redundant dispatches, and the Codex snapshot workflow already correctly uploads artifacts before the best-effort PR step (lines 521-532). Observable uncertainties exist: Rec 1 depends on `latest_validated.txt` being updated only on PR merge to main/staging, not on automation branch push; the analysis does not verify this assumption against how `create-pull-request@v6` + the merge process interact.",
+            "repair_hint": "Populate `strengths` with at least the Codex watcher's existing guard and the Codex snapshot's artifact-upload-before-PR pattern. Populate `uncertainties` with the assumption about when `latest_validated.txt` is updated and whether the branch-check API call could introduce a new failure mode in the watcher."
+          }
+        ],
+        "missing_topics": [],
+        "grounding_score": 0.86,
+        "actionability_score": 0.78,
+        "scope_compliance_score": 0.96,
+        "confidence": 0.88
+      },
+      "reviewer_role": "auditor"
+    }
+  }
+}

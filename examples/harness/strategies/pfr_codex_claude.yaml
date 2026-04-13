@@ -1,0 +1,48 @@
+name: pfr-codex-claude
+kind: pfr_v1
+max_repair_loops: 1
+rerun_falsifier_after_patch: true
+patch_on_inconclusive: false
+prompt_preamble: |
+  You are operating inside Forge's mini-harness surface.
+  Keep changes narrow, concrete, and easy to verify.
+roles:
+  proposer:
+    provider: codex_cli
+    effort: low
+    access: write
+    timeout_sec: 1800
+  falsifier:
+    provider: claude_code
+    effort: high
+    access: read
+    timeout_sec: 1200
+    disable_bare: true
+  patcher:
+    provider: codex_cli
+    effort: high
+    access: write
+    timeout_sec: 1800
+validators:
+  - name: tests
+    run: npm test --silent
+    timeout_sec: 1200
+    required: true
+    run_when: patch_only
+    requires_paths:
+      - package.json
+    on_missing_surface: not_applicable
+    required_binaries:
+      - npm
+    on_missing_binary: not_applicable
+  - name: lint
+    run: npm run lint --silent
+    timeout_sec: 1200
+    required: false
+    run_when: patch_only
+    requires_paths:
+      - package.json
+    on_missing_surface: skip
+    required_binaries:
+      - npm
+    on_missing_binary: skip

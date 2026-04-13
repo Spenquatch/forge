@@ -1,0 +1,1101 @@
+from __future__ import annotations
+
+import datetime as dt
+import json
+from dataclasses import asdict, replace
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from .files import load_structured_file, slugify, write_json, write_text
+from .git_utils import (
+    capture_git_snapshot,
+    capture_non_git_workspace_state,
+    changed_files,
+    evaluate_workspace_write_policy,
+    git_snapshot_is_dirty,
+)
+from .prompts import (
+    build_analysis_critic_prompt,
+    build_analysis_proposer_prompt,
+    build_analysis_reviser_prompt,
+    build_falsifier_prompt,
+    build_patcher_prompt,
+    build_proposer_prompt,
+    build_single_pass_prompt,
+)
+from .providers import get_provider
+from .reporting import apply_final_artifacts
+from .selection import extract_drafts_from_summary, select_best_draft
+from .schemas import (
+    analysis_output_schema,
+    analysis_review_schema,
+    falsifier_schema,
+    patcher_schema,
+    proposer_schema,
+    single_pass_schema,
+)
+from .types import ProviderRun, RoleConfig, StageRequest, StrategyConfig, TaskSpec, ValidationRun
+from .validation import preflight_validators, run_validators
+from anvil.orchestrator import reload_config
+
+
+class HarnessError(RuntimeError):
+    pass
+
+
+class WorkspacePolicyViolationError(HarnessError):
+    def __init__(self, checkpoint: str, evaluation: dict[str, Any]) -> None:
+        self.checkpoint = checkpoint
+        self.evaluation = evaluation
+        message = "; ".join(evaluation.get("violations", [])) or "Workspace write policy violated."
+        super().__init__(f"Workspace write policy violated at {checkpoint}: {message}")
+
+
+class HarnessRunner:
+    def __init__(
+        self,
+        *,
+        task_path: str | Path,
+        strategy_path: str | Path,
+        workspace: str | Path,
+        out_root: str | Path,
+        config_path: str | Path = "config/models.yaml",
+        task_data: dict[str, Any] | None = None,
+        strategy_data: dict[str, Any] | None = None,
+        thread_id: str | None = None,
+        auto_fit_strategy: bool = True,
+    ) -> None:
+        self.task_path = Path(task_path)
+        self.strategy_path = Path(strategy_path)
+        self.workspace = Path(workspace).resolve()
+        self.out_root = Path(out_root).resolve()
+        self.config_path = Path(config_path)
+        self.thread_id = thread_id
+        self.auto_fit_strategy = auto_fit_strategy
+        task_payload = task_data if task_data is not None else load_structured_file(self.task_path)
+        strategy_payload = strategy_data if strategy_data is not None else load_structured_file(self.strategy_path)
+        self.task = TaskSpec.from_dict(task_payload)
+        self.strategy = StrategyConfig.from_dict(strategy_payload)
+        self.agent_stages: list[dict[str, Any]] = []
+        self.validator_rounds: list[dict[str, Any]] = []
+        self.workspace_policy_checks: list[dict[str, Any]] = []
+        self.warnings: list[str] = []
+        self.errors: list[str] = []
+        self.stage_counter = 0
+        self.policy_ignored_rel_paths = self._workspace_ignored_rel_paths()
+        self.initial_git_snapshot: dict[str, Any] | None = None
+        self.initial_non_git_state: dict[str, Any] | None = None
+
+    def run(self) -> dict[str, Any]:
+        reload_config(str(self.config_path))
+        run_id = f"{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%SZ')}-{slugify(self.task.id)}-{uuid4().hex[:8]}"
+        self.run_dir = self.out_root / run_id
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.validators_dir = self.run_dir / "validators"
+        self.artifacts_dir = self.run_dir / "artifacts"
+        self.validators_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        write_json(self.run_dir / "task.effective.json", self.task.to_dict())
+        write_json(self.run_dir / "strategy.effective.json", self.strategy.to_dict())
+        write_json(
+            self.run_dir / "workspace.policy.config.json",
+            {
+                "ignored_rel_paths": self.policy_ignored_rel_paths,
+                "workspace_write_policy": self.task.workspace_write_policy.to_dict(),
+            },
+        )
+
+        run_verdict = "harness_error"
+        content_verdict = "harness_error"
+        validator_verdict = "not_run"
+        policy_verdict = "pass"
+        config_verdict = "pass"
+        final_summary = "Harness did not complete."
+        failure_details: dict[str, Any] | None = None
+        run_details: dict[str, Any] = {}
+
+        self.initial_git_snapshot = capture_git_snapshot(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        if not self.initial_git_snapshot.get("is_git"):
+            self.initial_non_git_state = capture_non_git_workspace_state(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            )
+        write_json(self.run_dir / "git.initial.json", self.initial_git_snapshot)
+
+        if self.initial_git_snapshot.get("is_git") and git_snapshot_is_dirty(self.initial_git_snapshot):
+            self.warnings.append(
+                "Workspace is dirty at start. The harness will operate on the existing working tree. "
+                "Use workspace_write_policy.require_clean_start=true to block this."
+            )
+
+        try:
+            self._emit_task_strategy_warnings()
+            self._apply_strategy_autofit()
+            preflight_outcome = self._validator_preflight_outcome()
+            if preflight_outcome is not None:
+                outcome = preflight_outcome
+            else:
+                self._enforce_clean_start_if_required()
+                if self.strategy.kind == "single_pass":
+                    outcome = self._run_single_pass()
+                elif self.strategy.kind == "pfr_v1":
+                    outcome = self._run_pfr_v1()
+                elif self.strategy.kind == "analysis_review_v1":
+                    outcome = self._run_analysis_review_v1()
+                else:
+                    raise HarnessError(f"Unsupported strategy kind: {self.strategy.kind}")
+            run_verdict = str(outcome.get("run_verdict", "harness_error"))
+            content_verdict = str(outcome.get("content_verdict", run_verdict))
+            validator_verdict = str(outcome.get("validator_verdict", "not_run"))
+            config_verdict = str(outcome.get("config_verdict", "pass"))
+            final_summary = str(outcome.get("final_summary", final_summary))
+            failure_details = outcome.get("failure_details")
+            run_details = dict(outcome.get("details", {}))
+        except WorkspacePolicyViolationError as exc:
+            run_verdict = "policy_violation"
+            content_verdict = "policy_violation"
+            validator_verdict = self._classify_validator_verdict(self._latest_validator_results())
+            final_summary = str(exc)
+            failure_details = exc.evaluation
+            self.warnings.append(str(exc))
+
+        final_git_snapshot = capture_git_snapshot(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        final_non_git_state = None
+        if not final_git_snapshot.get("is_git"):
+            final_non_git_state = capture_non_git_workspace_state(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            )
+        write_json(self.run_dir / "git.final.json", final_git_snapshot)
+
+        final_policy_evaluation = self._evaluate_workspace_policy(
+            current_git_snapshot=final_git_snapshot,
+            current_non_git_state=final_non_git_state,
+            final=True,
+            checkpoint="final",
+        )
+        self.workspace_policy_checks.append(final_policy_evaluation)
+        write_json(self.run_dir / "workspace.policy.final.json", final_policy_evaluation)
+
+        if final_policy_evaluation.get("violations"):
+            policy_verdict = "policy_violation"
+            run_verdict = "policy_violation"
+            final_summary = "; ".join(final_policy_evaluation["violations"])
+            failure_details = final_policy_evaluation
+        else:
+            policy_verdict = "pass"
+
+        final_changed_files = (
+            changed_files(final_git_snapshot)
+            if final_git_snapshot.get("is_git")
+            else list(final_policy_evaluation.get("touched_files", []))
+        )
+
+        final_answer_payload = self._derive_final_answer_payload(run_details)
+
+        summary = {
+            "run_id": run_id,
+            "thread_id": self.thread_id,
+            "workspace": str(self.workspace),
+            "config_path": str(self.config_path),
+            "task": self.task.to_dict(),
+            "strategy_name": self.strategy.name,
+            "strategy_kind": self.strategy.kind,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "verdict": run_verdict,
+            "verdicts": {
+                "run_verdict": run_verdict,
+                "content_verdict": content_verdict,
+                "validator_verdict": validator_verdict,
+                "policy_verdict": policy_verdict,
+                "config_verdict": config_verdict,
+            },
+            "final_summary": final_summary,
+            "failure_details": failure_details,
+            "run_details": run_details,
+            "validator_summary": self._summarize_validator_rounds(),
+            "workspace_write_policy": self.task.workspace_write_policy.to_dict(),
+            "workspace_policy_ignored_rel_paths": self.policy_ignored_rel_paths,
+            "workspace_policy_checks": self.workspace_policy_checks,
+            "final_workspace_policy_evaluation": final_policy_evaluation,
+            "agent_stages": self.agent_stages,
+            "validator_rounds": self.validator_rounds,
+            "initial_git_snapshot": self.initial_git_snapshot,
+            "final_git_snapshot": final_git_snapshot,
+            "changed_files": final_changed_files,
+            "artifacts": {
+                "run_dir": str(self.run_dir),
+                "report_md": str(self.run_dir / "REPORT.md"),
+                "summary_json": str(self.run_dir / "summary.json"),
+            },
+            "final_answer": final_answer_payload,
+            "created_at": dt.datetime.now(dt.UTC).isoformat(),
+        }
+        drafts = extract_drafts_from_summary(summary)
+        summary["drafts"] = drafts
+        best_draft = select_best_draft(drafts)
+        summary["best_draft_id"] = best_draft.get("draft_id") if best_draft else None
+        summary["selected_draft_id"] = best_draft.get("draft_id") if best_draft else None
+        summary = apply_final_artifacts(summary)
+        return summary
+
+    def _run_single_pass(self) -> dict[str, Any]:
+        role = self.strategy.roles.get("solver") or self.strategy.roles.get("proposer")
+        if role is None:
+            raise HarnessError("single_pass strategy requires a solver or proposer role")
+
+        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        prompt = build_single_pass_prompt(self.task, self.strategy.prompt_preamble, git_snapshot)
+        stage = self._run_agent_stage("solver", role.provider, prompt, single_pass_schema(), role)
+        if not stage.ok:
+            return {
+                "run_verdict": "harness_error",
+                "content_verdict": "harness_error",
+                "validator_verdict": self._classify_validator_verdict([]),
+                "final_summary": f"Solver stage failed: {stage.error or 'unknown error'}",
+                "failure_details": {"stage": "solver", "error": stage.error},
+            }
+
+        validation_runs = self._run_validator_round(round_index=0)
+        validator_verdict = self._classify_validator_verdict(validation_runs)
+        required_failures = self._required_validator_failures(validation_runs)
+        content_verdict = "accepted" if not required_failures else "rejected"
+        final_summary = (
+            "Single-pass run succeeded and all required validators passed."
+            if content_verdict == "accepted"
+            else f"Single-pass run left {len(required_failures)} required validator failure(s)."
+        )
+        if validator_verdict == "misconfigured":
+            final_summary = (
+                "Single-pass run completed, but required validators were not applicable to this workspace. "
+                "Check the validator configuration."
+            )
+        return {
+            "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
+            "content_verdict": content_verdict,
+            "validator_verdict": validator_verdict,
+            "final_summary": final_summary,
+            "details": {
+                "final_validator_round": 0,
+                "required_validator_failures": len(required_failures),
+                "final_solution": stage.structured_output,
+            },
+        }
+
+    def _run_pfr_v1(self) -> dict[str, Any]:
+        proposer_cfg = self._require_role("proposer")
+        self._require_role("falsifier")
+        patcher_cfg = self.strategy.roles.get("patcher")
+
+        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        proposer_prompt = build_proposer_prompt(self.task, self.strategy.prompt_preamble, git_snapshot)
+        proposer_run = self._run_agent_stage(
+            "proposer", proposer_cfg.provider, proposer_prompt, proposer_schema(), proposer_cfg
+        )
+        if not proposer_run.ok:
+            return {
+                "run_verdict": "harness_error",
+                "content_verdict": "harness_error",
+                "validator_verdict": self._classify_validator_verdict([]),
+                "final_summary": f"Proposer stage failed: {proposer_run.error or 'unknown error'}",
+                "failure_details": {"stage": "proposer", "error": proposer_run.error},
+            }
+
+        validation_runs = self._run_validator_round(round_index=0)
+        falsifier_run = self._run_falsifier(
+            prior_output=proposer_run.structured_output,
+            validation_runs=validation_runs,
+        )
+        if not falsifier_run.ok:
+            return {
+                "run_verdict": "harness_error",
+                "content_verdict": "harness_error",
+                "validator_verdict": self._classify_validator_verdict(validation_runs),
+                "final_summary": f"Falsifier stage failed: {falsifier_run.error or 'unknown error'}",
+                "failure_details": {"stage": "falsifier", "error": falsifier_run.error},
+            }
+
+        last_validation_runs = validation_runs
+        last_falsifier_run = falsifier_run
+        latest_solution_run = proposer_run
+        patch_rounds_executed = 0
+
+        for repair_round in range(1, self.strategy.max_repair_loops + 1):
+            if not self._should_patch(last_validation_runs, last_falsifier_run):
+                break
+            if patcher_cfg is None:
+                self.warnings.append(
+                    "Patch was needed but no patcher role is configured, so the harness stopped early."
+                )
+                break
+            patch_prompt = build_patcher_prompt(
+                self.task,
+                self.strategy.prompt_preamble,
+                proposer_run.structured_output,
+                last_falsifier_run.structured_output,
+                last_validation_runs,
+                capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+                repair_round=repair_round,
+            )
+            patcher_run = self._run_agent_stage(
+                f"patcher_round_{repair_round}",
+                patcher_cfg.provider,
+                patch_prompt,
+                patcher_schema(),
+                patcher_cfg,
+            )
+            if not patcher_run.ok:
+                return {
+                    "run_verdict": "harness_error",
+                    "content_verdict": "harness_error",
+                    "validator_verdict": self._classify_validator_verdict(last_validation_runs),
+                    "final_summary": f"Patcher stage failed: {patcher_run.error or 'unknown error'}",
+                    "failure_details": {"stage": f"patcher_round_{repair_round}", "error": patcher_run.error},
+                }
+
+            patch_rounds_executed += 1
+            latest_solution_run = patcher_run
+            last_validation_runs = self._run_validator_round(round_index=repair_round)
+            if self.strategy.rerun_falsifier_after_patch:
+                last_falsifier_run = self._run_falsifier(
+                    prior_output=patcher_run.structured_output,
+                    validation_runs=last_validation_runs,
+                )
+                if not last_falsifier_run.ok:
+                    return {
+                        "run_verdict": "harness_error",
+                        "content_verdict": "harness_error",
+                        "validator_verdict": self._classify_validator_verdict(last_validation_runs),
+                        "final_summary": f"Falsifier re-run failed: {last_falsifier_run.error or 'unknown error'}",
+                        "failure_details": {"stage": "falsifier_rerun", "error": last_falsifier_run.error},
+                    }
+
+        required_failures = self._required_validator_failures(last_validation_runs)
+        falsifier_payload = last_falsifier_run.structured_output or {}
+        verdict_signal = falsifier_payload.get("verdict")
+        validator_verdict = self._classify_validator_verdict(last_validation_runs)
+
+        if required_failures:
+            content_verdict = "rejected"
+            final_summary = (
+                f"Required validators still fail after the repair loop ({len(required_failures)} failure(s))."
+            )
+        elif verdict_signal == "reject":
+            content_verdict = "needs_manual_review"
+            final_summary = "Required validators pass, but the falsifier still recommends rejection."
+        elif verdict_signal == "inconclusive":
+            content_verdict = "accepted_with_warnings"
+            final_summary = "Required validators pass, but the falsifier remained inconclusive."
+        else:
+            content_verdict = "accepted"
+            final_summary = "Required validators pass and the final falsifier verdict is accept."
+
+        if validator_verdict == "misconfigured":
+            final_summary = (
+                "The P/F/R loop completed, but one or more required validators were not applicable to this workspace. "
+                "Check validator configuration."
+            )
+
+        return {
+            "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
+            "content_verdict": content_verdict,
+            "validator_verdict": validator_verdict,
+            "final_summary": final_summary,
+            "details": {
+                "patch_rounds_executed": patch_rounds_executed,
+                "final_validator_round": patch_rounds_executed,
+                "final_falsifier_verdict": verdict_signal,
+                "required_validator_failures": len(required_failures),
+                "final_solution": latest_solution_run.structured_output,
+                "final_falsifier": last_falsifier_run.structured_output,
+            },
+        }
+
+    def _run_analysis_review_v1(self) -> dict[str, Any]:
+        proposer_cfg = self._require_role("proposer")
+        critic_cfg = self._role_or_fallback("critic", ["falsifier"])
+        reviser_cfg = self._role_or_fallback("reviser", ["patcher", "proposer"])
+        auditor_cfg = self._role_or_fallback("auditor", ["critic", "falsifier"])
+
+        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        proposer_prompt = build_analysis_proposer_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            git_snapshot,
+        )
+        proposer_run = self._run_agent_stage(
+            "proposer",
+            proposer_cfg.provider,
+            proposer_prompt,
+            analysis_output_schema(),
+            proposer_cfg,
+        )
+        if not proposer_run.ok:
+            return {
+                "run_verdict": "harness_error",
+                "content_verdict": "harness_error",
+                "validator_verdict": self._classify_validator_verdict([]),
+                "final_summary": f"Proposer stage failed: {proposer_run.error or 'unknown error'}",
+                "failure_details": {"stage": "proposer", "error": proposer_run.error},
+            }
+
+        validation_runs = self._run_validator_round(round_index=0)
+        critic_run = self._run_analysis_reviewer(
+            role_name="critic",
+            role_cfg=critic_cfg,
+            prior_output=proposer_run.structured_output,
+            validation_runs=validation_runs,
+            round_index=0,
+        )
+        if not critic_run.ok:
+            return {
+                "run_verdict": "harness_error",
+                "content_verdict": "harness_error",
+                "validator_verdict": self._classify_validator_verdict(validation_runs),
+                "final_summary": f"Critic stage failed: {critic_run.error or 'unknown error'}",
+                "failure_details": {"stage": "critic", "error": critic_run.error},
+            }
+
+        latest_analysis_run = proposer_run
+        latest_review_run = critic_run
+        revisions_completed = 0
+        max_loops = max(
+            self.strategy.review_loops.max_loops,
+            self.strategy.review_loops.min_loops,
+            1 if self.strategy.review_loops.always_run_first_revision else 0,
+        )
+
+        while revisions_completed < max_loops:
+            if not self._analysis_needs_revision(latest_review_run.structured_output or {}, revisions_completed):
+                break
+            revisions_completed += 1
+            reviser_prompt = build_analysis_reviser_prompt(
+                self.task,
+                self.strategy.prompt_preamble,
+                latest_analysis_run.structured_output,
+                latest_review_run.structured_output,
+                validation_runs,
+                capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+                revision_round=revisions_completed,
+            )
+            latest_analysis_run = self._run_agent_stage(
+                f"reviser_round_{revisions_completed}",
+                reviser_cfg.provider,
+                reviser_prompt,
+                analysis_output_schema(),
+                reviser_cfg,
+            )
+            if not latest_analysis_run.ok:
+                return {
+                    "run_verdict": "harness_error",
+                    "content_verdict": "harness_error",
+                    "validator_verdict": self._classify_validator_verdict(validation_runs),
+                    "final_summary": f"Reviser stage failed: {latest_analysis_run.error or 'unknown error'}",
+                    "failure_details": {
+                        "stage": f"reviser_round_{revisions_completed}",
+                        "error": latest_analysis_run.error,
+                    },
+                }
+
+            latest_review_run = self._run_analysis_reviewer(
+                role_name="auditor",
+                role_cfg=auditor_cfg,
+                prior_output=latest_analysis_run.structured_output,
+                validation_runs=validation_runs,
+                round_index=revisions_completed,
+            )
+            if not latest_review_run.ok:
+                return {
+                    "run_verdict": "harness_error",
+                    "content_verdict": "harness_error",
+                    "validator_verdict": self._classify_validator_verdict(validation_runs),
+                    "final_summary": f"Auditor stage failed: {latest_review_run.error or 'unknown error'}",
+                    "failure_details": {"stage": "auditor", "error": latest_review_run.error},
+                }
+
+        final_review_payload = latest_review_run.structured_output or {}
+        validator_verdict = self._classify_validator_verdict(validation_runs)
+        content_verdict = self._analysis_content_verdict(
+            final_review_payload,
+            revisions_completed=revisions_completed,
+            max_loops=max_loops,
+        )
+
+        final_summary = self._analysis_final_summary(
+            final_review_payload,
+            revisions_completed=revisions_completed,
+            max_loops=max_loops,
+            validator_verdict=validator_verdict,
+        )
+
+        return {
+            "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
+            "content_verdict": content_verdict,
+            "validator_verdict": validator_verdict,
+            "final_summary": final_summary,
+            "details": {
+                "revisions_completed": revisions_completed,
+                "review_policy": self.strategy.review_loops.to_dict(),
+                "final_review": final_review_payload,
+                "final_analysis": latest_analysis_run.structured_output,
+            },
+        }
+
+    def _run_falsifier(
+        self,
+        *,
+        prior_output: dict[str, Any] | None,
+        validation_runs: list[ValidationRun],
+    ) -> ProviderRun:
+        falsifier_cfg = self._require_role("falsifier")
+        falsifier_prompt = build_falsifier_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            prior_output,
+            validation_runs,
+            capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+        )
+        return self._run_agent_stage(
+            "falsifier",
+            falsifier_cfg.provider,
+            falsifier_prompt,
+            falsifier_schema(),
+            falsifier_cfg,
+        )
+
+    def _run_analysis_reviewer(
+        self,
+        *,
+        role_name: str,
+        role_cfg: RoleConfig,
+        prior_output: dict[str, Any] | None,
+        validation_runs: list[ValidationRun],
+        round_index: int,
+    ) -> ProviderRun:
+        prompt = build_analysis_critic_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            prior_output,
+            validation_runs,
+            capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+            self.strategy.review_loops,
+            reviewer_label=role_name,
+            round_index=round_index,
+        )
+        return self._run_agent_stage(
+            role_name,
+            role_cfg.provider,
+            prompt,
+            analysis_review_schema(),
+            role_cfg,
+        )
+
+    def _run_agent_stage(
+        self,
+        role_name: str,
+        provider_name: str,
+        prompt_text: str,
+        schema: dict[str, Any],
+        role_config: RoleConfig,
+    ) -> ProviderRun:
+        self.stage_counter += 1
+        stage_dir = self.artifacts_dir / f"{self.stage_counter:02d}_{slugify(role_name)}"
+        provider = get_provider(provider_name)
+        effective_role_config = self._effective_role_config(role_name, role_config)
+        request = StageRequest(
+            role_name=role_name,
+            role_config=effective_role_config,
+            prompt_text=prompt_text,
+            schema=schema,
+            cwd=str(self.workspace),
+            out_dir=str(stage_dir),
+        )
+        run = provider.run(request)
+        stage_record = asdict(run)
+        stage_record["stage_index"] = self.stage_counter
+        stage_record["requested_access"] = role_config.access
+        stage_record["effective_access"] = effective_role_config.access
+        if role_config.access != effective_role_config.access:
+            stage_record[
+                "access_override_reason"
+            ] = "Task-level workspace_write_policy forced this stage to run read-only."
+        self.agent_stages.append(stage_record)
+        write_json(stage_dir / "run.envelope.json", stage_record)
+
+        self._record_workspace_policy_check(
+            checkpoint=f"after_{role_name}",
+            final=False,
+            raise_on_violation=True,
+        )
+        return run
+
+    def _run_validator_round(self, round_index: int) -> list[ValidationRun]:
+        current_git_snapshot = capture_git_snapshot(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        current_non_git_state = None
+        if not current_git_snapshot.get("is_git"):
+            current_non_git_state = capture_non_git_workspace_state(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            )
+        workspace_eval = self._evaluate_workspace_policy(
+            current_git_snapshot=current_git_snapshot,
+            current_non_git_state=current_non_git_state,
+            final=False,
+            checkpoint=f"validator_round_{round_index}",
+        )
+        results = run_validators(
+            self.strategy.validators,
+            self.workspace,
+            self.validators_dir,
+            round_index,
+            task=self.task,
+            strategy=self.strategy,
+            workspace_changed=bool(workspace_eval.get("touched_files")),
+        )
+        self.validator_rounds.append(
+            {
+                "round_index": round_index,
+                "results": [r.to_dict() for r in results],
+            }
+        )
+        return results
+
+    def _required_validator_failures(self, results: list[ValidationRun]) -> list[ValidationRun]:
+        return [item for item in results if item.required and item.status in {"failed", "error"}]
+
+    def _should_patch(self, validation_runs: list[ValidationRun], falsifier_run: ProviderRun) -> bool:
+        if self._required_validator_failures(validation_runs):
+            return True
+        payload = falsifier_run.structured_output or {}
+        verdict = payload.get("verdict")
+        if verdict == "reject":
+            return True
+        if verdict == "inconclusive" and self.strategy.patch_on_inconclusive:
+            return True
+        for issue in payload.get("issues", []):
+            if issue.get("severity") in {"high", "critical"}:
+                return True
+        return False
+
+    def _analysis_needs_revision(self, review_payload: dict[str, Any], revisions_completed: int) -> bool:
+        policy = self.strategy.review_loops
+        if revisions_completed < policy.min_loops:
+            return True
+        if revisions_completed == 0 and policy.always_run_first_revision:
+            return True
+        if not review_payload:
+            return True
+        if review_payload.get("verdict") in {"revise", "reject"}:
+            return True
+        medium_or_higher = self._count_review_issues(review_payload, {"medium", "high", "critical"})
+        if policy.max_open_medium_issues is not None and medium_or_higher > policy.max_open_medium_issues:
+            return True
+        score_checks = [
+            ("grounding_score", policy.min_grounding_score),
+            ("actionability_score", policy.min_actionability_score),
+            ("scope_compliance_score", policy.min_scope_compliance_score),
+        ]
+        for field_name, threshold in score_checks:
+            if threshold is None:
+                continue
+            value = review_payload.get(field_name)
+            if value is None:
+                return True
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                return True
+            if numeric_value < threshold:
+                return True
+        return False
+
+    def _analysis_content_verdict(
+        self,
+        review_payload: dict[str, Any],
+        *,
+        revisions_completed: int,
+        max_loops: int,
+    ) -> str:
+        if not self._analysis_needs_revision(review_payload, revisions_completed):
+            low_count = self._count_review_issues(review_payload, {"low"})
+            if low_count or review_payload.get("missing_topics"):
+                return "accepted_with_warnings"
+            return "accepted"
+        if revisions_completed >= max_loops:
+            return "best_effort_exhausted"
+        return "needs_revision"
+
+    def _analysis_final_summary(
+        self,
+        review_payload: dict[str, Any],
+        *,
+        revisions_completed: int,
+        max_loops: int,
+        validator_verdict: str,
+    ) -> str:
+        verdict = self._analysis_content_verdict(
+            review_payload,
+            revisions_completed=revisions_completed,
+            max_loops=max_loops,
+        )
+        parts = [
+            f"Analysis-review loop completed after {revisions_completed} revision round(s).",
+            f"Final reviewer verdict: {review_payload.get('verdict', 'unknown')}.",
+        ]
+        for field_name in ("grounding_score", "actionability_score", "scope_compliance_score"):
+            if field_name in review_payload:
+                parts.append(f"{field_name}={review_payload[field_name]}")
+        issue_count = len(review_payload.get("issues", []))
+        if issue_count:
+            parts.append(f"Open reviewer issues: {issue_count}.")
+        if review_payload.get("missing_topics"):
+            parts.append(
+                "Missing topics: " + ", ".join(str(x) for x in review_payload.get("missing_topics", []))
+            )
+        if validator_verdict == "misconfigured":
+            parts.append(
+                "Required validators were not applicable to this workspace. Check validator configuration."
+            )
+        if verdict == "accepted_with_warnings":
+            parts.append("The content is usable, but the auditor still left low-severity warnings.")
+        elif verdict == "best_effort_exhausted":
+            parts.append("The harness used its available review loops but still did not meet the stop criteria.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _count_review_issues(review_payload: dict[str, Any], severities: set[str]) -> int:
+        return sum(
+            1
+            for issue in review_payload.get("issues", [])
+            if str(issue.get("severity", "")).lower() in severities
+        )
+
+    def _require_role(self, role_name: str) -> RoleConfig:
+        role = self.strategy.roles.get(role_name)
+        if role is None:
+            raise HarnessError(f"Strategy requires role: {role_name}")
+        return role
+
+    def _role_or_fallback(self, preferred: str, fallbacks: list[str]) -> RoleConfig:
+        if preferred in self.strategy.roles:
+            return self.strategy.roles[preferred]
+        for name in fallbacks:
+            if name in self.strategy.roles:
+                self.warnings.append(
+                    f"Strategy role '{preferred}' is not configured; using '{name}' as a fallback."
+                )
+                return self.strategy.roles[name]
+        raise HarnessError(
+            f"Strategy requires role '{preferred}' or one of these fallbacks: {', '.join(fallbacks)}"
+        )
+
+    def _workspace_ignored_rel_paths(self) -> list[str]:
+        if self.out_root == self.workspace:
+            raise HarnessError(
+                "--out-root cannot be the same directory as --workspace. "
+                "Artifacts must live outside the target workspace or in a dedicated subdirectory."
+            )
+        try:
+            rel = self.out_root.relative_to(self.workspace)
+        except ValueError:
+            return []
+        rel_str = rel.as_posix().strip("/")
+        return [rel_str] if rel_str else []
+
+    def _effective_role_config(self, role_name: str, role_config: RoleConfig) -> RoleConfig:
+        effective_access = role_config.access
+        forced_read_roles = {"falsifier", "critic", "auditor"}
+        if role_name in forced_read_roles:
+            effective_access = "read"
+        elif not self.task.workspace_write_policy.allows_workspace_writes():
+            effective_access = "read"
+        return replace(role_config, access=effective_access)
+
+    def _emit_task_strategy_warnings(self) -> None:
+        if self.task.task_kind == "analysis_review" and self.strategy.kind in {"pfr_v1", "single_pass"}:
+            self.warnings.append(
+                "This task looks like an analysis_review task, but the selected strategy is patch-oriented. "
+                "analysis_review_v1 will usually be a better fit."
+            )
+        if self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+            self.warnings.append(
+                "This task requires a patch-oriented workflow, but the selected strategy is analysis_review_v1."
+            )
+
+    def _copy_role_if_missing(self, missing_role: str, source_roles: list[str]) -> None:
+        if missing_role in self.strategy.roles:
+            return
+        for source in source_roles:
+            if source in self.strategy.roles:
+                self.strategy.roles[missing_role] = self.strategy.roles[source]
+                return
+
+    def _apply_strategy_autofit(self) -> None:
+        if self.task.task_kind == "analysis_review" and self.strategy.kind == "pfr_v1":
+            if not self.auto_fit_strategy:
+                self.errors.append(
+                    "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
+                )
+                return
+            self.strategy.kind = "analysis_review_v1"
+            self._copy_role_if_missing("critic", ["falsifier"])
+            self._copy_role_if_missing("reviser", ["patcher", "proposer"])
+            self._copy_role_if_missing("auditor", ["critic", "falsifier"])
+            self.warnings.append(
+                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_v1 for an analysis_review task."
+            )
+        elif self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+            if not self.auto_fit_strategy:
+                self.errors.append(
+                    "patch tasks are incompatible with analysis_review_v1 unless auto-fit is enabled."
+                )
+                return
+            self.strategy.kind = "pfr_v1"
+            self._copy_role_if_missing("falsifier", ["critic", "auditor"])
+            self._copy_role_if_missing("patcher", ["reviser", "proposer"])
+            self.warnings.append(
+                "Auto-fit changed strategy kind from analysis_review_v1 to pfr_v1 for a patch task."
+            )
+
+    def _validator_preflight_outcome(self) -> dict[str, Any] | None:
+        if self.errors:
+            return {
+                "run_verdict": "invalid_config",
+                "content_verdict": "rejected",
+                "validator_verdict": "misconfigured",
+                "config_verdict": "invalid_config",
+                "final_summary": self.errors[0],
+                "failure_details": {"preflight_errors": list(self.errors)},
+                "details": {},
+            }
+
+        preflight = preflight_validators(
+            self.strategy.validators,
+            self.workspace,
+            task=self.task,
+            strategy=self.strategy,
+            workspace_changed=False,
+        )
+        self.validator_preflight = preflight
+
+        preflight_errors: list[str] = []
+        for item in preflight:
+            status = str(item.get("status") or "")
+            if item.get("required") and status in {"failed", "not_applicable"}:
+                reason = str(item.get("reason") or f"Validator {item.get('name')} is misconfigured.")
+                preflight_errors.append(reason)
+            elif not item.get("required") and status in {"failed", "not_applicable"}:
+                self.warnings.append(str(item.get("reason") or f"Optional validator {item.get('name')} is not applicable."))
+
+        if not preflight_errors:
+            return None
+
+        self.errors.extend(preflight_errors)
+        return {
+            "run_verdict": "invalid_config",
+            "content_verdict": "rejected",
+            "validator_verdict": "misconfigured",
+            "config_verdict": "invalid_config",
+            "final_summary": preflight_errors[0],
+            "failure_details": {"preflight_errors": preflight_errors, "validator_preflight": preflight},
+            "details": {},
+        }
+
+    def _enforce_clean_start_if_required(self) -> None:
+        if not self.task.workspace_write_policy.require_clean_start:
+            return
+        if self.initial_git_snapshot and self.initial_git_snapshot.get("is_git"):
+            dirty_paths = changed_files(self.initial_git_snapshot)
+            if dirty_paths:
+                evaluation = {
+                    "checkpoint": "start",
+                    "final": False,
+                    "policy_mode": self.task.workspace_write_policy.mode,
+                    "touched_files": dirty_paths,
+                    "modified_files": dirty_paths,
+                    "added_files": [],
+                    "deleted_files": [],
+                    "renamed_files": [],
+                    "new_untracked_files": [],
+                    "notes": [],
+                    "violations": [
+                        "workspace_write_policy.require_clean_start=true, but the workspace started dirty: "
+                        + ", ".join(dirty_paths[:8])
+                        + (f", ... (+{len(dirty_paths) - 8} more)" if len(dirty_paths) > 8 else "")
+                    ],
+                    "ok": False,
+                }
+                self.workspace_policy_checks.append(evaluation)
+                raise WorkspacePolicyViolationError("start", evaluation)
+
+    def _evaluate_workspace_policy(
+        self,
+        *,
+        current_git_snapshot: dict[str, Any],
+        current_non_git_state: dict[str, Any] | None,
+        final: bool,
+        checkpoint: str,
+    ) -> dict[str, Any]:
+        return evaluate_workspace_write_policy(
+            cwd=self.workspace,
+            initial_git_snapshot=self.initial_git_snapshot,
+            current_git_snapshot=current_git_snapshot,
+            initial_non_git_state=self.initial_non_git_state,
+            current_non_git_state=current_non_git_state,
+            policy=self.task.workspace_write_policy,
+            final=final,
+            checkpoint=checkpoint,
+        )
+
+    def _record_workspace_policy_check(
+        self,
+        *,
+        checkpoint: str,
+        final: bool,
+        raise_on_violation: bool,
+    ) -> dict[str, Any]:
+        current_git_snapshot = capture_git_snapshot(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        current_non_git_state = None
+        if not current_git_snapshot.get("is_git"):
+            current_non_git_state = capture_non_git_workspace_state(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            )
+        evaluation = self._evaluate_workspace_policy(
+            current_git_snapshot=current_git_snapshot,
+            current_non_git_state=current_non_git_state,
+            final=final,
+            checkpoint=checkpoint,
+        )
+        self.workspace_policy_checks.append(evaluation)
+        if evaluation.get("violations") and raise_on_violation:
+            raise WorkspacePolicyViolationError(checkpoint, evaluation)
+        return evaluation
+
+    @staticmethod
+    def _classify_validator_verdict(results: list[ValidationRun]) -> str:
+        if not results:
+            return "not_configured"
+        required = [result for result in results if result.required]
+        if not required:
+            return "advisory_only"
+        if any(result.status in {"failed", "error"} for result in required):
+            return "required_failures"
+        if any(result.status == "not_applicable" for result in required):
+            return "misconfigured"
+        if all(result.status == "skipped" for result in required):
+            return "not_run"
+        return "pass"
+
+    @staticmethod
+    def _combine_run_verdict(content_verdict: str, validator_verdict: str) -> str:
+        if content_verdict == "harness_error":
+            return "harness_error"
+        if validator_verdict == "misconfigured":
+            return "invalid_config"
+        return content_verdict
+
+    def _derive_final_answer_payload(self, run_details: dict[str, Any]) -> dict[str, Any] | None:
+        candidate_keys = ("final_analysis", "final_solution")
+        for key in candidate_keys:
+            candidate = run_details.get(key)
+            if isinstance(candidate, dict) and candidate:
+                return candidate
+        return None
+
+    def _write_final_answer_artifacts(self, payload: dict[str, Any] | None) -> dict[str, str]:
+        if not payload:
+            return {}
+        final_json_path = self.run_dir / "FINAL_ANSWER.json"
+        final_md_path = self.run_dir / "FINAL_ANSWER.md"
+        write_json(final_json_path, payload)
+        write_text(final_md_path, self._render_final_answer_markdown(payload))
+        return {
+            "final_answer_json": str(final_json_path),
+            "final_answer_md": str(final_md_path),
+        }
+
+    def _render_final_answer_markdown(self, payload: dict[str, Any]) -> str:
+        lines: list[str] = [f"# Final Answer: {self.task.id}", ""]
+        summary_text = str(payload.get("summary", "")).strip()
+        if summary_text:
+            lines.extend(["## Summary", "", summary_text, ""])
+
+        recommendations = payload.get("recommendations")
+        if isinstance(recommendations, list) and recommendations:
+            lines.extend(["## Recommendations", ""])
+            for idx, item in enumerate(recommendations, start=1):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or f"Recommendation {idx}")
+                classification = str(item.get("classification", "")).strip()
+                priority = str(item.get("priority", "")).strip()
+                header_bits = [title]
+                meta_bits = [bit for bit in (classification, priority) if bit]
+                if meta_bits:
+                    header_bits.append(f"({', '.join(meta_bits)})")
+                lines.append(f"### {idx}. {' '.join(header_bits)}")
+                lines.append("")
+                for field_name, label in (
+                    ("rationale", "Rationale"),
+                    ("proposed_change", "Suggested change"),
+                ):
+                    value = item.get(field_name)
+                    if value:
+                        lines.extend([f"**{label}:** {value}", ""])
+                evidence = item.get("evidence")
+                if isinstance(evidence, list) and evidence:
+                    lines.append("**Evidence:**")
+                    for evidence_item in evidence:
+                        lines.append(f"- {evidence_item}")
+                    lines.append("")
+                confidence = item.get("confidence")
+                if confidence is not None:
+                    lines.extend([f"**Confidence:** {confidence}", ""])
+        else:
+            lines.extend(["## Structured Output", "", "```json", json.dumps(payload, indent=2, sort_keys=False), "```", ""])
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _latest_validator_results(self) -> list[ValidationRun]:
+        if not self.validator_rounds:
+            return []
+        latest = self.validator_rounds[-1]
+        results: list[ValidationRun] = []
+        for item in latest.get("results", []):
+            results.append(ValidationRun(**item))
+        return results
+
+    def _summarize_validator_rounds(self) -> dict[str, Any]:
+        all_results: list[dict[str, Any]] = []
+        for round_data in self.validator_rounds:
+            for item in round_data.get("results", []):
+                all_results.append(item)
+        status_counts: dict[str, int] = {}
+        required_status_counts: dict[str, int] = {}
+        for item in all_results:
+            status = str(item.get("status", "unknown"))
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if item.get("required"):
+                required_status_counts[status] = required_status_counts.get(status, 0) + 1
+        latest_round_results = self._latest_validator_results()
+        return {
+            "total_runs": len(all_results),
+            "status_counts": status_counts,
+            "required_status_counts": required_status_counts,
+            "latest_round_verdict": self._classify_validator_verdict(latest_round_results),
+        }

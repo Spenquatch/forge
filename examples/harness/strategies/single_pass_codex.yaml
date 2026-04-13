@@ -1,0 +1,22 @@
+name: single-pass-codex
+kind: single_pass
+prompt_preamble: |
+  Solve the task directly and keep the solution as compact as possible.
+roles:
+  solver:
+    provider: codex_cli
+    effort: low
+    access: write
+    timeout_sec: 1800
+validators:
+  - name: tests
+    run: npm test --silent
+    timeout_sec: 1200
+    required: true
+    run_when: patch_only
+    requires_paths:
+      - package.json
+    on_missing_surface: not_applicable
+    required_binaries:
+      - npm
+    on_missing_binary: not_applicable

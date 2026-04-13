@@ -1,0 +1,44 @@
+{
+  "verdict": "revise",
+  "summary": "Evidence line numbers are accurate and the three core issues identified (no duplicate-dispatch guard, ref not pinned to staging, no concurrency controls) are real. However, two medium-severity problems undermine the analysis: Recommendation 1 overclaims PR failure behavior that the existing `continue-on-error: true` and idempotent `create-pull-request` action already mitigate; and Recommendation 2 misattributes what the dispatching `ref` actually controls \u2014 the workspace contents (including xtask/scripts) are always checked out from `staging` regardless of the dispatch ref. Both issues require factual correction before the recommendations can be executed without misunderstanding the scope of the actual problem.",
+  "workspace_write_intent": "none",
+  "issues": [
+    {
+      "severity": "medium",
+      "kind": "overclaim",
+      "title": "Recommendation 1 overstates PR conflict risk; `continue-on-error` and idempotent action already mitigate this",
+      "evidence": "codex-cli-update-snapshot.yml line 540: `continue-on-error: true` on the PR creation step. `peter-evans/create-pull-request@v6` is idempotent \u2014 it pushes to an existing branch and updates the existing PR rather than creating a duplicate or failing. The analysis claim that runs 'fight over the same branch and PR, consuming runners and often failing' is unsupported. The real cost is redundant runner time and multi-GB artifact downloads, not PR creation failures.",
+      "repair_hint": "Restate the actual harm as wasted compute (parallel runs each download multi-GB artifacts and run tests for the same version). Remove or soften the 'often failing' language. Note that the codex workflow already has `continue-on-error: true` so PR conflicts are non-fatal for that workflow. The claude-code workflow lacks this guard, which is a relevant asymmetry worth noting."
+    },
+    {
+      "severity": "medium",
+      "kind": "factual_error",
+      "title": "Recommendation 2 incorrectly claims the dispatching `ref` controls which xtask/scripts run",
+      "evidence": "codex-cli-update-snapshot.yml line 36: `uses: actions/checkout@v4` with `ref: staging` (explicit). claude-code-update-snapshot.yml line 30: same pattern. Both workflows pin their worktree to `staging` unconditionally, so xtask, scripts, and manifests always come from `staging` regardless of the dispatching ref. What the dispatching `ref` actually controls is which version of the workflow definition file (the YAML itself \u2014 its steps, job structure, environment variables) is executed.",
+      "repair_hint": "Correct the rationale: the risk from passing a non-staging `ref` is that a feature-branch version of the workflow YAML could run (with different steps, different env variables, or different action versions), not that xtask or scripts from the wrong branch are used. The proposed fix (hardcode `ref: 'staging'`) remains correct, but the motivation must be updated to reflect that the workflow definition file is what diverges, not the build scripts."
+    },
+    {
+      "severity": "low",
+      "kind": "missing_evidence",
+      "title": "`continue-on-error` asymmetry between the two snapshot workflows not noted",
+      "evidence": "codex-cli-update-snapshot.yml line 540 has `continue-on-error: true` on PR creation. claude-code-update-snapshot.yml lines 339-352 have no such flag. This means overlapping runs for claude-code are more likely to produce failed workflow runs than overlapping codex runs. The concurrency recommendation (Rec 3) is stronger justification for claude-code than codex, but the analysis treats both identically.",
+      "repair_hint": "Call out the asymmetry explicitly: the concurrency group is especially important for claude-code-update-snapshot.yml where PR-step failures are not swallowed by `continue-on-error`."
+    },
+    {
+      "severity": "low",
+      "kind": "missing_evidence",
+      "title": "Codex watch two-tier stable-minus-one dispatch logic not explained, making the Rec 1 guard description slightly inaccurate",
+      "evidence": "codex-cli-release-watch.yml lines 56-58 and 63-89: the codex watch dispatches for `candidate` (stable-minus-one, i.e., `stable[1]`), not `latestStable`. It exits early if either `latestStable === latestValidated` OR `candidate === latestValidated`. The analysis description 'only compare the upstream stable tag against latest_validated.txt' misses the two-tier logic and the intentional use of stable-minus-one.",
+      "repair_hint": "Clarify that codex dispatches the stable-minus-one release as a validation candidate, not the newest stable. The guard already skips dispatch if the candidate matches validated; the gap is that it does not skip if a branch or PR for that same candidate is already open."
+    }
+  ],
+  "missing_topics": [
+    "continue-on-error asymmetry: codex PR step is best-effort; claude-code PR step is not \u2014 this changes the relative urgency of Rec 3 per workflow",
+    "Codex stable-minus-one candidate selection: the watch intentionally dispatches stable[1] not stable[0], which affects how the Rec 1 guard should be described and scoped",
+    "What the dispatching ref actually controls in createWorkflowDispatch (workflow YAML version vs workspace contents) \u2014 needs accurate description before the Rec 2 fix can be implemented correctly"
+  ],
+  "grounding_score": 0.7,
+  "actionability_score": 0.78,
+  "scope_compliance_score": 0.95,
+  "confidence": 0.87
+}

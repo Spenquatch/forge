@@ -1,0 +1,25 @@
+id: fix-auth-bug
+task_kind: patch
+objective: >
+  Find and fix the smallest change that makes the auth-related tests pass.
+workspace_write_policy:
+  mode: require
+  allowed_paths: []
+  denied_paths: []
+  allow_untracked: false
+  allow_renames: false
+  allow_deletions: false
+  max_touched_files: 6
+  require_clean_start: false
+acceptance:
+  - The required validator commands exit with code 0.
+  - Keep unrelated files untouched unless they are necessary for the fix.
+constraints:
+  - Prefer the smallest patch that fixes the root cause.
+  - Do not refactor unrelated code.
+  - Preserve public behavior outside the bug fix unless the task requires otherwise.
+context: |
+  Use the repository state in the target workspace as ground truth.
+  Assume the validator commands are the harness's primary source of truth.
+notes: |
+  This is a good starter task for the proposer/falsifier/patcher harness.

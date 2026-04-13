@@ -1,0 +1,187 @@
+You are the REVISER stage in an analysis-review harness.
+
+Critical rules:
+- This is still an analysis task. Do not modify files unless your effective permissions and the task policy explicitly allow it.
+- Fix factual problems, soften overclaims, and improve actionability.
+- Return ONLY the JSON object required by the schema.
+
+Your job:
+1. Inspect the current workspace directly.
+2. Revise the prior analysis to address the critic's strongest evidence-backed issues.
+3. Prefer improving a few high-value recommendations over expanding the list with weak ideas.
+4. Preserve well-supported points; do not rewrite them away without reason.
+5. Use workspace_write_intent=`none` unless you truly changed the repo.
+
+Revision round: 2
+
+You are operating inside Forge's mini-harness surface.
+Keep recommendations concrete, grounded, and scoped to the task.
+
+Task ID: recommend_automation_improvements
+
+Objective:
+Analyze and recommend improvements for the CI/CD automation that triggers for new Claude Code and Codex releases in the target repository.
+
+Workspace write policy:
+Mode: forbid
+Allowed paths: - none
+Denied paths: - none
+Allow untracked files: False
+Allow renames: False
+Allow deletions: False
+Max touched files: 0
+Require clean start: False
+This task is analysis-only for the target workspace. Do not modify target-workspace files. Return recommendations or analysis only.
+This task-level workspace write policy overrides any broader stage tool permissions.
+
+Review requirements:
+Task kind: analysis_review
+Require evidence per recommendation: True
+Require classification per recommendation: True
+Require priority per recommendation: True
+Minimum recommendations: 2
+Use the labels confirmed_issue, risk, and recommendation carefully.
+If evidence is ambiguous, downgrade the claim rather than overstating certainty.
+
+Acceptance criteria:
+- The recommendations should enhance the automation reliability and efficiency.
+- The task should focus on CI/CD processes related to Claude Code and Codex releases.
+- Each recommendation should be grounded in concrete repository evidence.
+- Do not modify files in the target workspace.
+
+Constraints:
+- Provide clear, actionable recommendations for CI/CD automation improvements.
+- Avoid refactoring unrelated code or features.
+- Preserve existing public behavior outside the scope of CI/CD automation improvements.
+
+Context:
+Use the repository state in the target workspace as ground truth.
+Focus on CI/CD automation related to Claude Code and Codex releases.
+
+Notes:
+This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade
+any write-capable stage to effective read-only access and fail the run if repo files are changed.
+The analysis_review_v1 strategy is the preferred fit for this task.
+
+Files to prioritize:
+- .github/workflows/codex-cli-release-watch.yml
+- .github/workflows/claude-code-release-watch.yml
+- .github/workflows/codex-cli-update-snapshot.yml
+- .github/workflows/claude-code-update-snapshot.yml
+
+Prior analysis structured output:
+{
+  "status": "done",
+  "summary": "Release-watch workflows keep redispatching the same Codex (stable-minus-one candidate) and Claude Code versions until the pending automation branch merges, yet the snapshot jobs lack concurrency or failure isolation\u2014wasting runners and, for Claude Code, outright failing when the branch already exists.",
+  "confidence": 0.64,
+  "workspace_write_intent": "none",
+  "recommendations": [
+    {
+      "classification": "risk",
+      "priority": "high",
+      "title": "Skip dispatch when the automation branch or PR for that version already exists",
+      "rationale": "Both release-watch scripts only compare upstream versions with `latest_validated` (Codex even picks the stable-minus-one candidate via `const candidate = (stable[1] ?? stable[0])`, lines 56\u201168) before dispatching. They never ask GitHub whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already exists, so the scheduled job keeps launching multi-target snapshot runs every day until humans merge the first PR. That burns macOS/Linux/Windows runners repeatedly and, for Claude Code, the redundant runs fail at the PR step because the branch already exists.",
+      "evidence": [
+        ".github/workflows/codex-cli-release-watch.yml:45-108",
+        ".github/workflows/claude-code-release-watch.yml:38-66",
+        ".github/workflows/codex-cli-update-snapshot.yml:533-549",
+        ".github/workflows/claude-code-update-snapshot.yml:339-352"
+      ],
+      "proposed_change": "Inside each release-watch script, before `createWorkflowDispatch`, call the GitHub API (e.g., `repos.getBranch` or `search.issuesAndPullRequests`) to see whether `automation/codex-cli-${version}` or `automation/claude-code-${version}` already has a branch or open PR. If it exists, log and exit without dispatching; otherwise proceed. This keeps exactly one automation run per candidate release while still respecting the existing `latest_validated` and stable-minus-one semantics.",
+      "confidence": 0.58
+    },
+    {
+      "classification": "recommendation",
+      "priority": "medium",
+      "title": "Add per-version concurrency groups to the snapshot workflows",
+      "rationale": "Neither snapshot workflow declares `concurrency`, yet each run downloads multi\u2011GB artifacts for three platforms and writes to deterministic branches (`automation/codex-cli-${version}` / `automation/claude-code-${version}`). When two manual or scheduled dispatches overlap for the same version they race through the entire build matrix before one is rejected at the branch push step. Enforcing a `${{ github.workflow }}-${{ inputs.version }}` concurrency group would serialize those expensive jobs and keep runners available for other pipelines, while still allowing different versions to run in parallel.",
+      "evidence": [
+        ".github/workflows/codex-cli-update-snapshot.yml:1-37",
+        ".github/workflows/claude-code-update-snapshot.yml:1-37",
+        ".github/workflows/claude-code-update-snapshot.yml:300-352"
+      ],
+      "proposed_change": "Add to both workflows near the top:\n```\nconcurrency:\n  group: ${{ github.workflow }}-${{ inputs.version }}\n  cancel-in-progress: false\n```\nOptionally add a second `${{ github.workflow }}-latest` guard for manual reruns so superseded attempts get cancelled. This keeps at most one run per version alive while letting different versions run concurrently.",
+      "confidence": 0.55
+    },
+    {
+      "classification": "risk",
+      "priority": "medium",
+      "title": "Make the Claude Code PR creation step best-effort like Codex",
+      "rationale": "Once a duplicate Claude Code run reaches `peter-evans/create-pull-request`, it hard-fails the workflow because the branch already exists (no `continue-on-error`). Codex explicitly marks the analogous step `continue-on-error: true`, so the workflow finishes and keeps artifacts even if branch updates race. Aligning Claude Code with Codex prevents otherwise successful builds from being marked red only because a previous automation branch is still open.",
+      "evidence": [
+        ".github/workflows/claude-code-update-snapshot.yml:339-352",
+        ".github/workflows/codex-cli-update-snapshot.yml:539-549"
+      ],
+      "proposed_change": "Wrap the `claude-code-update-snapshot.yml` \u201cCreate update PR\u201d step with `continue-on-error: true` (or catch known branch-exists exit codes) so the workflow reports success when all artifact work finished but the branch already exists. Optionally log a note directing maintainers to update the existing PR instead of inspecting a failed run.",
+      "confidence": 0.5
+    }
+  ],
+  "strengths": [],
+  "uncertainties": [],
+  "files_reviewed": [
+    ".github/workflows/codex-cli-release-watch.yml",
+    ".github/workflows/claude-code-release-watch.yml",
+    ".github/workflows/codex-cli-update-snapshot.yml",
+    ".github/workflows/claude-code-update-snapshot.yml"
+  ]
+}
+
+Critic structured output:
+{
+  "verdict": "revise",
+  "summary": "The three recommendations are directionally valid and largely grounded in real code, but Recommendation 3 contains a factual overclaim about how `peter-evans/create-pull-request@v6` behaves on duplicate runs, the summary repeats that same overclaim, some evidence citations are imprecise, and a missing safety-asymmetry between the two release-watch workflows is not surfaced. All confirmed issues must be resolved before acceptance.",
+  "workspace_write_intent": "none",
+  "issues": [
+    {
+      "severity": "medium",
+      "kind": "factual_error",
+      "title": "Rec 3 rationale incorrectly claims create-pull-request hard-fails because the branch already exists",
+      "evidence": "claude-code-update-snapshot.yml:339-352 uses `peter-evans/create-pull-request@v6` with no `continue-on-error`. The analysis asserts 'the workflow because the branch already exists (no continue-on-error)'. However, create-pull-request@v6 is explicitly designed to be idempotent: if the automation branch already exists it pushes to it and updates the open PR rather than erroring. The real risk is a concurrent-run race (two runs pushing deterministic artifacts to the same ref simultaneously), not a deterministic hard-fail on branch existence. The failure mode described does not match the action's documented behavior.",
+      "repair_hint": "Replace the 'hard-fails because the branch already exists' rationale with the accurate risk: concurrent dispatches race on the same branch ref, and without continue-on-error one run will surface as red when the push is rejected due to a non-fast-forward conflict. Cite that Codex explicitly uses continue-on-error: true (line 540) as an intentional best-effort guard, and recommend the same guard for Claude Code for consistency and to avoid spurious red runs from race conditions."
+    },
+    {
+      "severity": "medium",
+      "kind": "overclaim",
+      "title": "Summary repeats the unsupported hard-fail claim",
+      "evidence": "The structured output summary states 'for Claude Code, outright failing when the branch already exists.' This flows directly from the Rec 3 rationale error above and will be seen by readers before they reach the recommendation body.",
+      "repair_hint": "Revise the summary to describe the actual asymmetry: Codex marks the PR step best-effort (continue-on-error: true) while Claude Code does not, creating inconsistent failure behavior if concurrent runs or rapid re-dispatches overlap."
+    },
+    {
+      "severity": "low",
+      "kind": "missing_evidence",
+      "title": "Rec 1 evidence citations include snapshot-workflow lines that do not directly prove the 'no branch-check' claim",
+      "evidence": "Rec 1 evidence includes codex-cli-update-snapshot.yml:533-549 and claude-code-update-snapshot.yml:339-352 (both are the PR-creation steps in the downstream snapshot workflow). These lines do not show the absence of a branch/PR existence check. The actual 'no check' evidence lives entirely in the two release-watch scripts (codex-cli-release-watch.yml:45-108 and claude-code-release-watch.yml:38-66). Citing unrelated downstream lines weakens traceability.",
+      "repair_hint": "Replace the snapshot-workflow citations in Rec 1 with only the release-watch lines (codex-cli-release-watch.yml:45-108 and claude-code-release-watch.yml:38-66) which contain the dispatch calls that lack a branch/PR existence guard."
+    },
+    {
+      "severity": "low",
+      "kind": "missed_issue",
+      "title": "Claude Code release-watch lacks the semver regression safety guard present in the Codex release-watch",
+      "evidence": "codex-cli-release-watch.yml:73-89 explicitly validates that the candidate semver is strictly newer than latest_validated before dispatching, exiting with setFailed if the format is invalid or candidate is older/equal. claude-code-release-watch.yml:50-53 only calls `cmpSemverDesc(stable, latestValidated) >= 0` (no NaN guard, no format validation of latestValidated). If cli_manifests/claude_code/latest_validated.txt is malformed, parseStrictStableSemver returns null, latestValidated is null, the >= 0 comparison is skipped entirely (null short-circuit), and the dispatch fires unconditionally.",
+      "repair_hint": "Add a recommendation noting that claude-code-release-watch.yml should mirror Codex's defensive guard: validate that latestValidatedRaw parses successfully and call setFailed if not, preventing unconditional dispatches when latest_validated.txt is corrupt or missing."
+    }
+  ],
+  "missing_topics": [
+    "Null-safety gap in claude-code-release-watch.yml when latest_validated.txt is malformed or absent"
+  ],
+  "grounding_score": 0.65,
+  "actionability_score": 0.82,
+  "scope_compliance_score": 0.92,
+  "confidence": 0.88
+}
+
+Validator and advisory results:
+No external validators were configured or applicable.
+
+Current workspace snapshot:
+Branch: feat/agent-api-model-selection
+
+HEAD: fcda1947219a48686836d0815aff4b4e273674f2
+
+Changed files: none
+
+Git status:
+clean
+
+Git diff --stat:
+no unstaged diff
