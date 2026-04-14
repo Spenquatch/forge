@@ -6,6 +6,7 @@ from anvil.config_loader import ProviderCfg
 from anvil.harness.providers import ForgeProviderAdapter, resolve_provider_name
 from anvil.harness.types import RoleConfig, StageRequest
 from anvil.providers.claude_code import ClaudeCodeProvider
+from anvil.providers.codex_cli import CodexCliProvider
 
 
 class _FakeApiProvider:
@@ -64,6 +65,40 @@ print(json.dumps({
     "usage": {"input_tokens": 9, "output_tokens": 4},
     "session_id": "claude-session-1",
 }))
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _write_codex_retry_stub(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+output_path = None
+if "-o" in args:
+    output_path = pathlib.Path(args[args.index("-o") + 1])
+
+model = None
+if "--model" in args:
+    model = args[args.index("--model") + 1]
+
+if model == "gpt-5-codex":
+    sys.stderr.write(
+        "The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account. invalid_request_error\\n"
+    )
+    sys.exit(1)
+
+if output_path is not None:
+    output_path.write_text(json.dumps({"summary": "ok"}), encoding="utf-8")
+
+print(json.dumps({"type": "thread.started", "thread_id": "codex-thread-1"}))
+print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "Codex final answer"}}))
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 11, "output_tokens": 7}}))
 """,
         encoding="utf-8",
     )
@@ -207,3 +242,61 @@ def test_provider_adapter_inherits_cli_role_defaults_for_mapped_analysis_review_
     assert result.command[model_index + 1] == "sonnet-override"
     assert result.command[effort_index + 1] == "high"
     assert result.command[max_turns_index + 1] == "4"
+
+
+def test_provider_adapter_retries_codex_models_yaml_model_and_reports_fallback_metadata(
+    tmp_path, monkeypatch
+):
+    codex_bin = tmp_path / "codex"
+    _write_codex_retry_stub(codex_bin)
+    provider_cfg = ProviderCfg(
+        type="cli",
+        class_path="anvil.providers.codex_cli.CodexCliProvider",
+        binary=str(codex_bin),
+        model_name="gpt-5-codex",
+        models={
+            "gpt-5-codex/*": {
+                "execute": {
+                    "access": "read",
+                    "effort": "medium",
+                    "timeout_sec": 300,
+                }
+            }
+        },
+    )
+    provider = CodexCliProvider(provider_cfg)
+
+    monkeypatch.setattr("anvil.harness.providers.get_provider_exact", lambda name: provider)
+    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: provider_cfg)
+    monkeypatch.setattr("anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4")
+
+    adapter = ForgeProviderAdapter("codex_cli")
+    request = StageRequest(
+        role_name="proposer",
+        role_config=RoleConfig(
+            provider="codex_cli",
+            effort="high",
+            access="read",
+        ),
+        prompt_text="Return a summary.",
+        schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+        cwd=str(tmp_path),
+        out_dir=str(tmp_path / "stage-codex-fallback"),
+    )
+
+    result = adapter.run(request)
+
+    assert result.ok is True
+    assert "--model" not in result.command
+    effort_index = result.command.index("-c")
+    assert result.command[effort_index + 1] == 'model_reasoning_effort="high"'
+    assert result.model == "gpt-5.4"
+    assert result.raw_meta["provider_model_initial_attempt"] == "gpt-5-codex"
+    assert result.raw_meta["provider_model_effective"] == "gpt-5.4"
+    assert result.raw_meta["provider_model_effective_source"] == "codex_config"
+    assert result.raw_meta["provider_model_fallback_used"] is True
+    assert result.raw_meta["provider_model_attempt_count"] == 2

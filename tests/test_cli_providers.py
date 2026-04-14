@@ -56,6 +56,45 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
+def _write_codex_retry_script(path: Path, log_path: Path, unsupported_model: str) -> None:
+    path.write_text(
+        rf'''#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+log_path = pathlib.Path({str(log_path)!r})
+log_path.parent.mkdir(parents=True, exist_ok=True)
+with log_path.open("a", encoding="utf-8") as fh:
+    fh.write(json.dumps({{"args": args}}) + "\n")
+
+output_path = None
+if "-o" in args:
+    output_path = pathlib.Path(args[args.index("-o") + 1])
+
+model = None
+if "--model" in args:
+    model = args[args.index("--model") + 1]
+
+if model == {unsupported_model!r}:
+    sys.stderr.write(
+        "The '{unsupported_model}' model is not supported when using Codex with a ChatGPT account. invalid_request_error\n"
+    )
+    sys.exit(1)
+
+if output_path is not None:
+    output_path.write_text(json.dumps({{"status": "ok", "source": "codex"}}), encoding="utf-8")
+
+print(json.dumps({{"type": "thread.started", "thread_id": "codex-thread-1"}}))
+print(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": "Codex final answer"}}}}))
+print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 11, "output_tokens": 7}}}}))
+''',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 @pytest.fixture
 def fake_cli_bins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     codex_path = tmp_path / "codex"
@@ -91,9 +130,12 @@ async def test_codex_cli_provider_text(fake_cli_bins: dict[str, str]) -> None:
     assert provider.last_usage.input_tokens == 11
     assert provider.last_usage.output_tokens == 7
     assert "--json" in provider.last_command
-    assert "--model" not in provider.last_command
+    model_index = provider.last_command.index("--model")
+    assert provider.last_command[model_index + 1] == "gpt-5-codex"
     assert provider.last_run_metadata["thread_id"] == "codex-thread-1"
     assert provider.last_run_metadata["item_type_counts"]["agent_message"] == 1
+    assert provider.last_run_metadata["model_effective"] == "gpt-5-codex"
+    assert provider.last_run_metadata["model_effective_source"] == "models_yaml"
 
 
 @pytest.mark.asyncio
@@ -158,12 +200,91 @@ def test_codex_cli_provider_reports_configured_default_model(monkeypatch: pytest
             type="cli",
             class_path="anvil.providers.codex_cli.CodexCliProvider",
             binary="codex",
-            model_name="gpt-5-codex",
+            model_name=None,
             models={},
         )
     )
 
     assert provider.reported_model_name() == "gpt-5.4"
+
+
+@pytest.mark.asyncio
+async def test_codex_cli_provider_retries_unsupported_models_yaml_model_without_model_arg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_path = tmp_path / "codex-runs.jsonl"
+    codex_path = tmp_path / "codex"
+    _write_codex_retry_script(codex_path, log_path, unsupported_model="gpt-5-codex")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+    monkeypatch.setattr("anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4")
+
+    provider = CodexCliProvider(
+        ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.codex_cli.CodexCliProvider",
+            binary=str(codex_path),
+            model_name="gpt-5-codex",
+            models={"gpt-5-codex/*": {"execute": {"access": "read", "effort": "high"}}},
+        )
+    )
+
+    result = await provider.generate(
+        "Return structured output.",
+        role="execute",
+        output_schema={
+            "type": "object",
+            "properties": {"status": {"type": "string"}, "source": {"type": "string"}},
+            "required": ["status", "source"],
+        },
+    )
+
+    invocations = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(invocations) == 2
+    assert "--model" in invocations[0]["args"]
+    assert invocations[0]["args"][invocations[0]["args"].index("--model") + 1] == "gpt-5-codex"
+    assert "--model" not in invocations[1]["args"]
+    assert json.loads(result) == {"status": "ok", "source": "codex"}
+    assert provider.reported_model_name() == "gpt-5.4"
+    assert provider.last_run_metadata["model_initial_attempt"] == "gpt-5-codex"
+    assert provider.last_run_metadata["model_effective"] == "gpt-5.4"
+    assert provider.last_run_metadata["model_effective_source"] == "codex_config"
+    assert provider.last_run_metadata["model_fallback_used"] is True
+    assert provider.last_run_metadata["model_attempt_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_codex_cli_provider_does_not_fallback_when_strategy_model_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_path = tmp_path / "codex-runs.jsonl"
+    codex_path = tmp_path / "codex"
+    _write_codex_retry_script(codex_path, log_path, unsupported_model="codex-mini-latest")
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+    monkeypatch.setattr("anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4")
+
+    provider = CodexCliProvider(
+        ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.codex_cli.CodexCliProvider",
+            binary=str(codex_path),
+            model_name="gpt-5-codex",
+            models={},
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="not supported"):
+        await provider.chat(
+            [{"role": "user", "content": "Use a specific model."}],
+            role="execute",
+            model="codex-mini-latest",
+        )
+
+    invocations = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(invocations) == 1
+    assert "--model" in invocations[0]["args"]
+    assert invocations[0]["args"][invocations[0]["args"].index("--model") + 1] == "codex-mini-latest"
+    assert provider.last_run_metadata["model_requested_explicit"] == "codex-mini-latest"
+    assert provider.last_run_metadata["model_fallback_used"] is False
 
 
 @pytest.mark.asyncio
