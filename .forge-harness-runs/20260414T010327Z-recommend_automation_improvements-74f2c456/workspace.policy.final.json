@@ -1,0 +1,31 @@
+{
+  "checkpoint": "final",
+  "final": true,
+  "policy_mode": "forbid",
+  "touched_files": [
+    "crates/agent_api/src/backends/codex/exec.rs",
+    "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+    "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+    "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+  ],
+  "modified_files": [
+    "crates/agent_api/src/backends/codex/exec.rs",
+    "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+    "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+    "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+  ],
+  "added_files": [],
+  "deleted_files": [],
+  "renamed_files": [],
+  "new_untracked_files": [],
+  "violations": [
+    "Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+  ],
+  "notes": [
+    "crates/agent_api/src/backends/codex/exec.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+    "crates/agent_api/src/backends/codex/tests/backend_contract.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+    "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+    "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot."
+  ],
+  "ok": false
+}

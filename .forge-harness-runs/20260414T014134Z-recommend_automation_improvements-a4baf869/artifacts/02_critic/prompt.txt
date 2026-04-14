@@ -1,0 +1,176 @@
+You are the CRITIC stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Perform the first structured review pass on the proposer draft.
+- Create stable issue IDs such as AR-001, AR-002, and keep them deterministic within this review.
+- Return ONLY the JSON object required by the schema.
+
+Your job:
+1. Audit the prior analysis for factual grounding, overclaims, omissions, actionability, and scope discipline.
+2. For every issue you raise, classify both `kind` and `blocking_class`.
+3. Review every recommendation individually and return recommendation-level verdicts.
+4. Use `accept_partial` when a subset of recommendations is already valid even if the overall draft still needs revision.
+5. Use the shared confidence rubric below when judging whether confidence is too high or too low.
+
+Decision guidance:
+- Return verdict=revise when the overall draft still needs more work.
+- Return verdict=reject only for severe, fundamental problems.
+- Return verdict=accept only when the entire draft is sound.
+- Return verdict=accept_partial when at least one recommendation is sound but the whole draft is not yet fully acceptable.
+
+Analysis-review contract: analysis_review_v1_contract_v1
+- Reviser goal: close_all_open_blockers
+- Require issue ledger: True
+- Require recommendation reviews: True
+- Partial acceptance enabled: True
+- Minimum accepted recommendations for partial acceptance: 2
+- Allow localized medium non-correctness issues for partial acceptance: True
+- Forbid correctness blockers on accepted recommendations: True
+- Strengths required: True
+- Uncertainties required: True
+- Empty section rationale allowed: True
+Review stop policy:
+- min_loops: 1
+- max_loops: 2
+- always_run_first_revision: True
+- max_open_medium_issues: 0
+- min_grounding_score: 0.8
+- min_actionability_score: 0.75
+- min_scope_compliance_score: 0.85
+Confidence rubric (analysis_review_confidence_v1):
+- 0.85-1.00: direct code-level observation or explicit file-to-file comparison in the current workspace
+- 0.65-0.84: strong inference from repo structure, workflow semantics, or repeated supporting evidence
+- 0.40-0.64: plausible but partially inferred behavior that is not directly proven by the workspace
+- 0.00-0.39: speculative, runtime-dependent, or otherwise weakly supported claim
+Use the same rubric for generating recommendations and for judging whether confidence is too high or too low.
+
+You are operating inside Forge's mini-harness surface.
+Keep recommendations concrete, grounded, and scoped to the task.
+
+Task ID: recommend_automation_improvements
+
+Objective:
+Analyze and recommend improvements for the CI/CD automation that triggers for new Claude Code and Codex releases in the target repository.
+
+Workspace write policy:
+Mode: forbid
+Allowed paths: - none
+Denied paths: - none
+Allow untracked files: False
+Allow renames: False
+Allow deletions: False
+Max touched files: 0
+Require clean start: False
+This task is analysis-only for the target workspace. Do not modify target-workspace files. Return recommendations or analysis only.
+This task-level workspace write policy overrides any broader stage tool permissions.
+
+Review requirements:
+Task kind: analysis_review
+Require evidence per recommendation: True
+Require classification per recommendation: True
+Require priority per recommendation: True
+Minimum recommendations: 2
+Use the labels confirmed_issue, risk, and recommendation carefully.
+If evidence is ambiguous, downgrade the claim rather than overstating certainty.
+
+Acceptance criteria:
+- The recommendations should enhance the automation reliability and efficiency.
+- The task should focus on CI/CD processes related to Claude Code and Codex releases.
+- Each recommendation should be grounded in concrete repository evidence.
+- Do not modify files in the target workspace.
+
+Constraints:
+- Provide clear, actionable recommendations for CI/CD automation improvements.
+- Avoid refactoring unrelated code or features.
+- Preserve existing public behavior outside the scope of CI/CD automation improvements.
+
+Context:
+Use the repository state in the target workspace as ground truth.
+Focus on CI/CD automation related to Claude Code and Codex releases.
+
+Notes:
+This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade
+any write-capable stage to effective read-only access and fail the run if repo files are changed.
+The analysis_review_v1 strategy is the preferred fit for this task.
+
+Files to prioritize:
+- .github/workflows/codex-cli-release-watch.yml
+- .github/workflows/claude-code-release-watch.yml
+- .github/workflows/codex-cli-update-snapshot.yml
+- .github/workflows/claude-code-update-snapshot.yml
+
+Prior analysis structured output:
+{
+  "status": "done",
+  "summary": "Codex release watch currently never auto-chases the newest upstream release because it always selects the \u201cstable-minus-one\u201d candidate, so automation stalls until two new releases exist. Both release-watch workflows also dispatch blindly even when an automation branch/PR for the same version is already open, wasting CI minutes and generating duplicate PRs. Finally, both snapshot workflows mark the macOS/Windows artifact downloads as best-effort, letting union/report succeed with only the Linux snapshot even though `RULES.json` marks all three targets as expected, so release PRs can merge without multi-platform coverage.",
+  "confidence": 0.79,
+  "workspace_write_intent": "none",
+  "recommendations": [
+    {
+      "classification": "confirmed_issue",
+      "priority": "high",
+      "title": "Codex release watch never triggers on the newest upstream release",
+      "rationale": "The watcher always chooses `stable[1]` (second newest release) as the candidate, so when a single new upstream release arrives the candidate equals the already validated version and automation skips entirely until two releases land. This creates a deterministic gap where the latest release is never processed automatically.",
+      "evidence": [
+        ".github/workflows/codex-cli-release-watch.yml:56",
+        ".github/workflows/codex-cli-release-watch.yml:57",
+        ".github/workflows/codex-cli-release-watch.yml:60-88"
+      ],
+      "proposed_change": "Update the release watch logic to prefer `stable[0]` (latest) as the candidate whenever it is newer than `latest_validated`, and only fall back to `stable[1]` when the newest release is already validated or intentionally skipped. Add regression unit tests (e.g., via github-script `core.summary`) proving that a single new release now triggers a dispatch.",
+      "confidence": 0.87
+    },
+    {
+      "classification": "risk",
+      "priority": "medium",
+      "title": "Release watchers dispatch even when an automation PR for that version already exists",
+      "rationale": "Neither watcher checks for existing automation branches/PRs, so scheduled runs will keep firing `createWorkflowDispatch` every night while a prior automation PR is open or blocked. That burns CI minutes and can create noisy branch churn that humans must clean up.",
+      "evidence": [
+        ".github/workflows/codex-cli-release-watch.yml:56-107",
+        ".github/workflows/claude-code-release-watch.yml:38-66"
+      ],
+      "proposed_change": "Before dispatching, query the repo for open PRs/branches that match the automation naming pattern (e.g. `automation/codex-cli-${version}` or `automation/claude-code-${version}`), and skip or comment instead of dispatching if one exists. Alternatively, persist the last dispatched version in a workflow output/issue. This keeps the automation idempotent and avoids duplicate CI runs.",
+      "confidence": 0.72
+    },
+    {
+      "classification": "risk",
+      "priority": "medium",
+      "title": "Snapshot workflows treat macOS/Windows artifacts as optional despite being marked required targets",
+      "rationale": "In both workflows the macOS and Windows snapshot artifact downloads are marked `continue-on-error`, and the union job only hard-gates the Linux snapshot. If either non-Linux matrix leg fails, the pipeline still succeeds and merges even though `RULES.json` expects these targets, reducing coverage for release PRs.",
+      "evidence": [
+        ".github/workflows/codex-cli-update-snapshot.yml:267-309",
+        ".github/workflows/claude-code-update-snapshot.yml:249-308"
+      ],
+      "proposed_change": "Make the macOS/Windows artifact downloads and presence checks fail fast (no `continue-on-error`) or explicitly compare the downloaded artifacts against `cli_manifests/**/RULES.json.union.expected_targets` and fail the workflow when any expected target artifact is missing. This enforces multi-platform parity before creating the automation PR.",
+      "confidence": 0.68
+    }
+  ],
+  "strengths": [
+    "Both snapshot workflows pin to the `staging` branch before generating artifacts, keeping automation branches aligned with the integration base (.github/workflows/codex-cli-update-snapshot.yml:114-125 and .github/workflows/claude-code-update-snapshot.yml:104-115)."
+  ],
+  "uncertainties": [
+    "unclear whether the \u201cstable-minus-one\u201d candidate selection in the Codex watcher was intentional legacy policy; confirming expectations with release owners may be necessary before adjusting the workflow."
+  ],
+  "files_reviewed": [
+    ".github/workflows/codex-cli-release-watch.yml",
+    ".github/workflows/claude-code-release-watch.yml",
+    ".github/workflows/codex-cli-update-snapshot.yml",
+    ".github/workflows/claude-code-update-snapshot.yml"
+  ]
+}
+
+Validator and advisory results:
+No external validators were configured or applicable.
+
+Current workspace snapshot:
+Branch: feat/agent-api-model-selection
+
+HEAD: 92e694957194999192ce91ef90a0a1db08162328
+
+Changed files: none
+
+Git status:
+clean
+
+Git diff --stat:
+no unstaged diff

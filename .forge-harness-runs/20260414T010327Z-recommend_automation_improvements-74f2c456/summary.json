@@ -1,0 +1,590 @@
+{
+  "run_id": "20260414T010327Z-recommend_automation_improvements-74f2c456",
+  "thread_id": null,
+  "workspace": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+  "config_path": "config/models.yaml",
+  "task": {
+    "id": "recommend_automation_improvements",
+    "objective": "Analyze and recommend improvements for the CI/CD automation that triggers for new Claude Code and Codex releases in the target repository.\n",
+    "workspace_write_policy": {
+      "mode": "forbid",
+      "allowed_paths": [],
+      "denied_paths": [],
+      "allow_untracked": false,
+      "allow_renames": false,
+      "allow_deletions": false,
+      "max_touched_files": 0,
+      "require_clean_start": false
+    },
+    "task_kind": "analysis_review",
+    "acceptance": [
+      "The recommendations should enhance the automation reliability and efficiency.",
+      "The task should focus on CI/CD processes related to Claude Code and Codex releases.",
+      "Each recommendation should be grounded in concrete repository evidence.",
+      "Do not modify files in the target workspace."
+    ],
+    "constraints": [
+      "Provide clear, actionable recommendations for CI/CD automation improvements.",
+      "Avoid refactoring unrelated code or features.",
+      "Preserve existing public behavior outside the scope of CI/CD automation improvements."
+    ],
+    "context": "Use the repository state in the target workspace as ground truth.\nFocus on CI/CD automation related to Claude Code and Codex releases.\n",
+    "notes": "This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade\nany write-capable stage to effective read-only access and fail the run if repo files are changed.\nThe analysis_review_v1 strategy is the preferred fit for this task.\n",
+    "files_hint": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml",
+      ".github/workflows/codex-cli-update-snapshot.yml",
+      ".github/workflows/claude-code-update-snapshot.yml"
+    ],
+    "prompt_addendum": "",
+    "review_requirements": {
+      "require_evidence_per_recommendation": true,
+      "require_classification": true,
+      "require_priority": true,
+      "min_recommendations": 2
+    }
+  },
+  "strategy_name": "analysis-review-codex-claude",
+  "strategy_kind": "analysis_review_v1",
+  "warnings": [
+    "Workspace is dirty at start. The harness will operate on the existing working tree. Use workspace_write_policy.require_clean_start=true to block this.",
+    "Workspace write policy violated at after_proposer: Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+  ],
+  "errors": [],
+  "verdict": "policy_violation",
+  "verdicts": {
+    "run_verdict": "policy_violation",
+    "content_verdict": "policy_violation",
+    "validator_verdict": "not_configured",
+    "policy_verdict": "policy_violation",
+    "config_verdict": "pass"
+  },
+  "final_summary": "Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs",
+  "failure_details": {
+    "checkpoint": "final",
+    "final": true,
+    "policy_mode": "forbid",
+    "touched_files": [
+      "crates/agent_api/src/backends/codex/exec.rs",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+    ],
+    "modified_files": [
+      "crates/agent_api/src/backends/codex/exec.rs",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+    ],
+    "added_files": [],
+    "deleted_files": [],
+    "renamed_files": [],
+    "new_untracked_files": [],
+    "violations": [
+      "Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+    ],
+    "notes": [
+      "crates/agent_api/src/backends/codex/exec.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot."
+    ],
+    "ok": false
+  },
+  "run_details": {},
+  "validator_summary": {
+    "total_runs": 0,
+    "status_counts": {},
+    "required_status_counts": {},
+    "latest_round_verdict": "not_configured"
+  },
+  "workspace_write_policy": {
+    "mode": "forbid",
+    "allowed_paths": [],
+    "denied_paths": [],
+    "allow_untracked": false,
+    "allow_renames": false,
+    "allow_deletions": false,
+    "max_touched_files": 0,
+    "require_clean_start": false
+  },
+  "workspace_policy_ignored_rel_paths": [],
+  "workspace_policy_checks": [
+    {
+      "checkpoint": "after_proposer",
+      "final": false,
+      "policy_mode": "forbid",
+      "touched_files": [
+        "crates/agent_api/src/backends/codex/exec.rs",
+        "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+        "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+        "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+      ],
+      "modified_files": [
+        "crates/agent_api/src/backends/codex/exec.rs",
+        "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+        "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+        "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+      ],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [
+        "Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+      ],
+      "notes": [
+        "crates/agent_api/src/backends/codex/exec.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+        "crates/agent_api/src/backends/codex/tests/backend_contract.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+        "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+        "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot."
+      ],
+      "ok": false
+    },
+    {
+      "checkpoint": "final",
+      "final": true,
+      "policy_mode": "forbid",
+      "touched_files": [
+        "crates/agent_api/src/backends/codex/exec.rs",
+        "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+        "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+        "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+      ],
+      "modified_files": [
+        "crates/agent_api/src/backends/codex/exec.rs",
+        "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+        "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+        "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+      ],
+      "added_files": [],
+      "deleted_files": [],
+      "renamed_files": [],
+      "new_untracked_files": [],
+      "violations": [
+        "Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+      ],
+      "notes": [
+        "crates/agent_api/src/backends/codex/exec.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+        "crates/agent_api/src/backends/codex/tests/backend_contract.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+        "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+        "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot."
+      ],
+      "ok": false
+    }
+  ],
+  "final_workspace_policy_evaluation": {
+    "checkpoint": "final",
+    "final": true,
+    "policy_mode": "forbid",
+    "touched_files": [
+      "crates/agent_api/src/backends/codex/exec.rs",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+    ],
+    "modified_files": [
+      "crates/agent_api/src/backends/codex/exec.rs",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+    ],
+    "added_files": [],
+    "deleted_files": [],
+    "renamed_files": [],
+    "new_untracked_files": [],
+    "violations": [
+      "Workspace writes are forbidden for this task, but changes were detected: crates/agent_api/src/backends/codex/exec.rs, crates/agent_api/src/backends/codex/tests/backend_contract.rs, crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs, crates/agent_api/tests/c1_codex_stream_exec_adapter.rs"
+    ],
+    "notes": [
+      "crates/agent_api/src/backends/codex/exec.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot.",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs was dirty at start and no longer appears in git status; it was still changed relative to the initial workspace snapshot."
+    ],
+    "ok": false
+  },
+  "agent_stages": [
+    {
+      "role_name": "proposer",
+      "provider": "codex_cli",
+      "model": "gpt-5-codex",
+      "access": "read",
+      "ok": true,
+      "exit_code": 0,
+      "duration_sec": 65.681,
+      "cwd": "/Users/spensermcconnell/__Active_Code/codex-wrapper",
+      "command": [
+        "/opt/homebrew/bin/codex",
+        "exec",
+        "--ephemeral",
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--model",
+        "gpt-5-codex",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "--output-schema",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j8628bd4/schema.json",
+        "-o",
+        "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j8628bd4/structured_output.json",
+        "-"
+      ],
+      "stdout_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/response.txt",
+      "stderr_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/error.txt",
+      "prompt_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/prompt.txt",
+      "schema_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/schema.json",
+      "output_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/structured_output.json",
+      "structured_output": {
+        "status": "done",
+        "summary": "CI/CD audit for Codex & Claude Code release automation surfaces one correctness bug in the Codex watcher and one reliability risk around branch drift between watchers and staging-only update workflows.",
+        "confidence": 0.8,
+        "workspace_write_intent": "none",
+        "recommendations": [
+          {
+            "classification": "confirmed_issue",
+            "priority": "high",
+            "title": "Codex release watch never dispatches the newest upstream release",
+            "rationale": "`codex-cli-release-watch.yml` selects `candidate = (stable[1] ?? stable[0])` and then refuses to dispatch whenever that candidate is not newer than `latest_validated`. When the repository has already validated the previous release (stable[1]), the candidate equals `latest_validated`, so the workflow exits even though `latestStable` is ahead. This leaves automation permanently one release behind and blocks new Codex versions from entering the snapshot pipeline.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml"
+            ],
+            "proposed_change": "Set `candidate` to the newest stable tag (fallback to the newest available entry when only one exists) and dispatch when `latestStable` is newer than `latest_validated`. A simple fix is to drop the stable-minus-one logic, compare `latestStable` directly against `latest_validated`, and hand that version into `codex-cli-update-snapshot.yml`.",
+            "confidence": 0.9
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Release watch workflows read validation pointers from the wrong branch",
+            "rationale": "Both release-watch jobs check out the workflow ref (for scheduled runs this is the default branch, likely `main`) and read `cli_manifests/*/latest_validated.txt`. However, the downstream update workflows always operate on `staging` (see explicit `checkout ref: staging` comments). If staging advances before main, the watchers continue seeing the old `latest_validated` pointer and will repeatedly trigger redundant snapshot runs for versions already processed on staging.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml",
+              ".github/workflows/claude-code-release-watch.yml",
+              ".github/workflows/codex-cli-update-snapshot.yml",
+              ".github/workflows/claude-code-update-snapshot.yml"
+            ],
+            "proposed_change": "In both release-watch workflows, check out `staging` (or explicitly read `latest_validated` from that branch via `ref: staging` or `git fetch`) so that the watcher\u2019s state matches the automation branch. Alternatively, keep the default checkout but read the file via `git show staging:cli_manifests/.../latest_validated.txt` before deciding to dispatch.",
+            "confidence": 0.7
+          }
+        ],
+        "strengths": [
+          "Snapshot update workflows for both Codex and Claude Code consistently pin to `staging`, verify upstream artifact hashes, and gate the Linux union/report path before creating PRs, providing a solid baseline of reproducible artifacts."
+        ],
+        "uncertainties": [
+          "Assuming the default branch for scheduled workflows is `main`; if GitHub has been reconfigured to schedule off `staging`, the branch-drift risk is reduced but not demonstrated in-repo."
+        ],
+        "files_reviewed": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/codex-cli-update-snapshot.yml",
+          ".github/workflows/claude-code-release-watch.yml",
+          ".github/workflows/claude-code-update-snapshot.yml"
+        ]
+      },
+      "raw_meta": {
+        "requested_provider": "codex_cli",
+        "resolved_provider": "codex_cli",
+        "provider_type": "cli",
+        "mapped_role": "execute",
+        "family": "codex",
+        "thread_id": "019d8983-c779-7ab2-a14e-195134da8eeb",
+        "event_count": 20,
+        "item_type_counts": {
+          "command_execution": 7,
+          "reasoning": 2,
+          "error": 1
+        },
+        "json_parse_errors": 0,
+        "raw_event_count": 20,
+        "schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j8628bd4/schema.json",
+        "output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j8628bd4/structured_output.json",
+        "usage": {
+          "input_tokens": 287036,
+          "output_tokens": 4518
+        },
+        "provider_family": "codex",
+        "provider_thread_id": "019d8983-c779-7ab2-a14e-195134da8eeb",
+        "provider_event_count": 20,
+        "provider_item_type_counts": {
+          "command_execution": 7,
+          "reasoning": 2,
+          "error": 1
+        },
+        "provider_json_parse_errors": 0,
+        "provider_raw_event_count": 20,
+        "provider_schema_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j8628bd4/schema.json",
+        "provider_output_path": "/var/folders/2x/5mqqp02j36v079m96nx8fjs00000gn/T/forge-codex-j8628bd4/structured_output.json"
+      },
+      "error": null,
+      "stage_index": 1,
+      "requested_access": "read",
+      "effective_access": "read"
+    }
+  ],
+  "validator_rounds": [],
+  "initial_git_snapshot": {
+    "is_git": true,
+    "branch": "feat/agent-api-model-selection",
+    "head": "4c06c8de4f7ef1854a4b6c015e857321e47b14e7",
+    "status_porcelain": " M crates/agent_api/src/backends/codex/exec.rs\n M crates/agent_api/src/backends/codex/tests/backend_contract.rs\n M crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs\n M crates/agent_api/tests/c1_codex_stream_exec_adapter.rs\n",
+    "status_entries": [
+      {
+        "raw": " M crates/agent_api/src/backends/codex/exec.rs",
+        "x": " ",
+        "y": "M",
+        "path": "crates/agent_api/src/backends/codex/exec.rs",
+        "orig_path": null,
+        "kind": "changed"
+      },
+      {
+        "raw": " M crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+        "x": " ",
+        "y": "M",
+        "path": "crates/agent_api/src/backends/codex/tests/backend_contract.rs",
+        "orig_path": null,
+        "kind": "changed"
+      },
+      {
+        "raw": " M crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+        "x": " ",
+        "y": "M",
+        "path": "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs",
+        "orig_path": null,
+        "kind": "changed"
+      },
+      {
+        "raw": " M crates/agent_api/tests/c1_codex_stream_exec_adapter.rs",
+        "x": " ",
+        "y": "M",
+        "path": "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs",
+        "orig_path": null,
+        "kind": "changed"
+      }
+    ],
+    "dirty_file_hashes": {
+      "crates/agent_api/src/backends/codex/exec.rs": "3ae6d53f564a7fd82b38a5d43d8161169058e863da51607ef3b8f5a0ca56bd0e",
+      "crates/agent_api/src/backends/codex/tests/backend_contract.rs": "ac0d15c2adde051045cd2140f50d2de69a7f2a5ef4a5cbd9871c3e9a366de9ec",
+      "crates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs": "2981bdfa24d720ecf5fc6a738b307f0b7049ab8703525ae275231adf8d2fad13",
+      "crates/agent_api/tests/c1_codex_stream_exec_adapter.rs": "baf438cd84c420d4f887ef5b29e9ffbf05e1f12ad57b02ef108d7f5523ea6019"
+    },
+    "diff_stat": " crates/agent_api/src/backends/codex/exec.rs        | 44 ++----------\n .../src/backends/codex/tests/backend_contract.rs   | 15 ++++\n .../fake_codex_stream_exec_scenarios_agent_api.rs  | 15 ++++\n .../tests/c1_codex_stream_exec_adapter.rs          | 81 ++++++++++++++++++++++\n 4 files changed, 115 insertions(+), 40 deletions(-)\n",
+    "diff_name_status": "M\tcrates/agent_api/src/backends/codex/exec.rs\nM\tcrates/agent_api/src/backends/codex/tests/backend_contract.rs\nM\tcrates/agent_api/src/bin/fake_codex_stream_exec_scenarios_agent_api.rs\nM\tcrates/agent_api/tests/c1_codex_stream_exec_adapter.rs\n",
+    "ignored_rel_paths": []
+  },
+  "final_git_snapshot": {
+    "is_git": true,
+    "branch": "feat/agent-api-model-selection",
+    "head": "0f8547684cf454ba7b9716cae2d295c5fb8ccd39",
+    "status_porcelain": "",
+    "status_entries": [],
+    "dirty_file_hashes": {},
+    "diff_stat": "",
+    "diff_name_status": "",
+    "ignored_rel_paths": []
+  },
+  "changed_files": [],
+  "analysis_review_contract": {
+    "contract_version": "analysis_review_v1_contract_v1",
+    "stop_policy": {
+      "min_loops": 1,
+      "max_loops": 2,
+      "always_run_first_revision": true,
+      "stop_when": {
+        "max_open_medium_issues": 0,
+        "min_grounding_score": 0.8,
+        "min_actionability_score": 0.75,
+        "min_scope_compliance_score": 0.85
+      }
+    },
+    "reviser_goal": "close_all_open_blockers",
+    "partial_acceptance": {
+      "enabled": true,
+      "min_accepted_recommendations": 2,
+      "allow_localized_medium_non_correctness_issues": true,
+      "forbid_correctness_blockers_on_accepted_recommendations": true
+    },
+    "required_sections": {
+      "strengths_required": true,
+      "uncertainties_required": true,
+      "none_reason_allowed": true
+    },
+    "require_issue_ledger": true,
+    "require_recommendation_reviews": true,
+    "confidence_rubric_version": "analysis_review_confidence_v1",
+    "confidence_rubric": [
+      "0.85-1.00: direct code-level observation or explicit file-to-file comparison in the current workspace",
+      "0.65-0.84: strong inference from repo structure, workflow semantics, or repeated supporting evidence",
+      "0.40-0.64: plausible but partially inferred behavior that is not directly proven by the workspace",
+      "0.00-0.39: speculative, runtime-dependent, or otherwise weakly supported claim"
+    ],
+    "issue_taxonomy_version": "analysis_review_issue_taxonomy_v1",
+    "issue_kind_default_blocking_class": {
+      "factual_error": "correctness",
+      "overclaim": "correctness",
+      "missing_evidence": "correctness",
+      "missing_priority": "completeness",
+      "missing_classification": "completeness",
+      "missed_issue": "completeness",
+      "scope_drift": "correctness",
+      "confidence_calibration": "presentation",
+      "insufficient_specificity": "actionability",
+      "missing_section": "completeness",
+      "other": "presentation"
+    }
+  },
+  "issue_ledger": [],
+  "recommendation_reviews": [],
+  "artifacts": {
+    "run_dir": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456",
+    "report_md": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/REPORT.md",
+    "summary_json": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/summary.json",
+    "final_artifact": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/BEST_DRAFT.md",
+    "final_artifact_json": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/BEST_DRAFT.json",
+    "final_artifact_kind": "best_draft",
+    "best_draft_json": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/BEST_DRAFT.json",
+    "best_draft_md": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/BEST_DRAFT.md",
+    "analysis_review_contract_json": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/analysis_review.contract.effective.json"
+  },
+  "final_answer": null,
+  "created_at": "2026-04-14T01:04:33.578304+00:00",
+  "drafts": [
+    {
+      "draft_id": "draft-proposer",
+      "source_stage_id": "stage-01-proposer",
+      "role_name": "proposer",
+      "task_kind": "analysis_review",
+      "round_index": 0,
+      "text_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/response.txt",
+      "json_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/structured_output.json",
+      "summary": "CI/CD audit for Codex & Claude Code release automation surfaces one correctness bug in the Codex watcher and one reliability risk around branch drift between watchers and staging-only update workflows.",
+      "review_status": "best",
+      "scores": {},
+      "issue_counts": {
+        "required_validator_failures": 0
+      },
+      "metadata": {
+        "stage_index": 1,
+        "requested_access": "read",
+        "effective_access": "read",
+        "payload": {
+          "status": "done",
+          "summary": "CI/CD audit for Codex & Claude Code release automation surfaces one correctness bug in the Codex watcher and one reliability risk around branch drift between watchers and staging-only update workflows.",
+          "confidence": 0.8,
+          "workspace_write_intent": "none",
+          "recommendations": [
+            {
+              "classification": "confirmed_issue",
+              "priority": "high",
+              "title": "Codex release watch never dispatches the newest upstream release",
+              "rationale": "`codex-cli-release-watch.yml` selects `candidate = (stable[1] ?? stable[0])` and then refuses to dispatch whenever that candidate is not newer than `latest_validated`. When the repository has already validated the previous release (stable[1]), the candidate equals `latest_validated`, so the workflow exits even though `latestStable` is ahead. This leaves automation permanently one release behind and blocks new Codex versions from entering the snapshot pipeline.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml"
+              ],
+              "proposed_change": "Set `candidate` to the newest stable tag (fallback to the newest available entry when only one exists) and dispatch when `latestStable` is newer than `latest_validated`. A simple fix is to drop the stable-minus-one logic, compare `latestStable` directly against `latest_validated`, and hand that version into `codex-cli-update-snapshot.yml`.",
+              "confidence": 0.9
+            },
+            {
+              "classification": "risk",
+              "priority": "medium",
+              "title": "Release watch workflows read validation pointers from the wrong branch",
+              "rationale": "Both release-watch jobs check out the workflow ref (for scheduled runs this is the default branch, likely `main`) and read `cli_manifests/*/latest_validated.txt`. However, the downstream update workflows always operate on `staging` (see explicit `checkout ref: staging` comments). If staging advances before main, the watchers continue seeing the old `latest_validated` pointer and will repeatedly trigger redundant snapshot runs for versions already processed on staging.",
+              "evidence": [
+                ".github/workflows/codex-cli-release-watch.yml",
+                ".github/workflows/claude-code-release-watch.yml",
+                ".github/workflows/codex-cli-update-snapshot.yml",
+                ".github/workflows/claude-code-update-snapshot.yml"
+              ],
+              "proposed_change": "In both release-watch workflows, check out `staging` (or explicitly read `latest_validated` from that branch via `ref: staging` or `git fetch`) so that the watcher\u2019s state matches the automation branch. Alternatively, keep the default checkout but read the file via `git show staging:cli_manifests/.../latest_validated.txt` before deciding to dispatch.",
+              "confidence": 0.7
+            }
+          ],
+          "strengths": [
+            "Snapshot update workflows for both Codex and Claude Code consistently pin to `staging`, verify upstream artifact hashes, and gate the Linux union/report path before creating PRs, providing a solid baseline of reproducible artifacts."
+          ],
+          "uncertainties": [
+            "Assuming the default branch for scheduled workflows is `main`; if GitHub has been reconfigured to schedule off `staging`, the branch-drift risk is reduced but not demonstrated in-repo."
+          ],
+          "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/codex-cli-update-snapshot.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/claude-code-update-snapshot.yml"
+          ]
+        },
+        "validator_round_index": 0,
+        "validator_results": []
+      }
+    }
+  ],
+  "best_draft_id": "draft-proposer",
+  "selected_draft_id": "draft-proposer",
+  "best_draft": {
+    "draft_id": "draft-proposer",
+    "source_stage_id": "stage-01-proposer",
+    "role_name": "proposer",
+    "task_kind": "analysis_review",
+    "round_index": 0,
+    "text_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/response.txt",
+    "json_path": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260414T010327Z-recommend_automation_improvements-74f2c456/artifacts/01_proposer/structured_output.json",
+    "summary": "CI/CD audit for Codex & Claude Code release automation surfaces one correctness bug in the Codex watcher and one reliability risk around branch drift between watchers and staging-only update workflows.",
+    "review_status": "best",
+    "scores": {},
+    "issue_counts": {
+      "required_validator_failures": 0
+    },
+    "metadata": {
+      "stage_index": 1,
+      "requested_access": "read",
+      "effective_access": "read",
+      "payload": {
+        "status": "done",
+        "summary": "CI/CD audit for Codex & Claude Code release automation surfaces one correctness bug in the Codex watcher and one reliability risk around branch drift between watchers and staging-only update workflows.",
+        "confidence": 0.8,
+        "workspace_write_intent": "none",
+        "recommendations": [
+          {
+            "classification": "confirmed_issue",
+            "priority": "high",
+            "title": "Codex release watch never dispatches the newest upstream release",
+            "rationale": "`codex-cli-release-watch.yml` selects `candidate = (stable[1] ?? stable[0])` and then refuses to dispatch whenever that candidate is not newer than `latest_validated`. When the repository has already validated the previous release (stable[1]), the candidate equals `latest_validated`, so the workflow exits even though `latestStable` is ahead. This leaves automation permanently one release behind and blocks new Codex versions from entering the snapshot pipeline.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml"
+            ],
+            "proposed_change": "Set `candidate` to the newest stable tag (fallback to the newest available entry when only one exists) and dispatch when `latestStable` is newer than `latest_validated`. A simple fix is to drop the stable-minus-one logic, compare `latestStable` directly against `latest_validated`, and hand that version into `codex-cli-update-snapshot.yml`.",
+            "confidence": 0.9
+          },
+          {
+            "classification": "risk",
+            "priority": "medium",
+            "title": "Release watch workflows read validation pointers from the wrong branch",
+            "rationale": "Both release-watch jobs check out the workflow ref (for scheduled runs this is the default branch, likely `main`) and read `cli_manifests/*/latest_validated.txt`. However, the downstream update workflows always operate on `staging` (see explicit `checkout ref: staging` comments). If staging advances before main, the watchers continue seeing the old `latest_validated` pointer and will repeatedly trigger redundant snapshot runs for versions already processed on staging.",
+            "evidence": [
+              ".github/workflows/codex-cli-release-watch.yml",
+              ".github/workflows/claude-code-release-watch.yml",
+              ".github/workflows/codex-cli-update-snapshot.yml",
+              ".github/workflows/claude-code-update-snapshot.yml"
+            ],
+            "proposed_change": "In both release-watch workflows, check out `staging` (or explicitly read `latest_validated` from that branch via `ref: staging` or `git fetch`) so that the watcher\u2019s state matches the automation branch. Alternatively, keep the default checkout but read the file via `git show staging:cli_manifests/.../latest_validated.txt` before deciding to dispatch.",
+            "confidence": 0.7
+          }
+        ],
+        "strengths": [
+          "Snapshot update workflows for both Codex and Claude Code consistently pin to `staging`, verify upstream artifact hashes, and gate the Linux union/report path before creating PRs, providing a solid baseline of reproducible artifacts."
+        ],
+        "uncertainties": [
+          "Assuming the default branch for scheduled workflows is `main`; if GitHub has been reconfigured to schedule off `staging`, the branch-drift risk is reduced but not demonstrated in-repo."
+        ],
+        "files_reviewed": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/codex-cli-update-snapshot.yml",
+          ".github/workflows/claude-code-release-watch.yml",
+          ".github/workflows/claude-code-update-snapshot.yml"
+        ]
+      },
+      "validator_round_index": 0,
+      "validator_results": []
+    }
+  }
+}

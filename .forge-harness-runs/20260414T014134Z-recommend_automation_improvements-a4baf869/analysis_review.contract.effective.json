@@ -1,0 +1,49 @@
+{
+  "contract_version": "analysis_review_v1_contract_v1",
+  "stop_policy": {
+    "min_loops": 1,
+    "max_loops": 2,
+    "always_run_first_revision": true,
+    "stop_when": {
+      "max_open_medium_issues": 0,
+      "min_grounding_score": 0.8,
+      "min_actionability_score": 0.75,
+      "min_scope_compliance_score": 0.85
+    }
+  },
+  "reviser_goal": "close_all_open_blockers",
+  "partial_acceptance": {
+    "enabled": true,
+    "min_accepted_recommendations": 2,
+    "allow_localized_medium_non_correctness_issues": true,
+    "forbid_correctness_blockers_on_accepted_recommendations": true
+  },
+  "required_sections": {
+    "strengths_required": true,
+    "uncertainties_required": true,
+    "none_reason_allowed": true
+  },
+  "require_issue_ledger": true,
+  "require_recommendation_reviews": true,
+  "confidence_rubric_version": "analysis_review_confidence_v1",
+  "confidence_rubric": [
+    "0.85-1.00: direct code-level observation or explicit file-to-file comparison in the current workspace",
+    "0.65-0.84: strong inference from repo structure, workflow semantics, or repeated supporting evidence",
+    "0.40-0.64: plausible but partially inferred behavior that is not directly proven by the workspace",
+    "0.00-0.39: speculative, runtime-dependent, or otherwise weakly supported claim"
+  ],
+  "issue_taxonomy_version": "analysis_review_issue_taxonomy_v1",
+  "issue_kind_default_blocking_class": {
+    "factual_error": "correctness",
+    "overclaim": "correctness",
+    "missing_evidence": "correctness",
+    "missing_priority": "completeness",
+    "missing_classification": "completeness",
+    "missed_issue": "completeness",
+    "scope_drift": "correctness",
+    "confidence_calibration": "presentation",
+    "insufficient_specificity": "actionability",
+    "missing_section": "completeness",
+    "other": "presentation"
+  }
+}

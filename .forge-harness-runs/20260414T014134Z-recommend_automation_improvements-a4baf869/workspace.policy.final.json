@@ -1,0 +1,14 @@
+{
+  "checkpoint": "final",
+  "final": true,
+  "policy_mode": "forbid",
+  "touched_files": [],
+  "modified_files": [],
+  "added_files": [],
+  "deleted_files": [],
+  "renamed_files": [],
+  "new_untracked_files": [],
+  "violations": [],
+  "notes": [],
+  "ok": true
+}

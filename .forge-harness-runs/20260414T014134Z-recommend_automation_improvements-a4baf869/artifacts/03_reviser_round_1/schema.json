@@ -1,0 +1,148 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "partial",
+        "blocked",
+        "revised",
+        "no_change_needed"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "workspace_write_intent": {
+      "type": "string",
+      "enum": [
+        "none",
+        "repo_patch"
+      ]
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "classification": {
+            "type": "string",
+            "enum": [
+              "confirmed_issue",
+              "risk",
+              "recommendation"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "proposed_change": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "classification",
+          "priority",
+          "title",
+          "rationale",
+          "evidence",
+          "proposed_change",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "strengths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "files_reviewed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "issue_resolution_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "issue_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "addressed",
+              "not_addressed",
+              "disagree"
+            ]
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "residual_risk": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "status",
+          "change_summary",
+          "residual_risk"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "workspace_write_intent",
+    "recommendations",
+    "strengths",
+    "uncertainties",
+    "files_reviewed",
+    "confidence",
+    "issue_resolution_map"
+  ],
+  "additionalProperties": false
+}
