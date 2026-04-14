@@ -197,6 +197,43 @@ async def test_claude_code_provider_text(fake_cli_bins: dict[str, str]) -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_code_provider_merges_wildcard_role_defaults_with_explicit_overrides(
+    fake_cli_bins: dict[str, str]
+) -> None:
+    provider = ClaudeCodeProvider(
+        ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.claude_code.ClaudeCodeProvider",
+            binary=fake_cli_bins["claude"],
+            model_name="sonnet",
+            models={
+                "sonnet/*": {
+                    "critique": {
+                        "access": "read",
+                        "effort": "medium",
+                        "max_turns": 4,
+                    }
+                }
+            },
+        )
+    )
+
+    await provider.chat(
+        [{"role": "user", "content": "Review the workflow."}],
+        role="critique",
+        model="sonnet-override",
+        effort="high",
+    )
+
+    model_index = provider.last_command.index("--model")
+    effort_index = provider.last_command.index("--effort")
+    max_turns_index = provider.last_command.index("--max-turns")
+    assert provider.last_command[model_index + 1] == "sonnet-override"
+    assert provider.last_command[effort_index + 1] == "high"
+    assert provider.last_command[max_turns_index + 1] == "4"
+
+
+@pytest.mark.asyncio
 async def test_claude_code_provider_structured_output(fake_cli_bins: dict[str, str]) -> None:
     provider = ClaudeCodeProvider(
         ProviderCfg(

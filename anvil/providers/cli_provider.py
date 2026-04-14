@@ -40,10 +40,15 @@ class CliProviderBase(ModelProvider, ABC):
         for model_role_key, config in self.cfg.models.items():
             if "/" in model_role_key:
                 model_part, role_part = model_role_key.rsplit("/", 1)
-                if "*" in model_part or model_part == self.model_name:
-                    if isinstance(config, Mapping):
-                        role_configs[role_part] = dict(config)
-            elif model_role_key == self.model_name and isinstance(config, Mapping):
+                if model_part not in {self.model_name, "default"} and "*" not in model_part:
+                    continue
+                if role_part == "*" and isinstance(config, Mapping):
+                    for nested_role, nested_config in config.items():
+                        if isinstance(nested_config, Mapping):
+                            role_configs[str(nested_role)] = dict(nested_config)
+                elif isinstance(config, Mapping):
+                    role_configs[role_part] = dict(config)
+            elif model_role_key in {self.model_name, "default"} and isinstance(config, Mapping):
                 role_configs["default"] = dict(config)
         return role_configs
 
