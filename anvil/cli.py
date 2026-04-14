@@ -1051,6 +1051,9 @@ async def harness_run_command(
     final_answer_md = artifacts.get('final_answer_md')
     if final_answer_md:
         print(f"final_answer={final_answer_md}")
+    partial_answer_md = artifacts.get('partial_answer_md')
+    if partial_answer_md:
+        print(f"partial_answer={partial_answer_md}")
 
 
 async def main_async(argv=None) -> None:

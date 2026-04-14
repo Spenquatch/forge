@@ -50,7 +50,7 @@ class DraftRecord(TypedDict, total=False):
     text_path: str
     json_path: str | None
     summary: str
-    review_status: Literal["candidate", "accepted", "rejected", "best"]
+    review_status: Literal["candidate", "accepted", "accepted_partial", "rejected", "best"]
     scores: dict[str, float]
     issue_counts: dict[str, int]
     metadata: dict[str, Any]
@@ -59,12 +59,17 @@ class DraftRecord(TypedDict, total=False):
 class IssueRecord(TypedDict, total=False):
     issue_id: str
     source_stage_id: str
+    first_seen_round: int
+    last_seen_round: int
     severity: Literal["low", "medium", "high", "critical"]
-    category: str
-    summary: str
-    rationale: str
-    evidence: list[dict[str, Any]]
-    resolution_status: Literal["open", "fixed", "partial", "disagreed", "waived"]
+    kind: str
+    blocking_class: str
+    recommendation_index: int | None
+    title: str
+    evidence: str
+    repair_hint: str
+    why_not_raised_earlier: str | None
+    resolution_status: Literal["open", "resolved", "carried_forward", "waived"]
     resolution_note: str
 
 
@@ -262,8 +267,17 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
     return records
 
 
-def _issue_history_from_drafts(drafts: list[dict[str, Any]]) -> list[IssueRecord]:
-    issues: list[IssueRecord] = []
+def _issue_history_from_summary(summary: dict[str, Any], drafts: list[dict[str, Any]]) -> list[IssueRecord]:
+    ledger = summary.get("issue_ledger")
+    if isinstance(ledger, list) and ledger:
+        issues: list[IssueRecord] = []
+        for item in ledger:
+            if not isinstance(item, dict):
+                continue
+            issues.append(IssueRecord(**item))
+        return issues
+
+    issues = []
     for draft in drafts:
         metadata = draft.get("metadata") or {}
         review_payload = metadata.get("review_payload")
@@ -276,11 +290,24 @@ def _issue_history_from_drafts(drafts: list[dict[str, Any]]) -> list[IssueRecord
                 IssueRecord(
                     issue_id=str(issue.get("issue_id") or f"{draft.get('draft_id', 'draft')}-issue-{issue_index}"),
                     source_stage_id=str(metadata.get("review_stage_id") or draft.get("source_stage_id") or ""),
+                    first_seen_round=int(draft.get("round_index") or 0),
+                    last_seen_round=int(draft.get("round_index") or 0),
                     severity=str(issue.get("severity") or "low"),
-                    category=str(issue.get("category") or issue.get("kind") or "other"),
-                    summary=str(issue.get("summary") or issue.get("title") or "Issue"),
-                    rationale=str(issue.get("rationale") or issue.get("repair_hint") or ""),
-                    evidence=[],
+                    kind=str(issue.get("kind") or "other"),
+                    blocking_class=str(issue.get("blocking_class") or "presentation"),
+                    recommendation_index=(
+                        None
+                        if issue.get("recommendation_index") in (None, "")
+                        else int(issue.get("recommendation_index"))
+                    ),
+                    title=str(issue.get("title") or "Issue"),
+                    evidence=str(issue.get("evidence") or ""),
+                    repair_hint=str(issue.get("repair_hint") or ""),
+                    why_not_raised_earlier=(
+                        None
+                        if issue.get("why_not_raised_earlier") in (None, "")
+                        else str(issue.get("why_not_raised_earlier"))
+                    ),
                     resolution_status="open",
                     resolution_note="",
                 )
@@ -291,6 +318,7 @@ def _issue_history_from_drafts(drafts: list[dict[str, Any]]) -> list[IssueRecord
 def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | None = None) -> HarnessState:
     drafts = extract_drafts_from_summary(summary)
     best_draft = select_best_draft(drafts)
+    issue_history = _issue_history_from_summary(summary, drafts)
 
     artifacts = summary.get("artifacts") or {}
     artifact_index: dict[str, ArtifactRef] = {}
@@ -339,7 +367,7 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
         drafts=drafts,
         validator_rounds=list(summary.get("validator_rounds") or []),
         policy_checks=list(summary.get("workspace_policy_checks") or []),
-        issue_history=_issue_history_from_drafts(drafts),
+        issue_history=issue_history,
         warnings=[str(item) for item in summary.get("warnings", [])],
         errors=[],
         stage_counter=len(summary.get("agent_stages", [])),
@@ -347,7 +375,11 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
         current_draft_id=(drafts[-1].get("draft_id") if drafts else None),
         best_draft_id=(best_draft.get("draft_id") if best_draft else None),
         selected_draft_id=(summary.get("selected_draft_id") or (best_draft.get("draft_id") if best_draft else None)),
-        open_issue_ids=[issue.get("issue_id", "") for issue in _issue_history_from_drafts(drafts)],
+        open_issue_ids=[
+            issue.get("issue_id", "")
+            for issue in issue_history
+            if str(issue.get("resolution_status") or "") in {"open", "carried_forward"}
+        ],
         latest_review_scores=latest_review_scores,
         stop_reason=(summary.get("failure_details") or {}).get("checkpoint") if isinstance(summary.get("failure_details"), dict) else None,
         content_verdict=(None if verdicts.get("content_verdict") in (None, "") else str(verdicts.get("content_verdict"))),

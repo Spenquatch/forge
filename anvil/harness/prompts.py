@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from .contracts import AnalysisReviewContract, confidence_rubric_lines
 from .git_utils import render_git_snapshot
 from .types import ReviewLoopPolicy, TaskSpec, ValidationRun, WorkspaceWritePolicy
 
@@ -145,6 +146,35 @@ def _review_policy_block(review_policy: ReviewLoopPolicy) -> str:
     )
 
 
+def _confidence_rubric_block(contract: AnalysisReviewContract) -> str:
+    lines = [
+        f"Confidence rubric ({contract.confidence_rubric_version}):",
+        *[f"- {line}" for line in confidence_rubric_lines()],
+        "Use the same rubric for generating recommendations and for judging whether confidence is too high or too low.",
+    ]
+    return "\n".join(lines)
+
+
+def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
+    partial = contract.partial_acceptance
+    required_sections = contract.required_sections
+    return "\n".join(
+        [
+            f"Analysis-review contract: {contract.contract_version}",
+            f"- Reviser goal: {contract.reviser_goal}",
+            f"- Require issue ledger: {contract.require_issue_ledger}",
+            f"- Require recommendation reviews: {contract.require_recommendation_reviews}",
+            f"- Partial acceptance enabled: {partial.enabled}",
+            f"- Minimum accepted recommendations for partial acceptance: {partial.min_accepted_recommendations}",
+            f"- Allow localized medium non-correctness issues for partial acceptance: {partial.allow_localized_medium_non_correctness_issues}",
+            f"- Forbid correctness blockers on accepted recommendations: {partial.forbid_correctness_blockers_on_accepted_recommendations}",
+            f"- Strengths required: {required_sections.strengths_required}",
+            f"- Uncertainties required: {required_sections.uncertainties_required}",
+            f"- Empty section rationale allowed: {required_sections.none_reason_allowed}",
+        ]
+    )
+
+
 def build_single_pass_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
     return f"""
 You are the SOLVER stage in an external evaluation harness.
@@ -279,6 +309,7 @@ def build_analysis_proposer_prompt(
     task: TaskSpec,
     prompt_preamble: str,
     git_snapshot: dict,
+    contract: AnalysisReviewContract,
 ) -> str:
     return f"""
 You are the PROPOSER stage in an analysis-review harness.
@@ -294,8 +325,12 @@ Your job:
 2. Produce a short list of the most important recommendations.
 3. For every recommendation, include classification, priority, evidence, and a concrete proposed change.
 4. Distinguish carefully among confirmed_issue, risk, and recommendation.
-5. If the evidence is incomplete, lower confidence and classify conservatively instead of overstating certainty.
-6. Use workspace_write_intent=`none` unless you truly changed the repo.
+5. Use the shared confidence rubric below. High confidence is appropriate for direct workspace evidence; lower confidence is appropriate for partial inference.
+6. Populate strengths, uncertainties, and files_reviewed with concrete observations from this run.
+7. Use workspace_write_intent=`none` unless you truly changed the repo.
+
+{_analysis_contract_block(contract)}
+{_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
 
@@ -311,34 +346,93 @@ def build_analysis_critic_prompt(
     validation_runs: list[ValidationRun],
     git_snapshot: dict,
     review_policy: ReviewLoopPolicy,
-    reviewer_label: str,
-    round_index: int,
+    contract: AnalysisReviewContract,
 ) -> str:
-    role_word = reviewer_label.upper()
     return f"""
-You are the {role_word} stage in an analysis-review harness.
+You are the CRITIC stage in an analysis-review harness.
 
 Critical rules:
 - Do NOT edit files in this stage.
-- Audit the prior analysis for factual grounding, overclaims, omissions, actionability, and scope discipline.
+- Perform the first structured review pass on the proposer draft.
+- Create stable issue IDs such as AR-001, AR-002, and keep them deterministic within this review.
 - Return ONLY the JSON object required by the schema.
 
-How to score:
-- grounding_score: Are the recommendations supported by actual repo evidence?
-- actionability_score: Are the recommendations concrete enough to execute?
-- scope_compliance_score: Do they stay within the requested task and avoid unrelated drift?
+Your job:
+1. Audit the prior analysis for factual grounding, overclaims, omissions, actionability, and scope discipline.
+2. For every issue you raise, classify both `kind` and `blocking_class`.
+3. Review every recommendation individually and return recommendation-level verdicts.
+4. Use `accept_partial` when a subset of recommendations is already valid even if the overall draft still needs revision.
+5. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
 Decision guidance:
-- Return verdict=revise if any medium-or-higher issue remains, or if the scores fail the stated stop policy.
+- Return verdict=revise when the overall draft still needs more work.
 - Return verdict=reject only for severe, fundamental problems.
-- Return verdict=accept only when the analysis is well-grounded, specific, and properly scoped.
+- Return verdict=accept only when the entire draft is sound.
+- Return verdict=accept_partial when at least one recommendation is sound but the whole draft is not yet fully acceptable.
 
-Review round: {round_index}
+{_analysis_contract_block(contract)}
 {_review_policy_block(review_policy)}
+{_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
 
 {_json_block('Prior analysis structured output', prior_output)}
+
+Validator and advisory results:
+{_validator_block(validation_runs)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
+
+
+def build_analysis_auditor_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    prior_output: dict | None,
+    reviser_output: dict | None,
+    validation_runs: list[ValidationRun],
+    git_snapshot: dict,
+    review_policy: ReviewLoopPolicy,
+    contract: AnalysisReviewContract,
+    issue_ledger: list[dict[str, Any]],
+    round_index: int,
+) -> str:
+    return f"""
+You are the AUDITOR stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- You are not starting from scratch. Your first job is to verify closure of the existing issue ledger.
+- For every previously open issue, you must explicitly classify it as resolved, carried_forward, or waived via the required issue-ID arrays.
+- If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`.
+- Return ONLY the JSON object required by the schema.
+
+Your job:
+1. Verify whether the reviser closed the existing blocker set.
+2. Preserve issue IDs for carried-forward issues.
+3. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
+4. Review every recommendation individually and return recommendation-level verdicts.
+5. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+
+Decision guidance:
+- Return verdict=accept when the entire draft is acceptable.
+- Return verdict=accept_partial when the accepted subset is usable but the whole draft is not.
+- Return verdict=revise when additional work is still required.
+- Return verdict=reject only for severe, fundamental problems.
+
+Audit round: {round_index}
+{_analysis_contract_block(contract)}
+{_review_policy_block(review_policy)}
+{_confidence_rubric_block(contract)}
+
+{_task_block(task, prompt_preamble)}
+
+{_json_block('Current analysis structured output', prior_output)}
+
+{_json_block('Reviser structured output', reviser_output)}
+
+{_json_block('Open issue ledger entering this audit', issue_ledger)}
 
 Validator and advisory results:
 {_validator_block(validation_runs)}
@@ -356,29 +450,38 @@ def build_analysis_reviser_prompt(
     validation_runs: list[ValidationRun],
     git_snapshot: dict,
     revision_round: int,
+    contract: AnalysisReviewContract,
+    open_issues: list[dict[str, Any]],
 ) -> str:
     return f"""
 You are the REVISER stage in an analysis-review harness.
 
 Critical rules:
 - This is still an analysis task. Do not modify files unless your effective permissions and the task policy explicitly allow it.
-- Fix factual problems, soften overclaims, and improve actionability.
+- Your job is to close all open medium-or-higher blockers, not merely to improve the strongest few issues.
+- Preserve already-solid recommendations wherever possible.
 - Return ONLY the JSON object required by the schema.
 
 Your job:
 1. Inspect the current workspace directly.
-2. Revise the prior analysis to address the critic's strongest evidence-backed issues.
-3. Prefer improving a few high-value recommendations over expanding the list with weak ideas.
-4. Preserve well-supported points; do not rewrite them away without reason.
-5. Use workspace_write_intent=`none` unless you truly changed the repo.
+2. Revise the prior analysis to address every open issue in the issue ledger below.
+3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
+4. Use the shared confidence rubric below when revising confidence values.
+5. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+6. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
+{_analysis_contract_block(contract)}
+{_review_policy_block(contract.stop_policy)}
+{_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
 
 {_json_block('Prior analysis structured output', prior_output)}
 
-{_json_block('Critic structured output', critic_output)}
+{_json_block('Latest review structured output', critic_output)}
+
+{_json_block('Open issue ledger', open_issues)}
 
 Validator and advisory results:
 {_validator_block(validation_runs)}

@@ -15,7 +15,9 @@ from .git_utils import (
     evaluate_workspace_write_policy,
     git_snapshot_is_dirty,
 )
+from .contracts import AnalysisReviewContract, build_analysis_review_contract, default_blocking_class_for_kind
 from .prompts import (
+    build_analysis_auditor_prompt,
     build_analysis_critic_prompt,
     build_analysis_proposer_prompt,
     build_analysis_reviser_prompt,
@@ -83,6 +85,9 @@ class HarnessRunner:
         self.warnings: list[str] = []
         self.errors: list[str] = []
         self.stage_counter = 0
+        self.analysis_review_contract: AnalysisReviewContract | None = None
+        self.issue_ledger: list[dict[str, Any]] = []
+        self._issue_ledger_by_id: dict[str, dict[str, Any]] = {}
         self.policy_ignored_rel_paths = self._workspace_ignored_rel_paths()
         self.initial_git_snapshot: dict[str, Any] | None = None
         self.initial_non_git_state: dict[str, Any] | None = None
@@ -96,16 +101,6 @@ class HarnessRunner:
         self.artifacts_dir = self.run_dir / "artifacts"
         self.validators_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-        write_json(self.run_dir / "task.effective.json", self.task.to_dict())
-        write_json(self.run_dir / "strategy.effective.json", self.strategy.to_dict())
-        write_json(
-            self.run_dir / "workspace.policy.config.json",
-            {
-                "ignored_rel_paths": self.policy_ignored_rel_paths,
-                "workspace_write_policy": self.task.workspace_write_policy.to_dict(),
-            },
-        )
 
         run_verdict = "harness_error"
         content_verdict = "harness_error"
@@ -136,6 +131,22 @@ class HarnessRunner:
         try:
             self._emit_task_strategy_warnings()
             self._apply_strategy_autofit()
+            if self.strategy.kind == "analysis_review_v1":
+                self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
+            write_json(self.run_dir / "task.effective.json", self.task.to_dict())
+            write_json(self.run_dir / "strategy.effective.json", self.strategy.to_dict())
+            if self.analysis_review_contract is not None:
+                write_json(
+                    self.run_dir / "analysis_review.contract.effective.json",
+                    self.analysis_review_contract.to_dict(),
+                )
+            write_json(
+                self.run_dir / "workspace.policy.config.json",
+                {
+                    "ignored_rel_paths": self.policy_ignored_rel_paths,
+                    "workspace_write_policy": self.task.workspace_write_policy.to_dict(),
+                },
+            )
             preflight_outcome = self._validator_preflight_outcome()
             if preflight_outcome is not None:
                 outcome = preflight_outcome
@@ -200,6 +211,13 @@ class HarnessRunner:
         )
 
         final_answer_payload = self._derive_final_answer_payload(run_details)
+        recommendation_reviews = list(run_details.get("recommendation_reviews") or [])
+        issue_ledger = list(run_details.get("issue_ledger") or self._serialized_issue_ledger())
+        analysis_review_contract = (
+            run_details.get("analysis_review_contract")
+            if isinstance(run_details.get("analysis_review_contract"), dict)
+            else (self.analysis_review_contract.to_dict() if self.analysis_review_contract is not None else None)
+        )
 
         summary = {
             "run_id": run_id,
@@ -232,6 +250,9 @@ class HarnessRunner:
             "initial_git_snapshot": self.initial_git_snapshot,
             "final_git_snapshot": final_git_snapshot,
             "changed_files": final_changed_files,
+            "analysis_review_contract": analysis_review_contract,
+            "issue_ledger": issue_ledger,
+            "recommendation_reviews": recommendation_reviews,
             "artifacts": {
                 "run_dir": str(self.run_dir),
                 "report_md": str(self.run_dir / "REPORT.md"),
@@ -421,6 +442,7 @@ class HarnessRunner:
         }
 
     def _run_analysis_review_v1(self) -> dict[str, Any]:
+        contract = self._analysis_contract()
         proposer_cfg = self._require_role("proposer")
         critic_cfg = self._role_or_fallback("critic", ["falsifier"])
         reviser_cfg = self._role_or_fallback("reviser", ["patcher", "proposer"])
@@ -431,6 +453,7 @@ class HarnessRunner:
             self.task,
             self.strategy.prompt_preamble,
             git_snapshot,
+            contract,
         )
         proposer_run = self._run_agent_stage(
             "proposer",
@@ -455,6 +478,7 @@ class HarnessRunner:
             prior_output=proposer_run.structured_output,
             validation_runs=validation_runs,
             round_index=0,
+            reviser_output=None,
         )
         if not critic_run.ok:
             return {
@@ -464,6 +488,12 @@ class HarnessRunner:
                 "final_summary": f"Critic stage failed: {critic_run.error or 'unknown error'}",
                 "failure_details": {"stage": "critic", "error": critic_run.error},
             }
+        self._ingest_review_payload(
+            critic_run.structured_output or {},
+            round_index=0,
+            role_name="critic",
+            reviser_output=None,
+        )
 
         latest_analysis_run = proposer_run
         latest_review_run = critic_run
@@ -486,12 +516,14 @@ class HarnessRunner:
                 validation_runs,
                 capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
                 revision_round=revisions_completed,
+                contract=contract,
+                open_issues=self._open_issue_records(),
             )
             latest_analysis_run = self._run_agent_stage(
                 f"reviser_round_{revisions_completed}",
                 reviser_cfg.provider,
                 reviser_prompt,
-                analysis_output_schema(),
+                analysis_output_schema(require_issue_resolution_map=True),
                 reviser_cfg,
             )
             if not latest_analysis_run.ok:
@@ -512,6 +544,7 @@ class HarnessRunner:
                 prior_output=latest_analysis_run.structured_output,
                 validation_runs=validation_runs,
                 round_index=revisions_completed,
+                reviser_output=latest_analysis_run.structured_output,
             )
             if not latest_review_run.ok:
                 return {
@@ -521,8 +554,15 @@ class HarnessRunner:
                     "final_summary": f"Auditor stage failed: {latest_review_run.error or 'unknown error'}",
                     "failure_details": {"stage": "auditor", "error": latest_review_run.error},
                 }
+            self._ingest_review_payload(
+                latest_review_run.structured_output or {},
+                round_index=revisions_completed,
+                role_name="auditor",
+                reviser_output=latest_analysis_run.structured_output,
+            )
 
         final_review_payload = latest_review_run.structured_output or {}
+        final_analysis_payload = latest_analysis_run.structured_output or {}
         validator_verdict = self._classify_validator_verdict(validation_runs)
         content_verdict = self._analysis_content_verdict(
             final_review_payload,
@@ -536,6 +576,7 @@ class HarnessRunner:
             max_loops=max_loops,
             validator_verdict=validator_verdict,
         )
+        accepted_recommendation_count = len(self._accepted_recommendation_reviews(final_review_payload))
 
         return {
             "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
@@ -544,9 +585,13 @@ class HarnessRunner:
             "final_summary": final_summary,
             "details": {
                 "revisions_completed": revisions_completed,
-                "review_policy": self.strategy.review_loops.to_dict(),
+                "review_policy": contract.stop_policy.to_dict(),
+                "analysis_review_contract": contract.to_dict(),
                 "final_review": final_review_payload,
-                "final_analysis": latest_analysis_run.structured_output,
+                "final_analysis": final_analysis_payload,
+                "issue_ledger": self._serialized_issue_ledger(),
+                "recommendation_reviews": self._recommendation_reviews(final_review_payload),
+                "accepted_recommendation_count": accepted_recommendation_count,
             },
         }
 
@@ -580,17 +625,33 @@ class HarnessRunner:
         prior_output: dict[str, Any] | None,
         validation_runs: list[ValidationRun],
         round_index: int,
+        reviser_output: dict[str, Any] | None,
     ) -> ProviderRun:
-        prompt = build_analysis_critic_prompt(
-            self.task,
-            self.strategy.prompt_preamble,
-            prior_output,
-            validation_runs,
-            capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
-            self.strategy.review_loops,
-            reviewer_label=role_name,
-            round_index=round_index,
-        )
+        contract = self._analysis_contract()
+        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        if role_name == "auditor":
+            prompt = build_analysis_auditor_prompt(
+                self.task,
+                self.strategy.prompt_preamble,
+                prior_output,
+                reviser_output,
+                validation_runs,
+                git_snapshot,
+                self.strategy.review_loops,
+                contract,
+                self._open_issue_records(),
+                round_index,
+            )
+        else:
+            prompt = build_analysis_critic_prompt(
+                self.task,
+                self.strategy.prompt_preamble,
+                prior_output,
+                validation_runs,
+                git_snapshot,
+                self.strategy.review_loops,
+                contract,
+            )
         return self._run_agent_stage(
             role_name,
             role_cfg.provider,
@@ -697,29 +758,13 @@ class HarnessRunner:
             return True
         if not review_payload:
             return True
+        if self._analysis_can_fully_accept(review_payload):
+            return False
+        if self._analysis_can_partially_accept(review_payload):
+            return False
         if review_payload.get("verdict") in {"revise", "reject"}:
             return True
-        medium_or_higher = self._count_review_issues(review_payload, {"medium", "high", "critical"})
-        if policy.max_open_medium_issues is not None and medium_or_higher > policy.max_open_medium_issues:
-            return True
-        score_checks = [
-            ("grounding_score", policy.min_grounding_score),
-            ("actionability_score", policy.min_actionability_score),
-            ("scope_compliance_score", policy.min_scope_compliance_score),
-        ]
-        for field_name, threshold in score_checks:
-            if threshold is None:
-                continue
-            value = review_payload.get(field_name)
-            if value is None:
-                return True
-            try:
-                numeric_value = float(value)
-            except (TypeError, ValueError):
-                return True
-            if numeric_value < threshold:
-                return True
-        return False
+        return bool(self._blocking_issues(review_payload)) or bool(self._score_threshold_failures(review_payload))
 
     def _analysis_content_verdict(
         self,
@@ -728,11 +773,15 @@ class HarnessRunner:
         revisions_completed: int,
         max_loops: int,
     ) -> str:
-        if not self._analysis_needs_revision(review_payload, revisions_completed):
+        if self._analysis_can_fully_accept(review_payload):
             low_count = self._count_review_issues(review_payload, {"low"})
-            if low_count or review_payload.get("missing_topics"):
+            if low_count or review_payload.get("missing_topics") or self._has_recommendation_caveats(review_payload):
                 return "accepted_with_warnings"
             return "accepted"
+        if self._analysis_can_partially_accept(review_payload):
+            return "accepted_partial"
+        if revisions_completed >= max_loops and str(review_payload.get("verdict") or "").lower() == "reject":
+            return "rejected"
         if revisions_completed >= max_loops:
             return "best_effort_exhausted"
         return "needs_revision"
@@ -760,6 +809,9 @@ class HarnessRunner:
         issue_count = len(review_payload.get("issues", []))
         if issue_count:
             parts.append(f"Open reviewer issues: {issue_count}.")
+        accepted_recommendation_count = len(self._accepted_recommendation_reviews(review_payload))
+        if accepted_recommendation_count:
+            parts.append(f"Accepted recommendations: {accepted_recommendation_count}.")
         if review_payload.get("missing_topics"):
             parts.append(
                 "Missing topics: " + ", ".join(str(x) for x in review_payload.get("missing_topics", []))
@@ -770,6 +822,10 @@ class HarnessRunner:
             )
         if verdict == "accepted_with_warnings":
             parts.append("The content is usable, but the auditor still left low-severity warnings.")
+        elif verdict == "accepted_partial":
+            parts.append(
+                "The run reached a partial acceptance outcome. Only the accepted recommendation subset is included in the final deliverable."
+            )
         elif verdict == "best_effort_exhausted":
             parts.append("The harness used its available review loops but still did not meet the stop criteria.")
         return " ".join(parts)
@@ -781,6 +837,311 @@ class HarnessRunner:
             for issue in review_payload.get("issues", [])
             if str(issue.get("severity", "")).lower() in severities
         )
+
+    def _analysis_contract(self) -> AnalysisReviewContract:
+        if self.analysis_review_contract is None:
+            self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
+        return self.analysis_review_contract
+
+    def _next_issue_id(self, reserved_ids: set[str] | None = None) -> str:
+        reserved = set(self._issue_ledger_by_id)
+        if reserved_ids:
+            reserved.update(reserved_ids)
+        index = 1
+        while True:
+            issue_id = f"AR-{index:03d}"
+            if issue_id not in reserved:
+                return issue_id
+            index += 1
+
+    def _open_issue_records(self) -> list[dict[str, Any]]:
+        return [
+            json.loads(json.dumps(record))
+            for record in self.issue_ledger
+            if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
+        ]
+
+    def _serialized_issue_ledger(self) -> list[dict[str, Any]]:
+        return [json.loads(json.dumps(record)) for record in self.issue_ledger]
+
+    def _normalize_review_issue(
+        self,
+        issue: dict[str, Any],
+        *,
+        round_index: int,
+        reserved_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        normalized = dict(issue)
+        issue_id = str(normalized.get("issue_id") or "").strip()
+        if not issue_id:
+            issue_id = self._next_issue_id(reserved_ids)
+        normalized["issue_id"] = issue_id
+        normalized["severity"] = str(normalized.get("severity") or "low").strip().lower()
+        normalized["kind"] = str(normalized.get("kind") or "other").strip().lower()
+        normalized["blocking_class"] = str(
+            normalized.get("blocking_class") or default_blocking_class_for_kind(normalized.get("kind"))
+        ).strip().lower()
+        recommendation_index = normalized.get("recommendation_index")
+        try:
+            normalized["recommendation_index"] = (
+                None if recommendation_index in (None, "") else int(recommendation_index)
+            )
+        except (TypeError, ValueError):
+            normalized["recommendation_index"] = None
+        normalized["title"] = str(normalized.get("title") or normalized.get("summary") or "Issue")
+        normalized["evidence"] = str(normalized.get("evidence") or "")
+        normalized["repair_hint"] = str(normalized.get("repair_hint") or "")
+        why_not_raised_earlier = normalized.get("why_not_raised_earlier")
+        normalized["why_not_raised_earlier"] = (
+            None if why_not_raised_earlier in (None, "") else str(why_not_raised_earlier)
+        )
+        if round_index > 0 and issue_id not in self._issue_ledger_by_id:
+            if normalized["severity"] in {"medium", "high", "critical"} and not normalized["why_not_raised_earlier"]:
+                self.warnings.append(
+                    f"{issue_id} was introduced as a new medium-or-higher issue in round {round_index} without why_not_raised_earlier."
+                )
+        return normalized
+
+    def _resolution_note_from_reviser(
+        self,
+        reviser_output: dict[str, Any] | None,
+        issue_id: str,
+    ) -> str:
+        if not isinstance(reviser_output, dict):
+            return ""
+        for item in reviser_output.get("issue_resolution_map", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("issue_id") or "") != issue_id:
+                continue
+            status = str(item.get("status") or "")
+            change_summary = str(item.get("change_summary") or "")
+            residual_risk = str(item.get("residual_risk") or "")
+            note_bits = [bit for bit in (status, change_summary, residual_risk) if bit]
+            return " | ".join(note_bits)
+        return ""
+
+    def _ingest_review_payload(
+        self,
+        review_payload: dict[str, Any],
+        *,
+        round_index: int,
+        role_name: str,
+        reviser_output: dict[str, Any] | None,
+    ) -> None:
+        if not isinstance(review_payload, dict) or not review_payload:
+            return
+
+        stage_id = f"stage-{self.stage_counter:02d}-{slugify(role_name)}"
+        prior_open_ids = {
+            str(record.get("issue_id"))
+            for record in self.issue_ledger
+            if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
+        }
+        normalized_issues = []
+        reserved_ids = set(self._issue_ledger_by_id)
+        for issue in review_payload.get("issues", []) or []:
+            if not isinstance(issue, dict):
+                continue
+            normalized_issue = self._normalize_review_issue(
+                issue,
+                round_index=round_index,
+                reserved_ids=reserved_ids,
+            )
+            reserved_ids.add(str(normalized_issue.get("issue_id")))
+            normalized_issues.append(normalized_issue)
+        current_issue_ids = {str(item.get("issue_id")) for item in normalized_issues}
+        resolved_ids = {str(item) for item in review_payload.get("resolved_issue_ids", []) if str(item).strip()}
+        carried_ids = {str(item) for item in review_payload.get("carried_forward_issue_ids", []) if str(item).strip()}
+        waived_ids = {str(item) for item in review_payload.get("waived_issue_ids", []) if str(item).strip()}
+        normalized_by_id = {str(item.get("issue_id")): item for item in normalized_issues}
+
+        for issue_id in prior_open_ids:
+            record = self._issue_ledger_by_id.get(issue_id)
+            if record is None:
+                continue
+            if issue_id in resolved_ids:
+                record["resolution_status"] = "resolved"
+                record["resolution_note"] = self._resolution_note_from_reviser(reviser_output, issue_id)
+                record["last_seen_round"] = round_index
+            elif issue_id in waived_ids:
+                record["resolution_status"] = "waived"
+                record["last_seen_round"] = round_index
+            elif issue_id in current_issue_ids or issue_id in carried_ids:
+                record["resolution_status"] = "carried_forward"
+                record["last_seen_round"] = round_index
+            else:
+                self.warnings.append(
+                    f"Review stage '{role_name}' did not explicitly classify prior open issue {issue_id}; treating it as carried_forward."
+                )
+                record["resolution_status"] = "carried_forward"
+                record["last_seen_round"] = round_index
+
+        for issue in normalized_issues:
+            issue_id = str(issue.get("issue_id"))
+            if issue_id in self._issue_ledger_by_id:
+                record = self._issue_ledger_by_id[issue_id]
+                record.update(
+                    {
+                        "source_stage_id": stage_id,
+                        "last_seen_round": round_index,
+                        "severity": issue.get("severity"),
+                        "kind": issue.get("kind"),
+                        "blocking_class": issue.get("blocking_class"),
+                        "recommendation_index": issue.get("recommendation_index"),
+                        "title": issue.get("title"),
+                        "evidence": issue.get("evidence"),
+                        "repair_hint": issue.get("repair_hint"),
+                        "why_not_raised_earlier": issue.get("why_not_raised_earlier"),
+                        "resolution_status": (
+                            "carried_forward" if issue_id in prior_open_ids else "open"
+                        ),
+                    }
+                )
+            else:
+                record = {
+                    "issue_id": issue_id,
+                    "source_stage_id": stage_id,
+                    "first_seen_round": round_index,
+                    "last_seen_round": round_index,
+                    "severity": issue.get("severity"),
+                    "kind": issue.get("kind"),
+                    "blocking_class": issue.get("blocking_class"),
+                    "recommendation_index": issue.get("recommendation_index"),
+                    "title": issue.get("title"),
+                    "evidence": issue.get("evidence"),
+                    "repair_hint": issue.get("repair_hint"),
+                    "why_not_raised_earlier": issue.get("why_not_raised_earlier"),
+                    "resolution_status": "open",
+                    "resolution_note": "",
+                }
+                self.issue_ledger.append(record)
+                self._issue_ledger_by_id[issue_id] = record
+
+    @staticmethod
+    def _recommendation_reviews(review_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        reviews = []
+        for item in review_payload.get("recommendation_reviews", []) or []:
+            if isinstance(item, dict):
+                reviews.append(item)
+        reviews.sort(key=lambda item: int(item.get("recommendation_index") or 0))
+        return reviews
+
+    def _accepted_recommendation_reviews(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            item
+            for item in self._recommendation_reviews(review_payload)
+            if str(item.get("verdict") or "").strip().lower() in {"accept", "accept_with_caveat"}
+        ]
+
+    def _has_recommendation_caveats(self, review_payload: dict[str, Any]) -> bool:
+        return any(
+            str(item.get("verdict") or "").strip().lower() == "accept_with_caveat"
+            for item in self._recommendation_reviews(review_payload)
+        )
+
+    def _blocking_issues(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        blocking: list[dict[str, Any]] = []
+        for issue in review_payload.get("issues", []) or []:
+            if not isinstance(issue, dict):
+                continue
+            severity = str(issue.get("severity") or "").strip().lower()
+            blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
+            if severity in {"medium", "high", "critical"} and blocking_class in {
+                "correctness",
+                "actionability",
+                "completeness",
+            }:
+                blocking.append(issue)
+        return blocking
+
+    def _score_threshold_failures(self, review_payload: dict[str, Any]) -> list[str]:
+        policy = self._analysis_contract().stop_policy
+        failures: list[str] = []
+        score_checks = [
+            ("grounding_score", policy.min_grounding_score),
+            ("actionability_score", policy.min_actionability_score),
+            ("scope_compliance_score", policy.min_scope_compliance_score),
+        ]
+        for field_name, threshold in score_checks:
+            if threshold is None:
+                continue
+            value = review_payload.get(field_name)
+            if value is None:
+                failures.append(field_name)
+                continue
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                failures.append(field_name)
+                continue
+            if numeric_value < threshold:
+                failures.append(field_name)
+        return failures
+
+    def _analysis_can_fully_accept(self, review_payload: dict[str, Any]) -> bool:
+        if not review_payload:
+            return False
+        if str(review_payload.get("verdict") or "").strip().lower() != "accept":
+            return False
+        if self._count_review_issues(review_payload, {"medium", "high", "critical"}) > 0:
+            return False
+        if self._score_threshold_failures(review_payload):
+            return False
+        recommendation_reviews = self._recommendation_reviews(review_payload)
+        if recommendation_reviews and any(
+            str(item.get("verdict") or "").strip().lower() not in {"accept", "accept_with_caveat"}
+            for item in recommendation_reviews
+        ):
+            return False
+        return True
+
+    def _analysis_can_partially_accept(self, review_payload: dict[str, Any]) -> bool:
+        contract = self._analysis_contract()
+        policy = contract.partial_acceptance
+        if not policy.enabled:
+            return False
+        if str(review_payload.get("verdict") or "").strip().lower() == "reject":
+            return False
+
+        accepted_reviews = self._accepted_recommendation_reviews(review_payload)
+        if len(accepted_reviews) < policy.min_accepted_recommendations:
+            return False
+
+        issues_by_id: dict[str, dict[str, Any]] = {}
+        for issue in review_payload.get("issues", []) or []:
+            if not isinstance(issue, dict):
+                continue
+            issues_by_id[str(issue.get("issue_id") or "")] = issue
+            severity = str(issue.get("severity") or "").strip().lower()
+            recommendation_index = issue.get("recommendation_index")
+            blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
+            if recommendation_index in (None, "") and severity in {"medium", "high", "critical"} and blocking_class in {
+                "correctness",
+                "actionability",
+                "completeness",
+            }:
+                return False
+            if recommendation_index in (None, "") and severity in {"high", "critical"}:
+                return False
+
+        for review in accepted_reviews:
+            for issue_id in review.get("open_issue_ids", []) or []:
+                issue = issues_by_id.get(str(issue_id))
+                if not isinstance(issue, dict):
+                    continue
+                severity = str(issue.get("severity") or "").strip().lower()
+                blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
+                if severity in {"high", "critical"}:
+                    return False
+                if severity == "medium" and blocking_class in {
+                    "correctness",
+                    "actionability",
+                    "completeness",
+                }:
+                    return False
+
+        return True
 
     def _require_role(self, role_name: str) -> RoleConfig:
         role = self.strategy.roles.get(role_name)

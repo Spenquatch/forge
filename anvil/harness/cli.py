@@ -68,6 +68,8 @@ def _print_summary(summary: dict[str, Any]) -> None:
         print(f"final_artifact={artifacts.get('final_artifact')}")
     if artifacts.get("final_answer_md"):
         print(f"final_answer={artifacts.get('final_answer_md')}")
+    if artifacts.get("partial_answer_md"):
+        print(f"partial_answer={artifacts.get('partial_answer_md')}")
 
 
 async def _run_with_executor(args) -> dict[str, Any]:

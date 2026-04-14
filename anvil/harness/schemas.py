@@ -23,6 +23,7 @@ ISSUE_SCHEMA: dict[str, Any] = {
 ANALYSIS_ISSUE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "issue_id": {"type": "string"},
         "severity": {
             "type": "string",
             "enum": ["low", "medium", "high", "critical"],
@@ -37,14 +38,41 @@ ANALYSIS_ISSUE_SCHEMA: dict[str, Any] = {
                 "missing_classification",
                 "missed_issue",
                 "scope_drift",
+                "confidence_calibration",
+                "insufficient_specificity",
+                "missing_section",
                 "other",
             ],
+        },
+        "blocking_class": {
+            "type": "string",
+            "enum": ["correctness", "actionability", "completeness", "presentation"],
+        },
+        "recommendation_index": {
+            "anyOf": [
+                {"type": "integer", "minimum": 1},
+                {"type": "null"},
+            ]
         },
         "title": {"type": "string"},
         "evidence": {"type": "string"},
         "repair_hint": {"type": "string"},
+        "why_not_raised_earlier": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        },
     },
-    "required": ["severity", "kind", "title", "evidence", "repair_hint"],
+    "required": [
+        "issue_id",
+        "severity",
+        "kind",
+        "blocking_class",
+        "title",
+        "evidence",
+        "repair_hint",
+    ],
     "additionalProperties": False,
 }
 
@@ -78,6 +106,48 @@ RECOMMENDATION_SCHEMA: dict[str, Any] = {
         "evidence",
         "proposed_change",
         "confidence",
+    ],
+    "additionalProperties": False,
+}
+
+
+ISSUE_RESOLUTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "issue_id": {"type": "string"},
+        "status": {
+            "type": "string",
+            "enum": ["addressed", "not_addressed", "disagree"],
+        },
+        "change_summary": {"type": "string"},
+        "residual_risk": {"type": "string"},
+    },
+    "required": ["issue_id", "status", "change_summary", "residual_risk"],
+    "additionalProperties": False,
+}
+
+
+RECOMMENDATION_REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "recommendation_index": {"type": "integer", "minimum": 1},
+        "verdict": {
+            "type": "string",
+            "enum": ["accept", "accept_with_caveat", "revise", "reject"],
+        },
+        "open_issue_ids": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+        "confidence_assessment": {
+            "type": "string",
+            "enum": ["too_low", "well_calibrated", "too_high", "not_assessed"],
+        },
+    },
+    "required": [
+        "recommendation_index",
+        "verdict",
+        "open_issue_ids",
+        "summary",
+        "confidence_assessment",
     ],
     "additionalProperties": False,
 }
@@ -164,33 +234,41 @@ def falsifier_schema() -> dict[str, Any]:
     }
 
 
-def analysis_output_schema() -> dict[str, Any]:
+def analysis_output_schema(*, require_issue_resolution_map: bool = False) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "status": {
+            "type": "string",
+            "enum": ["done", "partial", "blocked", "revised", "no_change_needed"],
+        },
+        **COMMON_PROPS,
+        "recommendations": {
+            "type": "array",
+            "items": RECOMMENDATION_SCHEMA,
+        },
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "uncertainties": {"type": "array", "items": {"type": "string"}},
+        "files_reviewed": {"type": "array", "items": {"type": "string"}},
+    }
+    required = [
+        "status",
+        "summary",
+        "workspace_write_intent",
+        "recommendations",
+        "strengths",
+        "uncertainties",
+        "files_reviewed",
+        "confidence",
+    ]
+    if require_issue_resolution_map:
+        properties["issue_resolution_map"] = {
+            "type": "array",
+            "items": ISSUE_RESOLUTION_SCHEMA,
+        }
+        required.append("issue_resolution_map")
     return {
         "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "enum": ["done", "partial", "blocked", "revised", "no_change_needed"],
-            },
-            **COMMON_PROPS,
-            "recommendations": {
-                "type": "array",
-                "items": RECOMMENDATION_SCHEMA,
-            },
-            "strengths": {"type": "array", "items": {"type": "string"}},
-            "uncertainties": {"type": "array", "items": {"type": "string"}},
-            "files_reviewed": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": [
-            "status",
-            "summary",
-            "workspace_write_intent",
-            "recommendations",
-            "strengths",
-            "uncertainties",
-            "files_reviewed",
-            "confidence",
-        ],
+        "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
@@ -199,9 +277,16 @@ def analysis_review_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "verdict": {"type": "string", "enum": ["accept", "revise", "reject"]},
+            "verdict": {"type": "string", "enum": ["accept", "accept_partial", "revise", "reject"]},
             **COMMON_PROPS,
             "issues": {"type": "array", "items": ANALYSIS_ISSUE_SCHEMA},
+            "resolved_issue_ids": {"type": "array", "items": {"type": "string"}},
+            "carried_forward_issue_ids": {"type": "array", "items": {"type": "string"}},
+            "waived_issue_ids": {"type": "array", "items": {"type": "string"}},
+            "recommendation_reviews": {
+                "type": "array",
+                "items": RECOMMENDATION_REVIEW_SCHEMA,
+            },
             "missing_topics": {"type": "array", "items": {"type": "string"}},
             "grounding_score": {"type": "number", "minimum": 0, "maximum": 1},
             "actionability_score": {"type": "number", "minimum": 0, "maximum": 1},
@@ -212,6 +297,10 @@ def analysis_review_schema() -> dict[str, Any]:
             "summary",
             "workspace_write_intent",
             "issues",
+            "resolved_issue_ids",
+            "carried_forward_issue_ids",
+            "waived_issue_ids",
+            "recommendation_reviews",
             "missing_topics",
             "grounding_score",
             "actionability_score",

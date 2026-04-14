@@ -22,17 +22,27 @@ def _candidate_round_index(role_name: str) -> int:
 
 def _count_issue_severities(payload: dict[str, Any]) -> dict[str, int]:
     issues = payload.get("issues")
-    counts = {"low": 0, "medium": 0, "high": 0, "critical": 0, "medium_or_higher": 0}
+    counts = {
+        "low": 0,
+        "medium": 0,
+        "high": 0,
+        "critical": 0,
+        "medium_or_higher": 0,
+        "blocking_medium_or_higher": 0,
+    }
     if not isinstance(issues, list):
         return counts
     for issue in issues:
         if not isinstance(issue, dict):
             continue
         severity = str(issue.get("severity", "")).strip().lower()
+        blocking_class = str(issue.get("blocking_class", "presentation")).strip().lower()
         if severity in counts:
             counts[severity] += 1
         if severity in {"medium", "high", "critical"}:
             counts["medium_or_higher"] += 1
+            if blocking_class in {"correctness", "actionability", "completeness"}:
+                counts["blocking_medium_or_higher"] += 1
     return counts
 
 
@@ -48,9 +58,23 @@ def _draft_review_status(payload: dict[str, Any]) -> str | None:
     verdict = str(payload.get("verdict", "")).strip().lower()
     if verdict == "accept":
         return "accepted"
+    if verdict == "accept_partial":
+        return "accepted_partial"
     if verdict == "reject":
         return "rejected"
     return None
+
+
+def _accepted_recommendation_count(payload: dict[str, Any]) -> int:
+    reviews = payload.get("recommendation_reviews")
+    if not isinstance(reviews, list):
+        return 0
+    return sum(
+        1
+        for item in reviews
+        if isinstance(item, dict)
+        and str(item.get("verdict", "")).strip().lower() in {"accept", "accept_with_caveat"}
+    )
 
 
 def _is_candidate_stage(stage: dict[str, Any]) -> bool:
@@ -95,9 +119,7 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             round_index = _candidate_round_index(role_name)
             validator_results = validator_rounds.get(round_index, [])
             issue_counts = {
-                **_count_issue_severities(payload),
                 "required_validator_failures": _required_validator_failure_count(validator_results),
-                "missing_topics": len(payload.get("missing_topics", []) or []),
             }
             draft = {
                 "draft_id": f"draft-{slugify(role_name)}",
@@ -133,6 +155,10 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                 int(issue_counts.get("missing_topics", 0)),
                 len(payload.get("missing_topics", []) or []),
             )
+            issue_counts["accepted_recommendations"] = max(
+                int(issue_counts.get("accepted_recommendations", 0)),
+                _accepted_recommendation_count(payload),
+            )
             scores = latest_draft.setdefault("scores", {})
             for field_name in (
                 "grounding_score",
@@ -158,8 +184,10 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
     if drafts:
         if content_verdict in {"accepted", "accepted_with_warnings"}:
             drafts[-1]["review_status"] = "accepted"
+        elif content_verdict == "accepted_partial":
+            drafts[-1]["review_status"] = "accepted_partial"
         elif content_verdict in {"rejected", "best_effort_exhausted"} and not any(
-            draft.get("review_status") == "accepted" for draft in drafts
+            draft.get("review_status") in {"accepted", "accepted_partial"} for draft in drafts
         ):
             drafts[-1]["review_status"] = "rejected"
 
@@ -173,20 +201,35 @@ def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not candidates:
         return None
 
+    def _status_rank(draft: dict[str, Any]) -> int:
+        status = str(draft.get("review_status") or "candidate")
+        if status == "accepted":
+            return 0
+        if status == "accepted_partial":
+            return 1
+        if status == "candidate":
+            return 2
+        if status == "rejected":
+            return 3
+        return 4
+
     def _sort_key(draft: dict[str, Any]) -> tuple[Any, ...]:
         issue_counts = draft.get("issue_counts") or {}
         scores = draft.get("scores") or {}
+        accepted_recommendations = int(issue_counts.get("accepted_recommendations", 0))
+        blocking_medium_plus = int(issue_counts.get("blocking_medium_or_higher", 0))
         medium_plus = int(issue_counts.get("medium_or_higher", 0))
-        accepted = 0 if draft.get("review_status") == "accepted" else 1
         grounding = float(scores.get("grounding_score", -1.0))
         validator_failures = int(issue_counts.get("required_validator_failures", 0))
         round_index = int(draft.get("round_index", 0))
         stage_index = int((draft.get("metadata") or {}).get("stage_index", 0))
         return (
+            _status_rank(draft),
+            0 if blocking_medium_plus == 0 else 1,
             0 if medium_plus == 0 else 1,
-            accepted,
-            -grounding,
+            -accepted_recommendations,
             validator_failures,
+            -grounding,
             -round_index,
             -stage_index,
         )

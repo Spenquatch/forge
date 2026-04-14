@@ -5,21 +5,22 @@ from typing import Any
 
 
 def _render_policy_list(items: list[str]) -> str:
-    if not items:
-        return "none"
-    return ", ".join(items)
+    values = [str(item) for item in items if str(item).strip()]
+    return ", ".join(values) if values else "none"
 
 
 def render_report(summary: dict[str, Any]) -> str:
-    lines: list[str] = []
-    verdicts = summary.get("verdicts") or {}
+    lines: list[str] = ["# Forge Harness Report", ""]
+
     task = summary.get("task") or {}
+    verdicts = summary.get("verdicts") or {}
     validator_summary = summary.get("validator_summary") or {}
     run_details = summary.get("run_details") or {}
+    contract = summary.get("analysis_review_contract") or {}
 
-    lines.append(f"# Mini Frontier Harness Report: {summary.get('run_id', 'run')}")
+    lines.append("## Overview")
     lines.append("")
-    lines.append(f"- Verdict: **{summary.get('verdict', 'unknown')}**")
+    lines.append(f"- Run verdict: **{summary.get('verdict')}**")
     if verdicts:
         lines.append(f"- Content verdict: `{verdicts.get('content_verdict', 'unknown')}`")
         lines.append(f"- Validator verdict: `{verdicts.get('validator_verdict', 'unknown')}`")
@@ -39,6 +40,24 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("## Final Summary")
         lines.append("")
         lines.append(summary["final_summary"])
+        lines.append("")
+
+    if contract:
+        lines.append("## Analysis Review Contract")
+        lines.append("")
+        lines.append(f"- Contract version: `{contract.get('contract_version')}`")
+        stop_policy = contract.get("stop_policy") or {}
+        stop_when = stop_policy.get("stop_when") or {}
+        lines.append(f"- Reviser goal: `{contract.get('reviser_goal')}`")
+        lines.append(f"- Require issue ledger: `{contract.get('require_issue_ledger')}`")
+        lines.append(f"- Require recommendation reviews: `{contract.get('require_recommendation_reviews')}`")
+        if stop_when:
+            lines.append(f"- Stop policy: `{json.dumps(stop_when, sort_keys=True)}`")
+        partial_acceptance = contract.get("partial_acceptance") or {}
+        if partial_acceptance:
+            lines.append(
+                f"- Partial acceptance policy: `{json.dumps(partial_acceptance, sort_keys=True)}`"
+            )
         lines.append("")
 
     if run_details:
@@ -150,6 +169,34 @@ def render_report(summary: dict[str, Any]) -> str:
                     lines.append(f"  - error: {item.get('error')}")
             lines.append("")
 
+    issue_ledger = summary.get("issue_ledger") or []
+    if issue_ledger:
+        lines.append("## Issue Ledger")
+        lines.append("")
+        open_count = sum(
+            1 for issue in issue_ledger if str(issue.get("resolution_status") or "") in {"open", "carried_forward"}
+        )
+        resolved_count = sum(
+            1 for issue in issue_ledger if str(issue.get("resolution_status") or "") == "resolved"
+        )
+        lines.append(f"- Open issues: `{open_count}`")
+        lines.append(f"- Resolved issues: `{resolved_count}`")
+        lines.append("")
+        for issue in issue_ledger:
+            lines.append(
+                f"### {issue.get('issue_id')} — {issue.get('severity')} — {issue.get('blocking_class')} — {issue.get('resolution_status')}"
+            )
+            lines.append("")
+            lines.append(f"- Kind: `{issue.get('kind')}`")
+            if issue.get("recommendation_index") is not None:
+                lines.append(f"- Recommendation index: `{issue.get('recommendation_index')}`")
+            lines.append(f"- Title: {issue.get('title')}")
+            lines.append(f"- Evidence: {issue.get('evidence')}")
+            lines.append(f"- Repair hint: {issue.get('repair_hint')}")
+            if issue.get("why_not_raised_earlier"):
+                lines.append(f"- Why not raised earlier: {issue.get('why_not_raised_earlier')}")
+            lines.append("")
+
     drafts = summary.get("drafts", [])
     if drafts:
         lines.append("## Draft Selection")
@@ -171,6 +218,21 @@ def render_report(summary: dict[str, Any]) -> str:
             if draft.get('summary'):
                 lines.append(f"- Summary: {draft.get('summary')}")
             lines.append("")
+
+    recommendation_reviews = summary.get("recommendation_reviews") or []
+    if recommendation_reviews:
+        lines.append("## Recommendation Reviews")
+        lines.append("")
+        for item in recommendation_reviews:
+            lines.append(
+                f"- Recommendation {item.get('recommendation_index')}: `{item.get('verdict')}` — {item.get('summary')}"
+            )
+            if item.get("open_issue_ids"):
+                lines.append(f"  - Open issues: {_render_policy_list(item.get('open_issue_ids', []))}")
+            lines.append(
+                f"  - Confidence assessment: `{item.get('confidence_assessment', 'not_assessed')}`"
+            )
+        lines.append("")
 
     lines.append("## Agent Stages")
     lines.append("")

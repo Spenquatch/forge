@@ -11,7 +11,8 @@ from .files import write_json, write_text
 from .report import render_report
 from .selection import select_best_draft
 
-_ACCEPTED_RUN_VERDICTS = {"accepted", "accepted_with_warnings"}
+_FULLY_ACCEPTED_RUN_VERDICTS = {"accepted", "accepted_with_warnings"}
+_PARTIAL_ACCEPTED_RUN_VERDICTS = {"accepted_partial"}
 
 
 def artifact_ref(path: str | Path, *, kind: str, description: str) -> dict[str, str]:
@@ -28,6 +29,57 @@ def ensure_run_dir(run_dir: str | Path) -> Path:
     return path
 
 
+def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
+    reviews = summary.get("recommendation_reviews") or []
+    indices: list[int] = []
+    for item in reviews:
+        if not isinstance(item, dict):
+            continue
+        verdict = str(item.get("verdict") or "").strip().lower()
+        if verdict not in {"accept", "accept_with_caveat"}:
+            continue
+        try:
+            indices.append(int(item.get("recommendation_index")))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(indices))
+
+
+def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, dict) or not payload:
+        return None
+    recommendation_indices = _accepted_recommendation_indices(summary)
+    recommendations = payload.get("recommendations")
+    if not isinstance(recommendations, list) or not recommendations or not recommendation_indices:
+        return None
+    selected_recommendations = [
+        copy.deepcopy(item)
+        for index, item in enumerate(recommendations, start=1)
+        if index in recommendation_indices and isinstance(item, dict)
+    ]
+    if not selected_recommendations:
+        return None
+    excluded_indices = [
+        index for index in range(1, len(recommendations) + 1) if index not in recommendation_indices
+    ]
+    partial_payload = copy.deepcopy(payload)
+    partial_payload["summary"] = (
+        str(payload.get("summary") or "").strip()
+        + (
+            f"\n\nPartial acceptance: recommendations {', '.join(str(i) for i in recommendation_indices)} "
+            f"are included; recommendations {', '.join(str(i) for i in excluded_indices) or 'none'} were excluded."
+        )
+    ).strip()
+    partial_payload["recommendations"] = selected_recommendations
+    partial_payload["included_recommendation_indices"] = recommendation_indices
+    partial_payload["excluded_recommendation_indices"] = excluded_indices
+    partial_payload["recommendation_reviews"] = copy.deepcopy(summary.get("recommendation_reviews") or [])
+    partial_payload["caveats"] = [
+        f"This is a partial answer. Excluded recommendations: {', '.join(str(i) for i in excluded_indices) or 'none'}."
+    ]
+    return partial_payload
+
+
 def render_deliverable_markdown(
     task_id: str,
     payload: dict[str, Any],
@@ -40,7 +92,7 @@ def render_deliverable_markdown(
         lines.extend(
             [
                 "> [!WARNING]",
-                "> This run did not reach an accepted verdict. This file is the best available draft, not a final accepted answer.",
+                "> This run did not reach a fully accepted verdict. This file may contain a best-effort or partial deliverable.",
                 "",
             ]
         )
@@ -48,6 +100,14 @@ def render_deliverable_markdown(
     summary_text = str(payload.get("summary", "") or "").strip()
     if summary_text:
         lines.extend(["## Summary", "", summary_text, ""])
+
+    caveats = payload.get("caveats")
+    if isinstance(caveats, list) and caveats:
+        lines.append("## Caveats")
+        lines.append("")
+        for item in caveats:
+            lines.append(f"- {item}")
+        lines.append("")
 
     recommendations = payload.get("recommendations")
     if isinstance(recommendations, list) and recommendations:
@@ -95,9 +155,9 @@ def render_deliverable_markdown(
 def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     """Ensure the summary includes best-draft selection and deliverable artifacts.
 
-    Accepted runs get ``FINAL_ANSWER.*``. Non-accepted runs get ``BEST_DRAFT.*``.
-    The summary/report are rewritten after the selection step so the artifacts are
-    internally consistent.
+    Accepted runs get ``FINAL_ANSWER.*``. Partially accepted runs get
+    ``PARTIAL_ANSWER.*``. Other runs get ``BEST_DRAFT.*``. The summary/report are
+    rewritten after the selection step so the artifacts are internally consistent.
     """
 
     summary = copy.deepcopy(summary)
@@ -117,13 +177,15 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
                 break
     summary["drafts"] = drafts
 
-    accepted = str(summary.get("verdict") or "") in _ACCEPTED_RUN_VERDICTS
+    verdict = str(summary.get("verdict") or "")
+    fully_accepted = verdict in _FULLY_ACCEPTED_RUN_VERDICTS
+    partially_accepted = verdict in _PARTIAL_ACCEPTED_RUN_VERDICTS
     payload: dict[str, Any] | None = None
     artifact_kind = None
     artifact_json_path: Path | None = None
     artifact_md_path: Path | None = None
 
-    if accepted:
+    if fully_accepted:
         payload = summary.get("final_answer")
         if not isinstance(payload, dict) or not payload:
             if best_draft is not None:
@@ -132,6 +194,18 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             artifact_kind = "final_answer"
             artifact_json_path = run_dir / "FINAL_ANSWER.json"
             artifact_md_path = run_dir / "FINAL_ANSWER.md"
+    elif partially_accepted:
+        payload = summary.get("partial_answer")
+        if not isinstance(payload, dict) or not payload:
+            source_payload = summary.get("final_answer")
+            if (not isinstance(source_payload, dict) or not source_payload) and best_draft is not None:
+                source_payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
+            payload = build_partial_answer_payload(summary, source_payload)
+        if isinstance(payload, dict) and payload:
+            artifact_kind = "partial_answer"
+            artifact_json_path = run_dir / "PARTIAL_ANSWER.json"
+            artifact_md_path = run_dir / "PARTIAL_ANSWER.md"
+            summary["partial_answer"] = payload
     else:
         if best_draft is not None:
             payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
@@ -147,23 +221,44 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             render_deliverable_markdown(
                 task_id,
                 payload,
-                artifact_label=("Final Answer" if accepted else "Best Draft"),
-                accepted=accepted,
+                artifact_label=(
+                    "Final Answer"
+                    if fully_accepted
+                    else "Partial Answer"
+                    if partially_accepted
+                    else "Best Draft"
+                ),
+                accepted=fully_accepted,
             ),
         )
         artifacts["final_artifact"] = str(artifact_md_path)
         artifacts["final_artifact_json"] = str(artifact_json_path)
         artifacts["final_artifact_kind"] = artifact_kind
-        if accepted:
+        if fully_accepted:
             artifacts["final_answer_json"] = str(artifact_json_path)
             artifacts["final_answer_md"] = str(artifact_md_path)
             summary["final_answer"] = payload
+        elif partially_accepted:
+            artifacts["partial_answer_json"] = str(artifact_json_path)
+            artifacts["partial_answer_md"] = str(artifact_md_path)
         else:
             artifacts["best_draft_json"] = str(artifact_json_path)
             artifacts["best_draft_md"] = str(artifact_md_path)
     else:
         artifacts.setdefault("final_artifact", "")
         artifacts.setdefault("final_artifact_kind", "none")
+
+    contract = summary.get("analysis_review_contract")
+    if isinstance(contract, dict) and contract:
+        contract_path = run_dir / "analysis_review.contract.effective.json"
+        write_json(contract_path, contract)
+        artifacts["analysis_review_contract_json"] = str(contract_path)
+
+    issue_ledger = summary.get("issue_ledger")
+    if isinstance(issue_ledger, list) and issue_ledger:
+        issue_ledger_path = run_dir / "issue_ledger.final.json"
+        write_json(issue_ledger_path, issue_ledger)
+        artifacts["issue_ledger_json"] = str(issue_ledger_path)
 
     summary_path = run_dir / "summary.json"
     report_path = run_dir / "REPORT.md"
@@ -208,6 +303,7 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
         "agent_stages": list(state.get("stage_history") or []),
         "validator_rounds": list(state.get("validator_rounds") or []),
         "drafts": list(state.get("drafts") or []),
+        "issue_ledger": list(state.get("issue_history") or []),
         "artifacts": {
             "run_dir": str(run_dir),
         },
@@ -218,17 +314,10 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
         kind="summary_json",
         description="Machine-readable harness run summary",
     )
-    state["artifact_index"]["report_md"] = artifact_ref(
+    state.setdefault("artifact_index", {})["report_md"] = artifact_ref(
         summary["artifacts"]["report_md"],
         kind="report_md",
-        description="Human-readable harness report",
+        description="Human-readable harness run report",
     )
-    final_artifact = summary["artifacts"].get("final_artifact")
-    if final_artifact:
-        state["artifact_index"][summary["artifacts"].get("final_artifact_kind", "deliverable")] = artifact_ref(
-            final_artifact,
-            kind=summary["artifacts"].get("final_artifact_kind", "deliverable"),
-            description="Primary harness deliverable",
-        )
-    state["run_dir"] = summary["artifacts"]["run_dir"]
+    state["summary_payload"] = summary
     return state

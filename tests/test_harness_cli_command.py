@@ -66,3 +66,40 @@ def test_harness_run_cli_reports_runtime_dependency_errors(monkeypatch, capsys):
     )
     captured = capsys.readouterr()
     assert "❌ HARNESS RUN FAILED: PyYAML is required" in captured.out
+
+
+
+class _PartialRunner:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def run(self):
+        return {
+            "verdict": "accepted_partial",
+            "artifacts": {
+                "run_dir": "/tmp/run",
+                "report_md": "/tmp/run/REPORT.md",
+                "summary_json": "/tmp/run/summary.json",
+                "partial_answer_md": "/tmp/run/PARTIAL_ANSWER.md",
+            },
+        }
+
+
+def test_harness_run_cli_dispatch_partial_answer(monkeypatch, capsys):
+    monkeypatch.setattr(cli_module, "HarnessRunner", _PartialRunner)
+    asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                "task.yaml",
+                "--strategy",
+                "strategy.yaml",
+                "--workspace",
+                "/tmp/workspace",
+            ]
+        )
+    )
+    captured = capsys.readouterr()
+    assert "verdict=accepted_partial" in captured.out
+    assert "partial_answer=/tmp/run/PARTIAL_ANSWER.md" in captured.out
