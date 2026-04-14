@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Shared typed contracts for the analysis-review harness surface.
+
+The contract in this module is the single source of truth for analysis-review
+stage behavior. Changes here should be reviewed in PRs together with the prompt,
+runner, schema, and test updates that enforce the new contract.
+"""
+
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
@@ -50,6 +57,8 @@ class RequiredSectionPolicy:
     strengths_required: bool = True
     uncertainties_required: bool = True
     none_reason_allowed: bool = True
+    min_items_when_populated: int = 1
+    minimum_files_reviewed: int = 1
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -89,7 +98,7 @@ def build_analysis_review_contract(
 ) -> AnalysisReviewContract:
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v1",
+        contract_version="analysis_review_v1_contract_v2",
         stop_policy=strategy.review_loops,
         partial_acceptance=PartialAcceptancePolicy(
             enabled=True,
@@ -101,6 +110,8 @@ def build_analysis_review_contract(
             strengths_required=(task.task_kind == "analysis_review"),
             uncertainties_required=(task.task_kind == "analysis_review"),
             none_reason_allowed=True,
+            min_items_when_populated=1,
+            minimum_files_reviewed=1,
         ),
         require_issue_ledger=True,
         require_recommendation_reviews=True,

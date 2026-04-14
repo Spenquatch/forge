@@ -58,8 +58,14 @@ class _AcceptingHarnessAdapter:
                     "confidence": 0.81,
                 },
             ],
-            "strengths": ["Grounded in workflow files"],
-            "uncertainties": [],
+            "strengths": {
+                "items": ["Grounded in workflow files"],
+                "none_reason": "",
+            },
+            "uncertainties": {
+                "items": [],
+                "none_reason": "No material uncertainties remained after comparing the relevant workflow files.",
+            },
             "files_reviewed": [
                 ".github/workflows/codex-cli-release-watch.yml",
                 ".github/workflows/claude-code-release-watch.yml",
@@ -242,6 +248,18 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _InvalidSemanticHarnessAdapter(_AcceptingHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        if role_name == "proposer":
+            payload = self._base_analysis(revised=False)
+            payload["strengths"] = {"items": [], "none_reason": ""}
+            payload["uncertainties"] = {"items": [], "none_reason": ""}
+            payload["files_reviewed"] = []
+            return payload
+        return super()._payload_for_role(role_name)
+
+
+
 def _write_task_and_strategy(tmp_path: Path, *, min_recommendations: int = 2) -> tuple[Path, Path]:
     task_path = tmp_path / "task.yaml"
     task_path.write_text(
@@ -293,6 +311,7 @@ validators: []
     return task_path, strategy_path
 
 
+
 def _prepare_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -306,6 +325,7 @@ def _prepare_workspace(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return workspace
+
 
 
 def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
@@ -333,8 +353,10 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
+    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v2"
     assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
     assert summary["final_answer"]["recommendations"][0]["title"] == "Add concurrency controls"
+    assert summary["final_answer"]["strengths"]["items"] == ["Grounded in workflow files"]
     assert summary["recommendation_reviews"][0]["verdict"] == "accept"
     assert summary["issue_ledger"] == []
 
@@ -344,6 +366,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert proposer_stage["effective_access"] == "read"
     assert reviser_stage["requested_access"] == "write"
     assert reviser_stage["effective_access"] == "read"
+
 
 
 def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
@@ -385,3 +408,40 @@ def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
     assert issue_ledger[0]["resolution_status"] == "carried_forward"
     assert issue_ledger[0]["blocking_class"] == "actionability"
     assert issue_ledger[0]["recommendation_index"] == 3
+
+
+
+def test_analysis_review_runner_surfaces_semantic_validation_failures(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _InvalidSemanticHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert "Semantic validation failed" in summary["final_summary"]
+    proposer_stage = summary["agent_stages"][0]
+    assert proposer_stage["ok"] is False
+    assert any(
+        "strengths must contain at least one concrete item or a non-empty none_reason" in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
+    assert any(
+        "files_reviewed must contain at least 1 non-empty path" in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
+    assert Path(proposer_stage["semantic_validation_path"]).exists()

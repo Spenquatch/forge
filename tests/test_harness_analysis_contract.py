@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from anvil.harness.contracts import (
     build_analysis_review_contract,
     default_blocking_class_for_kind,
 )
-from anvil.harness.types import StrategyConfig, TaskSpec
+from anvil.harness.files import load_structured_file
+from anvil.harness.types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 
 def _task(min_recommendations: int = 2) -> TaskSpec:
@@ -38,14 +41,14 @@ def _strategy() -> StrategyConfig:
             "name": "analysis-review-codex-claude",
             "kind": "analysis_review_v1",
             "roles": {
-                "proposer": {"provider": "codex_cli", "effort": "low", "access": "read"},
+                "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
                 "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
                 "reviser": {"provider": "codex_cli", "effort": "high", "access": "read"},
                 "auditor": {"provider": "claude_code", "effort": "high", "access": "read"},
             },
             "review_loops": {
                 "min_loops": 1,
-                "max_loops": 2,
+                "max_loops": 3,
                 "always_run_first_revision": True,
                 "stop_when": {
                     "max_open_medium_issues": 0,
@@ -63,9 +66,9 @@ def _strategy() -> StrategyConfig:
 def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
 
-    assert contract.contract_version == "analysis_review_v1_contract_v1"
+    assert contract.contract_version == "analysis_review_v1_contract_v2"
     assert contract.reviser_goal == "close_all_open_blockers"
-    assert contract.stop_policy.max_loops == 2
+    assert contract.stop_policy.max_loops == 3
     assert contract.stop_policy.min_grounding_score == 0.8
     assert contract.partial_acceptance.enabled is True
     assert contract.partial_acceptance.min_accepted_recommendations == 3
@@ -74,6 +77,8 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.require_recommendation_reviews is True
     assert contract.required_sections.strengths_required is True
     assert contract.required_sections.uncertainties_required is True
+    assert contract.required_sections.min_items_when_populated == 1
+    assert contract.required_sections.minimum_files_reviewed == 1
 
 
 
@@ -83,3 +88,14 @@ def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():
     assert default_blocking_class_for_kind("factual_error") == "correctness"
     assert default_blocking_class_for_kind("missing_priority") == "completeness"
     assert default_blocking_class_for_kind("unknown-kind") == "presentation"
+
+
+
+def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2():
+    assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_v1").max_loops == 3
+
+    example = load_structured_file(
+        Path("examples/harness/strategies/analysis_review_codex_claude.yaml")
+    )
+    assert example["roles"]["proposer"]["effort"] == "medium"
+    assert example["review_loops"]["max_loops"] == 3

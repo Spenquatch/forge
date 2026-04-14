@@ -58,6 +58,11 @@ def render_report(summary: dict[str, Any]) -> str:
             lines.append(
                 f"- Partial acceptance policy: `{json.dumps(partial_acceptance, sort_keys=True)}`"
             )
+        required_sections = contract.get("required_sections") or {}
+        if required_sections:
+            lines.append(
+                f"- Required analysis sections: `{json.dumps(required_sections, sort_keys=True)}`"
+            )
         lines.append("")
 
     if run_details:
@@ -251,6 +256,19 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append(f"- Duration: `{stage.get('duration_sec')}` seconds")
         if stage.get("error"):
             lines.append(f"- Error: {stage.get('error')}")
+        semantic_path = stage.get("semantic_validation_path")
+        if semantic_path:
+            lines.append(f"- Semantic validation artifact: `{semantic_path}`")
+        semantic_errors = stage.get("semantic_validation_errors") or []
+        if semantic_errors:
+            lines.append("- Semantic validation errors:")
+            for item in semantic_errors:
+                lines.append(f"  - {item}")
+        semantic_warnings = stage.get("semantic_validation_warnings") or []
+        if semantic_warnings:
+            lines.append("- Semantic validation warnings:")
+            for item in semantic_warnings:
+                lines.append(f"  - {item}")
         structured = stage.get("structured_output") or {}
         if structured:
             lines.append("")

@@ -71,3 +71,20 @@ Note on full test suite in this container:
 
 - `pytest -q` did not complete here because this environment does not have optional dependencies like `langgraph` and `langchain_core` installed, and some pre-existing Forge tests import those modules directly during collection.
 - The new harness-specific surface itself compiled and passed its targeted tests.
+
+## Priority 2 hardening
+
+The analysis-review surface now also includes:
+
+- contract-driven semantic validation for analysis-review stages
+- structured `strengths` / `uncertainties` sections using `items` plus `none_reason`
+- explicit stage-level semantic validation artifacts on failures or warnings
+- updated recommended tuning for the example analysis-review strategy:
+  - proposer effort `medium`
+  - max review loops `3`
+- additional docs in `docs/analysis_review_contract.md`
+
+Change-management note:
+
+- review contract changes in PRs together with prompt/schema/runner/test updates
+- do not add manual per-run approval gates just to paper over contract drift

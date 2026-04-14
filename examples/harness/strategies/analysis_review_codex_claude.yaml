@@ -6,7 +6,7 @@ prompt_preamble: |
 roles:
   proposer:
     provider: codex_cli
-    effort: low
+    effort: medium
     access: read
     timeout_sec: 1800
   critic:
@@ -28,7 +28,7 @@ roles:
     disable_bare: true
 review_loops:
   min_loops: 1
-  max_loops: 2
+  max_loops: 3
   always_run_first_revision: true
   stop_when:
     max_open_medium_issues: 0

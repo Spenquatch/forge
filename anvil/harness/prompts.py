@@ -171,6 +171,8 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
             f"- Strengths required: {required_sections.strengths_required}",
             f"- Uncertainties required: {required_sections.uncertainties_required}",
             f"- Empty section rationale allowed: {required_sections.none_reason_allowed}",
+            f"- Minimum items when a section is populated: {required_sections.min_items_when_populated}",
+            f"- Minimum files_reviewed entries: {required_sections.minimum_files_reviewed}",
         ]
     )
 
@@ -326,8 +328,10 @@ Your job:
 3. For every recommendation, include classification, priority, evidence, and a concrete proposed change.
 4. Distinguish carefully among confirmed_issue, risk, and recommendation.
 5. Use the shared confidence rubric below. High confidence is appropriate for direct workspace evidence; lower confidence is appropriate for partial inference.
-6. Populate strengths, uncertainties, and files_reviewed with concrete observations from this run.
-7. Use workspace_write_intent=`none` unless you truly changed the repo.
+6. Populate strengths and uncertainties as objects with `items` and `none_reason`.
+7. For strengths/uncertainties: include concrete items when you have them; otherwise leave `items` empty and explain why in `none_reason`.
+8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
+9. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 {_analysis_contract_block(contract)}
 {_confidence_rubric_block(contract)}
@@ -466,9 +470,10 @@ Your job:
 1. Inspect the current workspace directly.
 2. Revise the prior analysis to address every open issue in the issue ledger below.
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
-4. Use the shared confidence rubric below when revising confidence values.
-5. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-6. Use workspace_write_intent=`none` unless you truly changed the repo.
+4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
+5. Use the shared confidence rubric below when revising confidence values.
+6. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+7. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}

@@ -12,3 +12,4 @@ __pycache__/
 .mypy_cache
 .mcp.json
 archived
+.forge-harness-runs

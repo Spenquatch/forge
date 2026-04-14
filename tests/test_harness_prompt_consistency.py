@@ -16,6 +16,7 @@ _GIT_SNAPSHOT = {
 }
 
 
+
 def _task() -> TaskSpec:
     return TaskSpec.from_dict(
         {
@@ -47,14 +48,14 @@ def _strategy() -> StrategyConfig:
             "name": "analysis-review-codex-claude",
             "kind": "analysis_review_v1",
             "roles": {
-                "proposer": {"provider": "codex_cli", "effort": "low", "access": "read"},
+                "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
                 "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
                 "reviser": {"provider": "codex_cli", "effort": "high", "access": "read"},
                 "auditor": {"provider": "claude_code", "effort": "high", "access": "read"},
             },
             "review_loops": {
                 "min_loops": 1,
-                "max_loops": 2,
+                "max_loops": 3,
                 "always_run_first_revision": True,
                 "stop_when": {
                     "max_open_medium_issues": 0,
@@ -108,13 +109,17 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
         open_issues=[{"issue_id": "AR-001", "severity": "medium", "title": "Example issue"}],
     )
 
-    assert "Analysis-review contract: analysis_review_v1_contract_v1" in proposer
+    assert "Analysis-review contract: analysis_review_v1_contract_v2" in proposer
     assert "Minimum accepted recommendations for partial acceptance: 2" in critic
     assert "Create stable issue IDs such as AR-001" in critic
     assert "You are not starting from scratch" in auditor
     assert "Open issue ledger entering this audit" in auditor
     assert "close all open medium-or-higher blockers" in reviser
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
+    assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer
+    assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
+    assert "Minimum items when a section is populated: 1" in proposer
+    assert "Minimum files_reviewed entries: 1" in proposer
 
     for rubric_line in confidence_rubric_lines():
         assert rubric_line in proposer

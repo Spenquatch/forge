@@ -260,7 +260,7 @@ class ReviewLoopPolicy:
         if strategy_kind == "analysis_review_v1":
             return cls(
                 min_loops=1,
-                max_loops=2,
+                max_loops=3,
                 always_run_first_revision=True,
                 max_open_medium_issues=0,
                 min_grounding_score=0.80,

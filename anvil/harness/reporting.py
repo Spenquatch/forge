@@ -45,6 +45,22 @@ def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
     return sorted(set(indices))
 
 
+def _render_analysis_section(lines: list[str], title: str, section: Any) -> None:
+    if not isinstance(section, dict):
+        return
+    items = [str(item).strip() for item in section.get("items", []) if str(item).strip()]
+    none_reason = str(section.get("none_reason") or "").strip()
+    if not items and not none_reason:
+        return
+    lines.extend([f"## {title}", ""])
+    if items:
+        for item in items:
+            lines.append(f"- {item}")
+    if none_reason:
+        lines.append(f"- none_reason: {none_reason}")
+    lines.append("")
+
+
 def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or not payload:
         return None
@@ -107,6 +123,17 @@ def render_deliverable_markdown(
         lines.append("")
         for item in caveats:
             lines.append(f"- {item}")
+        lines.append("")
+
+    _render_analysis_section(lines, "Strengths", payload.get("strengths"))
+    _render_analysis_section(lines, "Uncertainties", payload.get("uncertainties"))
+
+    files_reviewed = payload.get("files_reviewed")
+    if isinstance(files_reviewed, list) and files_reviewed:
+        lines.extend(["## Files Reviewed", ""])
+        for item in files_reviewed:
+            if str(item).strip():
+                lines.append(f"- {item}")
         lines.append("")
 
     recommendations = payload.get("recommendations")

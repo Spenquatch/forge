@@ -29,6 +29,7 @@ from .prompts import (
 from .providers import get_provider
 from .reporting import apply_final_artifacts
 from .selection import extract_drafts_from_summary, select_best_draft
+from .semantic_validation import validate_stage_output
 from .schemas import (
     analysis_output_schema,
     analysis_review_schema,
@@ -461,6 +462,7 @@ class HarnessRunner:
             proposer_prompt,
             analysis_output_schema(),
             proposer_cfg,
+            semantic_context={"contract": contract},
         )
         if not proposer_run.ok:
             return {
@@ -525,6 +527,14 @@ class HarnessRunner:
                 reviser_prompt,
                 analysis_output_schema(require_issue_resolution_map=True),
                 reviser_cfg,
+                semantic_context={
+                    "contract": contract,
+                    "open_issue_ids": [
+                        str(item.get("issue_id"))
+                        for item in self._open_issue_records()
+                        if str(item.get("issue_id") or "").strip()
+                    ],
+                },
             )
             if not latest_analysis_run.ok:
                 return {
@@ -629,6 +639,16 @@ class HarnessRunner:
     ) -> ProviderRun:
         contract = self._analysis_contract()
         git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        prior_open_issue_ids = [
+            str(item.get("issue_id"))
+            for item in self._open_issue_records()
+            if str(item.get("issue_id") or "").strip()
+        ]
+        expected_recommendation_count = 0
+        if isinstance(prior_output, dict):
+            recommendations = prior_output.get("recommendations")
+            if isinstance(recommendations, list):
+                expected_recommendation_count = len(recommendations)
         if role_name == "auditor":
             prompt = build_analysis_auditor_prompt(
                 self.task,
@@ -652,12 +672,18 @@ class HarnessRunner:
                 self.strategy.review_loops,
                 contract,
             )
+            prior_open_issue_ids = []
         return self._run_agent_stage(
             role_name,
             role_cfg.provider,
             prompt,
             analysis_review_schema(),
             role_cfg,
+            semantic_context={
+                "contract": contract,
+                "prior_open_issue_ids": prior_open_issue_ids,
+                "expected_recommendation_count": expected_recommendation_count,
+            },
         )
 
     def _run_agent_stage(
@@ -667,6 +693,7 @@ class HarnessRunner:
         prompt_text: str,
         schema: dict[str, Any],
         role_config: RoleConfig,
+        semantic_context: dict[str, Any] | None = None,
     ) -> ProviderRun:
         self.stage_counter += 1
         stage_dir = self.artifacts_dir / f"{self.stage_counter:02d}_{slugify(role_name)}"
@@ -681,10 +708,57 @@ class HarnessRunner:
             out_dir=str(stage_dir),
         )
         run = provider.run(request)
+
+        semantic_errors: list[str] = []
+        semantic_warnings: list[str] = []
+        semantic_validation_path: str | None = None
+        context = dict(semantic_context or {})
+        contract = context.pop("contract", None)
+        if isinstance(contract, AnalysisReviewContract) and isinstance(run.structured_output, dict):
+            semantic_result = validate_stage_output(
+                role_name=role_name,
+                payload=run.structured_output,
+                task=self.task,
+                contract=contract,
+                **context,
+            )
+            semantic_errors = list(semantic_result.errors)
+            semantic_warnings = list(semantic_result.warnings)
+            if semantic_errors or semantic_warnings:
+                semantic_validation_path = str(stage_dir / "semantic_validation.json")
+                semantic_payload = {
+                    "ok": not semantic_errors,
+                    "errors": semantic_errors,
+                    "warnings": semantic_warnings,
+                }
+                write_json(semantic_validation_path, semantic_payload)
+                raw_meta = dict(run.raw_meta or {})
+                raw_meta["semantic_validation"] = semantic_payload
+                if semantic_errors:
+                    semantic_error_text = "Semantic validation failed:\n" + "\n".join(
+                        f"- {item}" for item in semantic_errors
+                    )
+                    combined_error = semantic_error_text
+                    if run.error:
+                        combined_error = f"{run.error.rstrip()}\n{semantic_error_text}"
+                    run = replace(run, ok=False, error=combined_error, raw_meta=raw_meta)
+                else:
+                    run = replace(run, raw_meta=raw_meta)
+                for warning in semantic_warnings:
+                    self.warnings.append(f"{role_name}: {warning}")
+
         stage_record = asdict(run)
         stage_record["stage_index"] = self.stage_counter
         stage_record["requested_access"] = role_config.access
         stage_record["effective_access"] = effective_role_config.access
+        if semantic_warnings:
+            stage_record["warnings"] = list(semantic_warnings)
+        if semantic_errors:
+            stage_record["semantic_validation_errors"] = semantic_errors
+        if semantic_warnings:
+            stage_record["semantic_validation_warnings"] = semantic_warnings
+        if semantic_validation_path:
+            stage_record["semantic_validation_path"] = semantic_validation_path
         if role_config.access != effective_role_config.access:
             stage_record[
                 "access_override_reason"

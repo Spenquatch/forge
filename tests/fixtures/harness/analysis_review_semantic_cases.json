@@ -1,0 +1,146 @@
+{
+  "analysis_output_valid": {
+    "status": "done",
+    "summary": "Two grounded recommendations.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [".github/workflows/codex-cli-release-watch.yml"],
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Align timeout handling",
+        "rationale": "Consistent timeouts make failures easier to compare.",
+        "evidence": [".github/workflows/claude-code-release-watch.yml"],
+        "proposed_change": "Use explicit timeout-minutes across both workflows.",
+        "confidence": 0.82
+      }
+    ],
+    "strengths": {
+      "items": ["Grounded in workflow files"],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": "No material uncertainties remained after comparing the relevant files."
+    },
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
+    "confidence": 0.86
+  },
+  "analysis_output_missing_sections": {
+    "status": "done",
+    "summary": "Only one recommendation and no meaningful section data.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [".github/workflows/codex-cli-release-watch.yml"],
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9
+      }
+    ],
+    "strengths": {
+      "items": [],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": ""
+    },
+    "files_reviewed": [],
+    "confidence": 0.86
+  },
+  "analysis_output_missing_issue_resolution": {
+    "status": "revised",
+    "summary": "Attempted revision.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [".github/workflows/codex-cli-release-watch.yml"],
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Align timeout handling",
+        "rationale": "Consistent timeouts make failures easier to compare.",
+        "evidence": [".github/workflows/claude-code-release-watch.yml"],
+        "proposed_change": "Use explicit timeout-minutes across both workflows.",
+        "confidence": 0.82
+      }
+    ],
+    "strengths": {
+      "items": ["Grounded in workflow files"],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": "No material uncertainties remained after comparing the relevant files."
+    },
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml"
+    ],
+    "issue_resolution_map": [
+      {
+        "issue_id": "AR-001",
+        "status": "addressed",
+        "change_summary": "Tightened the recommendation wording.",
+        "residual_risk": ""
+      }
+    ],
+    "confidence": 0.84
+  },
+  "review_payload_missing_coverage": {
+    "verdict": "revise",
+    "summary": "Recommendation 1 is solid, but recommendation 2 still needs work.",
+    "workspace_write_intent": "none",
+    "issues": [
+      {
+        "issue_id": "AR-001",
+        "severity": "medium",
+        "kind": "insufficient_specificity",
+        "blocking_class": "actionability",
+        "recommendation_index": 2,
+        "title": "Recommendation 2 needs more implementation detail.",
+        "evidence": "The proposed change stays at a conceptual level.",
+        "repair_hint": "Point to the exact workflow or docs target.",
+        "why_not_raised_earlier": null
+      }
+    ],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Strong recommendation.",
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "missing_topics": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.72,
+    "scope_compliance_score": 0.94,
+    "confidence": 0.83
+  }
+}

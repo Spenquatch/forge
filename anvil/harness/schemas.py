@@ -153,6 +153,20 @@ RECOMMENDATION_REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+SECTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "none_reason": {"type": "string"},
+    },
+    "required": ["items", "none_reason"],
+    "additionalProperties": False,
+}
+
+
 COMMON_PROPS: dict[str, Any] = {
     "summary": {"type": "string"},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -244,10 +258,15 @@ def analysis_output_schema(*, require_issue_resolution_map: bool = False) -> dic
         "recommendations": {
             "type": "array",
             "items": RECOMMENDATION_SCHEMA,
+            "minItems": 1,
         },
-        "strengths": {"type": "array", "items": {"type": "string"}},
-        "uncertainties": {"type": "array", "items": {"type": "string"}},
-        "files_reviewed": {"type": "array", "items": {"type": "string"}},
+        "strengths": SECTION_SCHEMA,
+        "uncertainties": SECTION_SCHEMA,
+        "files_reviewed": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
     }
     required = [
         "status",
@@ -286,6 +305,7 @@ def analysis_review_schema() -> dict[str, Any]:
             "recommendation_reviews": {
                 "type": "array",
                 "items": RECOMMENDATION_REVIEW_SCHEMA,
+                "minItems": 1,
             },
             "missing_topics": {"type": "array", "items": {"type": "string"}},
             "grounding_score": {"type": "number", "minimum": 0, "maximum": 1},
