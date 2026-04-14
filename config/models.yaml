@@ -29,15 +29,15 @@ default_pipeline:
 
 providers:
   # ===== CLI AGENTS (first-class) =====
-  codex_cli:
+  codex_cli_gpt_5_4:
     type: cli
     class_path: anvil.providers.codex_cli.CodexCliProvider
     binary: codex
-    model_name: gpt-5-codex
+    model_name: gpt-5.4
     default_args: []
     env: {}
     models:
-      gpt-5-codex/*:
+      gpt-5.4/*:
         execute:
           access: read
           effort: medium
