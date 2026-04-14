@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+from anvil.harness.files import load_structured_file
 
 from anvil.harness.runner import HarnessRunner
 from anvil.harness.types import ProviderRun
@@ -259,6 +262,44 @@ class _InvalidSemanticHarnessAdapter(_AcceptingHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
+    def run(self, request):
+        if request.role_name == "critic":
+            out_dir = Path(request.out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "type": "result",
+                "subtype": "success",
+                "is_error": True,
+                "result": "You've hit your limit · resets 1pm (America/Indiana/Indianapolis)",
+            }
+            (out_dir / "response.txt").write_text("quota", encoding="utf-8")
+            (out_dir / "error.txt").write_text(payload["result"], encoding="utf-8")
+            (out_dir / "structured_output.json").write_text(json.dumps(payload), encoding="utf-8")
+            return ProviderRun(
+                role_name=request.role_name,
+                provider="fake-claude",
+                model="fake-model",
+                access=request.role_config.access,
+                ok=False,
+                exit_code=1,
+                duration_sec=0.01,
+                cwd=request.cwd,
+                command=["fake-claude"],
+                stdout_path=str(out_dir / "response.txt"),
+                stderr_path=str(out_dir / "error.txt"),
+                prompt_path=str(out_dir / "prompt.txt"),
+                schema_path=str(out_dir / "schema.json"),
+                output_path=str(out_dir / "structured_output.json"),
+                structured_output=payload,
+                raw_meta={},
+                error="Provider quota exhausted: You've hit your limit · resets 1pm (America/Indiana/Indianapolis)",
+                failure_kind="quota_exhausted",
+                failure_summary="Provider quota exhausted: You've hit your limit · resets 1pm (America/Indiana/Indianapolis)",
+            )
+        return super().run(request)
+
+
 
 def _write_task_and_strategy(tmp_path: Path, *, min_recommendations: int = 2) -> tuple[Path, Path]:
     task_path = tmp_path / "task.yaml"
@@ -359,6 +400,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert summary["final_answer"]["strengths"]["items"] == ["Grounded in workflow files"]
     assert summary["recommendation_reviews"][0]["verdict"] == "accept"
     assert summary["issue_ledger"] == []
+    assert summary["analysis_review_coverage"]["review_loop_exercised"] is True
 
     proposer_stage = summary["agent_stages"][0]
     reviser_stage = summary["agent_stages"][2]
@@ -366,6 +408,10 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert proposer_stage["effective_access"] == "read"
     assert reviser_stage["requested_access"] == "write"
     assert reviser_stage["effective_access"] == "read"
+    assert Path(proposer_stage["semantic_validation_path"]).exists()
+    proposer_semantic = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
+    assert proposer_semantic["ok"] is True
+    assert proposer_semantic["skipped"] is False
 
 
 
@@ -445,3 +491,49 @@ def test_analysis_review_runner_surfaces_semantic_validation_failures(
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert Path(proposer_stage["semantic_validation_path"]).exists()
+
+
+def test_analysis_review_runner_short_circuits_provider_failures_and_marks_review_unexercised(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _QuotaFailingReviewHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert "Review loop not exercised." in summary["final_summary"]
+    assert summary["analysis_review_coverage"]["review_loop_exercised"] is False
+    assert summary["analysis_review_coverage"]["review_stages_attempted"] == 1
+    assert summary["analysis_review_coverage"]["review_stages_completed"] == 0
+
+    critic_stage = summary["agent_stages"][1]
+    assert critic_stage["failure_kind"] == "quota_exhausted"
+    assert "$.verdict: missing required field" not in critic_stage["error"]
+    semantic_payload = load_structured_file(Path(critic_stage["semantic_validation_path"]))
+    assert semantic_payload["skipped"] is True
+    assert semantic_payload["skipped_reason"] == "provider_failure:quota_exhausted"
+
+    draft = summary["drafts"][0]
+    assert draft["review_state"] == "not_evaluated"
+    assert "medium_or_higher" not in draft["issue_counts"]
+    assert "review_failure_summary" in draft["metadata"]
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "Review loop exercised: `False`" in report_text
+    assert "Review issue counts: `not evaluated`" in report_text
+    best_draft_text = Path(summary["artifacts"]["best_draft_md"]).read_text(encoding="utf-8")
+    assert "not evaluated by a successful critic/auditor stage" in best_draft_text

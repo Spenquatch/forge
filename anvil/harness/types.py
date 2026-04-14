@@ -409,6 +409,9 @@ class ProviderRun:
     structured_output: Optional[dict[str, Any]] = None
     raw_meta: dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    failure_kind: Optional[str] = None
+    failure_summary: Optional[str] = None
+    schema_validation_errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

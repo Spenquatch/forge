@@ -94,6 +94,8 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         error_text: Optional[str] = None
         exit_code = 0
         structured_output: Optional[dict[str, Any]] = None
+        failure_kind: Optional[str] = None
+        failure_summary: Optional[str] = None
         raw_meta: dict[str, Any] = {
             "requested_provider": self.requested_name,
             "resolved_provider": self.name,
@@ -146,10 +148,23 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             if parse_error and error_text is None:
                 error_text = parse_error
 
-        validation_errors = _soft_validate_schema(structured_output, request.schema)
-        if validation_errors:
-            error_blob = "\n".join(validation_errors)
-            error_text = (error_text + "\n" if error_text else "") + error_blob
+        provider_failure = _classify_provider_failure(
+            structured_output,
+            error_text=error_text,
+            raw_text=raw_text,
+            exit_code=exit_code,
+        )
+        validation_errors: list[str] = []
+        if provider_failure is not None:
+            failure_kind, failure_summary = provider_failure
+            raw_meta["provider_failure_kind"] = failure_kind
+            raw_meta["provider_failure_summary"] = failure_summary
+            error_text = failure_summary
+        else:
+            validation_errors = _soft_validate_schema(structured_output, request.schema)
+            if validation_errors:
+                error_blob = "\n".join(validation_errors)
+                error_text = (error_text + "\n" if error_text else "") + error_blob
 
         write_text(stdout_path, raw_text)
         write_text(stderr_path, error_text or "")
@@ -167,11 +182,16 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             if isinstance(maybe_command, list):
                 command = list(maybe_command)
 
-        ok = exit_code == 0 and structured_output is not None and not validation_errors
+        ok = (
+            exit_code == 0
+            and structured_output is not None
+            and not validation_errors
+            and failure_kind is None
+        )
         return ProviderRun(
             role_name=request.role_name,
             provider=self.name,
-            model=request.role_config.model or getattr(provider, "model_name", None),
+            model=_reported_model_name(provider, request.role_config.model),
             access=request.role_config.access,
             ok=ok,
             exit_code=exit_code,
@@ -186,6 +206,9 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             structured_output=structured_output,
             raw_meta=raw_meta,
             error=error_text,
+            failure_kind=failure_kind,
+            failure_summary=failure_summary,
+            schema_validation_errors=validation_errors,
         )
 
 
@@ -249,6 +272,16 @@ def _build_provider_kwargs(request: StageRequest, provider_type: str) -> dict[st
         if cfg.max_budget_usd is not None:
             kwargs["max_budget_usd"] = cfg.max_budget_usd
     return kwargs
+
+
+def _reported_model_name(provider: Any, explicit_model: str | None) -> str | None:
+    if hasattr(provider, "reported_model_name"):
+        maybe = provider.reported_model_name(explicit_model)
+        return str(maybe) if maybe not in (None, "") else None
+    if explicit_model:
+        return explicit_model
+    fallback = getattr(provider, "model_name", None)
+    return str(fallback) if fallback not in (None, "") else None
 
 
 def _render_prompt_for_provider(prompt_text: str, schema: dict[str, Any], *, provider_type: str) -> str:
@@ -403,6 +436,85 @@ def _validate_node(value: Any, schema: Mapping[str, Any], *, path: str, errors: 
     enum = schema.get("enum")
     if isinstance(enum, list) and value not in enum:
         errors.append(f"{path}: value must be one of {enum}")
+
+
+def _classify_provider_failure(
+    payload: Optional[dict[str, Any]],
+    *,
+    error_text: Optional[str],
+    raw_text: str,
+    exit_code: int,
+) -> tuple[str, str] | None:
+    message = _provider_failure_message(payload, error_text=error_text, raw_text=raw_text)
+    lowered = message.lower()
+    looks_like_provider_envelope = _looks_like_provider_result_envelope(payload)
+
+    if exit_code == 0 and not looks_like_provider_envelope:
+        return None
+
+    if not message and exit_code == 0:
+        return None
+
+    kind = "provider_error"
+    if any(token in lowered for token in ("hit your limit", "quota", "rate limit", "too many requests", "429")):
+        kind = "quota_exhausted"
+    elif any(token in lowered for token in ("authentication", "unauthorized", "api key", "not logged in", "login")):
+        kind = "authentication_error"
+    elif any(token in lowered for token in ("permission denied", "forbidden", "permission")):
+        kind = "permission_denied"
+    elif any(
+        token in lowered
+        for token in ("not configured", "could not be initialized", "unavailable", "not installed")
+    ):
+        kind = "provider_unavailable"
+
+    summary = _format_provider_failure_summary(kind, message or f"Provider exited with code {exit_code}.")
+    return kind, summary
+
+
+def _looks_like_provider_result_envelope(payload: Optional[dict[str, Any]]) -> bool:
+    if not isinstance(payload, dict) or not payload:
+        return False
+    if payload.get("type") in {"result", "error"}:
+        return True
+    if "is_error" in payload:
+        return True
+    if payload.get("subtype") and payload.get("session_id"):
+        return True
+    return False
+
+
+def _provider_failure_message(
+    payload: Optional[dict[str, Any]],
+    *,
+    error_text: Optional[str],
+    raw_text: str,
+) -> str:
+    candidate_bits: list[str] = []
+    if isinstance(payload, dict):
+        for field_name in ("result", "error", "message", "stderr", "stdout"):
+            value = payload.get(field_name)
+            if isinstance(value, str) and value.strip():
+                candidate_bits.append(value.strip())
+    if error_text and error_text.strip():
+        candidate_bits.append(error_text.strip())
+    cleaned_raw = raw_text.strip()
+    if cleaned_raw and cleaned_raw not in candidate_bits and len(cleaned_raw) <= 400:
+        candidate_bits.append(cleaned_raw)
+    return next((item for item in candidate_bits if item), "")
+
+
+def _format_provider_failure_summary(kind: str, message: str) -> str:
+    prefix_map = {
+        "quota_exhausted": "Provider quota exhausted",
+        "authentication_error": "Provider authentication error",
+        "permission_denied": "Provider permission error",
+        "provider_unavailable": "Provider unavailable",
+        "provider_error": "Provider execution error",
+    }
+    prefix = prefix_map.get(kind, "Provider execution error")
+    text = message.strip()
+    return f"{prefix}: {text}" if text else prefix
 
 
 def _cli_result_meta(cli_result: Any) -> dict[str, Any]:

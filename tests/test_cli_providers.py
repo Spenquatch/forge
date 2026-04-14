@@ -91,6 +91,7 @@ async def test_codex_cli_provider_text(fake_cli_bins: dict[str, str]) -> None:
     assert provider.last_usage.input_tokens == 11
     assert provider.last_usage.output_tokens == 7
     assert "--json" in provider.last_command
+    assert "--model" not in provider.last_command
     assert provider.last_run_metadata["thread_id"] == "codex-thread-1"
     assert provider.last_run_metadata["item_type_counts"]["agent_message"] == 1
 
@@ -121,6 +122,51 @@ async def test_codex_cli_provider_structured_output(fake_cli_bins: dict[str, str
 
 
 @pytest.mark.asyncio
+async def test_codex_cli_provider_respects_explicit_model_override(fake_cli_bins: dict[str, str]) -> None:
+    provider = CodexCliProvider(
+        ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.codex_cli.CodexCliProvider",
+            binary=fake_cli_bins["codex"],
+            model_name="gpt-5-codex",
+            models={},
+        )
+    )
+
+    await provider.chat(
+        [{"role": "user", "content": "Use a specific model."}],
+        role="execute",
+        model="codex-mini-latest",
+    )
+
+    model_index = provider.last_command.index("--model")
+    assert provider.last_command[model_index + 1] == "codex-mini-latest"
+    assert provider.reported_model_name("codex-mini-latest") == "codex-mini-latest"
+
+
+def test_codex_cli_provider_reports_configured_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("pathlib.Path.home", lambda: Path("/tmp/codex-home-test"))
+
+    def _fake_read_text(self: Path, encoding: str = "utf-8") -> str:
+        assert self == Path("/tmp/codex-home-test/.codex/config.toml")
+        return 'model = "gpt-5.4"\n'
+
+    monkeypatch.setattr("pathlib.Path.read_text", _fake_read_text)
+
+    provider = CodexCliProvider(
+        ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.codex_cli.CodexCliProvider",
+            binary="codex",
+            model_name="gpt-5-codex",
+            models={},
+        )
+    )
+
+    assert provider.reported_model_name() == "gpt-5.4"
+
+
+@pytest.mark.asyncio
 async def test_claude_code_provider_text(fake_cli_bins: dict[str, str]) -> None:
     provider = ClaudeCodeProvider(
         ProviderCfg(
@@ -141,10 +187,13 @@ async def test_claude_code_provider_text(fake_cli_bins: dict[str, str]) -> None:
     assert provider.last_usage is not None
     assert provider.last_usage.total_tokens == 13
     assert provider.last_command[0].endswith("claude")
+    model_index = provider.last_command.index("--model")
+    assert provider.last_command[model_index + 1] == "sonnet"
     assert "--bare" not in provider.last_command
     assert "--no-session-persistence" not in provider.last_command
     assert "<prompt omitted>" in provider.last_command
     assert "--allowedTools" in provider.last_command
+    assert provider.reported_model_name() == "sonnet"
 
 
 @pytest.mark.asyncio

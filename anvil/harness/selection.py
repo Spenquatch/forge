@@ -87,6 +87,18 @@ def _is_review_stage(stage: dict[str, Any]) -> bool:
     return role_name.startswith(_REVIEW_PREFIXES)
 
 
+def _looks_like_completed_review_payload(payload: dict[str, Any]) -> bool:
+    required_fields = {
+        "verdict",
+        "issues",
+        "recommendation_reviews",
+        "grounding_score",
+        "actionability_score",
+        "scope_compliance_score",
+    }
+    return isinstance(payload, dict) and required_fields.issubset(payload)
+
+
 def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Project agent stages + validator rounds into the draft contract from ADR-0024.
 
@@ -131,6 +143,7 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                 "json_path": str(stage.get("output_path") or "") or None,
                 "summary": str(payload.get("summary", "") or ""),
                 "review_status": "candidate",
+                "review_state": "not_evaluated",
                 "scores": {},
                 "issue_counts": issue_counts,
                 "metadata": {
@@ -140,6 +153,8 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                     "payload": copy.deepcopy(payload),
                     "validator_round_index": round_index,
                     "validator_results": copy.deepcopy(validator_results),
+                    "review_attempted": False,
+                    "review_completed": False,
                 },
             }
             drafts.append(draft)
@@ -147,6 +162,25 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             continue
 
         if _is_review_stage(stage) and latest_draft is not None:
+            metadata = latest_draft.setdefault("metadata", {})
+            metadata["review_stage_id"] = stage_id
+            metadata["reviewer_role"] = role_name
+            metadata["review_attempted"] = True
+
+            if not stage.get("ok") or not _looks_like_completed_review_payload(payload):
+                latest_draft["review_state"] = "not_evaluated"
+                metadata["review_completed"] = False
+                metadata["review_failure_kind"] = stage.get("failure_kind") or "review_stage_failed"
+                metadata["review_failure_summary"] = (
+                    stage.get("failure_summary")
+                    or stage.get("error")
+                    or "Review stage did not produce a valid review payload."
+                )
+                metadata["review_attempt_payload"] = copy.deepcopy(payload)
+                continue
+
+            latest_draft["review_state"] = "evaluated"
+            metadata["review_completed"] = True
             issue_counts = latest_draft.setdefault("issue_counts", {})
             review_counts = _count_issue_severities(payload)
             for key, value in review_counts.items():
@@ -176,20 +210,21 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             review_status = _draft_review_status(payload)
             if review_status is not None:
                 latest_draft["review_status"] = review_status
-            latest_draft.setdefault("metadata", {})["review_stage_id"] = stage_id
-            latest_draft["metadata"]["review_payload"] = copy.deepcopy(payload)
-            latest_draft["metadata"]["reviewer_role"] = role_name
+            metadata["review_payload"] = copy.deepcopy(payload)
 
     content_verdict = str((summary.get("verdicts") or {}).get("content_verdict") or "")
     if drafts:
         if content_verdict in {"accepted", "accepted_with_warnings"}:
             drafts[-1]["review_status"] = "accepted"
+            drafts[-1]["review_state"] = "evaluated"
         elif content_verdict == "accepted_partial":
             drafts[-1]["review_status"] = "accepted_partial"
+            drafts[-1]["review_state"] = "evaluated"
         elif content_verdict in {"rejected", "best_effort_exhausted"} and not any(
             draft.get("review_status") in {"accepted", "accepted_partial"} for draft in drafts
         ):
             drafts[-1]["review_status"] = "rejected"
+            drafts[-1]["review_state"] = "evaluated"
 
     return drafts
 

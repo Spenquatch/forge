@@ -50,10 +50,29 @@ class CliProviderBase(ModelProvider, ABC):
     def _get_role_config(self, role: str = "default") -> Dict[str, Any]:
         return dict(self.role_configs.get(role, self.role_configs.get("default", {})))
 
+    def forces_default_model_arg(self) -> bool:
+        """Whether the provider default should be passed as an explicit CLI model arg."""
+        return True
+
+    def reported_model_name(self, explicit_model: str | None = None) -> str | None:
+        if explicit_model:
+            return explicit_model
+        if self.forces_default_model_arg():
+            return self.model_name or None
+        return None
+
+    def _resolve_model_arg(self, merged_kwargs: Dict[str, Any]) -> str | None:
+        if "model" in merged_kwargs:
+            value = str(merged_kwargs.pop("model", "")) or None
+            return value
+        if self.forces_default_model_arg():
+            return self.model_name or None
+        return None
+
     def _merge_kwargs(self, role: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         merged = self._get_role_config(role)
         merged.update(kwargs)
-        if self.model_name and "model" not in merged:
+        if self.model_name and "model" not in merged and self.forces_default_model_arg():
             merged["model"] = self.model_name
         return merged
 
@@ -72,7 +91,7 @@ class CliProviderBase(ModelProvider, ABC):
         **kwargs: Any,
     ) -> str:
         merged_kwargs = self._merge_kwargs(role, dict(kwargs))
-        model = str(merged_kwargs.pop("model", self.model_name or "")) or None
+        model = self._resolve_model_arg(merged_kwargs)
         cwd = merged_kwargs.pop("cwd", None)
         prompt_text = render_messages_as_transcript(messages)
 

@@ -17,6 +17,7 @@ def render_report(summary: dict[str, Any]) -> str:
     validator_summary = summary.get("validator_summary") or {}
     run_details = summary.get("run_details") or {}
     contract = summary.get("analysis_review_contract") or {}
+    review_coverage = summary.get("analysis_review_coverage") or {}
 
     lines.append("## Overview")
     lines.append("")
@@ -62,6 +63,25 @@ def render_report(summary: dict[str, Any]) -> str:
         if required_sections:
             lines.append(
                 f"- Required analysis sections: `{json.dumps(required_sections, sort_keys=True)}`"
+            )
+        lines.append("")
+
+    if task.get("task_kind") == "analysis_review" or summary.get("strategy_kind") == "analysis_review_v1":
+        lines.append("## Review Loop Coverage")
+        lines.append("")
+        lines.append(f"- Review stages attempted: `{review_coverage.get('review_stages_attempted', 0)}`")
+        lines.append(f"- Review stages completed: `{review_coverage.get('review_stages_completed', 0)}`")
+        lines.append(f"- Review loop exercised: `{review_coverage.get('review_loop_exercised', False)}`")
+        failed_review_stages = review_coverage.get("failed_review_stages") or []
+        if failed_review_stages:
+            lines.append("- Failed review stages:")
+            for item in failed_review_stages:
+                label = item.get("role_name") or f"stage-{item.get('stage_index')}"
+                detail = item.get("failure_summary") or item.get("failure_kind") or "unknown error"
+                lines.append(f"  - {label}: {detail}")
+        if not review_coverage.get("review_loop_exercised", False):
+            lines.append(
+                "- Notes: reviewer-derived issue counts and recommendation verdicts were not produced for this run."
             )
         lines.append("")
 
@@ -214,14 +234,31 @@ def render_report(summary: dict[str, Any]) -> str:
             lines.append("")
             lines.append(f"- Role: `{draft.get('role_name')}`")
             lines.append(f"- Round: `{draft.get('round_index')}`")
+            lines.append(f"- Review state: `{draft.get('review_state', 'not_evaluated')}`")
             issue_counts = draft.get('issue_counts') or {}
-            if issue_counts:
-                lines.append(f"- Issue counts: `{json.dumps(issue_counts, sort_keys=True)}`")
+            validator_failures = issue_counts.get("required_validator_failures")
+            if validator_failures is not None:
+                lines.append(f"- Required validator failures: `{validator_failures}`")
+            if draft.get("review_state") == "evaluated":
+                review_issue_counts = {
+                    key: value
+                    for key, value in issue_counts.items()
+                    if key != "required_validator_failures"
+                }
+                if review_issue_counts:
+                    lines.append(f"- Review issue counts: `{json.dumps(review_issue_counts, sort_keys=True)}`")
+            else:
+                lines.append("- Review issue counts: `not evaluated`")
             scores = draft.get('scores') or {}
             if scores:
                 lines.append(f"- Scores: `{json.dumps(scores, sort_keys=True)}`")
             if draft.get('summary'):
                 lines.append(f"- Summary: {draft.get('summary')}")
+            metadata = draft.get("metadata") or {}
+            if metadata.get("review_attempted") and not metadata.get("review_completed"):
+                lines.append(
+                    f"- Review attempt failed: {metadata.get('review_failure_summary') or metadata.get('review_failure_kind') or 'unknown error'}"
+                )
             lines.append("")
 
     recommendation_reviews = summary.get("recommendation_reviews") or []
@@ -254,8 +291,17 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append(f"- OK: `{stage.get('ok')}`")
         lines.append(f"- Exit code: `{stage.get('exit_code')}`")
         lines.append(f"- Duration: `{stage.get('duration_sec')}` seconds")
+        if stage.get("failure_kind"):
+            lines.append(f"- Failure kind: `{stage.get('failure_kind')}`")
+        if stage.get("failure_summary"):
+            lines.append(f"- Failure summary: {stage.get('failure_summary')}")
         if stage.get("error"):
             lines.append(f"- Error: {stage.get('error')}")
+        schema_errors = stage.get("schema_validation_errors") or []
+        if schema_errors:
+            lines.append("- Schema validation errors:")
+            for item in schema_errors:
+                lines.append(f"  - {item}")
         semantic_path = stage.get("semantic_validation_path")
         if semantic_path:
             lines.append(f"- Semantic validation artifact: `{semantic_path}`")

@@ -219,6 +219,7 @@ class HarnessRunner:
             if isinstance(run_details.get("analysis_review_contract"), dict)
             else (self.analysis_review_contract.to_dict() if self.analysis_review_contract is not None else None)
         )
+        analysis_review_coverage = self._analysis_review_coverage()
 
         summary = {
             "run_id": run_id,
@@ -252,6 +253,7 @@ class HarnessRunner:
             "final_git_snapshot": final_git_snapshot,
             "changed_files": final_changed_files,
             "analysis_review_contract": analysis_review_contract,
+            "analysis_review_coverage": analysis_review_coverage,
             "issue_ledger": issue_ledger,
             "recommendation_reviews": recommendation_reviews,
             "artifacts": {
@@ -328,8 +330,17 @@ class HarnessRunner:
                 "run_verdict": "harness_error",
                 "content_verdict": "harness_error",
                 "validator_verdict": self._classify_validator_verdict([]),
-                "final_summary": f"Proposer stage failed: {proposer_run.error or 'unknown error'}",
-                "failure_details": {"stage": "proposer", "error": proposer_run.error},
+                "final_summary": self._analysis_stage_failure_summary(
+                    "proposer",
+                    proposer_run,
+                    review_loop_exercised=False,
+                ),
+                "failure_details": self._stage_failure_details(
+                    "proposer",
+                    proposer_run,
+                    review_loop_exercised=False,
+                ),
+                "details": {"review_loop_exercised": False},
             }
 
         validation_runs = self._run_validator_round(round_index=0)
@@ -487,8 +498,17 @@ class HarnessRunner:
                 "run_verdict": "harness_error",
                 "content_verdict": "harness_error",
                 "validator_verdict": self._classify_validator_verdict(validation_runs),
-                "final_summary": f"Critic stage failed: {critic_run.error or 'unknown error'}",
-                "failure_details": {"stage": "critic", "error": critic_run.error},
+                "final_summary": self._analysis_stage_failure_summary(
+                    "critic",
+                    critic_run,
+                    review_loop_exercised=False,
+                ),
+                "failure_details": self._stage_failure_details(
+                    "critic",
+                    critic_run,
+                    review_loop_exercised=False,
+                ),
+                "details": {"review_loop_exercised": False},
             }
         self._ingest_review_payload(
             critic_run.structured_output or {},
@@ -541,11 +561,17 @@ class HarnessRunner:
                     "run_verdict": "harness_error",
                     "content_verdict": "harness_error",
                     "validator_verdict": self._classify_validator_verdict(validation_runs),
-                    "final_summary": f"Reviser stage failed: {latest_analysis_run.error or 'unknown error'}",
-                    "failure_details": {
-                        "stage": f"reviser_round_{revisions_completed}",
-                        "error": latest_analysis_run.error,
-                    },
+                    "final_summary": self._analysis_stage_failure_summary(
+                        f"reviser round {revisions_completed}",
+                        latest_analysis_run,
+                        review_loop_exercised=True,
+                    ),
+                    "failure_details": self._stage_failure_details(
+                        f"reviser_round_{revisions_completed}",
+                        latest_analysis_run,
+                        review_loop_exercised=True,
+                    ),
+                    "details": {"review_loop_exercised": True},
                 }
 
             latest_review_run = self._run_analysis_reviewer(
@@ -561,8 +587,17 @@ class HarnessRunner:
                     "run_verdict": "harness_error",
                     "content_verdict": "harness_error",
                     "validator_verdict": self._classify_validator_verdict(validation_runs),
-                    "final_summary": f"Auditor stage failed: {latest_review_run.error or 'unknown error'}",
-                    "failure_details": {"stage": "auditor", "error": latest_review_run.error},
+                    "final_summary": self._analysis_stage_failure_summary(
+                        "auditor",
+                        latest_review_run,
+                        review_loop_exercised=True,
+                    ),
+                    "failure_details": self._stage_failure_details(
+                        "auditor",
+                        latest_review_run,
+                        review_loop_exercised=True,
+                    ),
+                    "details": {"review_loop_exercised": True},
                 }
             self._ingest_review_payload(
                 latest_review_run.structured_output or {},
@@ -602,6 +637,7 @@ class HarnessRunner:
                 "issue_ledger": self._serialized_issue_ledger(),
                 "recommendation_reviews": self._recommendation_reviews(final_review_payload),
                 "accepted_recommendation_count": accepted_recommendation_count,
+                "review_loop_exercised": True,
             },
         }
 
@@ -712,45 +748,85 @@ class HarnessRunner:
         semantic_errors: list[str] = []
         semantic_warnings: list[str] = []
         semantic_validation_path: str | None = None
+        schema_validation_errors = list(run.schema_validation_errors or [])
         context = dict(semantic_context or {})
         contract = context.pop("contract", None)
-        if isinstance(contract, AnalysisReviewContract) and isinstance(run.structured_output, dict):
-            semantic_result = validate_stage_output(
-                role_name=role_name,
-                payload=run.structured_output,
-                task=self.task,
-                contract=contract,
-                **context,
-            )
-            semantic_errors = list(semantic_result.errors)
-            semantic_warnings = list(semantic_result.warnings)
-            if semantic_errors or semantic_warnings:
-                semantic_validation_path = str(stage_dir / "semantic_validation.json")
+        if isinstance(contract, AnalysisReviewContract):
+            semantic_validation_path = str(stage_dir / "semantic_validation.json")
+            if run.failure_kind:
+                semantic_payload = {
+                    "ok": False,
+                    "skipped": True,
+                    "skipped_reason": f"provider_failure:{run.failure_kind}",
+                    "errors": [],
+                    "warnings": [],
+                }
+            elif schema_validation_errors:
+                semantic_payload = {
+                    "ok": False,
+                    "skipped": True,
+                    "skipped_reason": "schema_validation_failed",
+                    "errors": list(schema_validation_errors),
+                    "warnings": [],
+                }
+            elif isinstance(run.structured_output, dict):
+                semantic_result = validate_stage_output(
+                    role_name=role_name,
+                    payload=run.structured_output,
+                    task=self.task,
+                    contract=contract,
+                    **context,
+                )
+                semantic_errors = list(semantic_result.errors)
+                semantic_warnings = list(semantic_result.warnings)
                 semantic_payload = {
                     "ok": not semantic_errors,
+                    "skipped": False,
                     "errors": semantic_errors,
                     "warnings": semantic_warnings,
                 }
-                write_json(semantic_validation_path, semantic_payload)
-                raw_meta = dict(run.raw_meta or {})
-                raw_meta["semantic_validation"] = semantic_payload
-                if semantic_errors:
-                    semantic_error_text = "Semantic validation failed:\n" + "\n".join(
-                        f"- {item}" for item in semantic_errors
-                    )
-                    combined_error = semantic_error_text
-                    if run.error:
-                        combined_error = f"{run.error.rstrip()}\n{semantic_error_text}"
-                    run = replace(run, ok=False, error=combined_error, raw_meta=raw_meta)
-                else:
-                    run = replace(run, raw_meta=raw_meta)
-                for warning in semantic_warnings:
-                    self.warnings.append(f"{role_name}: {warning}")
+            else:
+                semantic_payload = {
+                    "ok": False,
+                    "skipped": True,
+                    "skipped_reason": "structured_output_missing",
+                    "errors": [],
+                    "warnings": [],
+                }
+
+            write_json(semantic_validation_path, semantic_payload)
+            raw_meta = dict(run.raw_meta or {})
+            raw_meta["semantic_validation"] = semantic_payload
+            if semantic_errors:
+                semantic_error_text = "Semantic validation failed:\n" + "\n".join(
+                    f"- {item}" for item in semantic_errors
+                )
+                combined_error = semantic_error_text
+                if run.error:
+                    combined_error = f"{run.error.rstrip()}\n{semantic_error_text}"
+                run = replace(
+                    run,
+                    ok=False,
+                    error=combined_error,
+                    raw_meta=raw_meta,
+                    failure_kind=run.failure_kind or "semantic_validation_error",
+                    failure_summary=run.failure_summary or "Semantic validation failed.",
+                )
+            else:
+                run = replace(run, raw_meta=raw_meta)
+            for warning in semantic_warnings:
+                self.warnings.append(f"{role_name}: {warning}")
 
         stage_record = asdict(run)
         stage_record["stage_index"] = self.stage_counter
         stage_record["requested_access"] = role_config.access
         stage_record["effective_access"] = effective_role_config.access
+        if run.failure_kind:
+            stage_record["failure_kind"] = run.failure_kind
+        if run.failure_summary:
+            stage_record["failure_summary"] = run.failure_summary
+        if schema_validation_errors:
+            stage_record["schema_validation_errors"] = list(schema_validation_errors)
         if semantic_warnings:
             stage_record["warnings"] = list(semantic_warnings)
         if semantic_errors:
@@ -903,6 +979,89 @@ class HarnessRunner:
         elif verdict == "best_effort_exhausted":
             parts.append("The harness used its available review loops but still did not meet the stop criteria.")
         return " ".join(parts)
+
+    def _analysis_stage_failure_summary(
+        self,
+        stage_label: str,
+        run: ProviderRun,
+        *,
+        review_loop_exercised: bool,
+    ) -> str:
+        kind = str(run.failure_kind or "").strip()
+        if kind == "quota_exhausted":
+            prefix = f"{stage_label.capitalize()} stage could not run because the provider hit its quota or usage limit."
+        elif kind == "authentication_error":
+            prefix = f"{stage_label.capitalize()} stage could not run because provider authentication failed."
+        elif kind == "permission_denied":
+            prefix = f"{stage_label.capitalize()} stage could not run because the provider denied access."
+        elif kind == "provider_unavailable":
+            prefix = f"{stage_label.capitalize()} stage could not run because the provider is unavailable or misconfigured."
+        elif kind:
+            prefix = f"{stage_label.capitalize()} stage failed ({kind})."
+        else:
+            prefix = f"{stage_label.capitalize()} stage failed."
+
+        detail = str(run.failure_summary or run.error or "").strip()
+        parts = [prefix]
+        if detail:
+            parts.append(detail)
+        if not review_loop_exercised:
+            parts.append("Review loop not exercised.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _stage_failure_details(
+        stage_label: str,
+        run: ProviderRun,
+        *,
+        review_loop_exercised: bool | None = None,
+    ) -> dict[str, Any]:
+        details: dict[str, Any] = {
+            "stage": stage_label,
+            "error": run.error,
+            "failure_kind": run.failure_kind,
+            "failure_summary": run.failure_summary,
+            "provider": run.provider,
+            "model": run.model,
+            "exit_code": run.exit_code,
+        }
+        if run.schema_validation_errors:
+            details["schema_validation_errors"] = list(run.schema_validation_errors)
+        if review_loop_exercised is not None:
+            details["review_loop_exercised"] = review_loop_exercised
+        return details
+
+    def _analysis_review_coverage(self) -> dict[str, Any]:
+        attempted = 0
+        completed = 0
+        failed: list[dict[str, Any]] = []
+
+        for stage in self.agent_stages:
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "")
+            if not role_name.startswith(("critic", "auditor")):
+                continue
+            attempted += 1
+            payload = stage.get("structured_output")
+            if stage.get("ok") and isinstance(payload, dict) and "verdict" in payload:
+                completed += 1
+                continue
+            failed.append(
+                {
+                    "stage_index": stage.get("stage_index"),
+                    "role_name": role_name,
+                    "failure_kind": stage.get("failure_kind"),
+                    "failure_summary": stage.get("failure_summary") or stage.get("error"),
+                }
+            )
+
+        return {
+            "review_stages_attempted": attempted,
+            "review_stages_completed": completed,
+            "review_loop_exercised": completed > 0,
+            "failed_review_stages": failed,
+        }
 
     @staticmethod
     def _count_review_issues(review_payload: dict[str, Any], severities: set[str]) -> int:

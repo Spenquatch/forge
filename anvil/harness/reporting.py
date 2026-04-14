@@ -96,6 +96,24 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
     return partial_payload
 
 
+def _augment_best_draft_payload(best_draft: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    enriched = copy.deepcopy(payload)
+    caveats = [str(item) for item in enriched.get("caveats", []) if str(item).strip()]
+    review_state = str(best_draft.get("review_state") or "not_evaluated")
+    metadata = best_draft.get("metadata") or {}
+    if review_state != "evaluated":
+        failure_kind = str(metadata.get("review_failure_kind") or "").strip()
+        failure_summary = str(metadata.get("review_failure_summary") or "").strip()
+        message = "This draft was not evaluated by a successful critic/auditor stage."
+        if failure_kind or failure_summary:
+            detail = failure_summary or failure_kind.replace("_", " ")
+            message = f"{message} Latest review attempt: {detail}."
+        caveats.append(message)
+    if caveats:
+        enriched["caveats"] = caveats
+    return enriched
+
+
 def render_deliverable_markdown(
     task_id: str,
     payload: dict[str, Any],
@@ -236,6 +254,8 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     else:
         if best_draft is not None:
             payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
+            if isinstance(payload, dict) and payload:
+                payload = _augment_best_draft_payload(best_draft, payload)
             artifact_kind = "best_draft"
             artifact_json_path = run_dir / "BEST_DRAFT.json"
             artifact_md_path = run_dir / "BEST_DRAFT.md"
