@@ -132,27 +132,22 @@ providers:
           access: read
           effort: medium
           timeout_sec: 300
-          max_turns: 4
         critique:
           access: read
           effort: high
           timeout_sec: 300
-          max_turns: 4
         refine:
           access: read
           effort: high
           timeout_sec: 300
-          max_turns: 4
         review:
           access: read
           effort: medium
           timeout_sec: 300
-          max_turns: 3
         reflect:
           access: read
           effort: high
           timeout_sec: 300
-          max_turns: 4
 
   claude_code_haiku:
     type: cli
@@ -166,23 +161,18 @@ providers:
         execute:
           access: read
           timeout_sec: 300
-          max_turns: 4
         critique:
           access: read
           timeout_sec: 300
-          max_turns: 4
         refine:
           access: read
           timeout_sec: 300
-          max_turns: 4
         review:
           access: read
           timeout_sec: 300
-          max_turns: 3
         reflect:
           access: read
           timeout_sec: 300
-          max_turns: 4
 
   # ===== API BACKENDS =====
   anthropic:
