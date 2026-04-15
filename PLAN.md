@@ -2,366 +2,593 @@
 
 ## Purpose
 
-This document is a planning handoff for redesigning the `analysis_review_v1` harness shape so critic and auditor stages finish in a predictable amount of time without depending on fragile provider turn semantics. It is intentionally not implementation-ready. The goal is to capture context, intent, affected surfaces, requirement shifts, and rollout considerations for a follow-on planning/implementation pass.
+Turn `analysis_review_v1` into a bounded-review harness where runtime predictability comes from explicit work contracts, not from provider turn semantics or blunt subprocess timeouts.
 
-## Problem Statement
+This plan is now implementation-ready enough for a small PR sequence. The main move is simple:
 
-The current `analysis_review_v1` flow asks the critic and auditor to perform broad review work over the proposer output plus the live repository. In practice this has a few failure modes:
+- keep the existing harness shape
+- tighten the contract
+- carry bounded review surfaces inside the existing structured payload
+- enforce the new limits in semantic validation
 
-- runtime is dominated by open-ended file inspection rather than bounded work
-- `max_turns` is provider-specific and unstable as a control mechanism
-- `timeout_sec` is only a hard subprocess kill and does not guarantee useful output
-- broad prompts encourage redundant file reads and repeated repo exploration
-- later review stages can act like full re-reviews instead of issue-closure checks
+No second harness. No new strategy kind. No derived packet subsystem in v1.
 
-The desired redesign is to make timeliness come from narrower work contracts, smaller review packets, and more deterministic stage responsibilities.
+## Step 0: Scope Challenge
 
-## Desired Outcome
+### What already exists
 
-The future `analysis_review` flow should:
+The repo already has most of the machinery this redesign needs.
 
-- bound each stage by explicit work scope rather than conversation length
-- reduce unnecessary repo exploration in critic/auditor stages
-- preserve grounding and recommendation-level review quality
-- keep `timeout_sec` only as a final safety fuse
-- work across CLI providers without assuming identical turn-budget semantics
-- remain compatible with the current harness artifact/reporting model unless an explicit migration is approved
+| Existing surface | What it already solves | Reuse decision |
+|---|---|---|
+| [`anvil/harness/contracts.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:1) | Typed contract, stop policy, shared role rules | Reuse and extend |
+| [`anvil/harness/prompts.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:320) | Distinct proposer/critic/reviser/auditor prompt builders | Reuse and narrow |
+| [`anvil/harness/schemas.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:1) | Structured payloads for recommendations, review issues, issue resolution | Reuse and extend |
+| [`anvil/harness/semantic_validation.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:1) | Contract-aware validation beyond JSON schema | Reuse as the primary enforcement point |
+| [`anvil/harness/runner.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:456) | Stage orchestration, issue ledger, recommendation reviews, loop control | Reuse, avoid new orchestration path |
+| [`anvil/harness/report.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/report.py:1) | Human-readable contract/report output | Reuse for packet-budget visibility |
+| Existing tests under [`tests/`](/Users/spensermcconnell/__Active_Code/forge/tests) | Contract, prompt, semantic validation, runner integration coverage | Extend, do not create a second test stack |
 
-## Current State Summary
+### Existing behavior we should not rebuild
 
-Today the analysis-review path is driven by:
+The current harness already has:
 
-- strategy selection and role wiring in [examples/harness/strategies/analysis_review_codex_claude.yaml](/Users/spensermcconnell/__Active_Code/forge/examples/harness/strategies/analysis_review_codex_claude.yaml:1)
-- contract defaults in [anvil/harness/contracts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:1)
-- prompt builders in [anvil/harness/prompts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:320)
-- runtime loop orchestration in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:456)
-- review payload schema in [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:305)
-- semantic validation in [anvil/harness/semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:226)
-- contract guidance docs in [docs/analysis_review_contract.md](/Users/spensermcconnell/__Active_Code/forge/docs/analysis_review_contract.md:1)
+- stable `AR-###` issue IDs
+- an issue ledger across rounds
+- recommendation-level verdicts
+- semantic validation hooks
+- review coverage reporting
 
-The current prompt shape still instructs the critic to:
+That matters because the redesign does **not** need a separate packet store or a second review-loop implementation. The cheap move is to make the existing payloads more explicit and more bounded.
 
-- audit the prior analysis broadly for grounding, omissions, actionability, and scope
-- review every recommendation individually
-- inspect the live workspace directly as needed
+### Minimum viable scope
 
-The current auditor prompt still allows the auditor to:
+The minimum change that achieves the goal is:
 
-- verify issue closure
-- raise new issues
-- perform effectively a broad re-review after revisions
+1. extend the contract with bounded-review policy
+2. extend recommendation payloads with bounded `review_surface`
+3. update prompts to force bounded reviewer behavior
+4. enforce the limits in semantic validation
+5. surface bounded-review metrics in the report
 
-The current reviser prompt still tells the reviser to inspect the current workspace directly and revise the full analysis package, which can expand the scope of later review rounds.
+Anything beyond that is optional.
 
-## Design Direction
+### Scope reduction decision
 
-The redesign should shift from "full repo re-review at every stage" to "bounded packet review with narrowly scoped verification."
+The original outline implied a big surface area. That is a smell. The plan now reduces scope in three concrete ways:
 
-### High-Level Shape
+1. **No new strategy kind**
+   Keep `analysis_review_v1`, bump the contract version, and let the existing runner keep working.
 
-Recommended future shape:
+2. **No derived packet artifact in v1**
+   Put the bounded review surface directly on each recommendation instead of inventing a second artifact lifecycle.
 
-1. Proposer produces a bounded analysis draft plus a review packet.
-2. Critic validates the packet, not the whole repo.
-3. Reviser resolves only the issue ledger.
-4. Auditor verifies issue closure first and only escalates when a true new blocker appears.
+3. **No provider-specific budget logic as the main mechanism**
+   Provider knobs remain secondary. The harness contract is the control plane.
 
-### Key Principle
+### Search check
 
-Stage runtime should be bounded by:
+- **[Layer 1]** Reuse the existing issue ledger and recommendation-review model instead of building a parallel packet tracker.
+- **[Layer 1]** Reuse semantic validation as the enforcement point instead of scattering caps across runner conditionals.
+- **[Layer 3]** Bound reviewer work with payload-level surfaces and budget caps. This is the boring move, and it matches the codebase you already have.
 
-- explicit review surfaces
-- evidence budgets
+No external framework built-in replaces this cleanly. This is harness-specific behavior. First-principles design is the right tool here.
+
+### Complexity check
+
+This still touches more than 8 files. That remains a smell, so implementation should be split:
+
+- **PR 1**: contract, schema, prompts, semantic validation, docs, focused unit tests
+- **PR 2**: runner/reporting exposure, strategy example, integration tests
+
+That keeps structural and behavioral changes separated. Much safer.
+
+### Completeness check
+
+Do the complete version for the bounded-review contract now:
+
+- bounded review surface
 - issue budgets
-- narrower schemas and output expectations
+- scope-escape justification
+- reviewer prompt changes
+- semantic validation
+- tests
 
-Stage runtime should not primarily be bounded by:
+Do **not** ship a half-version where prompts mention bounded work but validation cannot enforce it. That would create a paper contract. Not great.
 
-- provider turn caps
-- hard subprocess timeout
-- open-ended "inspect whatever looks relevant" prompting
+### Distribution check
 
-## Recommended Requirement Changes
+No new binary, package, or container is introduced here. Distribution work is not applicable.
 
-### 1. Add Review Packet Semantics
+## Architecture Review
 
-The proposer output should be extended with an explicit review packet concept. This may be encoded directly in proposer output or split into a derived intermediate artifact.
+### Opinionated decisions
 
-Recommended new concepts:
+#### 1. Evolve in place, contract bump only
 
-- `primary_evidence`: 1-3 canonical evidence refs per recommendation
-- `review_surface`: explicit file sets per recommendation
-- `must_check_files`: files the critic must validate
-- `optional_check_files`: files the critic may consult only if needed
-- `evidence_budget` or equivalent guidance: cap on extra exploration
+**Recommendation:** keep strategy kind `analysis_review_v1`, introduce `analysis_review_v1_contract_v3`.
 
-Intent:
+Why:
 
-- make critic work deterministic
-- prevent the critic from rediscovering the whole repo
-- make later stages review the proposer's grounding decisions, not restart the task
+- the runner, report, and tests already key off the current harness kind
+- a new strategy kind would spend an innovation token on routing, not on user value
+- the change is behavioral, not architectural enough to deserve a second runtime path
 
-### 2. Narrow Critic Scope
+#### 2. Reuse `evidence`, add `review_surface`
 
-The critic should no longer be treated as an open-ended repo auditor.
+**Recommendation:** keep `recommendations[].evidence` as the canonical bounded evidence list and add one nested `review_surface` object per recommendation.
 
-Recommended critic contract changes:
+Do **not** add both `evidence` and `primary_evidence`. That is avoidable duplication.
 
-- review only proposer recommendations, cited evidence, task `files_hint`, and bounded optional files
-- do not perform broad repo exploration unless cited evidence is insufficient or contradictory
-- cap the number of issues the critic may raise in a normal pass
-- cap the number of new missed-topic discoveries
-- prefer validating existing recommendations over hunting for new opportunities
+Recommended `review_surface` shape:
 
-Suggested operational defaults for a future design pass:
+```json
+{
+  "must_check_files": ["path/a.py", "path/b.py"],
+  "optional_check_files": ["path/c.py"],
+  "scope_note": "Validate timeout handling and retry behavior only."
+}
+```
 
-- at most 5 issues total in a critic pass
-- at most 2 new missed-topic issues
-- no broad repo exploration without an explicit justification field
+Contract defaults:
 
-### 3. Narrow Auditor Scope Further
+- `evidence` length: `1..3`
+- `must_check_files` length: `1..3`
+- `optional_check_files` length: `0..2`
 
-The auditor should become an issue-closure verifier, not a second critic.
+That is enough structure to bound the critic without creating a second packet artifact.
 
-Recommended auditor contract changes:
+#### 3. Add explicit bounded-review policy to the contract
 
-- default responsibility is verifying closure of existing open issues
-- only raise new medium-or-higher issues when:
-  - the reviser created them, or
-  - the earlier critic clearly missed them within the bounded review surface
-- require a stronger explanation for new issues raised after round 0
-- disallow broad repo exploration by default
+Add a new contract section, for example:
 
-### 4. Keep Reviser Focused on Open Issues
+```python
+@dataclass
+class BoundedReviewPolicy:
+    max_evidence_refs_per_recommendation: int = 3
+    max_must_check_files_per_recommendation: int = 3
+    max_optional_check_files_per_recommendation: int = 2
+    critic_issue_cap: int = 5
+    critic_new_topic_cap: int = 2
+    auditor_new_medium_or_higher_issue_cap_after_round0: int = 1
+    require_scope_escape_justification: bool = True
+```
 
-The reviser should not restart the analysis from scratch.
+This belongs in the contract, not strategy YAML, because it defines harness semantics.
 
-Recommended reviser changes:
+Strategy YAML can still tune loops/timeouts later, but the behavioral rules need one source of truth.
 
-- revise only against the open issue ledger
-- preserve already-accepted recommendations wherever possible
-- inspect only:
-  - files referenced by proposer evidence
-  - files referenced by critic issues
-  - immediately adjacent lines when necessary
-- avoid adding new recommendations unless needed to satisfy a logged gap
+#### 4. Track scope escapes explicitly
 
-### 5. Replace Turn-Budget Dependence with Work Budgets
+Add a review-payload field for when a critic or auditor leaves the bounded review surface:
 
-The redesign should not rely on `max_turns` as the primary control surface.
+```json
+{
+  "scope_escapes": [
+    {
+      "path": "anvil/harness/state.py",
+      "reason": "Cited evidence was contradictory, needed adjacent source of truth."
+    }
+  ]
+}
+```
 
-Preferred controls:
+Why this matters:
 
-- prompt-level work-scope restrictions
-- file review caps
-- issue caps
-- recommendation-count caps
-- smaller structured packets
-- provider-native budget controls when available
-- `timeout_sec` retained only as the final hard stop
+- reporting can explain why a run got slower
+- semantic validation can reject unjustified broad repo exploration
+- the auditor can still escalate real blockers without silently becoming a second full review
 
-## Prompting Changes Required
+#### 5. Reviser stays ledger-first
 
-The main shape change must be encoded in prompt text, not just docs.
+Keep the reviser contract narrow:
 
-### Prompt Surfaces
-
-- [anvil/harness/prompts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:320)
-
-Specific prompt builders expected to change:
-
-- `build_analysis_proposer_prompt`
-- `build_analysis_critic_prompt`
-- `build_analysis_auditor_prompt`
-- `build_analysis_reviser_prompt`
-
-### Critic Prompt Intent Changes
-
-The critic prompt should explicitly say:
-
-- validate recommendations against cited evidence first
-- only inspect additional files if cited evidence is insufficient or contradictory
-- do not perform open-ended repo exploration
-- raise at most a bounded number of issues
-- prefer validating current recommendations over discovering new topics
-
-### Auditor Prompt Intent Changes
-
-The auditor prompt should explicitly say:
-
-- verify closure of the issue ledger first
-- do not perform broad re-review
-- only raise new issues when clearly justified
-- remain inside the bounded review surface unless there is a contradiction
-
-### Reviser Prompt Intent Changes
-
-The reviser prompt should explicitly say:
-
-- fix the open issue ledger, not the entire analysis package
-- do not restart analysis from scratch
+- revise only against open issues
 - preserve accepted recommendations when possible
+- do not add new recommendations unless required to close a logged gap or satisfy minimum recommendation count
 
-## Contract and Schema Changes Required
+The reviser is not a second proposer.
 
-### Contract Surface
+### Target flow
 
-- [anvil/harness/contracts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:1)
-- [docs/analysis_review_contract.md](/Users/spensermcconnell/__Active_Code/forge/docs/analysis_review_contract.md:1)
+```text
+task + workspace
+      │
+      ▼
+ PROPOSER
+   ├─ recommendations[ ]
+   │   ├─ evidence[1..3]
+   │   └─ review_surface
+   │       ├─ must_check_files[1..3]
+   │       ├─ optional_check_files[0..2]
+   │       └─ scope_note
+   └─ files_reviewed
+      │
+      ▼
+ CRITIC
+   ├─ validate cited evidence first
+   ├─ stay inside review_surface by default
+   ├─ raise <= 5 issues
+   ├─ raise <= 2 new topics
+   └─ record scope_escapes if it leaves bounds
+      │
+      ▼
+ REVISER
+   ├─ resolve open issue ledger
+   ├─ preserve accepted recommendations
+   └─ no broad re-analysis
+      │
+      ▼
+ AUDITOR
+   ├─ verify issue closure first
+   ├─ only add new medium+ issue if justified
+   └─ record scope_escapes if it leaves bounds
+```
 
-Expected contract evolution areas:
+### Realistic production failure scenarios
 
-- bounded review surface rules
-- issue budget / missed-topic budget policy
-- distinction between packet validation and broad workspace review
-- stronger auditor constraints
-- explicit review packet requirements if adopted
+| Surface | Failure mode | Plan response |
+|---|---|---|
+| Contract defaults | Caps drift between prompt text and semantic validation | Centralize caps in contract and render them into prompts |
+| Proposer payload | `review_surface` references files not in `files_reviewed` | Semantic validation rejects payload |
+| Critic | Raises 12 issues and effectively restarts the task | Semantic validation rejects issue-cap overflow |
+| Auditor | Raises a new blocker in round 2 with no explanation | Semantic validation rejects missing scope-escape / missing `why_not_raised_earlier` |
+| Reporting | Operators cannot tell why one run was slower than another | Add scope-escape counts and budget-usage summary to report |
 
-This likely warrants a contract version bump rather than silent in-place behavior drift.
+## Code Quality Review
 
-### Schema Surface
+### Keep the design DRY
 
-- [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:305)
+The dangerous version of this work is:
 
-Potential schema additions:
+- caps hard-coded in prompts
+- separate caps hard-coded in semantic validation
+- runner warnings with their own thresholds
 
-- proposer-side packet metadata fields
-- recommendation-level `primary_evidence`
-- recommendation-level `review_surface`
-- optional justification field when critic/auditor leaves the bounded review surface
+That would rot immediately.
 
-The implementation planner should decide whether these belong in:
+The clean version is:
 
-- the proposer schema directly
-- an intermediate packet artifact
-- both
+- contract stores the numbers
+- prompts render the numbers
+- semantic validation enforces the numbers
+- reports display the numbers and actual usage
 
-## Runner and Orchestration Changes Required
+One source of truth. Minimal diff. Explicit over clever.
 
-### Runtime Surfaces
+### Module boundaries
 
-- [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:456)
-- [anvil/harness/subgraphs/analysis_review_v1.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/subgraphs/analysis_review_v1.py:1)
+| File | Responsibility after change |
+|---|---|
+| [`anvil/harness/contracts.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:1) | Contract version bump, bounded-review policy dataclasses |
+| [`anvil/harness/schemas.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:1) | `review_surface` and `scope_escapes` schema additions |
+| [`anvil/harness/prompts.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:320) | Role-boundary wording that mirrors contract caps |
+| [`anvil/harness/semantic_validation.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:1) | Budget enforcement and cross-field coherence |
+| [`anvil/harness/runner.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:456) | Persist new review metadata, no new loop type |
+| [`anvil/harness/report.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/report.py:1) | Show bounded-review usage and scope escapes |
 
-Expected runtime changes:
+### Engineering quality rules for implementation
 
-- pass bounded review packet context into critic/auditor stages
-- preserve and surface packet metadata in artifacts and summaries
-- possibly reduce default review loop behavior for normal runs
-- keep a clear distinction between:
-  - first-pass critique
-  - issue-ledger revision
-  - issue-closure audit
+- keep new types in the existing modules, do not spawn helper files unless one module becomes unreadable
+- keep schema additions additive where possible
+- keep reporter output human-readable, not raw JSON blobs everywhere
+- update docs and tests in the same PR as each behavioral change
 
-Potential follow-on design consideration:
+## Implementation Plan
 
-- make extra review loops conditional on unresolved high-severity blockers rather than always allowing broad repeat passes
+### Slice 1: Contract and schema foundation
 
-## Semantic Validation Changes Required
+**Files**
 
-### Validation Surface
+- [`anvil/harness/contracts.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:1)
+- [`anvil/harness/schemas.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:1)
+- [`docs/analysis_review_contract.md`](/Users/spensermcconnell/__Active_Code/forge/docs/analysis_review_contract.md:1)
 
-- [anvil/harness/semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:226)
+**Changes**
 
-Expected future validation additions:
+- bump contract version to `analysis_review_v1_contract_v3`
+- add `BoundedReviewPolicy`
+- add `REVIEW_SURFACE_SCHEMA`
+- add `SCOPE_ESCAPE_SCHEMA`
+- extend proposer/reviser recommendation schema with `review_surface`
+- extend critic/auditor review schema with `scope_escapes`
 
-- proposer packet fields are present and internally coherent
-- critic/auditor do not exceed configured issue or missed-topic budgets unless explicitly justified
-- recommendation reviews align with packet recommendation indices
-- reviewer outputs that claim new missed topics include bounded-scope justification
+**Acceptance**
 
-## Reporting and Artifact Changes Required
+- contract serializes the new policy
+- schemas accept bounded payloads and reject malformed surfaces
+- docs describe the new bounded-review semantics
 
-### Reporting Surfaces
+### Slice 2: Prompt and validation enforcement
 
-- [anvil/harness/report.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/report.py:54)
-- [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py:33)
-- [docs/project_management/adrs/draft/ADR-0024-harness-state-and-artifact-contract.md](/Users/spensermcconnell/__Active_Code/forge/docs/project_management/adrs/draft/ADR-0024-harness-state-and-artifact-contract.md:1)
+**Files**
 
-Recommended reporting outcomes:
+- [`anvil/harness/prompts.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:320)
+- [`anvil/harness/semantic_validation.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:1)
 
-- show when review was packet-bounded vs. broad
-- record when a reviewer stepped outside its bounded review surface
-- show issue-budget and missed-topic-budget usage
-- preserve enough information for operators to understand why a review was fast or slow
+**Changes**
 
-## Strategy and Configuration Touch Surfaces
+- proposer prompt requires bounded `evidence` and `review_surface`
+- critic prompt says "validate cited evidence first, do not perform open-ended repo exploration"
+- auditor prompt says "issue-closure first, new medium+ issues after round 0 require explicit justification"
+- semantic validation enforces:
+  - evidence cap
+  - `must_check_files` / `optional_check_files` caps
+  - `must_check_files ⊆ files_reviewed`
+  - issue cap
+  - new-topic cap
+  - round>0 medium+ issues require `why_not_raised_earlier`
+  - scope escapes require non-empty reasons
 
-### Strategy Surface
+**Acceptance**
 
-- [examples/harness/strategies/analysis_review_codex_claude.yaml](/Users/spensermcconnell/__Active_Code/forge/examples/harness/strategies/analysis_review_codex_claude.yaml:1)
+- invalid bounded-review payloads fail before they can influence loop behavior
+- prompts and validation both reflect the same contract numbers
 
-This strategy will likely need a follow-on update for:
+### Slice 3: Runner and reporting visibility
 
-- lower dependence on provider turn caps
-- possible explicit "bounded review mode" knobs
-- narrower review-loop defaults
+**Files**
 
-### Provider Configuration Surface
+- [`anvil/harness/runner.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:456)
+- [`anvil/harness/report.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/report.py:1)
+- [`anvil/harness/reporting.py`](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py:1)
 
-- [config/models.yaml](/Users/spensermcconnell/__Active_Code/forge/config/models.yaml:122)
+**Changes**
 
-This plan does not require provider-specific behavior changes as the primary mechanism. The redesign should be provider-agnostic at the harness level. Provider-specific tuning may remain useful, but it should not be the main solution.
+- include bounded-review policy in final run details
+- persist `scope_escapes` and budget-usage counts in summary details
+- report:
+  - review-surface mode
+  - issue cap / actual usage
+  - missed-topic cap / actual usage
+  - scope escapes and reasons
 
-## Test Surfaces Likely Impacted
+**Acceptance**
 
-- [tests/test_harness_prompt_consistency.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_prompt_consistency.py:49)
-- [tests/test_harness_analysis_contract.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_analysis_contract.py:42)
-- [tests/test_harness_runner.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py:333)
-- [tests/test_harness_semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_semantic_validation.py:47)
-- [tests/fixtures/harness/analysis_review_semantic_cases.json](/Users/spensermcconnell/__Active_Code/forge/tests/fixtures/harness/analysis_review_semantic_cases.json:1)
+- operators can tell whether a run stayed packet-bounded
+- when a reviewer leaves the bounded surface, the report says so plainly
 
-The planning pass should explicitly account for:
+### Slice 4: Tests and example strategy
 
-- prompt wording changes
-- schema shape changes
-- semantic validation rule updates
-- report shape expectations
+**Files**
 
-## Non-Goals
+- [`tests/test_harness_analysis_contract.py`](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_analysis_contract.py:1)
+- [`tests/test_harness_prompt_consistency.py`](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_prompt_consistency.py:1)
+- [`tests/test_harness_semantic_validation.py`](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_semantic_validation.py:1)
+- [`tests/test_harness_runner.py`](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py:333)
+- [`tests/fixtures/harness/analysis_review_semantic_cases.json`](/Users/spensermcconnell/__Active_Code/forge/tests/fixtures/harness/analysis_review_semantic_cases.json:1)
+- [`examples/harness/strategies/analysis_review_codex_claude.yaml`](/Users/spensermcconnell/__Active_Code/forge/examples/harness/strategies/analysis_review_codex_claude.yaml:1)
 
-This planning effort is not trying to:
+**Changes**
 
-- redesign the entire harness architecture
-- replace `timeout_sec`
-- introduce provider-specific review semantics as the main control path
-- guarantee identical runtime behavior across all providers
-- fully specify exact schema fields or final prompt wording in this document
+- add contract serialization assertions for bounded policy
+- add prompt text assertions for critic/auditor bounded wording
+- add semantic-validation failures for cap overflow and invalid `review_surface`
+- add runner integration coverage for accepted bounded-review payloads
+- leave provider timeout tuning unchanged in the first PR unless tests show the caps are still too loose
 
-## Open Questions for the Planning Agent
+**Acceptance**
 
-The follow-on planning pass should resolve these:
+- full test suite proves bounded review is enforced structurally and semantically
+- example strategy remains provider-agnostic
 
-1. Should the bounded review packet be:
-   - embedded in proposer output
-   - generated as a derived harness artifact
-   - both
+## Test Review
 
-2. Should issue and missed-topic budgets live in:
-   - the contract
-   - strategy config
-   - task config
+### Code path coverage
 
-3. Should the auditor be allowed any new issue creation after round 0 without an explicit elevated threshold?
+```text
+CODE PATH COVERAGE
+===========================
+[+] anvil/harness/contracts.py
+    │
+    └── build_analysis_review_contract()
+        ├── [★★  TESTED] Existing contract defaults — tests/test_harness_analysis_contract.py
+        └── [GAP]         BoundedReviewPolicy serialization and v3 versioning
 
-4. Should there be a new strategy kind or contract version for bounded analysis review, or should `analysis_review_v1` evolve in place?
+[+] anvil/harness/schemas.py
+    │
+    ├── RECOMMENDATION_SCHEMA
+    │   └── [GAP]         review_surface shape + bounds
+    └── analysis_review_schema()
+        └── [GAP]         scope_escapes on critic/auditor payloads
 
-5. Should proposer outputs be forced to include smaller evidence sets to keep later stages bounded?
+[+] anvil/harness/prompts.py
+    │
+    ├── build_analysis_proposer_prompt()
+    │   └── [GAP]         bounded evidence + review_surface instructions
+    ├── build_analysis_critic_prompt()
+    │   └── [GAP]         issue cap + no open-ended repo exploration
+    ├── build_analysis_auditor_prompt()
+    │   └── [GAP]         issue-closure-first + scope escape rules
+    └── build_analysis_reviser_prompt()
+        └── [GAP]         ledger-first wording with no broad re-analysis
 
-6. Should the runner support a "standard" vs "deep" review mode?
+[+] anvil/harness/semantic_validation.py
+    │
+    ├── validate_analysis_output_payload()
+    │   ├── [★★  TESTED] Existing section/files_reviewed rules
+    │   └── [GAP]         review_surface subset/cap validation
+    └── validate_analysis_review_payload()
+        ├── [★★  TESTED] Existing recommendation coverage / issue classification
+        └── [GAP]         issue caps, new-topic caps, scope_escape validation
 
-## Suggested Rollout Shape
+[+] anvil/harness/runner.py + report.py
+    │
+    ├── summary details
+    │   └── [GAP]         bounded-review metrics surfaced
+    └── human report
+        └── [GAP]         scope escape visibility
+```
 
-Recommended sequencing for implementation planning:
+### User-flow coverage
 
-1. Define the new contract shape and bounded-review rules.
-2. Decide whether a packet artifact is explicit or implicit.
-3. Update prompt builders to enforce the new role boundaries.
-4. Update schemas and semantic validation.
-5. Update runner/reporting to preserve the new packet metadata and bounded-scope signals.
-6. Update example strategy/docs/tests.
-7. Tune provider configs only after the bounded-work redesign lands.
+```text
+USER FLOW COVERAGE
+===========================
+[+] Normal bounded run
+    ├── [GAP] [→UNIT] proposer emits bounded review surface
+    ├── [GAP] [→UNIT] critic stays within cap and validates recommendations
+    ├── [GAP] [→UNIT] reviser closes issue ledger without new rec churn
+    └── [GAP] [→INT]  report shows bounded-review policy and usage
 
-## Summary
+[+] Reviewer escapes bounded surface
+    ├── [GAP] [→UNIT] critic escape with reason is accepted
+    ├── [GAP] [→UNIT] critic escape without reason is rejected
+    └── [GAP] [→INT]  report surfaces escape reason
 
-The central recommendation is to redesign `analysis_review` around bounded work packets and narrower stage roles. The critic should validate proposer evidence, not rediscover the repository. The auditor should verify issue closure, not act like a second broad critic. The reviser should resolve the issue ledger, not restart the task. Runtime predictability should come from work scope and packet design, with `timeout_sec` retained only as the hard safety fuse.
+[+] Auditor late blocker
+    ├── [GAP] [→UNIT] new round>0 medium issue with why_not_raised_earlier passes
+    └── [GAP] [→UNIT] new round>0 medium issue without why_not_raised_earlier fails
+```
+
+```text
+─────────────────────────────────
+COVERAGE: 4 existing paths tested, 13 gaps to add
+QUALITY:  ★★★: 0  ★★: 4  ★: 0
+GAPS: contract/schema/prompt/validation/report visibility
+─────────────────────────────────
+```
+
+### Required new tests
+
+1. `tests/test_harness_analysis_contract.py`
+   Assert `analysis_review_v1_contract_v3` and bounded-review default caps serialize correctly.
+
+2. `tests/test_harness_prompt_consistency.py`
+   Assert each prompt includes the exact bounded-review policy language rendered from the contract.
+
+3. `tests/test_harness_semantic_validation.py`
+   Add cases for:
+   - too many evidence refs
+   - `must_check_files` not present in `files_reviewed`
+   - too many issues in critic payload
+   - too many missing topics
+   - empty `scope_escapes[].reason`
+
+4. `tests/test_harness_runner.py`
+   Add an integration case where a bounded run succeeds and the report exposes the bounded-review summary.
+
+5. `tests/fixtures/harness/analysis_review_semantic_cases.json`
+   Add valid and invalid bounded-review fixtures.
+
+## Failure Modes
+
+| New codepath | Real production failure | Test planned | Error handling planned | User-visible outcome |
+|---|---|---|---|---|
+| Contract v3 serialization | Prompt/validator numbers diverge | Yes | Fail tests | Internal only |
+| `review_surface` validation | Proposer points critic at files it never inspected | Yes | Semantic validation error | Clear harness error |
+| Critic issue cap enforcement | Critic performs full re-review and explodes issue count | Yes | Semantic validation error | Clear harness error |
+| Auditor late-issue rule | Auditor invents a new blocker in round 2 with no explanation | Yes | Semantic validation error | Clear harness error |
+| Scope escape reporting | Reviewer leaves packet bounds but operators cannot tell why run slowed down | Yes | Report summary | Clear report note |
+
+**Critical gaps to avoid in implementation**
+
+None are acceptable where all three are true:
+
+- no test
+- no validation/error handling
+- silent behavior drift
+
+The only way to avoid that is to ship validation and tests with the prompt changes, not after.
+
+## Performance Review
+
+### Main performance concern
+
+The redesign is supposed to reduce review-time work. It will fail if we add heavy validation while still allowing open-ended repo exploration.
+
+The practical performance rule is:
+
+- small extra schema/semantic-validation cost is fine
+- unbounded extra file reads are not
+
+### Performance guidance
+
+- validate caps using cheap list-count and subset checks
+- do not resolve or stat the whole repo to enforce bounded review
+- keep report summaries count-based, not full duplicated packet dumps
+
+### Caching / complexity notes
+
+- no new caching layer needed
+- no N+1-style data structure risk in this design
+- avoid serializing duplicate large payload blobs into both runner details and report artifacts if a compact count will do
+
+## NOT in Scope
+
+- New strategy kind such as `analysis_review_v2`
+  Rationale: too much routing churn for too little value.
+
+- Provider-specific turn-budget tuning as the main fix
+  Rationale: this is exactly the fragile control surface we are trying to de-emphasize.
+
+- A standalone derived packet artifact lifecycle
+  Rationale: existing proposer payload already carries recommendations and evidence.
+
+- A new "deep review" mode in the first PR
+  Rationale: useful later, but it expands scope before bounded-review basics are proven.
+
+- Replacing `timeout_sec`
+  Rationale: keep it as the safety fuse.
+
+## Worktree Parallelization Strategy
+
+### Dependency table
+
+| Step | Modules touched | Depends on |
+|---|---|---|
+| Slice 1: contract + schema | `anvil/harness/`, `docs/` | — |
+| Slice 2: prompt + semantic validation | `anvil/harness/`, `tests/` | Slice 1 |
+| Slice 3: runner + report visibility | `anvil/harness/` | Slice 1 |
+| Slice 4: tests + example strategy | `tests/`, `examples/`, `docs/` | Slice 2, Slice 3 |
+
+### Parallel lanes
+
+- **Lane A:** Slice 1 → Slice 2
+  Sequential, shared `anvil/harness/` contract/validation surfaces.
+
+- **Lane B:** Slice 3
+  Can start after Slice 1 lands, mostly runner/report visibility.
+
+- **Lane C:** Slice 4
+  Wait for A + B because tests need final schema/prompt/report shapes.
+
+### Execution order
+
+Launch **Lane A** and **Lane B** after the contract/schema direction is fixed.
+
+Merge both.
+
+Then run **Lane C**.
+
+### Conflict flags
+
+- Lanes A and B both touch `anvil/harness/`
+  Potential merge conflict. Safe only with clear ownership and small patches.
+
+## Review Completion Summary
+
+- Step 0: Scope Challenge — scope reduced to in-place contract evolution, no new harness kind
+- Architecture Review: 5 core decisions locked
+- Code Quality Review: 2 structural rules locked
+- Test Review: diagram produced, 13 gaps identified
+- Performance Review: 1 primary concern, no new infra required
+- NOT in scope: written
+- What already exists: written
+- TODOS.md updates: 0 proposed
+- Failure modes: 0 unresolved critical gaps if validation + tests ship together
+- Outside voice: skipped
+- Parallelization: 3 lanes, 1 parallel window / 2 sequential dependencies
+- Lake Score: 5/5 recommendations chose the complete option
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 21 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+
+**UNRESOLVED:** 0
+**VERDICT:** ENG CLEARED — ready to implement
