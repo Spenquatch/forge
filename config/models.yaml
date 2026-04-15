@@ -29,7 +29,37 @@ default_pipeline:
 
 providers:
   # ===== CLI AGENTS (first-class) =====
-  codex_cli_gpt_5_4:
+  codex_gpt_5_2:
+    type: cli
+    class_path: anvil.providers.codex_cli.CodexCliProvider
+    binary: codex
+    model_name: gpt-5.2
+    default_args: []
+    env: {}
+    models:
+      gpt-5.2/*:
+        execute:
+          access: read
+          effort: medium
+          timeout_sec: 300
+        critique:
+          access: read
+          effort: high
+          timeout_sec: 300
+        refine:
+          access: read
+          effort: high
+          timeout_sec: 300
+        review:
+          access: read
+          effort: medium
+          timeout_sec: 300
+        reflect:
+          access: read
+          effort: high
+          timeout_sec: 300
+
+  codex_gpt_5_4:
     type: cli
     class_path: anvil.providers.codex_cli.CodexCliProvider
     binary: codex
@@ -59,12 +89,40 @@ providers:
           effort: high
           timeout_sec: 300
 
-  claude_code:
+  codex_gpt_5_4_mini:
+    type: cli
+    class_path: anvil.providers.codex_cli.CodexCliProvider
+    binary: codex
+    model_name: gpt-5.4-mini
+    default_args: []
+    env: {}
+    models:
+      gpt-5.4-mini/*:
+        execute:
+          access: read
+          effort: medium
+          timeout_sec: 300
+        critique:
+          access: read
+          effort: high
+          timeout_sec: 300
+        refine:
+          access: read
+          effort: high
+          timeout_sec: 300
+        review:
+          access: read
+          effort: medium
+          timeout_sec: 300
+        reflect:
+          access: read
+          effort: high
+          timeout_sec: 300
+
+  claude_code_sonnet:
     type: cli
     class_path: anvil.providers.claude_code.ClaudeCodeProvider
     binary: claude
-    # Claude Code can authenticate via Claude subscription, Console/API key,
-    # or other configured auth; keep key_env optional by default.
     model_name: sonnet
     default_args: []
     env: {}
@@ -93,6 +151,36 @@ providers:
         reflect:
           access: read
           effort: high
+          timeout_sec: 300
+          max_turns: 4
+
+  claude_code_haiku:
+    type: cli
+    class_path: anvil.providers.claude_code.ClaudeCodeProvider
+    binary: claude
+    model_name: haiku
+    default_args: []
+    env: {}
+    models:
+      haiku/*:
+        execute:
+          access: read
+          timeout_sec: 300
+          max_turns: 4
+        critique:
+          access: read
+          timeout_sec: 300
+          max_turns: 4
+        refine:
+          access: read
+          timeout_sec: 300
+          max_turns: 4
+        review:
+          access: read
+          timeout_sec: 300
+          max_turns: 3
+        reflect:
+          access: read
           timeout_sec: 300
           max_turns: 4
 

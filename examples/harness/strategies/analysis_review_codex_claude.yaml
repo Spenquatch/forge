@@ -5,24 +5,24 @@ prompt_preamble: |
   Keep recommendations concrete, grounded, and scoped to the task.
 roles:
   proposer:
-    provider: codex_cli
-    effort: medium
+    provider: codex_gpt_5_4_mini
+    effort: high
     access: read
     timeout_sec: 1800
   critic:
-    provider: claude_code
-    effort: high
+    provider: claude_code_sonnet
+    effort: medium
     access: read
     timeout_sec: 1200
     disable_bare: true
   reviser:
-    provider: codex_cli
+    provider: codex_gpt_5_2
     effort: high
     access: read
     timeout_sec: 1800
   auditor:
-    provider: claude_code
-    effort: high
+    provider: claude_code_sonnet
+    effort: medium
     access: read
     timeout_sec: 1200
     disable_bare: true
