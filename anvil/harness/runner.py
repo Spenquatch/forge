@@ -211,6 +211,10 @@ class HarnessRunner:
             else list(final_policy_evaluation.get("touched_files", []))
         )
 
+        bounded_review_summary = self._build_bounded_review_summary(run_details)
+        if bounded_review_summary is not None:
+            run_details["bounded_review_summary"] = bounded_review_summary
+
         final_answer_payload = self._derive_final_answer_payload(run_details)
         recommendation_reviews = list(run_details.get("recommendation_reviews") or [])
         issue_ledger = list(run_details.get("issue_ledger") or self._serialized_issue_ledger())
@@ -264,6 +268,8 @@ class HarnessRunner:
             "final_answer": final_answer_payload,
             "created_at": dt.datetime.now(dt.UTC).isoformat(),
         }
+        if bounded_review_summary is not None:
+            summary["bounded_review_summary"] = bounded_review_summary
         drafts = extract_drafts_from_summary(summary)
         summary["drafts"] = drafts
         best_draft = select_best_draft(drafts)
@@ -1062,6 +1068,150 @@ class HarnessRunner:
             "review_loop_exercised": completed > 0,
             "failed_review_stages": failed,
         }
+
+    def _build_bounded_review_summary(self, run_details: dict[str, Any]) -> dict[str, Any] | None:
+        contract_dict = run_details.get("analysis_review_contract")
+        if not isinstance(contract_dict, dict):
+            if self.analysis_review_contract is None:
+                return None
+            contract_dict = self.analysis_review_contract.to_dict()
+
+        bounded_policy = contract_dict.get("bounded_review")
+        if not isinstance(bounded_policy, dict):
+            return None
+
+        final_analysis = run_details.get("final_analysis")
+        recommendations = final_analysis.get("recommendations") if isinstance(final_analysis, dict) else []
+        if not isinstance(recommendations, list):
+            recommendations = []
+
+        issue_ledger = run_details.get("issue_ledger")
+        if not isinstance(issue_ledger, list):
+            issue_ledger = self._serialized_issue_ledger()
+
+        review_stages: list[dict[str, Any]] = []
+        scope_escapes: list[dict[str, Any]] = []
+        next_auditor_round = 1
+
+        for stage in self.agent_stages:
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if role_name not in {"critic", "auditor"}:
+                continue
+            payload = stage.get("structured_output")
+            if not stage.get("ok") or not isinstance(payload, dict) or "verdict" not in payload:
+                continue
+
+            if role_name == "critic":
+                round_index = 0
+            else:
+                round_index = next_auditor_round
+                next_auditor_round += 1
+
+            issues = [item for item in payload.get("issues", []) or [] if isinstance(item, dict)]
+            missing_topics = [
+                item for item in payload.get("missing_topics", []) or [] if str(item or "").strip()
+            ]
+
+            stage_scope_escapes: list[dict[str, Any]] = []
+            for escape in payload.get("scope_escapes", []) or []:
+                if not isinstance(escape, dict):
+                    continue
+                path = str(escape.get("path") or "").strip()
+                reason = str(escape.get("reason") or "").strip()
+                if not path and not reason:
+                    continue
+                escape_entry = {
+                    "role_name": role_name,
+                    "round_index": round_index,
+                    "path": path,
+                    "reason": reason,
+                }
+                stage_scope_escapes.append(escape_entry)
+                scope_escapes.append(escape_entry)
+
+            review_stages.append(
+                {
+                    "role_name": role_name,
+                    "round_index": round_index,
+                    "issue_count": len(issues),
+                    "issue_cap": (
+                        bounded_policy.get("critic_issue_cap") if role_name == "critic" else None
+                    ),
+                    "missing_topic_count": len(missing_topics),
+                    "missing_topic_cap": (
+                        bounded_policy.get("critic_new_topic_cap") if role_name == "critic" else None
+                    ),
+                    "new_medium_or_higher_issue_count": self._count_new_medium_or_higher_review_issues(
+                        role_name=role_name,
+                        round_index=round_index,
+                        issues=issues,
+                        issue_ledger=issue_ledger,
+                    ),
+                    "new_medium_or_higher_issue_cap": (
+                        bounded_policy.get("auditor_new_medium_or_higher_issue_cap_after_round0")
+                        if role_name == "auditor" and round_index > 0
+                        else None
+                    ),
+                    "scope_escape_count": len(stage_scope_escapes),
+                }
+            )
+
+        return {
+            "mode": "recommendation_review_surface",
+            "policy": bounded_policy,
+            "recommendation_count": len(recommendations),
+            "recommendations_with_review_surface": sum(
+                1
+                for item in recommendations
+                if isinstance(item, dict) and isinstance(item.get("review_surface"), dict)
+            ),
+            "review_stages": review_stages,
+            "scope_escape_count": len(scope_escapes),
+            "scope_escapes": scope_escapes,
+        }
+
+    @staticmethod
+    def _count_medium_or_higher_review_issues(issues: list[dict[str, Any]]) -> int:
+        return sum(
+            1
+            for issue in issues
+            if str(issue.get("severity") or "").strip().lower() in {"medium", "high", "critical"}
+        )
+
+    def _count_new_medium_or_higher_review_issues(
+        self,
+        *,
+        role_name: str,
+        round_index: int,
+        issues: list[dict[str, Any]],
+        issue_ledger: list[dict[str, Any]],
+    ) -> int:
+        if role_name == "critic":
+            return self._count_medium_or_higher_review_issues(issues)
+
+        current_issue_ids = {
+            str(issue.get("issue_id") or "").strip()
+            for issue in issues
+            if str(issue.get("issue_id") or "").strip()
+        }
+        if current_issue_ids:
+            return sum(
+                1
+                for record in issue_ledger
+                if isinstance(record, dict)
+                and str(record.get("issue_id") or "").strip() in current_issue_ids
+                and str(record.get("severity") or "").strip().lower() in {"medium", "high", "critical"}
+                and record.get("first_seen_round") == round_index
+            )
+
+        return sum(
+            1
+            for issue in issues
+            if str(issue.get("severity") or "").strip().lower() in {"medium", "high", "critical"}
+            and str(issue.get("why_not_raised_earlier") or "").strip()
+        )
 
     @staticmethod
     def _count_review_issues(review_payload: dict[str, Any], severities: set[str]) -> int:

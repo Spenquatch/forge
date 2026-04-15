@@ -126,6 +126,7 @@ def test_review_semantic_validation_requires_recommendation_and_issue_coverage()
 
     result = validate_analysis_review_payload(
         payload,
+        role_name="critic",
         task=task,
         contract=contract,
         prior_open_issue_ids=["AR-001"],
@@ -138,3 +139,194 @@ def test_review_semantic_validation_requires_recommendation_and_issue_coverage()
         "prior open issue IDs are missing from resolved/carried_forward/waived arrays: AR-001"
         in result.errors
     )
+
+
+def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["analysis_output_too_many_evidence"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)." in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_too_many_must_check_files():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["analysis_output_too_many_must_check_files"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].review_surface.must_check_files exceeds the bounded-review cap of 3 item(s)."
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_rejects_too_many_optional_check_files():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["analysis_output_too_many_optional_check_files"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].review_surface.optional_check_files exceeds the bounded-review cap of 2 item(s)."
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_rejects_must_check_files_outside_files_reviewed():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["analysis_output_must_check_not_in_files_reviewed"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].review_surface.must_check_files must be a subset of files_reviewed: "
+        ".github/workflows/missing.yml"
+    ) in result.errors
+
+
+def test_critic_semantic_validation_rejects_issue_cap_overflow():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_too_many_issues"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert "issues exceeds the bounded-review cap of 5 item(s) for critic." in result.errors
+
+
+def test_critic_semantic_validation_rejects_new_topic_cap_overflow():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_too_many_missing_topics"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert "missing_topics exceeds the bounded-review cap of 2 item(s) for critic." in result.errors
+
+
+def test_auditor_semantic_validation_requires_why_not_raised_earlier_for_new_medium_issue():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["auditor_payload_missing_why_not_raised_earlier"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=["AR-001"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert (
+        "issues[1] must include why_not_raised_earlier for new medium-or-higher auditor issues."
+        in result.errors
+    )
+
+
+def test_auditor_semantic_validation_accepts_new_medium_issue_with_why_not_raised_earlier():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["auditor_payload_valid_new_issue_with_why_not_raised_earlier"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=["AR-001"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_review_semantic_validation_rejects_empty_scope_escape_reason():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_scope_escape_empty_reason"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert (
+        "scope_escapes[1].reason must be non-empty when scope escapes are recorded."
+        in result.errors
+    )
+
+
+def test_review_semantic_validation_accepts_scope_escape_with_reason():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_scope_escape_valid"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is True
+    assert result.errors == []

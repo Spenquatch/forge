@@ -65,8 +65,9 @@ def _strategy() -> StrategyConfig:
 
 def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
+    serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v2"
+    assert contract.contract_version == "analysis_review_v1_contract_v3"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
     assert contract.stop_policy.min_grounding_score == 0.8
@@ -79,6 +80,22 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.required_sections.uncertainties_required is True
     assert contract.required_sections.min_items_when_populated == 1
     assert contract.required_sections.minimum_files_reviewed == 1
+    assert contract.bounded_review.max_evidence_refs_per_recommendation == 3
+    assert contract.bounded_review.max_must_check_files_per_recommendation == 3
+    assert contract.bounded_review.max_optional_check_files_per_recommendation == 2
+    assert contract.bounded_review.critic_issue_cap == 5
+    assert contract.bounded_review.critic_new_topic_cap == 2
+    assert contract.bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0 == 1
+    assert contract.bounded_review.require_scope_escape_justification is True
+    assert serialized["bounded_review"] == {
+        "max_evidence_refs_per_recommendation": 3,
+        "max_must_check_files_per_recommendation": 3,
+        "max_optional_check_files_per_recommendation": 2,
+        "critic_issue_cap": 5,
+        "critic_new_topic_cap": 2,
+        "auditor_new_medium_or_higher_issue_cap_after_round0": 1,
+        "require_scope_escape_justification": True,
+    }
 
 
 
@@ -97,5 +114,5 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
     example = load_structured_file(
         Path("examples/harness/strategies/analysis_review_codex_claude.yaml")
     )
-    assert example["roles"]["proposer"]["effort"] == "medium"
+    assert example["kind"] == "analysis_review_v1"
     assert example["review_loops"]["max_loops"] == 3

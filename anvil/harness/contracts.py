@@ -65,12 +65,27 @@ class RequiredSectionPolicy:
 
 
 @dataclass
+class BoundedReviewPolicy:
+    max_evidence_refs_per_recommendation: int = 3
+    max_must_check_files_per_recommendation: int = 3
+    max_optional_check_files_per_recommendation: int = 2
+    critic_issue_cap: int = 5
+    critic_new_topic_cap: int = 2
+    auditor_new_medium_or_higher_issue_cap_after_round0: int = 1
+    require_scope_escape_justification: bool = True
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass
 class AnalysisReviewContract:
     contract_version: str
     stop_policy: ReviewLoopPolicy
     reviser_goal: Literal["close_all_open_blockers"] = "close_all_open_blockers"
     partial_acceptance: PartialAcceptancePolicy = field(default_factory=PartialAcceptancePolicy)
     required_sections: RequiredSectionPolicy = field(default_factory=RequiredSectionPolicy)
+    bounded_review: BoundedReviewPolicy = field(default_factory=BoundedReviewPolicy)
     require_issue_ledger: bool = True
     require_recommendation_reviews: bool = True
     confidence_rubric_version: str = "analysis_review_confidence_v1"
@@ -83,6 +98,7 @@ class AnalysisReviewContract:
             "reviser_goal": self.reviser_goal,
             "partial_acceptance": self.partial_acceptance.to_dict(),
             "required_sections": self.required_sections.to_dict(),
+            "bounded_review": self.bounded_review.to_dict(),
             "require_issue_ledger": self.require_issue_ledger,
             "require_recommendation_reviews": self.require_recommendation_reviews,
             "confidence_rubric_version": self.confidence_rubric_version,
@@ -98,7 +114,7 @@ def build_analysis_review_contract(
 ) -> AnalysisReviewContract:
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v2",
+        contract_version="analysis_review_v1_contract_v3",
         stop_policy=strategy.review_loops,
         partial_acceptance=PartialAcceptancePolicy(
             enabled=True,

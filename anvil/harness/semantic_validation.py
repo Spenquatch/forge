@@ -69,6 +69,7 @@ def validate_stage_output(
         result.extend(
             validate_analysis_review_payload(
                 payload,
+                role_name=role,
                 task=task,
                 contract=contract,
                 prior_open_issue_ids=prior_open_issue_ids,
@@ -88,6 +89,7 @@ def validate_analysis_output_payload(
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     review_requirements = task.review_requirements
+    bounded_review = contract.bounded_review
     recommendations = payload.get("recommendations") or []
     if not isinstance(recommendations, list):
         result.errors.append("recommendations must be a list.")
@@ -97,6 +99,14 @@ def validate_analysis_output_payload(
         result.errors.append(
             f"recommendations must contain at least {min_recommendations} item(s) for this task."
         )
+
+    files_reviewed = payload.get("files_reviewed") or []
+    file_items = _non_empty_strings(files_reviewed if isinstance(files_reviewed, list) else [])
+    if len(file_items) < int(contract.required_sections.minimum_files_reviewed or 0):
+        result.errors.append(
+            f"files_reviewed must contain at least {contract.required_sections.minimum_files_reviewed} non-empty path(s)."
+        )
+    files_reviewed_set = set(file_items)
 
     for index, item in enumerate(recommendations, start=1):
         if not isinstance(item, dict):
@@ -113,6 +123,18 @@ def validate_analysis_output_payload(
                 result.errors.append(
                     f"recommendations[{index}] must include at least one non-empty evidence item."
                 )
+            if len(evidence_items) > bounded_review.max_evidence_refs_per_recommendation:
+                result.errors.append(
+                    f"recommendations[{index}].evidence exceeds the bounded-review cap of "
+                    f"{bounded_review.max_evidence_refs_per_recommendation} item(s)."
+                )
+        _validate_review_surface(
+            result,
+            review_surface=item.get("review_surface"),
+            recommendation_index=index,
+            files_reviewed=files_reviewed_set,
+            contract=contract,
+        )
 
     required_sections = contract.required_sections
     _validate_section(
@@ -131,13 +153,6 @@ def validate_analysis_output_payload(
         none_reason_allowed=required_sections.none_reason_allowed,
         min_items_when_populated=required_sections.min_items_when_populated,
     )
-
-    files_reviewed = payload.get("files_reviewed") or []
-    file_items = _non_empty_strings(files_reviewed if isinstance(files_reviewed, list) else [])
-    if len(file_items) < int(required_sections.minimum_files_reviewed or 0):
-        result.errors.append(
-            f"files_reviewed must contain at least {required_sections.minimum_files_reviewed} non-empty path(s)."
-        )
 
     if require_issue_resolution_map:
         expected_ids = {str(item).strip() for item in (expected_open_issue_ids or []) if str(item).strip()}
@@ -178,6 +193,7 @@ def validate_analysis_output_payload(
 def validate_analysis_review_payload(
     payload: dict[str, Any],
     *,
+    role_name: str,
     task: TaskSpec,
     contract: AnalysisReviewContract,
     prior_open_issue_ids: Iterable[str] | None,
@@ -185,13 +201,20 @@ def validate_analysis_review_payload(
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     del task  # reserved for future task-specific review checks
-    del contract
+    bounded_review = contract.bounded_review
 
     issues = payload.get("issues") or []
     issue_id_order: list[str] = []
     if not isinstance(issues, list):
         result.errors.append("issues must be a list.")
         issues = []
+    if role_name == "critic" and len(issues) > bounded_review.critic_issue_cap:
+        result.errors.append(
+            f"issues exceeds the bounded-review cap of {bounded_review.critic_issue_cap} item(s) for critic."
+        )
+
+    prior_open_ids = {str(item).strip() for item in (prior_open_issue_ids or []) if str(item).strip()}
+    new_medium_or_higher_issue_ids: list[str] = []
     for index, issue in enumerate(issues, start=1):
         if not isinstance(issue, dict):
             result.errors.append(f"issues[{index}] must be an object.")
@@ -218,10 +241,29 @@ def validate_analysis_review_payload(
                     result.errors.append(
                         f"issues[{index}].recommendation_index={recommendation_number} exceeds the recommendation count ({expected_recommendation_count})."
                     )
+        if (
+            role_name == "auditor"
+            and issue_id not in prior_open_ids
+            and str(issue.get("severity") or "").strip() in {"medium", "high", "critical"}
+        ):
+            new_medium_or_higher_issue_ids.append(issue_id)
+            if not str(issue.get("why_not_raised_earlier") or "").strip():
+                result.errors.append(
+                    f"issues[{index}] must include why_not_raised_earlier for new medium-or-higher auditor issues."
+                )
     duplicate_issue_ids = sorted({issue_id for issue_id in issue_id_order if issue_id_order.count(issue_id) > 1})
     if duplicate_issue_ids:
         result.errors.append("issues contains duplicate issue IDs: " + ", ".join(duplicate_issue_ids))
     issue_ids = set(issue_id_order)
+    if (
+        role_name == "auditor"
+        and len(new_medium_or_higher_issue_ids)
+        > bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0
+    ):
+        result.errors.append(
+            "new medium-or-higher auditor issues exceed the bounded-review cap of "
+            f"{bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0} after round 0."
+        )
 
     recommendation_reviews = payload.get("recommendation_reviews") or []
     if not isinstance(recommendation_reviews, list):
@@ -276,7 +318,6 @@ def validate_analysis_review_payload(
                 + ", ".join(str(item) for item in unexpected_indices)
             )
 
-    prior_open_ids = {str(item).strip() for item in (prior_open_issue_ids or []) if str(item).strip()}
     resolved_ids = _normalized_id_set(payload.get("resolved_issue_ids"))
     carried_ids = _normalized_id_set(payload.get("carried_forward_issue_ids"))
     waived_ids = _normalized_id_set(payload.get("waived_issue_ids"))
@@ -298,6 +339,31 @@ def validate_analysis_review_payload(
             "prior open issue IDs are missing from resolved/carried_forward/waived arrays: "
             + ", ".join(missing_classifications)
         )
+
+    missing_topics = payload.get("missing_topics") or []
+    if not isinstance(missing_topics, list):
+        result.errors.append("missing_topics must be a list.")
+        missing_topics = []
+    missing_topic_items = _non_empty_strings(missing_topics if isinstance(missing_topics, list) else [])
+    if role_name == "critic" and len(missing_topic_items) > bounded_review.critic_new_topic_cap:
+        result.errors.append(
+            "missing_topics exceeds the bounded-review cap of "
+            f"{bounded_review.critic_new_topic_cap} item(s) for critic."
+        )
+
+    scope_escapes = payload.get("scope_escapes") or []
+    if not isinstance(scope_escapes, list):
+        result.errors.append("scope_escapes must be a list.")
+        scope_escapes = []
+    if bounded_review.require_scope_escape_justification:
+        for index, item in enumerate(scope_escapes, start=1):
+            if not isinstance(item, dict):
+                result.errors.append(f"scope_escapes[{index}] must be an object.")
+                continue
+            if not str(item.get("reason") or "").strip():
+                result.errors.append(
+                    f"scope_escapes[{index}].reason must be non-empty when scope escapes are recorded."
+                )
 
     return result
 
@@ -340,6 +406,48 @@ def _validate_section(
                 )
         else:
             result.errors.append(f"{name} must contain at least one concrete item.")
+
+
+def _validate_review_surface(
+    result: SemanticValidationResult,
+    *,
+    review_surface: Any,
+    recommendation_index: int,
+    files_reviewed: set[str],
+    contract: AnalysisReviewContract,
+) -> None:
+    if not isinstance(review_surface, dict):
+        result.errors.append(f"recommendations[{recommendation_index}].review_surface must be an object.")
+        return
+
+    bounded_review = contract.bounded_review
+    must_check_files = review_surface.get("must_check_files") or []
+    optional_check_files = review_surface.get("optional_check_files") or []
+    must_check_items = _non_empty_strings(must_check_files if isinstance(must_check_files, list) else [])
+    optional_check_items = _non_empty_strings(
+        optional_check_files if isinstance(optional_check_files, list) else []
+    )
+
+    if not must_check_items:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface.must_check_files must contain at least one non-empty path."
+        )
+    if len(must_check_items) > bounded_review.max_must_check_files_per_recommendation:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface.must_check_files exceeds the bounded-review cap of "
+            f"{bounded_review.max_must_check_files_per_recommendation} item(s)."
+        )
+    if len(optional_check_items) > bounded_review.max_optional_check_files_per_recommendation:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface.optional_check_files exceeds the bounded-review cap of "
+            f"{bounded_review.max_optional_check_files_per_recommendation} item(s)."
+        )
+    missing_files = sorted(set(must_check_items) - files_reviewed)
+    if missing_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface.must_check_files must be a subset of files_reviewed: "
+            + ", ".join(missing_files)
+        )
 
 
 def _non_empty_strings(values: Iterable[Any]) -> list[str]:

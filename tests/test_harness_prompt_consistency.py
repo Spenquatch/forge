@@ -109,15 +109,38 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
         open_issues=[{"issue_id": "AR-001", "severity": "medium", "title": "Example issue"}],
     )
 
-    assert "Analysis-review contract: analysis_review_v1_contract_v2" in proposer
+    common_bounded_lines = [
+        "Analysis-review contract: analysis_review_v1_contract_v3",
+        "Bounded review policy:",
+        "Recommendation evidence refs: 1..3 per recommendation",
+        "review_surface.must_check_files: 1..3 per recommendation",
+        "review_surface.optional_check_files: 0..2 per recommendation",
+        "review_surface.must_check_files must be a subset of files_reviewed",
+        "Critic issue cap: 5",
+        "Critic new-topic cap: 2",
+        "Auditor new medium-or-higher issue cap after round 0: 1",
+        "Scope escapes require non-empty reasons: True",
+    ]
+
+    for line in common_bounded_lines:
+        assert line in proposer
+        assert line in critic
+        assert line in auditor
+        assert line in reviser
+
     assert "Minimum accepted recommendations for partial acceptance: 2" in critic
     assert "Create stable issue IDs such as AR-001" in critic
+    assert "Validate each recommendation's cited evidence first" in critic
+    assert "Record `scope_escapes` whenever you inspect files outside the declared review_surface" in critic
     assert "You are not starting from scratch" in auditor
     assert "Open issue ledger entering this audit" in auditor
+    assert "If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`." in auditor
     assert "close all open medium-or-higher blockers" in reviser
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
     assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer
+    assert "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note." in proposer
     assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
+    assert "Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them." in reviser
     assert "Minimum items when a section is populated: 1" in proposer
     assert "Minimum files_reviewed entries: 1" in proposer
 

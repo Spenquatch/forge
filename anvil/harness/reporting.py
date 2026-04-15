@@ -210,6 +210,12 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     artifacts = dict(summary.get("artifacts") or {})
     task = summary.get("task") or {}
     task_id = str(task.get("id") or "task")
+    bounded_review_summary = summary.get("bounded_review_summary")
+    if not isinstance(bounded_review_summary, dict) or not bounded_review_summary:
+        run_details = summary.get("run_details") or {}
+        bounded_review_summary = run_details.get("bounded_review_summary")
+        if isinstance(bounded_review_summary, dict) and bounded_review_summary:
+            summary["bounded_review_summary"] = copy.deepcopy(bounded_review_summary)
 
     drafts = list(summary.get("drafts") or [])
     best_draft = select_best_draft(drafts)

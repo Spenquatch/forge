@@ -177,6 +177,38 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
     )
 
 
+def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
+    bounded = contract.bounded_review
+    return "\n".join(
+        [
+            "Bounded review policy:",
+            (
+                "- Recommendation evidence refs: "
+                f"1..{bounded.max_evidence_refs_per_recommendation} per recommendation"
+            ),
+            (
+                "- review_surface.must_check_files: "
+                f"1..{bounded.max_must_check_files_per_recommendation} per recommendation"
+            ),
+            (
+                "- review_surface.optional_check_files: "
+                f"0..{bounded.max_optional_check_files_per_recommendation} per recommendation"
+            ),
+            "- review_surface.must_check_files must be a subset of files_reviewed",
+            f"- Critic issue cap: {bounded.critic_issue_cap}",
+            f"- Critic new-topic cap: {bounded.critic_new_topic_cap}",
+            (
+                "- Auditor new medium-or-higher issue cap after round 0: "
+                f"{bounded.auditor_new_medium_or_higher_issue_cap_after_round0}"
+            ),
+            (
+                "- Scope escapes require non-empty reasons: "
+                f"{bounded.require_scope_escape_justification}"
+            ),
+        ]
+    )
+
+
 def build_single_pass_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
     return f"""
 You are the SOLVER stage in an external evaluation harness.
@@ -331,9 +363,11 @@ Your job:
 6. Populate strengths and uncertainties as objects with `items` and `none_reason`.
 7. For strengths/uncertainties: include concrete items when you have them; otherwise leave `items` empty and explain why in `none_reason`.
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
-9. Use workspace_write_intent=`none` unless you truly changed the repo.
+9. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note.
+10. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
 {_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
@@ -363,10 +397,12 @@ Critical rules:
 
 Your job:
 1. Audit the prior analysis for factual grounding, overclaims, omissions, actionability, and scope discipline.
-2. For every issue you raise, classify both `kind` and `blocking_class`.
-3. Review every recommendation individually and return recommendation-level verdicts.
-4. Use `accept_partial` when a subset of recommendations is already valid even if the overall draft still needs revision.
-5. Use the shared confidence rubric below when judging whether confidence is too high or too low.
+2. Validate each recommendation's cited evidence first, then stay inside its review_surface unless you must leave it.
+3. For every issue you raise, classify both `kind` and `blocking_class`.
+4. Review every recommendation individually and return recommendation-level verdicts.
+5. Use `missing_topics` only for genuinely new bounded-review topics, not for open-ended repo exploration.
+6. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
+7. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
 Decision guidance:
 - Return verdict=revise when the overall draft still needs more work.
@@ -375,6 +411,7 @@ Decision guidance:
 - Return verdict=accept_partial when at least one recommendation is sound but the whole draft is not yet fully acceptable.
 
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
 
@@ -417,7 +454,9 @@ Your job:
 2. Preserve issue IDs for carried-forward issues.
 3. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
 4. Review every recommendation individually and return recommendation-level verdicts.
-5. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+5. Stay inside each recommendation's bounded review_surface unless you must leave it.
+6. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
+7. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
 
 Decision guidance:
 - Return verdict=accept when the entire draft is acceptable.
@@ -427,6 +466,7 @@ Decision guidance:
 
 Audit round: {round_index}
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
 
@@ -471,12 +511,14 @@ Your job:
 2. Revise the prior analysis to address every open issue in the issue ledger below.
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
 4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
-5. Use the shared confidence rubric below when revising confidence values.
-6. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-7. Use workspace_write_intent=`none` unless you truly changed the repo.
+5. Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them.
+6. Use the shared confidence rubric below when revising confidence values.
+7. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+8. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
 {_review_policy_block(contract.stop_policy)}
 {_confidence_rubric_block(contract)}
 

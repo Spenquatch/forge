@@ -9,6 +9,90 @@ def _render_policy_list(items: list[str]) -> str:
     return ", ".join(values) if values else "none"
 
 
+def _bounded_review_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    bounded_review = summary.get("bounded_review_summary")
+    if isinstance(bounded_review, dict) and bounded_review:
+        return bounded_review
+    run_details = summary.get("run_details") or {}
+    bounded_review = run_details.get("bounded_review_summary")
+    if isinstance(bounded_review, dict) and bounded_review:
+        return bounded_review
+    return {}
+
+
+def _sanitize_run_details_for_report(run_details: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(run_details)
+    if "bounded_review_summary" in sanitized:
+        sanitized["bounded_review_summary"] = {
+            "rendered_in_report_section": True,
+            "mode": (
+                sanitized.get("bounded_review_summary", {}).get("mode")
+                if isinstance(sanitized.get("bounded_review_summary"), dict)
+                else None
+            ),
+        }
+    return sanitized
+
+
+def _render_cap_usage(used: Any, cap: Any) -> str:
+    used_value = 0 if used is None else used
+    if cap is None:
+        return f"`{used_value}` / `n/a`"
+    return f"`{used_value}` / `{cap}`"
+
+
+def _append_bounded_review_section(lines: list[str], summary: dict[str, Any]) -> None:
+    bounded_review = _bounded_review_summary(summary)
+    if not bounded_review:
+        return
+
+    lines.append("## Bounded Review")
+    lines.append("")
+    lines.append(f"- Mode: `{bounded_review.get('mode', 'unknown')}`")
+    lines.append(
+        "- Review surfaces declared: "
+        f"`{bounded_review.get('recommendations_with_review_surface', 0)}` / "
+        f"`{bounded_review.get('recommendation_count', 0)}` recommendations"
+    )
+    lines.append(f"- Total scope escapes: `{bounded_review.get('scope_escape_count', 0)}`")
+    lines.append("")
+
+    review_stages = bounded_review.get("review_stages") or []
+    if review_stages:
+        lines.append("### Review Stages")
+        lines.append("")
+        for stage in review_stages:
+            role_name = stage.get("role_name") or "reviewer"
+            round_index = stage.get("round_index", 0)
+            lines.append(f"- `{role_name}` round `{round_index}`")
+            lines.append(
+                "  - Issue cap/usage: "
+                f"{_render_cap_usage(stage.get('issue_count'), stage.get('issue_cap'))}"
+            )
+            lines.append(
+                "  - Missing-topic cap/usage: "
+                f"{_render_cap_usage(stage.get('missing_topic_count'), stage.get('missing_topic_cap'))}"
+            )
+            lines.append(
+                "  - Auditor new medium+ cap/usage: "
+                f"{_render_cap_usage(stage.get('new_medium_or_higher_issue_count'), stage.get('new_medium_or_higher_issue_cap'))}"
+            )
+            lines.append(f"  - Scope escapes: `{stage.get('scope_escape_count', 0)}`")
+        lines.append("")
+
+    scope_escapes = bounded_review.get("scope_escapes") or []
+    if scope_escapes:
+        lines.append("### Scope Escapes")
+        lines.append("")
+        for item in scope_escapes:
+            role_name = item.get("role_name") or "reviewer"
+            round_index = item.get("round_index", 0)
+            path = item.get("path") or "workspace"
+            reason = item.get("reason") or "No reason provided."
+            lines.append(f"- `{role_name}` round `{round_index}` — `{path}`: {reason}")
+        lines.append("")
+
+
 def render_report(summary: dict[str, Any]) -> str:
     lines: list[str] = ["# Forge Harness Report", ""]
 
@@ -85,11 +169,13 @@ def render_report(summary: dict[str, Any]) -> str:
             )
         lines.append("")
 
+    _append_bounded_review_section(lines, summary)
+
     if run_details:
         lines.append("## Run Details")
         lines.append("")
         lines.append("```json")
-        lines.append(json.dumps(run_details, indent=2, sort_keys=False))
+        lines.append(json.dumps(_sanitize_run_details_for_report(run_details), indent=2, sort_keys=False))
         lines.append("```")
         lines.append("")
 

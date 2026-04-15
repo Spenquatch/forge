@@ -10,6 +10,14 @@ from anvil.harness.types import ProviderRun
 
 
 class _AcceptingHarnessAdapter:
+    @staticmethod
+    def _review_surface(*, must_check_files: list[str], optional_check_files: list[str], scope_note: str) -> dict:
+        return {
+            "must_check_files": must_check_files,
+            "optional_check_files": optional_check_files,
+            "scope_note": scope_note,
+        }
+
     def run(self, request):
         out_dir = Path(request.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +58,11 @@ class _AcceptingHarnessAdapter:
                     "evidence": [".github/workflows/codex-cli-release-watch.yml"],
                     "proposed_change": "Add a workflow-level concurrency group keyed by workflow and ref.",
                     "confidence": 0.91,
+                    "review_surface": self._review_surface(
+                        must_check_files=[".github/workflows/codex-cli-release-watch.yml"],
+                        optional_check_files=[".github/workflows/claude-code-release-watch.yml"],
+                        scope_note="Limit review to the release-watch workflow concurrency behavior.",
+                    ),
                 },
                 {
                     "classification": "recommendation",
@@ -59,6 +72,11 @@ class _AcceptingHarnessAdapter:
                     "evidence": [".github/workflows/claude-code-update-snapshot.yml"],
                     "proposed_change": "Use explicit timeout-minutes consistently across both release paths.",
                     "confidence": 0.81,
+                    "review_surface": self._review_surface(
+                        must_check_files=[".github/workflows/claude-code-release-watch.yml"],
+                        optional_check_files=[".github/workflows/codex-cli-release-watch.yml"],
+                        scope_note="Focus on timeout settings in the release-watch workflows.",
+                    ),
                 },
             ],
             "strengths": {
@@ -114,6 +132,7 @@ class _AcceptingHarnessAdapter:
                 "actionability_score": 0.89,
                 "scope_compliance_score": 0.95,
                 "confidence": 0.88,
+                "scope_escapes": [],
             }
         raise AssertionError(f"Unexpected role: {role_name}")
 
@@ -130,6 +149,11 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "evidence": [".github/workflows/claude-code-release-watch.yml"],
                 "proposed_change": "Document or annotate the distinct failure paths.",
                 "confidence": 0.69 if not revised else 0.58,
+                "review_surface": self._review_surface(
+                    must_check_files=[".github/workflows/claude-code-release-watch.yml"],
+                    optional_check_files=[],
+                    scope_note="Keep the review bounded to existing release-watch failure-path handling.",
+                ),
             }
         )
         return payload
@@ -186,6 +210,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "actionability_score": 0.71,
                 "scope_compliance_score": 0.94,
                 "confidence": 0.82,
+                "scope_escapes": [],
             }
         if role_name == "reviser_round_1":
             payload = self._base_analysis(revised=True)
@@ -247,6 +272,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "actionability_score": 0.73,
                 "scope_compliance_score": 0.95,
                 "confidence": 0.84,
+                "scope_escapes": [],
             }
         return super()._payload_for_role(role_name)
 
@@ -394,13 +420,48 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
-    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v2"
+    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v3"
     assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
+    assert summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
     assert summary["final_answer"]["recommendations"][0]["title"] == "Add concurrency controls"
+    assert summary["final_answer"]["recommendations"][0]["review_surface"]["must_check_files"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
     assert summary["final_answer"]["strengths"]["items"] == ["Grounded in workflow files"]
     assert summary["recommendation_reviews"][0]["verdict"] == "accept"
     assert summary["issue_ledger"] == []
     assert summary["analysis_review_coverage"]["review_loop_exercised"] is True
+    bounded_review_summary = summary["bounded_review_summary"]
+    assert bounded_review_summary == summary["run_details"]["bounded_review_summary"]
+    assert bounded_review_summary["mode"] == "recommendation_review_surface"
+    assert bounded_review_summary["recommendation_count"] == 2
+    assert bounded_review_summary["recommendations_with_review_surface"] == 2
+    assert bounded_review_summary["scope_escape_count"] == 0
+    assert bounded_review_summary["scope_escapes"] == []
+    assert bounded_review_summary["review_stages"] == [
+        {
+            "role_name": "critic",
+            "round_index": 0,
+            "issue_count": 0,
+            "issue_cap": 5,
+            "missing_topic_count": 0,
+            "missing_topic_cap": 2,
+            "new_medium_or_higher_issue_count": 0,
+            "new_medium_or_higher_issue_cap": None,
+            "scope_escape_count": 0,
+        },
+        {
+            "role_name": "auditor",
+            "round_index": 1,
+            "issue_count": 0,
+            "issue_cap": None,
+            "missing_topic_count": 0,
+            "missing_topic_cap": None,
+            "new_medium_or_higher_issue_count": 0,
+            "new_medium_or_higher_issue_cap": 1,
+            "scope_escape_count": 0,
+        },
+    ]
 
     proposer_stage = summary["agent_stages"][0]
     reviser_stage = summary["agent_stages"][2]
@@ -412,6 +473,12 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     proposer_semantic = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
     assert proposer_semantic["ok"] is True
     assert proposer_semantic["skipped"] is False
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "## Bounded Review" in report_text
+    assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
+    assert '"rendered_in_report_section": true' in report_text
+    assert '"bounded_review_summary": {' in report_text
+    assert '"review_stages"' not in report_text.split('"bounded_review_summary": {', 1)[1].split("}", 1)[0]
 
 
 
@@ -448,6 +515,11 @@ def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
     assert partial_answer["included_recommendation_indices"] == [1, 2]
     assert partial_answer["excluded_recommendation_indices"] == [3]
     assert summary["recommendation_reviews"][2]["verdict"] == "revise"
+    bounded_review_summary = summary["bounded_review_summary"]
+    assert bounded_review_summary["recommendation_count"] == 3
+    assert bounded_review_summary["recommendations_with_review_surface"] == 3
+    assert bounded_review_summary["scope_escape_count"] == 0
+    assert len(bounded_review_summary["review_stages"]) == 2
 
     issue_ledger = summary["issue_ledger"]
     assert issue_ledger[0]["issue_id"] == "AR-001"

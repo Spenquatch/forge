@@ -111,6 +111,36 @@ RECOMMENDATION_SCHEMA: dict[str, Any] = {
 }
 
 
+REVIEW_SURFACE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "must_check_files": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
+        "optional_check_files": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "scope_note": {"type": "string"},
+    },
+    "required": ["must_check_files", "optional_check_files", "scope_note"],
+    "additionalProperties": False,
+}
+
+
+SCOPE_ESCAPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["path", "reason"],
+    "additionalProperties": False,
+}
+
+
 ISSUE_RESOLUTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -249,6 +279,15 @@ def falsifier_schema() -> dict[str, Any]:
 
 
 def analysis_output_schema(*, require_issue_resolution_map: bool = False) -> dict[str, Any]:
+    recommendation_schema = {
+        "type": "object",
+        "properties": {
+            **RECOMMENDATION_SCHEMA["properties"],
+            "review_surface": REVIEW_SURFACE_SCHEMA,
+        },
+        "required": [*RECOMMENDATION_SCHEMA["required"], "review_surface"],
+        "additionalProperties": False,
+    }
     properties: dict[str, Any] = {
         "status": {
             "type": "string",
@@ -257,7 +296,7 @@ def analysis_output_schema(*, require_issue_resolution_map: bool = False) -> dic
         **COMMON_PROPS,
         "recommendations": {
             "type": "array",
-            "items": RECOMMENDATION_SCHEMA,
+            "items": recommendation_schema,
             "minItems": 1,
         },
         "strengths": SECTION_SCHEMA,
@@ -308,6 +347,7 @@ def analysis_review_schema() -> dict[str, Any]:
                 "minItems": 1,
             },
             "missing_topics": {"type": "array", "items": {"type": "string"}},
+            "scope_escapes": {"type": "array", "items": SCOPE_ESCAPE_SCHEMA},
             "grounding_score": {"type": "number", "minimum": 0, "maximum": 1},
             "actionability_score": {"type": "number", "minimum": 0, "maximum": 1},
             "scope_compliance_score": {"type": "number", "minimum": 0, "maximum": 1},
@@ -322,6 +362,7 @@ def analysis_review_schema() -> dict[str, Any]:
             "waived_issue_ids",
             "recommendation_reviews",
             "missing_topics",
+            "scope_escapes",
             "grounding_score",
             "actionability_score",
             "scope_compliance_score",
