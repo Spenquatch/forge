@@ -97,7 +97,7 @@ class _AcceptingHarnessAdapter:
                     "priority": "medium",
                     "title": "Align timeout handling",
                     "rationale": "Uneven timeout settings make failures harder to compare.",
-                    "evidence": [".github/workflows/claude-code-update-snapshot.yml"],
+                    "evidence": [".github/workflows/claude-code-release-watch.yml"],
                     "proposed_change": "Use explicit timeout-minutes consistently across both release paths.",
                     "confidence": 0.81,
                     "review_surface": self._review_surface(
@@ -303,6 +303,13 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "scope_escapes": [],
             }
         return super()._payload_for_role(role_name)
+
+
+class _HallucinatedEvidenceHarnessAdapter(_AcceptingHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"][1]["evidence"] = [".github/workflows/claude-code-update-snapshot.yml"]
+        return payload
 
 
 class _InvalidSemanticHarnessAdapter(_AcceptingHarnessAdapter):
@@ -611,6 +618,43 @@ def test_analysis_review_runner_surfaces_semantic_validation_failures(
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert Path(proposer_stage["semantic_validation_path"]).exists()
+
+
+def test_analysis_review_runner_rejects_hallucinated_evidence_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _HallucinatedEvidenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert "Semantic validation failed" in summary["final_summary"]
+    proposer_stage = summary["agent_stages"][0]
+    assert proposer_stage["ok"] is False
+    assert any(
+        "recommendations[2].evidence must be a subset of files_reviewed: .github/workflows/claude-code-update-snapshot.yml"
+        in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
+    assert any(
+        "recommendations[2].evidence contains path(s) not present in the workspace snapshot: .github/workflows/claude-code-update-snapshot.yml"
+        in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
 
 
 def test_analysis_review_runner_short_circuits_provider_failures_and_marks_review_unexercised(

@@ -140,6 +140,13 @@ def validate_analysis_output_payload(
                     f"recommendations[{index}].evidence exceeds the bounded-review cap of "
                     f"{bounded_review.max_evidence_refs_per_recommendation} item(s)."
                 )
+            _validate_recommendation_evidence(
+                result,
+                evidence_items=evidence_items,
+                recommendation_index=index,
+                files_reviewed=files_reviewed_set,
+                workspace_paths=workspace_path_set,
+            )
         _validate_review_surface(
             result,
             review_surface=item.get("review_surface"),
@@ -473,6 +480,28 @@ def _validate_review_surface(
         result.errors.append(
             f"recommendations[{recommendation_index}].review_surface.optional_check_files contains path(s) not present in the workspace snapshot: "
             + ", ".join(unknown_optional_check_files)
+        )
+
+
+def _validate_recommendation_evidence(
+    result: SemanticValidationResult,
+    *,
+    evidence_items: list[str],
+    recommendation_index: int,
+    files_reviewed: set[str],
+    workspace_paths: set[str],
+) -> None:
+    missing_files = sorted(set(evidence_items) - files_reviewed)
+    if missing_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].evidence must be a subset of files_reviewed: "
+            + ", ".join(missing_files)
+        )
+    unknown_files = sorted(set(evidence_items) - workspace_paths)
+    if unknown_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].evidence contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_files)
         )
 
 

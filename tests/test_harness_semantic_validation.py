@@ -172,6 +172,68 @@ def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
     assert "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)." in result.errors
 
 
+def test_analysis_output_semantic_validation_rejects_evidence_outside_files_reviewed():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["recommendations"][0]["evidence"] = [".github/workflows/release.yml"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].evidence must be a subset of files_reviewed: .github/workflows/release.yml"
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_rejects_evidence_outside_workspace_snapshot():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["recommendations"][0]["evidence"] = ["does/not/exist.py"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].evidence contains path(s) not present in the workspace snapshot: does/not/exist.py"
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_accepts_evidence_present_in_files_reviewed():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
 def test_analysis_output_semantic_validation_rejects_too_many_must_check_files():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())

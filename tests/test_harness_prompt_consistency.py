@@ -138,9 +138,17 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
     assert "close all open medium-or-higher blockers" in reviser
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
     assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer
+    assert (
+        "Every evidence ref must be a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
+        in proposer
+    )
     assert "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note." in proposer
     assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
     assert "Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them." in reviser
+    assert (
+        "Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
+        in reviser
+    )
     assert "Minimum items when a section is populated: 1" in proposer
     assert "Minimum files_reviewed entries: 1" in proposer
 

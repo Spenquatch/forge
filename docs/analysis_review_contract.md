@@ -66,6 +66,8 @@ Examples of semantic checks:
 
 - proposer/reviser outputs must satisfy the task minimum recommendation count
 - recommendation evidence counts must stay within the bounded-review cap
+- recommendation evidence refs must exist in the workspace snapshot
+- recommendation evidence refs must remain a subset of `files_reviewed`
 - `review_surface.must_check_files` must stay within cap and remain a subset of `files_reviewed`
 - `review_surface.optional_check_files` must stay within cap
 - critics must stay within the issue cap and new-topic cap

@@ -363,8 +363,9 @@ Your job:
 6. Populate strengths and uncertainties as objects with `items` and `none_reason`.
 7. For strengths/uncertainties: include concrete items when you have them; otherwise leave `items` empty and explain why in `none_reason`.
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
-9. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note.
-10. Use workspace_write_intent=`none` unless you truly changed the repo.
+9. Every evidence ref must be a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+10. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note.
+11. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
@@ -512,9 +513,10 @@ Your job:
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
 4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
 5. Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them.
-6. Use the shared confidence rubric below when revising confidence values.
-7. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-8. Use workspace_write_intent=`none` unless you truly changed the repo.
+6. Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+7. Use the shared confidence rubric below when revising confidence values.
+8. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+9. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
