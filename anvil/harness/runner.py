@@ -11,6 +11,7 @@ from .files import load_structured_file, slugify, write_json, write_text
 from .git_utils import (
     capture_git_snapshot,
     capture_non_git_workspace_state,
+    capture_workspace_file_inventory,
     changed_files,
     evaluate_workspace_write_policy,
     git_snapshot_is_dirty,
@@ -500,22 +501,14 @@ class HarnessRunner:
             reviser_output=None,
         )
         if not critic_run.ok:
-            return {
-                "run_verdict": "harness_error",
-                "content_verdict": "harness_error",
-                "validator_verdict": self._classify_validator_verdict(validation_runs),
-                "final_summary": self._analysis_stage_failure_summary(
-                    "critic",
-                    critic_run,
-                    review_loop_exercised=False,
-                ),
-                "failure_details": self._stage_failure_details(
-                    "critic",
-                    critic_run,
-                    review_loop_exercised=False,
-                ),
-                "details": {"review_loop_exercised": False},
-            }
+            return self._analysis_stage_failure_outcome(
+                stage_label="critic",
+                run=critic_run,
+                validator_verdict=self._classify_validator_verdict(validation_runs),
+                review_loop_exercised=False,
+                final_analysis=proposer_run.structured_output,
+                contract=contract,
+            )
         self._ingest_review_payload(
             critic_run.structured_output or {},
             round_index=0,
@@ -547,7 +540,8 @@ class HarnessRunner:
                 contract=contract,
                 open_issues=self._open_issue_records(),
             )
-            latest_analysis_run = self._run_agent_stage(
+            prior_analysis_payload = latest_analysis_run.structured_output
+            next_analysis_run = self._run_agent_stage(
                 f"reviser_round_{revisions_completed}",
                 reviser_cfg.provider,
                 reviser_prompt,
@@ -562,23 +556,16 @@ class HarnessRunner:
                     ],
                 },
             )
-            if not latest_analysis_run.ok:
-                return {
-                    "run_verdict": "harness_error",
-                    "content_verdict": "harness_error",
-                    "validator_verdict": self._classify_validator_verdict(validation_runs),
-                    "final_summary": self._analysis_stage_failure_summary(
-                        f"reviser round {revisions_completed}",
-                        latest_analysis_run,
-                        review_loop_exercised=True,
-                    ),
-                    "failure_details": self._stage_failure_details(
-                        f"reviser_round_{revisions_completed}",
-                        latest_analysis_run,
-                        review_loop_exercised=True,
-                    ),
-                    "details": {"review_loop_exercised": True},
-                }
+            if not next_analysis_run.ok:
+                return self._analysis_stage_failure_outcome(
+                    stage_label=f"reviser round {revisions_completed}",
+                    run=next_analysis_run,
+                    validator_verdict=self._classify_validator_verdict(validation_runs),
+                    review_loop_exercised=True,
+                    final_analysis=prior_analysis_payload,
+                    contract=contract,
+                )
+            latest_analysis_run = next_analysis_run
 
             latest_review_run = self._run_analysis_reviewer(
                 role_name="auditor",
@@ -589,22 +576,14 @@ class HarnessRunner:
                 reviser_output=latest_analysis_run.structured_output,
             )
             if not latest_review_run.ok:
-                return {
-                    "run_verdict": "harness_error",
-                    "content_verdict": "harness_error",
-                    "validator_verdict": self._classify_validator_verdict(validation_runs),
-                    "final_summary": self._analysis_stage_failure_summary(
-                        "auditor",
-                        latest_review_run,
-                        review_loop_exercised=True,
-                    ),
-                    "failure_details": self._stage_failure_details(
-                        "auditor",
-                        latest_review_run,
-                        review_loop_exercised=True,
-                    ),
-                    "details": {"review_loop_exercised": True},
-                }
+                return self._analysis_stage_failure_outcome(
+                    stage_label="auditor",
+                    run=latest_review_run,
+                    validator_verdict=self._classify_validator_verdict(validation_runs),
+                    review_loop_exercised=True,
+                    final_analysis=latest_analysis_run.structured_output,
+                    contract=contract,
+                )
             self._ingest_review_payload(
                 latest_review_run.structured_output or {},
                 round_index=revisions_completed,
@@ -758,6 +737,13 @@ class HarnessRunner:
         context = dict(semantic_context or {})
         contract = context.pop("contract", None)
         if isinstance(contract, AnalysisReviewContract):
+            context.setdefault(
+                "workspace_paths",
+                capture_workspace_file_inventory(
+                    self.workspace,
+                    ignored_rel_paths=self.policy_ignored_rel_paths,
+                ),
+            )
             semantic_validation_path = str(stage_dir / "semantic_validation.json")
             if run.failure_kind:
                 semantic_payload = {
@@ -1015,12 +1001,46 @@ class HarnessRunner:
             parts.append("Review loop not exercised.")
         return " ".join(parts)
 
+    def _analysis_stage_failure_outcome(
+        self,
+        *,
+        stage_label: str,
+        run: ProviderRun,
+        validator_verdict: str,
+        review_loop_exercised: bool,
+        final_analysis: dict[str, Any] | None,
+        contract: AnalysisReviewContract | None,
+    ) -> dict[str, Any]:
+        details = self._stage_failure_details(
+            stage_label,
+            run,
+            review_loop_exercised=review_loop_exercised,
+            final_analysis=final_analysis,
+            contract=contract,
+            issue_ledger=self._serialized_issue_ledger(),
+        )
+        return {
+            "run_verdict": "harness_error",
+            "content_verdict": "harness_error",
+            "validator_verdict": validator_verdict,
+            "final_summary": self._analysis_stage_failure_summary(
+                stage_label,
+                run,
+                review_loop_exercised=review_loop_exercised,
+            ),
+            "failure_details": details,
+            "details": details,
+        }
+
     @staticmethod
     def _stage_failure_details(
         stage_label: str,
         run: ProviderRun,
         *,
         review_loop_exercised: bool | None = None,
+        final_analysis: dict[str, Any] | None = None,
+        contract: AnalysisReviewContract | None = None,
+        issue_ledger: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         details: dict[str, Any] = {
             "stage": stage_label,
@@ -1035,6 +1055,12 @@ class HarnessRunner:
             details["schema_validation_errors"] = list(run.schema_validation_errors)
         if review_loop_exercised is not None:
             details["review_loop_exercised"] = review_loop_exercised
+        if isinstance(final_analysis, dict) and final_analysis:
+            details["final_analysis"] = final_analysis
+        if contract is not None:
+            details["analysis_review_contract"] = contract.to_dict()
+        if issue_ledger is not None:
+            details["issue_ledger"] = issue_ledger
         return details
 
     def _analysis_review_coverage(self) -> dict[str, Any]:
@@ -1080,7 +1106,7 @@ class HarnessRunner:
         if not isinstance(bounded_policy, dict):
             return None
 
-        final_analysis = run_details.get("final_analysis")
+        final_analysis = self._resolve_bounded_review_analysis_payload(run_details)
         recommendations = final_analysis.get("recommendations") if isinstance(final_analysis, dict) else []
         if not isinstance(recommendations, list):
             recommendations = []
@@ -1171,6 +1197,31 @@ class HarnessRunner:
             "scope_escape_count": len(scope_escapes),
             "scope_escapes": scope_escapes,
         }
+
+    def _resolve_bounded_review_analysis_payload(self, run_details: dict[str, Any]) -> dict[str, Any]:
+        final_analysis = run_details.get("final_analysis")
+        if isinstance(final_analysis, dict) and final_analysis:
+            return final_analysis
+
+        for stage in reversed(self.agent_stages):
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if not role_name.startswith("reviser_round_"):
+                continue
+            payload = stage.get("structured_output")
+            if stage.get("ok") and isinstance(payload, dict) and payload:
+                return payload
+
+        for stage in self.agent_stages:
+            if not isinstance(stage, dict):
+                continue
+            if str(stage.get("role_name") or "").strip() != "proposer":
+                continue
+            payload = stage.get("structured_output")
+            if stage.get("ok") and isinstance(payload, dict) and payload:
+                return payload
+        return {}
 
     @staticmethod
     def _count_medium_or_higher_review_issues(issues: list[dict[str, Any]]) -> int:

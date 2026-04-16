@@ -43,6 +43,7 @@ def validate_stage_output(
     payload: dict[str, Any] | None,
     task: TaskSpec,
     contract: AnalysisReviewContract | None,
+    workspace_paths: Iterable[str] | None = None,
     open_issue_ids: Iterable[str] | None = None,
     prior_open_issue_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
@@ -61,6 +62,7 @@ def validate_stage_output(
                 payload,
                 task=task,
                 contract=contract,
+                workspace_paths=workspace_paths,
                 expected_open_issue_ids=open_issue_ids,
                 require_issue_resolution_map=(role == "reviser"),
             )
@@ -84,12 +86,16 @@ def validate_analysis_output_payload(
     *,
     task: TaskSpec,
     contract: AnalysisReviewContract,
+    workspace_paths: Iterable[str] | None,
     expected_open_issue_ids: Iterable[str] | None,
     require_issue_resolution_map: bool,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     review_requirements = task.review_requirements
     bounded_review = contract.bounded_review
+    workspace_path_set = {
+        str(item).strip() for item in (workspace_paths or []) if str(item).strip()
+    }
     recommendations = payload.get("recommendations") or []
     if not isinstance(recommendations, list):
         result.errors.append("recommendations must be a list.")
@@ -107,6 +113,12 @@ def validate_analysis_output_payload(
             f"files_reviewed must contain at least {contract.required_sections.minimum_files_reviewed} non-empty path(s)."
         )
     files_reviewed_set = set(file_items)
+    unknown_files_reviewed = sorted(files_reviewed_set - workspace_path_set)
+    if unknown_files_reviewed:
+        result.errors.append(
+            "files_reviewed contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_files_reviewed)
+        )
 
     for index, item in enumerate(recommendations, start=1):
         if not isinstance(item, dict):
@@ -133,6 +145,7 @@ def validate_analysis_output_payload(
             review_surface=item.get("review_surface"),
             recommendation_index=index,
             files_reviewed=files_reviewed_set,
+            workspace_paths=workspace_path_set,
             contract=contract,
         )
 
@@ -414,6 +427,7 @@ def _validate_review_surface(
     review_surface: Any,
     recommendation_index: int,
     files_reviewed: set[str],
+    workspace_paths: set[str],
     contract: AnalysisReviewContract,
 ) -> None:
     if not isinstance(review_surface, dict):
@@ -447,6 +461,18 @@ def _validate_review_surface(
         result.errors.append(
             f"recommendations[{recommendation_index}].review_surface.must_check_files must be a subset of files_reviewed: "
             + ", ".join(missing_files)
+        )
+    unknown_must_check_files = sorted(set(must_check_items) - workspace_paths)
+    if unknown_must_check_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface.must_check_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_must_check_files)
+        )
+    unknown_optional_check_files = sorted(set(optional_check_items) - workspace_paths)
+    if unknown_optional_check_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface.optional_check_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_optional_check_files)
         )
 
 

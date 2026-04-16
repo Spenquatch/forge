@@ -159,6 +159,30 @@ def capture_git_snapshot(
     }
 
 
+def capture_workspace_file_inventory(
+    cwd: str | Path,
+    ignored_rel_paths: list[str] | None = None,
+) -> set[str]:
+    ignored = _normalize_ignored_rel_paths(ignored_rel_paths)
+    root = Path(cwd)
+    if not is_git_repo(root):
+        return set(capture_non_git_workspace_state(root, ignored).get("file_hashes", {}).keys())
+
+    result = _run_git(root, ["ls-files", "--cached", "--others", "--exclude-standard"])
+    if result.returncode != 0:
+        return set(_walk_workspace_files(root, ignored).keys())
+
+    inventory: set[str] = set()
+    for raw_line in result.stdout.splitlines():
+        rel_path = _normalize_relpath(raw_line)
+        if not rel_path or _path_is_ignored(rel_path, ignored):
+            continue
+        full_path = root / rel_path
+        if full_path.exists() and full_path.is_file():
+            inventory.add(rel_path)
+    return inventory
+
+
 def _walk_workspace_files(
     cwd: str | Path,
     ignored_rel_paths: list[str] | None = None,

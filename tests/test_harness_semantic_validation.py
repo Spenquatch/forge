@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -61,6 +62,15 @@ def _fixture() -> dict:
     return json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
+def _workspace_paths() -> set[str]:
+    return {
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/nightly.yml",
+    }
+
+
 
 def test_analysis_output_semantic_validation_accepts_valid_payload():
     task = _task(min_recommendations=2)
@@ -71,6 +81,7 @@ def test_analysis_output_semantic_validation_accepts_valid_payload():
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=[],
         require_issue_resolution_map=False,
     )
@@ -89,6 +100,7 @@ def test_analysis_output_semantic_validation_rejects_missing_sections_and_files(
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=[],
         require_issue_resolution_map=False,
     )
@@ -110,6 +122,7 @@ def test_reviser_semantic_validation_requires_full_issue_resolution_map_coverage
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=["AR-001", "AR-002"],
         require_issue_resolution_map=True,
     )
@@ -150,6 +163,7 @@ def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=[],
         require_issue_resolution_map=False,
     )
@@ -167,6 +181,7 @@ def test_analysis_output_semantic_validation_rejects_too_many_must_check_files()
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=[],
         require_issue_resolution_map=False,
     )
@@ -187,6 +202,7 @@ def test_analysis_output_semantic_validation_rejects_too_many_optional_check_fil
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=[],
         require_issue_resolution_map=False,
     )
@@ -207,6 +223,7 @@ def test_analysis_output_semantic_validation_rejects_must_check_files_outside_fi
         payload,
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         expected_open_issue_ids=[],
         require_issue_resolution_map=False,
     )
@@ -215,6 +232,73 @@ def test_analysis_output_semantic_validation_rejects_must_check_files_outside_fi
     assert (
         "recommendations[1].review_surface.must_check_files must be a subset of files_reviewed: "
         ".github/workflows/missing.yml"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_files_reviewed_outside_workspace_snapshot():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["files_reviewed"].append("does/not/exist.py")
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "files_reviewed contains path(s) not present in the workspace snapshot: does/not/exist.py"
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_rejects_must_check_files_outside_workspace_snapshot():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["files_reviewed"].append("does/not/exist.py")
+    payload["recommendations"][0]["review_surface"]["must_check_files"] = ["does/not/exist.py"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].review_surface.must_check_files contains path(s) not present in the workspace snapshot: "
+        "does/not/exist.py"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_optional_check_files_outside_workspace_snapshot():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["recommendations"][0]["review_surface"]["optional_check_files"] = ["does/not/exist.py"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].review_surface.optional_check_files contains path(s) not present in the workspace snapshot: "
+        "does/not/exist.py"
     ) in result.errors
 
 

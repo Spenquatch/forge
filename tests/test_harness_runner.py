@@ -9,6 +9,34 @@ from anvil.harness.runner import HarnessRunner
 from anvil.harness.types import ProviderRun
 
 
+def _failed_provider_run(request, *, message: str, failure_kind: str = "provider_unavailable") -> ProviderRun:
+    out_dir = Path(request.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "response.txt").write_text("", encoding="utf-8")
+    (out_dir / "error.txt").write_text(message, encoding="utf-8")
+    return ProviderRun(
+        role_name=request.role_name,
+        provider="fake",
+        model="fake-model",
+        access=request.role_config.access,
+        ok=False,
+        exit_code=1,
+        duration_sec=0.01,
+        cwd=request.cwd,
+        command=["fake"],
+        stdout_path=str(out_dir / "response.txt"),
+        stderr_path=str(out_dir / "error.txt"),
+        prompt_path=str(out_dir / "prompt.txt"),
+        schema_path=str(out_dir / "schema.json"),
+        output_path=str(out_dir / "structured_output.json"),
+        structured_output=None,
+        raw_meta={},
+        error=message,
+        failure_kind=failure_kind,
+        failure_summary=message,
+    )
+
+
 class _AcceptingHarnessAdapter:
     @staticmethod
     def _review_surface(*, must_check_files: list[str], optional_check_files: list[str], scope_note: str) -> dict:
@@ -326,6 +354,26 @@ class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
         return super().run(request)
 
 
+class _ReviserFailingHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    def run(self, request):
+        if request.role_name == "reviser_round_1":
+            return _failed_provider_run(
+                request,
+                message="Reviser provider unavailable during round 1.",
+            )
+        return super().run(request)
+
+
+class _AuditorFailingHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    def run(self, request):
+        if request.role_name == "auditor":
+            return _failed_provider_run(
+                request,
+                message="Auditor provider unavailable during round 1.",
+            )
+        return super().run(request)
+
+
 
 def _write_task_and_strategy(tmp_path: Path, *, min_recommendations: int = 2) -> tuple[Path, Path]:
     task_path = tmp_path / "task.yaml"
@@ -588,6 +636,10 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
 
     assert summary["verdict"] == "harness_error"
     assert "Review loop not exercised." in summary["final_summary"]
+    assert summary["run_details"]["final_analysis"]["status"] == "done"
+    assert summary["bounded_review_summary"]["recommendation_count"] == 2
+    assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 2
+    assert summary["bounded_review_summary"]["review_stages"] == []
     assert summary["analysis_review_coverage"]["review_loop_exercised"] is False
     assert summary["analysis_review_coverage"]["review_stages_attempted"] == 1
     assert summary["analysis_review_coverage"]["review_stages_completed"] == 0
@@ -607,5 +659,194 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
     assert "Review loop exercised: `False`" in report_text
     assert "Review issue counts: `not evaluated`" in report_text
+    assert "Review surfaces declared: `2` / `2` recommendations" in report_text
     best_draft_text = Path(summary["artifacts"]["best_draft_md"]).read_text(encoding="utf-8")
     assert "not evaluated by a successful critic/auditor stage" in best_draft_text
+
+
+def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _ReviserFailingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert summary["run_details"]["stage"] == "reviser round 1"
+    assert summary["run_details"]["review_loop_exercised"] is True
+    assert summary["run_details"]["final_analysis"]["status"] == "done"
+    assert summary["run_details"]["final_analysis"]["recommendations"][2]["title"] == (
+        "Add release failure categorization"
+    )
+    assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
+        "analysis_review_v1_contract_v3"
+    )
+    assert summary["bounded_review_summary"]["recommendation_count"] == 3
+    assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3
+    assert len(summary["bounded_review_summary"]["review_stages"]) == 1
+    assert summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+
+
+def test_analysis_review_runner_preserves_reviser_payload_when_auditor_fails(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AuditorFailingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert summary["run_details"]["stage"] == "auditor"
+    assert summary["run_details"]["review_loop_exercised"] is True
+    assert summary["run_details"]["final_analysis"]["status"] == "revised"
+    assert summary["run_details"]["final_analysis"]["issue_resolution_map"][0]["issue_id"] == "AR-001"
+    assert summary["run_details"]["issue_ledger"][0]["issue_id"] == "AR-001"
+    assert summary["bounded_review_summary"]["recommendation_count"] == 3
+    assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3
+    assert len(summary["bounded_review_summary"]["review_stages"]) == 1
+    assert summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+
+
+def test_bounded_review_summary_falls_back_to_latest_successful_stage_when_final_analysis_missing(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    runner._analysis_contract()
+    adapter = _PartialAcceptanceHarnessAdapter()
+    runner.agent_stages = [
+        {
+            "role_name": "proposer",
+            "ok": True,
+            "structured_output": adapter._base_analysis(revised=False),
+        },
+        {
+            "role_name": "critic",
+            "ok": True,
+            "structured_output": adapter._payload_for_role("critic"),
+        },
+        {
+            "role_name": "reviser_round_1",
+            "ok": True,
+            "structured_output": adapter._payload_for_role("reviser_round_1"),
+        },
+        {
+            "role_name": "auditor",
+            "ok": False,
+            "structured_output": None,
+        },
+    ]
+
+    bounded_review_summary = runner._build_bounded_review_summary(
+        {
+            "analysis_review_contract": runner.analysis_review_contract.to_dict(),
+            "review_loop_exercised": True,
+        }
+    )
+
+    assert bounded_review_summary is not None
+    assert bounded_review_summary["recommendation_count"] == 3
+    assert bounded_review_summary["recommendations_with_review_surface"] == 3
+    assert len(bounded_review_summary["review_stages"]) == 1
+    assert bounded_review_summary["review_stages"][0]["role_name"] == "critic"
+
+
+def test_bounded_review_summary_ignores_empty_final_analysis_and_recovers_from_stage_history(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    runner._analysis_contract()
+    adapter = _PartialAcceptanceHarnessAdapter()
+    runner.agent_stages = [
+        {
+            "role_name": "proposer",
+            "ok": True,
+            "structured_output": adapter._base_analysis(revised=False),
+        },
+        {
+            "role_name": "critic",
+            "ok": True,
+            "structured_output": adapter._payload_for_role("critic"),
+        },
+        {
+            "role_name": "reviser_round_1",
+            "ok": True,
+            "structured_output": adapter._payload_for_role("reviser_round_1"),
+        },
+        {
+            "role_name": "auditor",
+            "ok": False,
+            "structured_output": None,
+        },
+    ]
+
+    bounded_review_summary = runner._build_bounded_review_summary(
+        {
+            "analysis_review_contract": runner.analysis_review_contract.to_dict(),
+            "review_loop_exercised": True,
+            "final_analysis": {},
+        }
+    )
+
+    assert bounded_review_summary is not None
+    assert bounded_review_summary["recommendation_count"] == 3
+    assert bounded_review_summary["recommendations_with_review_surface"] == 3
+    resolved_analysis = runner._resolve_bounded_review_analysis_payload({"final_analysis": {}})
+    assert resolved_analysis["status"] == "revised"
+    assert resolved_analysis["issue_resolution_map"][0]["issue_id"] == "AR-001"
