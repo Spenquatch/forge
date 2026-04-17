@@ -115,4 +115,5 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
         Path("examples/harness/strategies/analysis_review_codex_claude.yaml")
     )
     assert example["kind"] == "analysis_review_v1"
+    assert example["roles"]["proposer"]["effort"] == "medium"
     assert example["review_loops"]["max_loops"] == 3

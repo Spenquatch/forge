@@ -6,7 +6,7 @@ prompt_preamble: |
 roles:
   proposer:
     provider: codex_gpt_5_4_mini
-    effort: high
+    effort: medium
     access: read
     timeout_sec: 1800
   critic:
