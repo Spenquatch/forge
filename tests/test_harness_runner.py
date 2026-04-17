@@ -323,6 +323,86 @@ class _InvalidSemanticHarnessAdapter(_AcceptingHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _ScopeEscapeHarnessAdapter(_AcceptingHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name == "critic":
+            payload["scope_escapes"] = [
+                {
+                    "path": "anvil/harness/state.py",
+                    "reason": "The cited evidence conflicted with the adjacent state transition logic.",
+                }
+            ]
+        return payload
+
+
+class _LateAuditorIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        if role_name == "auditor":
+            return {
+                "verdict": "revise",
+                "summary": "The auditor found a new medium-severity issue after the revision rewrote recommendation 2.",
+                "workspace_write_intent": "none",
+                "issues": [
+                    {
+                        "issue_id": "AR-001",
+                        "severity": "medium",
+                        "kind": "insufficient_specificity",
+                        "blocking_class": "actionability",
+                        "recommendation_index": 3,
+                        "title": "Recommendation 3 remains too conceptual.",
+                        "evidence": "The revision did not identify a concrete implementation target or check path.",
+                        "repair_hint": "Point to the exact workflow, script, or documentation surface that should change.",
+                        "why_not_raised_earlier": None,
+                    },
+                    {
+                        "issue_id": "AR-002",
+                        "severity": "medium",
+                        "kind": "missing_evidence",
+                        "blocking_class": "correctness",
+                        "recommendation_index": 2,
+                        "title": "Recommendation 2 now needs explicit evidence after the rewrite.",
+                        "evidence": "The revised recommendation no longer names the workflow file backing the timeout claim.",
+                        "repair_hint": "Reattach the concrete workflow evidence for the timeout recommendation.",
+                        "why_not_raised_earlier": "The missing evidence was introduced by the revision that rewrote recommendation 2.",
+                    },
+                ],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": ["AR-001"],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": 1,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 1 remains acceptable.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 2,
+                        "verdict": "revise",
+                        "open_issue_ids": ["AR-002"],
+                        "summary": "Recommendation 2 introduced a new evidence gap during revision.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 3,
+                        "verdict": "revise",
+                        "open_issue_ids": ["AR-001"],
+                        "summary": "Recommendation 3 remains too abstract to include.",
+                        "confidence_assessment": "too_low",
+                    },
+                ],
+                "missing_topics": [],
+                "grounding_score": 0.80,
+                "actionability_score": 0.69,
+                "scope_compliance_score": 0.95,
+                "confidence": 0.79,
+                "scope_escapes": [],
+            }
+        return super()._payload_for_role(role_name)
+
+
 class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
     def run(self, request):
         if request.role_name == "critic":
@@ -382,7 +462,12 @@ class _AuditorFailingHarnessAdapter(_PartialAcceptanceHarnessAdapter):
 
 
 
-def _write_task_and_strategy(tmp_path: Path, *, min_recommendations: int = 2) -> tuple[Path, Path]:
+def _write_task_and_strategy(
+    tmp_path: Path,
+    *,
+    min_recommendations: int = 2,
+    review_max_loops: int | None = None,
+) -> tuple[Path, Path]:
     task_path = tmp_path / "task.yaml"
     task_path.write_text(
         f"""
@@ -408,8 +493,14 @@ review_requirements:
     )
 
     strategy_path = tmp_path / "strategy.yaml"
+    review_loops = ""
+    if review_max_loops is not None:
+        review_loops = f"""
+review_loops:
+  max_loops: {review_max_loops}
+"""
     strategy_path.write_text(
-        """
+        f"""
 name: analysis-review-fake
 kind: analysis_review_v1
 roles:
@@ -426,7 +517,7 @@ roles:
     provider: fake
     access: read
 validators: []
-""".strip()
+{review_loops}""".strip()
         + "\n",
         encoding="utf-8",
     )
@@ -582,6 +673,52 @@ def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
     assert issue_ledger[0]["blocking_class"] == "actionability"
     assert issue_ledger[0]["recommendation_index"] == 3
 
+
+
+def test_analysis_review_runner_reports_non_zero_scope_escapes(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _ScopeEscapeHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    bounded_review_summary = summary["bounded_review_summary"]
+    assert bounded_review_summary["scope_escape_count"] == 1
+    assert bounded_review_summary["scope_escapes"] == [
+        {
+            "role_name": "critic",
+            "round_index": 0,
+            "path": "anvil/harness/state.py",
+            "reason": "The cited evidence conflicted with the adjacent state transition logic.",
+        }
+    ]
+    assert bounded_review_summary["review_stages"][0]["role_name"] == "critic"
+    assert bounded_review_summary["review_stages"][0]["scope_escape_count"] == 1
+    assert bounded_review_summary["review_stages"][1]["role_name"] == "auditor"
+    assert bounded_review_summary["review_stages"][1]["scope_escape_count"] == 0
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "## Bounded Review" in report_text
+    assert "- Total scope escapes: `1`" in report_text
+    assert "### Scope Escapes" in report_text
+    assert (
+        "- `critic` round `0` — `anvil/harness/state.py`: "
+        "The cited evidence conflicted with the adjacent state transition logic."
+    ) in report_text
 
 
 def test_analysis_review_runner_surfaces_semantic_validation_failures(
@@ -776,6 +913,55 @@ def test_analysis_review_runner_preserves_reviser_payload_when_auditor_fails(
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3
     assert len(summary["bounded_review_summary"]["review_stages"]) == 1
     assert summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+
+
+def test_analysis_review_runner_preserves_late_auditor_issue_attribution_in_ledger_and_report(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        min_recommendations=2,
+        review_max_loops=1,
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _LateAuditorIssueHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    issue_ledger_by_id = {item["issue_id"]: item for item in summary["issue_ledger"]}
+    assert set(issue_ledger_by_id) == {"AR-001", "AR-002"}
+    assert issue_ledger_by_id["AR-001"]["resolution_status"] == "carried_forward"
+    assert issue_ledger_by_id["AR-002"]["first_seen_round"] == 1
+    assert issue_ledger_by_id["AR-002"]["resolution_status"] == "open"
+    assert issue_ledger_by_id["AR-002"]["blocking_class"] == "correctness"
+    assert issue_ledger_by_id["AR-002"]["recommendation_index"] == 2
+    assert issue_ledger_by_id["AR-002"]["why_not_raised_earlier"] == (
+        "The missing evidence was introduced by the revision that rewrote recommendation 2."
+    )
+
+    auditor_stage = summary["bounded_review_summary"]["review_stages"][1]
+    assert auditor_stage["role_name"] == "auditor"
+    assert auditor_stage["new_medium_or_higher_issue_count"] == 1
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "## Issue Ledger" in report_text
+    assert "### AR-002 — medium — correctness — open" in report_text
+    assert (
+        "- Why not raised earlier: "
+        "The missing evidence was introduced by the revision that rewrote recommendation 2."
+    ) in report_text
 
 
 def test_bounded_review_summary_falls_back_to_latest_successful_stage_when_final_analysis_missing(
