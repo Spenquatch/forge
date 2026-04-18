@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .contracts import GROUNDING_MODE_VALUES
 
 ISSUE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -57,6 +58,12 @@ ANALYSIS_ISSUE_SCHEMA: dict[str, Any] = {
         "title": {"type": "string"},
         "evidence": {"type": "string"},
         "repair_hint": {"type": "string"},
+        "blocking_class_override_reason": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        },
         "why_not_raised_earlier": {
             "anyOf": [
                 {"type": "string"},
@@ -97,6 +104,22 @@ RECOMMENDATION_SCHEMA: dict[str, Any] = {
         },
         "proposed_change": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "verified_evidence_refs": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "checked_files": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "affected_files": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "grounding_mode": {
+            "type": "string",
+            "enum": list(GROUNDING_MODE_VALUES),
+        },
     },
     "required": [
         "classification",

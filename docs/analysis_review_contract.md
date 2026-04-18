@@ -6,24 +6,62 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v3` adds bounded-review semantics so review depth comes from explicit harness rules instead of open-ended reviewer behavior.
+`analysis_review_v1_contract_v4` keeps the bounded-review rules from v3, makes mode explicit, and adds one unified trust policy instead of inventing a second payload family.
 
 ## What the contract governs
 
 The current contract covers:
 
+- effective strategy surface: `strategy_kind` plus explicit `mode`
 - stop policy and loop limits
 - partial-acceptance policy
 - required analysis sections
 - bounded-review policy
+- trust-review policy
 - issue-ledger requirements
 - recommendation-level review requirements
 - the shared confidence rubric
 - the issue taxonomy and default blocking classes
 
+The contract now serializes:
+
+```json
+{
+  "contract_version": "analysis_review_v1_contract_v4",
+  "strategy_kind": "analysis_review_v1",
+  "mode": "bounded",
+  "effective_strategy": {
+    "kind": "analysis_review_v1",
+    "mode": "bounded"
+  }
+}
+```
+
+Today the legacy `analysis_review_v1` surface still resolves to bounded behavior. When explicit public strategy kinds land, `analysis_review_bounded_v1` and `analysis_review_trust_v1` should serialize through the same contract with different `mode` and `trust_review` values.
+
+## Unified policy model
+
+The v4 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
+
+Why this is preferable to mode-specific contract classes:
+
+- one source of truth for prompts and validation
+- bounded and trust stay comparable
+- mode-specific behavior lives in policy fields instead of branching the whole type system
+
+The trust policy covers:
+
+- whether blocking-class overrides require a reason
+- whether `verified_evidence_refs` must stay a subset of recommendation evidence
+- whether non-inferred `affected_files` require evidence or checked-file coverage
+- whether payload provenance binding is expected
+- whether clean acceptance should be downgraded on semantic warnings
+- whether inference-backed acceptance should be downgraded to a caveated acceptance
+- whether late auditor medium-or-higher issues are treated as errors or warnings
+
 ## Bounded-review policy
 
-The bounded-review policy is the single source of truth for review caps. Prompts must render these values from the contract, and semantic validation must enforce the same values.
+The bounded-review policy remains the single source of truth for review caps. Prompts must render these values from the contract, and semantic validation must enforce the same values.
 
 Current defaults:
 
@@ -35,34 +73,90 @@ Current defaults:
 - auditor new medium-or-higher issue cap after round 0: `1`
 - scope escapes require non-empty reasons
 
-The proposer and reviser now emit a bounded `review_surface` on each recommendation:
+## Shared payload family
+
+Do not split bounded and trust mode into separate JSON payload families.
+
+Use one additive recommendation payload shape:
 
 ```json
 {
-  "must_check_files": ["path/a.py"],
-  "optional_check_files": ["path/b.py"],
-  "scope_note": "Validate timeout handling only."
+  "classification": "confirmed_issue",
+  "priority": "high",
+  "title": "Tighten prompt-surface contract wording",
+  "rationale": "The prompts duplicate trust assumptions instead of deriving them from the contract.",
+  "evidence": [
+    "anvil/harness/prompts.py",
+    "anvil/harness/contracts.py"
+  ],
+  "verified_evidence_refs": [
+    "anvil/harness/prompts.py"
+  ],
+  "checked_files": [
+    "anvil/harness/prompts.py"
+  ],
+  "affected_files": [
+    "anvil/harness/prompts.py",
+    "anvil/harness/schemas.py"
+  ],
+  "grounding_mode": "direct",
+  "proposed_change": "Render trust behavior from the contract blocks instead of duplicating it in each role prompt.",
+  "confidence": 0.93,
+  "review_surface": {
+    "must_check_files": [
+      "anvil/harness/prompts.py"
+    ],
+    "optional_check_files": [
+      "anvil/harness/schemas.py"
+    ],
+    "scope_note": "Validate prompt/schema alignment only."
+  }
 }
 ```
 
-Critic and auditor payloads also carry explicit `scope_escapes` when they leave the bounded surface:
+Bounded mode and trust mode share that shape. The difference is policy:
+
+- bounded mode may omit the trust-oriented fields
+- trust mode should populate them deliberately and is expected to enforce stricter semantics downstream
+
+Critic and auditor issue payloads stay on the same shared family and add `blocking_class_override_reason` when they intentionally override the default blocking class implied by issue kind:
 
 ```json
 {
-  "scope_escapes": [
-    {
-      "path": "anvil/harness/state.py",
-      "reason": "Cited evidence was contradictory, so adjacent state logic had to be checked."
-    }
-  ]
+  "issue_id": "AR-003",
+  "severity": "medium",
+  "kind": "confidence_calibration",
+  "blocking_class": "actionability",
+  "blocking_class_override_reason": "The confidence overstatement changes whether the recommendation is safe to act on.",
+  "title": "Recommendation confidence overstates observed evidence",
+  "evidence": "The recommendation cites only one file but claims a repo-wide invariant.",
+  "repair_hint": "Downgrade confidence or narrow the claim."
 }
 ```
 
-## Semantic validation
+## Trust semantics
+
+Trust mode is stricter, but it is still the same harness path.
+
+What trust mode adds conceptually:
+
+- provenance-aware evidence accounting
+- explicit direct vs mixed vs inferred grounding via `grounding_mode`
+- clearer distinction between files checked and files claimed to be affected
+- justification when issue taxonomy is intentionally overridden
+- cleaner caveat semantics for accepted recommendations
+
+What trust mode does **not** add in this contract alone:
+
+- hard read sandboxing
+- a second subgraph
+- a second runner implementation
+
+## Semantic validation expectations
 
 JSON schema validation is necessary but not sufficient. The harness runs semantic validation after structured output is produced.
 
-Examples of semantic checks:
+Examples of the existing and intended v4 semantic checks:
 
 - proposer/reviser outputs must satisfy the task minimum recommendation count
 - recommendation evidence counts must stay within the bounded-review cap
@@ -75,6 +169,9 @@ Examples of semantic checks:
 - auditors must explicitly classify every prior open issue as resolved, carried forward, or waived
 - new medium-or-higher auditor issues after round 0 must include `why_not_raised_earlier`
 - every `scope_escapes[].reason` must be non-empty
+- in trust mode, `verified_evidence_refs` should stay a subset of `evidence`
+- in trust mode, non-inferred `affected_files` should be covered by evidence or checked files
+- in trust mode, `blocking_class_override_reason` should explain intentional taxonomy overrides
 
 Semantic validation failures are surfaced as stage errors and written to a per-stage `semantic_validation.json` artifact.
 
@@ -91,4 +188,4 @@ When changing the contract:
 5. update tests and prompt-consistency checks in the same PR
 6. update example strategies or docs when defaults or recommended settings change
 
-The contract is the source of truth. Prompts, runner logic, schema expectations, semantic validation, and reporting should derive from it instead of duplicating cap numbers.
+The contract is the source of truth. Prompts, runner logic, schema expectations, semantic validation, and reporting should derive from it instead of duplicating trust and bounded-review rules in parallel.
