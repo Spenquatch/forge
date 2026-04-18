@@ -31,7 +31,11 @@ from anvil.cli_utils import (
     provider_selection_status,
 )
 from anvil.config_validator import (
+    ConfigurationValidator,
     ValidationLevel,
+    ValidationReport,
+    ValidationResult,
+    ValidationType,
     get_config_validator,
     validate_config,
 )
@@ -58,6 +62,7 @@ from anvil.performance_monitor import MetricType, get_performance_monitor
 from anvil.persistence_manager import get_persistence_manager
 from anvil.providers import get_provider
 from anvil.usage import TokenUsage, estimate_cost_usd
+from anvil.harness.cli import _summary_exit_code
 from anvil.harness.executor import HarnessLangGraphExecutor
 from anvil.harness.runner import HarnessError, HarnessRunner
 
@@ -74,6 +79,40 @@ _STREAM_PROGRESS_NODES = {
     "reflect",
     "finalize",
 }
+
+
+def _validate_requested_provider_configurations(
+    validator: ConfigurationValidator,
+    providers_config: dict[str, Any],
+    requested_pipeline: dict[str, str],
+) -> ValidationReport:
+    selected = {
+        provider_name
+        for provider_name in requested_pipeline.values()
+        if isinstance(provider_name, str) and provider_name and provider_name != "auto"
+    }
+    if not selected:
+        return validate_config(providers_config)
+
+    report = ValidationReport()
+    for provider_name in sorted(selected):
+        config = providers_config.get(provider_name)
+        if config is None:
+            report.add_result(
+                ValidationResult(
+                    valid=False,
+                    level=ValidationLevel.CRITICAL,
+                    validation_type=ValidationType.SCHEMA,
+                    message="Provider is not configured",
+                    component=provider_name,
+                    suggestion="Choose a configured provider or add it to config/models.yaml",
+                )
+            )
+            continue
+        provider_report = validator.validate_provider_config(provider_name, config)
+        for result in provider_report.results:
+            report.add_result(result)
+    return report
 
 
 def _should_print_stream_event(event: dict[str, Any], *, verbose: bool) -> bool:
@@ -145,23 +184,10 @@ async def run_command(
     )
     print("=" * 60)
 
-    # Load and validate configuration
+    # Load configuration
     print("📋 Loading and validating configuration...")
     providers_config, _ = reload_config()
-    _ = get_config_validator()
-    validation_report = validate_config(providers_config)
-    if not validation_report.is_valid:
-        print("❌ Configuration validation failed!")
-        print(validation_report.format_report())
-        return
-    elif validation_report.has_warnings:
-        print("⚠️  Configuration has warnings:")
-        for warning in validation_report.get_results_by_level(ValidationLevel.WARNING):
-            print(f"  • {warning}")
-            if warning.suggestion:
-                print(f"    💡 {warning.suggestion}")
-    else:
-        print("✅ Configuration validation passed!")
+    validator = get_config_validator()
 
     # Initialize persistence/monitor/leadership
     get_persistence_manager()
@@ -196,6 +222,24 @@ async def run_command(
     # Create state with base provider + per-role overrides (if provided)
     requested_pipeline = normalize_requested_pipeline(provider, role_providers)
     print(f"Effective pipeline: {format_pipeline_map(requested_pipeline)}")
+
+    validation_report = _validate_requested_provider_configurations(
+        validator,
+        providers_config,
+        requested_pipeline,
+    )
+    if not validation_report.is_valid:
+        print("❌ Configuration validation failed!")
+        print(validation_report.format_report())
+        return
+    elif validation_report.has_warnings:
+        print("⚠️  Configuration has warnings:")
+        for warning in validation_report.get_results_by_level(ValidationLevel.WARNING):
+            print(f"  • {warning}")
+            if warning.suggestion:
+                print(f"    💡 {warning.suggestion}")
+    else:
+        print("✅ Configuration validation passed!")
 
     pipeline = build_state_pipeline(
         base_provider=provider, role_providers=role_providers
@@ -590,22 +634,10 @@ async def run_stream_command(
     )
     print("=" * 60)
 
-    # Load and validate configuration
+    # Load configuration
     print("📋 Loading and validating configuration...")
     providers_config, _ = reload_config()
-    validation_report = validate_config(providers_config)
-    if not validation_report.is_valid:
-        print("❌ Configuration validation failed!")
-        print(validation_report.format_report())
-        return
-    elif validation_report.has_warnings:
-        print("⚠️  Configuration has warnings:")
-        for warning in validation_report.get_results_by_level(ValidationLevel.WARNING):
-            print(f"  • {warning}")
-            if warning.suggestion:
-                print(f"    💡 {warning.suggestion}")
-    else:
-        print("✅ Configuration validation passed!")
+    validator = get_config_validator()
 
     # Initialize persistence/monitor/leadership so data is saved during exit.
     get_persistence_manager()
@@ -632,6 +664,24 @@ async def run_stream_command(
     # Build pipeline for streaming; if roles are set here, orchestrator node will not overwrite them.
     requested_pipeline = normalize_requested_pipeline(provider, role_providers)
     print(f"Effective pipeline: {format_pipeline_map(requested_pipeline)}")
+
+    validation_report = _validate_requested_provider_configurations(
+        validator,
+        providers_config,
+        requested_pipeline,
+    )
+    if not validation_report.is_valid:
+        print("❌ Configuration validation failed!")
+        print(validation_report.format_report())
+        return
+    elif validation_report.has_warnings:
+        print("⚠️  Configuration has warnings:")
+        for warning in validation_report.get_results_by_level(ValidationLevel.WARNING):
+            print(f"  • {warning}")
+            if warning.suggestion:
+                print(f"    💡 {warning.suggestion}")
+    else:
+        print("✅ Configuration validation passed!")
 
     pipeline = build_state_pipeline(
         base_provider=provider, role_providers=role_providers
@@ -988,7 +1038,7 @@ async def harness_run_command(
     thread_id: str | None = None,
     checkpoint: str = "memory",
     auto_fit_strategy: bool = True,
-) -> None:
+) -> int:
     try:
         if checkpoint == "memory":
             runner = HarnessRunner(
@@ -1029,11 +1079,11 @@ async def harness_run_command(
             }
     except (HarnessError, RuntimeError, ValueError, KeyError) as exc:
         print(f"❌ HARNESS RUN FAILED: {exc}")
-        return
+        return 2
 
     if json_output:
         print(json.dumps(summary, indent=2, sort_keys=False))
-        return
+        return _summary_exit_code(summary)
 
     verdicts = summary.get("verdicts") or {}
     artifacts = summary.get("artifacts") or {}
@@ -1054,9 +1104,10 @@ async def harness_run_command(
     partial_answer_md = artifacts.get('partial_answer_md')
     if partial_answer_md:
         print(f"partial_answer={partial_answer_md}")
+    return _summary_exit_code(summary)
 
 
-async def main_async(argv=None) -> None:
+async def main_async(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Anvil CLI (Enhanced)")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -1168,17 +1219,22 @@ async def main_async(argv=None) -> None:
             await run_command(
                 args.task, args.provider, not args.no_leadership, role_overrides
             )
+        return 0
     elif args.command == "perf-report":
         await performance_report()
+        return 0
     elif args.command == "leadership-report":
         await leadership_report()
+        return 0
     elif args.command == "hotswap-demo":
         await hot_swap_demo(args.task)
+        return 0
     elif args.command == "save":
         get_persistence_manager().save_all()
         print("✅ Manually saved all persistence data")
+        return 0
     elif args.command == "harness-run":
-        await harness_run_command(
+        return await harness_run_command(
             task_path=args.task,
             strategy_path=args.strategy,
             workspace=args.workspace,
@@ -1191,21 +1247,26 @@ async def main_async(argv=None) -> None:
         )
     elif args.command == "test":
         await test_provider(args.provider)
+        return 0
     elif args.command == "list":
         await list_providers()
+        return 0
     else:
         parser.print_help()
+        return 0
 
 
 def main(argv=None) -> None:
+    exit_code = 0
     try:
-        asyncio.run(main_async(argv))
+        exit_code = asyncio.run(main_async(argv))
     finally:
         try:
             get_persistence_manager().save_all()
             print("✅ Performance and leadership data saved successfully")
         except Exception as e:
             print(f"⚠️  Error saving persistence data: {e}")
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

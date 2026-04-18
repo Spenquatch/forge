@@ -504,13 +504,14 @@ class HarnessRunner:
             semantic_context={"contract": contract},
         )
         if not proposer_run.ok:
-            return {
-                "run_verdict": "harness_error",
-                "content_verdict": "harness_error",
-                "validator_verdict": self._classify_validator_verdict([]),
-                "final_summary": f"Proposer stage failed: {proposer_run.error or 'unknown error'}",
-                "failure_details": {"stage": "proposer", "error": proposer_run.error},
-            }
+            return self._analysis_stage_failure_outcome(
+                stage_label="proposer",
+                run=proposer_run,
+                validator_verdict=self._classify_validator_verdict([]),
+                review_loop_exercised=False,
+                final_analysis=None,
+                contract=contract,
+            )
 
         validation_runs = self._run_validator_round(round_index=0)
         critic_run = self._run_analysis_reviewer(
@@ -764,6 +765,12 @@ class HarnessRunner:
         semantic_warnings: list[str] = []
         semantic_validation_path: str | None = None
         schema_validation_errors = list(run.schema_validation_errors or [])
+        if schema_validation_errors and not run.failure_kind:
+            run = replace(
+                run,
+                failure_kind="schema_validation_error",
+                failure_summary="Schema validation failed.",
+            )
         context = dict(semantic_context or {})
         contract = context.pop("contract", None)
         normalized_payload: dict[str, Any] | None = None

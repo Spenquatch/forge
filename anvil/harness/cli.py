@@ -9,6 +9,12 @@ from typing import Any
 from .executor import HarnessLangGraphExecutor
 from .runner import HarnessError, HarnessRunner
 
+_SUCCESSFUL_RUN_VERDICTS = {
+    "accepted",
+    "accepted_with_warnings",
+    "accepted_partial",
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Forge Harness CLI")
@@ -103,6 +109,12 @@ async def _run_with_executor(args) -> dict[str, Any]:
     }
 
 
+def _summary_exit_code(summary: dict[str, Any]) -> int:
+    verdicts = summary.get("verdicts") or {}
+    run_verdict = str(verdicts.get("run_verdict", summary.get("verdict")) or "")
+    return 0 if run_verdict in _SUCCESSFUL_RUN_VERDICTS else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -129,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(summary, indent=2, sort_keys=False))
         else:
             _print_summary(summary)
-        return 0
+        return _summary_exit_code(summary)
 
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2

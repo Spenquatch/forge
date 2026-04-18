@@ -127,10 +127,18 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     contract = build_analysis_review_contract(task, strategy)
 
     proposer = build_analysis_proposer_prompt(task, strategy.prompt_preamble, _GIT_SNAPSHOT, contract)
+    prior_analysis = {
+        "status": "done",
+        "recommendations": [
+            {"title": "Add concurrency controls"},
+            {"title": "Align timeout handling"},
+            {"title": "Document operator rollback"},
+        ],
+    }
     critic = build_analysis_critic_prompt(
         task,
         strategy.prompt_preamble,
-        prior_output={"status": "done"},
+        prior_output=prior_analysis,
         validation_runs=[],
         git_snapshot=_GIT_SNAPSHOT,
         review_policy=strategy.review_loops,
@@ -139,7 +147,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     auditor = build_analysis_auditor_prompt(
         task,
         strategy.prompt_preamble,
-        prior_output={"status": "revised"},
+        prior_output=prior_analysis,
         reviser_output={"issue_resolution_map": []},
         validation_runs=[],
         git_snapshot=_GIT_SNAPSHOT,
@@ -191,9 +199,18 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "Create stable issue IDs such as AR-001" in critic
     assert "Validate each recommendation's cited evidence first" in critic
     assert "Record `scope_escapes` whenever you inspect files outside the declared review_surface" in critic
+    assert "Recommendation review coverage:" in critic
+    assert "The prior analysis contains 3 recommendation(s)." in critic
+    assert "Do not omit acceptable recommendations." in critic
+    assert "1. Add concurrency controls" in critic
+    assert "2. Align timeout handling" in critic
+    assert "3. Document operator rollback" in critic
     assert "You are not starting from scratch" in auditor
     assert "Open issue ledger entering this audit" in auditor
     assert "If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`." in auditor
+    assert "Recommendation review coverage:" in auditor
+    assert "The prior analysis contains 3 recommendation(s)." in auditor
+    assert "3. Document operator rollback" in auditor
     assert "close all open medium-or-higher blockers" in reviser
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
     assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer

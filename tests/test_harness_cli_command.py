@@ -103,3 +103,45 @@ def test_harness_run_cli_dispatch_partial_answer(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "verdict=accepted_partial" in captured.out
     assert "partial_answer=/tmp/run/PARTIAL_ANSWER.md" in captured.out
+
+
+class _HarnessErrorRunner:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def run(self):
+        return {
+            "verdict": "harness_error",
+            "verdicts": {
+                "run_verdict": "harness_error",
+                "content_verdict": "harness_error",
+                "validator_verdict": "not_configured",
+                "policy_verdict": "pass",
+                "config_verdict": "pass",
+            },
+            "artifacts": {
+                "run_dir": "/tmp/run",
+                "report_md": "/tmp/run/REPORT.md",
+                "summary_json": "/tmp/run/summary.json",
+            },
+        }
+
+
+def test_harness_run_cli_returns_nonzero_for_failed_run_verdict(monkeypatch):
+    monkeypatch.setattr(cli_module, "HarnessRunner", _HarnessErrorRunner)
+
+    exit_code = asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                "task.yaml",
+                "--strategy",
+                "strategy.yaml",
+                "--workspace",
+                "/tmp/workspace",
+            ]
+        )
+    )
+
+    assert exit_code == 1

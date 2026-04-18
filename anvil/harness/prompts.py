@@ -135,6 +135,35 @@ def _json_block(title: str, payload: dict | list | None) -> str:
     return f"{title}:\n{_clip(json.dumps(payload, indent=2, sort_keys=False))}"
 
 
+def _recommendation_review_coverage_block(prior_output: dict | None) -> str:
+    recommendations: list[dict[str, Any]] = []
+    if isinstance(prior_output, dict):
+        raw_recommendations = prior_output.get("recommendations")
+        if isinstance(raw_recommendations, list):
+            recommendations = [item for item in raw_recommendations if isinstance(item, dict)]
+    if not recommendations:
+        return (
+            "Recommendation review coverage:\n"
+            "- If the prior analysis includes recommendations, return exactly one "
+            "`recommendation_reviews` item per recommendation index."
+        )
+
+    lines = [
+        "Recommendation review coverage:",
+        (
+            "- The prior analysis contains "
+            f"{len(recommendations)} recommendation(s). Return exactly one "
+            "`recommendation_reviews` item for each recommendation index below."
+        ),
+        "- Do not omit acceptable recommendations. Use verdict=accept or accept_with_caveat when appropriate.",
+        "- Keep the indices aligned with this checklist:",
+    ]
+    for index, item in enumerate(recommendations, start=1):
+        title = str(item.get("title") or "").strip() or "(untitled recommendation)"
+        lines.append(f"{index}. {title}")
+    return "\n".join(lines)
+
+
 def _review_policy_block(review_policy: ReviewLoopPolicy) -> str:
     return "\n".join(
         [
@@ -531,6 +560,7 @@ Decision guidance:
 {_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
+{_recommendation_review_coverage_block(prior_output)}
 
 {_task_block(task, prompt_preamble)}
 
@@ -590,6 +620,7 @@ Audit round: {round_index}
 {_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
+{_recommendation_review_coverage_block(prior_output)}
 
 {_task_block(task, prompt_preamble)}
 

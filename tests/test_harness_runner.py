@@ -322,6 +322,62 @@ class _InvalidSemanticHarnessAdapter(_AcceptingHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _InvalidSemanticWithProviderNoiseHarnessAdapter(_AcceptingHarnessAdapter):
+    def run(self, request):
+        run = super().run(request)
+        if request.role_name != "proposer":
+            return run
+        payload = dict(run.structured_output or {})
+        payload["strengths"] = {"items": [], "none_reason": ""}
+        payload["files_reviewed"] = []
+        return ProviderRun(
+            role_name=run.role_name,
+            provider=run.provider,
+            model=run.model,
+            access=run.access,
+            ok=run.ok,
+            exit_code=run.exit_code,
+            duration_sec=run.duration_sec,
+            cwd=run.cwd,
+            command=run.command,
+            stdout_path=run.stdout_path,
+            stderr_path=run.stderr_path,
+            prompt_path=run.prompt_path,
+            schema_path=run.schema_path,
+            output_path=run.output_path,
+            structured_output=payload,
+            raw_meta=run.raw_meta,
+            error="WARN codex_core::plugins::manifest: noisy provider warning",
+        )
+
+
+class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
+    def run(self, request):
+        run = super().run(request)
+        if request.role_name != "proposer":
+            return run
+        return ProviderRun(
+            role_name=run.role_name,
+            provider=run.provider,
+            model=run.model,
+            access=run.access,
+            ok=False,
+            exit_code=run.exit_code,
+            duration_sec=run.duration_sec,
+            cwd=run.cwd,
+            command=run.command,
+            stdout_path=run.stdout_path,
+            stderr_path=run.stderr_path,
+            prompt_path=run.prompt_path,
+            schema_path=run.schema_path,
+            output_path=run.output_path,
+            structured_output=run.structured_output,
+            raw_meta=run.raw_meta,
+            error="WARN codex_core::plugins::manifest: noisy provider warning",
+            schema_validation_errors=["$.recommendations[0].affected_files: expected array"],
+        )
+
+
 class _ScopeEscapeHarnessAdapter(_AcceptingHarnessAdapter):
     def _payload_for_role(self, role_name: str):
         payload = super()._payload_for_role(role_name)
@@ -915,6 +971,57 @@ def test_analysis_review_runner_surfaces_semantic_validation_failures(
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert Path(proposer_stage["semantic_validation_path"]).exists()
+
+
+def test_analysis_review_runner_prefers_semantic_failure_summary_over_provider_noise(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _InvalidSemanticWithProviderNoiseHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert "Semantic validation failed" in summary["final_summary"]
+    assert "noisy provider warning" not in summary["final_summary"]
+
+
+def test_analysis_review_runner_reports_schema_validation_failures_cleanly(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _InvalidSchemaHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert "Schema validation failed" in summary["final_summary"]
 
 
 def test_analysis_review_runner_rejects_hallucinated_evidence_refs(

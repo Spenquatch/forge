@@ -496,12 +496,44 @@ def _provider_failure_message(
             value = payload.get(field_name)
             if isinstance(value, str) and value.strip():
                 candidate_bits.append(value.strip())
+    candidate_bits.extend(_extract_provider_event_messages(raw_text))
     if error_text and error_text.strip():
         candidate_bits.append(error_text.strip())
     cleaned_raw = raw_text.strip()
     if cleaned_raw and cleaned_raw not in candidate_bits and len(cleaned_raw) <= 400:
         candidate_bits.append(cleaned_raw)
     return next((item for item in candidate_bits if item), "")
+
+
+def _extract_provider_event_messages(raw_text: str) -> list[str]:
+    messages: list[str] = []
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        direct_message = payload.get("message")
+        if isinstance(direct_message, str) and direct_message.strip():
+            messages.append(direct_message.strip())
+
+        nested_error = payload.get("error")
+        if isinstance(nested_error, dict):
+            nested_message = nested_error.get("message")
+            if isinstance(nested_message, str) and nested_message.strip():
+                messages.append(nested_message.strip())
+
+        item = payload.get("item")
+        if isinstance(item, dict):
+            item_message = item.get("message")
+            if isinstance(item_message, str) and item_message.strip():
+                messages.append(item_message.strip())
+    return messages
 
 
 def _format_provider_failure_summary(kind: str, message: str) -> str:

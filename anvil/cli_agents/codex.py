@@ -71,7 +71,10 @@ class CodexCliAgent(BaseCliAgent):
         if output_schema is not None:
             schema_path = tmpdir / "schema.json"
             output_path = tmpdir / "structured_output.json"
-            schema_path.write_text(json.dumps(output_schema, indent=2), encoding="utf-8")
+            schema_path.write_text(
+                json.dumps(_codex_compatible_schema(output_schema), indent=2),
+                encoding="utf-8",
+            )
             cmd.extend(["--output-schema", str(schema_path), "-o", str(output_path)])
             safe_cmd.extend(["--output-schema", str(schema_path), "-o", str(output_path)])
 
@@ -178,3 +181,65 @@ class CodexCliAgent(BaseCliAgent):
             structured_output=structured_output,
             error=error,
         )
+
+
+def _codex_compatible_schema(schema: Any) -> Any:
+    if not isinstance(schema, dict):
+        return schema
+
+    if isinstance(schema.get("anyOf"), list):
+        normalized = dict(schema)
+        normalized["anyOf"] = [
+            _codex_compatible_schema(option) for option in schema["anyOf"]
+        ]
+        return normalized
+
+    schema_type = schema.get("type")
+    if schema_type == "array":
+        normalized = dict(schema)
+        normalized["items"] = _codex_compatible_schema(schema.get("items"))
+        return normalized
+
+    if schema_type != "object":
+        return dict(schema)
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return dict(schema)
+
+    required = schema.get("required")
+    required_list = list(required) if isinstance(required, list) else []
+    required_set = set(required_list)
+
+    normalized_props: dict[str, Any] = {}
+    for key, child_schema in properties.items():
+        normalized_child = _codex_compatible_schema(child_schema)
+        if key not in required_set:
+            normalized_child = _make_nullable_schema(normalized_child)
+            required_list.append(key)
+            required_set.add(key)
+        normalized_props[key] = normalized_child
+
+    normalized = dict(schema)
+    normalized["properties"] = normalized_props
+    normalized["required"] = required_list
+    return normalized
+
+
+def _make_nullable_schema(schema: Any) -> Any:
+    if not isinstance(schema, dict):
+        return {"anyOf": [schema, {"type": "null"}]}
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        if any(
+            isinstance(option, dict) and option.get("type") == "null"
+            for option in any_of
+        ):
+            return schema
+        return {"anyOf": [*any_of, {"type": "null"}]}
+
+    if schema.get("type") == "null":
+        return schema
+
+    return {"anyOf": [schema, {"type": "null"}]}
