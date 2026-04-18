@@ -36,4 +36,4 @@ files_hint:
 notes: |
   This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade
   any write-capable stage to effective read-only access and fail the run if repo files are changed.
-  The analysis_review_v1 strategy is the preferred fit for this task.
+  The analysis_review_bounded_v1 strategy is the preferred fit for this task.

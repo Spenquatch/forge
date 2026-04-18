@@ -39,7 +39,17 @@ from .schemas import (
     proposer_schema,
     single_pass_schema,
 )
-from .types import ProviderRun, RoleConfig, StageRequest, StrategyConfig, TaskSpec, ValidationRun
+from .types import (
+    ANALYSIS_REVIEW_BOUNDED_KIND,
+    ANALYSIS_REVIEW_LEGACY_KIND,
+    ProviderRun,
+    RoleConfig,
+    StageRequest,
+    StrategyConfig,
+    TaskSpec,
+    ValidationRun,
+    is_analysis_review_strategy_kind,
+)
 from .validation import preflight_validators, run_validators
 from anvil.orchestrator import reload_config
 
@@ -133,7 +143,7 @@ class HarnessRunner:
         try:
             self._emit_task_strategy_warnings()
             self._apply_strategy_autofit()
-            if self.strategy.kind == "analysis_review_v1":
+            if is_analysis_review_strategy_kind(self.strategy.kind):
                 self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
             write_json(self.run_dir / "task.effective.json", self.task.to_dict())
             write_json(self.run_dir / "strategy.effective.json", self.strategy.to_dict())
@@ -158,7 +168,7 @@ class HarnessRunner:
                     outcome = self._run_single_pass()
                 elif self.strategy.kind == "pfr_v1":
                     outcome = self._run_pfr_v1()
-                elif self.strategy.kind == "analysis_review_v1":
+                elif is_analysis_review_strategy_kind(self.strategy.kind):
                     outcome = self._run_analysis_review_v1()
                 else:
                     raise HarnessError(f"Unsupported strategy kind: {self.strategy.kind}")
@@ -1619,14 +1629,18 @@ class HarnessRunner:
         return replace(role_config, access=effective_access)
 
     def _emit_task_strategy_warnings(self) -> None:
+        if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
+            self.warnings.append(
+                "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
+            )
         if self.task.task_kind == "analysis_review" and self.strategy.kind in {"pfr_v1", "single_pass"}:
             self.warnings.append(
                 "This task looks like an analysis_review task, but the selected strategy is patch-oriented. "
-                "analysis_review_v1 will usually be a better fit."
+                "analysis_review_bounded_v1 or analysis_review_trust_v1 will usually be a better fit."
             )
-        if self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+        if self.task.task_kind == "patch" and is_analysis_review_strategy_kind(self.strategy.kind):
             self.warnings.append(
-                "This task requires a patch-oriented workflow, but the selected strategy is analysis_review_v1."
+                f"This task requires a patch-oriented workflow, but the selected strategy is {self.strategy.kind}."
             )
 
     def _copy_role_if_missing(self, missing_role: str, source_roles: list[str]) -> None:
@@ -1638,30 +1652,33 @@ class HarnessRunner:
                 return
 
     def _apply_strategy_autofit(self) -> None:
+        if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
+            self.strategy.kind = ANALYSIS_REVIEW_BOUNDED_KIND
         if self.task.task_kind == "analysis_review" and self.strategy.kind == "pfr_v1":
             if not self.auto_fit_strategy:
                 self.errors.append(
                     "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
                 )
                 return
-            self.strategy.kind = "analysis_review_v1"
+            self.strategy.kind = ANALYSIS_REVIEW_BOUNDED_KIND
             self._copy_role_if_missing("critic", ["falsifier"])
             self._copy_role_if_missing("reviser", ["patcher", "proposer"])
             self._copy_role_if_missing("auditor", ["critic", "falsifier"])
             self.warnings.append(
-                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_v1 for an analysis_review task."
+                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_bounded_v1 for an analysis_review task."
             )
-        elif self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+        elif self.task.task_kind == "patch" and is_analysis_review_strategy_kind(self.strategy.kind):
+            original_kind = self.strategy.kind
             if not self.auto_fit_strategy:
                 self.errors.append(
-                    "patch tasks are incompatible with analysis_review_v1 unless auto-fit is enabled."
+                    f"patch tasks are incompatible with {original_kind} unless auto-fit is enabled."
                 )
                 return
             self.strategy.kind = "pfr_v1"
             self._copy_role_if_missing("falsifier", ["critic", "auditor"])
             self._copy_role_if_missing("patcher", ["reviser", "proposer"])
             self.warnings.append(
-                "Auto-fit changed strategy kind from analysis_review_v1 to pfr_v1 for a patch task."
+                f"Auto-fit changed strategy kind from {original_kind} to pfr_v1 for a patch task."
             )
 
     def _validator_preflight_outcome(self) -> dict[str, Any] | None:

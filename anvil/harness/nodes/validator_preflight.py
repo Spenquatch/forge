@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from ..state import HarnessState
-from ..types import StrategyConfig, TaskSpec
+from ..types import (
+    ANALYSIS_REVIEW_BOUNDED_KIND,
+    ANALYSIS_REVIEW_LEGACY_KIND,
+    StrategyConfig,
+    TaskSpec,
+    is_analysis_review_strategy_kind,
+)
 from ..validation import preflight_validators
 
 
@@ -28,32 +34,40 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
     warnings = list(state.get("warnings") or [])
     errors = list(state.get("errors") or [])
 
+    if strategy_kind == ANALYSIS_REVIEW_LEGACY_KIND:
+        strategy_spec_dict["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
+        strategy_kind = ANALYSIS_REVIEW_BOUNDED_KIND
+        warnings.append(
+            "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
+        )
+
     if task_spec.task_kind == "analysis_review" and strategy_kind == "pfr_v1":
         if auto_fit:
-            strategy_spec_dict["kind"] = "analysis_review_v1"
+            strategy_spec_dict["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
             _copy_role_if_missing(strategy_spec_dict, "critic", ["falsifier"])
             _copy_role_if_missing(strategy_spec_dict, "reviser", ["patcher", "proposer"])
             _copy_role_if_missing(strategy_spec_dict, "auditor", ["critic", "falsifier"])
-            strategy_kind = "analysis_review_v1"
+            strategy_kind = ANALYSIS_REVIEW_BOUNDED_KIND
             warnings.append(
-                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_v1 for an analysis_review task."
+                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_bounded_v1 for an analysis_review task."
             )
         else:
             errors.append(
                 "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
             )
-    elif task_spec.task_kind == "patch" and strategy_kind == "analysis_review_v1":
+    elif task_spec.task_kind == "patch" and is_analysis_review_strategy_kind(strategy_kind):
         if auto_fit:
+            original_kind = strategy_kind
             strategy_spec_dict["kind"] = "pfr_v1"
             _copy_role_if_missing(strategy_spec_dict, "falsifier", ["critic", "auditor"])
             _copy_role_if_missing(strategy_spec_dict, "patcher", ["reviser", "proposer"])
             strategy_kind = "pfr_v1"
             warnings.append(
-                "Auto-fit changed strategy kind from analysis_review_v1 to pfr_v1 for a patch task."
+                f"Auto-fit changed strategy kind from {original_kind} to pfr_v1 for a patch task."
             )
         else:
             errors.append(
-                "patch tasks are incompatible with analysis_review_v1 unless auto-fit is enabled."
+                f"patch tasks are incompatible with {strategy_kind} unless auto-fit is enabled."
             )
 
     strategy_spec = StrategyConfig.from_dict(strategy_spec_dict)
