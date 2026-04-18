@@ -41,11 +41,11 @@ def _task(min_recommendations: int = 2) -> TaskSpec:
 
 
 
-def _strategy() -> StrategyConfig:
+def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
-            "kind": "analysis_review_v1",
+            "kind": kind,
             "roles": {
                 "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
                 "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
@@ -476,3 +476,134 @@ def test_review_semantic_validation_accepts_scope_escape_with_reason():
 
     assert result.ok is True
     assert result.errors == []
+
+
+def test_trust_analysis_output_semantic_validation_accepts_valid_trust_metadata():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["analysis_output_trust_surface_valid"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_trust_analysis_output_semantic_validation_rejects_verified_evidence_not_subset():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["analysis_output_verified_evidence_not_subset"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].verified_evidence_refs must be a subset of evidence: .github/workflows/release.yml"
+        in result.errors
+    )
+
+
+def test_trust_analysis_output_semantic_validation_rejects_uncovered_affected_files():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["analysis_output_uncovered_affected_files"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].affected_files must be covered by evidence or checked_files when grounding_mode is not inferred: .github/workflows/nightly.yml"
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_requires_blocking_class_override_reason():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["review_payload_override_reason_missing"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert (
+        "issues[1] overrides blocking_class for kind=missing_priority but is missing blocking_class_override_reason."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_accepts_override_reason_and_warns_on_late_auditor_overflow():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_override_reason_valid"])
+    payload["issues"].extend(
+        [
+            {
+                "issue_id": "AR-002",
+                "severity": "medium",
+                "kind": "missing_evidence",
+                "blocking_class": "correctness",
+                "recommendation_index": 2,
+                "title": "A first new issue arrived late.",
+                "evidence": "The revision introduced an unsupported claim.",
+                "repair_hint": "Restore direct evidence for recommendation 2.",
+                "blocking_class_override_reason": None,
+                "why_not_raised_earlier": "The first evidence gap was introduced by the revision.",
+            },
+            {
+                "issue_id": "AR-003",
+                "severity": "medium",
+                "kind": "missing_evidence",
+                "blocking_class": "correctness",
+                "recommendation_index": 2,
+                "title": "A second new issue arrived late.",
+                "evidence": "The revision introduced a second unsupported claim.",
+                "repair_hint": "Restore direct evidence for recommendation 2.",
+                "blocking_class_override_reason": None,
+                "why_not_raised_earlier": "The second evidence gap was introduced by the revision.",
+            },
+        ]
+    )
+    payload["carried_forward_issue_ids"] = ["AR-001"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=["AR-001"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+    assert result.warnings == [
+        "new medium-or-higher auditor issues exceed the bounded-review cap of 1 after round 0."
+    ]
