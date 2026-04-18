@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .contracts import AnalysisReviewContract, confidence_rubric_lines
+from .contracts import (
+    GROUNDING_MODE_VALUES,
+    ISSUE_KIND_DEFAULT_BLOCKING_CLASS,
+    AnalysisReviewContract,
+    confidence_rubric_lines,
+)
 from .git_utils import render_git_snapshot
 from .types import ReviewLoopPolicy, TaskSpec, ValidationRun, WorkspaceWritePolicy
-
 
 MAX_BLOCK_CHARS = 5000
 
@@ -161,6 +165,8 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
     return "\n".join(
         [
             f"Analysis-review contract: {contract.contract_version}",
+            f"- Effective strategy kind: {contract.strategy_kind}",
+            f"- Mode: {contract.mode}",
             f"- Reviser goal: {contract.reviser_goal}",
             f"- Require issue ledger: {contract.require_issue_ledger}",
             f"- Require recommendation reviews: {contract.require_recommendation_reviews}",
@@ -173,6 +179,37 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
             f"- Empty section rationale allowed: {required_sections.none_reason_allowed}",
             f"- Minimum items when a section is populated: {required_sections.min_items_when_populated}",
             f"- Minimum files_reviewed entries: {required_sections.minimum_files_reviewed}",
+        ]
+    )
+
+
+def _trust_review_policy_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    return "\n".join(
+        [
+            "Trust review policy:",
+            f"- Taxonomy override reason required: {trust.require_taxonomy_override_reason}",
+            (
+                "- verified_evidence_refs must be a subset of evidence refs: "
+                f"{trust.require_verified_evidence_refs_subset}"
+            ),
+            (
+                "- Non-inferred affected_files require evidence or checked-file coverage: "
+                f"{trust.require_affected_file_coverage}"
+            ),
+            f"- Payload provenance mode: {trust.payload_provenance_mode}",
+            (
+                "- Downgrade clean acceptance when semantic warnings remain: "
+                f"{trust.downgrade_on_semantic_warnings}"
+            ),
+            (
+                "- Downgrade inference-backed acceptance to caveated acceptance: "
+                f"{trust.downgrade_on_inferred_acceptance}"
+            ),
+            (
+                "- Late auditor medium-or-higher issue policy: "
+                f"{trust.late_auditor_medium_or_higher_policy}"
+            ),
         ]
     )
 
@@ -207,6 +244,79 @@ def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
             ),
         ]
     )
+
+
+def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
+    grounding_modes = ", ".join(GROUNDING_MODE_VALUES)
+    trust = contract.trust_review
+    lines = [
+        "Recommendation payload fields:",
+        "- Every recommendation uses the same payload family in both modes.",
+        "- Always populate classification, priority, rationale, evidence, proposed_change, confidence, and review_surface.",
+        f"- grounding_mode, when present, must be one of: {grounding_modes}.",
+        "- checked_files should list the concrete files you personally inspected to verify the recommendation.",
+        "- affected_files should name the concrete files the recommendation says are affected.",
+    ]
+    if trust.require_verified_evidence_refs_subset:
+        lines.append(
+            "- In this mode, populate verified_evidence_refs with the evidence refs you directly re-checked; keep it a subset of evidence."
+        )
+    else:
+        lines.append(
+            "- verified_evidence_refs is optional advisory metadata in this mode; keep it a subset of evidence when you provide it."
+        )
+    if trust.require_affected_file_coverage:
+        lines.append(
+            "- In this mode, non-inferred affected_files should be backed by evidence refs or checked_files."
+        )
+    else:
+        lines.append(
+            "- In this mode, affected_files and checked_files are optional scoping metadata rather than strict trust requirements."
+        )
+    return "\n".join(lines)
+
+
+def _issue_taxonomy_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    defaults = ", ".join(
+        f"{kind}={blocking_class}"
+        for kind, blocking_class in ISSUE_KIND_DEFAULT_BLOCKING_CLASS.items()
+    )
+    lines = [
+        "Issue taxonomy guidance:",
+        f"- Default blocking_class by issue kind: {defaults}.",
+    ]
+    if trust.require_taxonomy_override_reason:
+        lines.append(
+            "- If you intentionally override the default blocking_class for a kind, include blocking_class_override_reason with concrete justification."
+        )
+    else:
+        lines.append(
+            "- blocking_class_override_reason is optional context when you intentionally override the default blocking_class."
+        )
+    return "\n".join(lines)
+
+
+def _mode_acceptance_guidance_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    lines = ["Mode-specific acceptance guidance:"]
+    if trust.downgrade_on_inferred_acceptance:
+        lines.append(
+            "- In this mode, inference-heavy recommendations should usually receive accept_with_caveat instead of clean accept."
+        )
+    else:
+        lines.append(
+            "- In this mode, clean accept is allowed without the extra trust downgrade rules."
+        )
+    if trust.downgrade_on_semantic_warnings:
+        lines.append(
+            "- In this mode, unresolved semantic warnings are treated as caveats, not clean acceptance."
+        )
+    else:
+        lines.append(
+            "- In this mode, semantic warning handling follows the standard bounded-review flow."
+        )
+    return "\n".join(lines)
 
 
 def build_single_pass_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
@@ -365,10 +475,13 @@ Your job:
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
 9. Every evidence ref must be a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
 10. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note.
-11. Use workspace_write_intent=`none` unless you truly changed the repo.
+11. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
+12. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_trust_review_policy_block(contract)}
+{_recommendation_payload_block(contract)}
 {_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
@@ -399,7 +512,7 @@ Critical rules:
 Your job:
 1. Audit the prior analysis for factual grounding, overclaims, omissions, actionability, and scope discipline.
 2. Validate each recommendation's cited evidence first, then stay inside its review_surface unless you must leave it.
-3. For every issue you raise, classify both `kind` and `blocking_class`.
+3. For every issue you raise, classify both `kind` and `blocking_class`, and follow the contract rule for blocking_class_override_reason when you override the default taxonomy mapping.
 4. Review every recommendation individually and return recommendation-level verdicts.
 5. Use `missing_topics` only for genuinely new bounded-review topics, not for open-ended repo exploration.
 6. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
@@ -413,6 +526,9 @@ Decision guidance:
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_trust_review_policy_block(contract)}
+{_issue_taxonomy_block(contract)}
+{_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
 
@@ -457,7 +573,8 @@ Your job:
 4. Review every recommendation individually and return recommendation-level verdicts.
 5. Stay inside each recommendation's bounded review_surface unless you must leave it.
 6. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
-7. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+7. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
+8. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
 
 Decision guidance:
 - Return verdict=accept when the entire draft is acceptable.
@@ -468,6 +585,9 @@ Decision guidance:
 Audit round: {round_index}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_trust_review_policy_block(contract)}
+{_issue_taxonomy_block(contract)}
+{_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
 
@@ -513,14 +633,17 @@ Your job:
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
 4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
 5. Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them.
-6. Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
-7. Use the shared confidence rubric below when revising confidence values.
-8. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-9. Use workspace_write_intent=`none` unless you truly changed the repo.
+6. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
+7. Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+8. Use the shared confidence rubric below when revising confidence values.
+9. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+10. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_trust_review_policy_block(contract)}
+{_recommendation_payload_block(contract)}
 {_review_policy_block(contract.stop_policy)}
 {_confidence_rubric_block(contract)}
 

@@ -27,7 +27,9 @@ Harness task/strategy examples:
 ```bash
 poetry run python -m anvil.cli harness-run \
   --task examples/harness/tasks/recommend_automation_improvements.yaml \
-  --strategy examples/harness/strategies/analysis_review_codex_claude.yaml \
+  --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml \
   --workspace /path/to/repo \
   --out-root .forge-harness-runs
 ```
+
+Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude.yaml`.

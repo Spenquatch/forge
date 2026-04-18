@@ -202,8 +202,10 @@ Use it when you want explicit task specs, strategy specs, workspace write-policy
 Example:
 
 ```bash
-poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recommend_automation_improvements.yaml   --strategy examples/harness/strategies/analysis_review_codex_claude.yaml   --workspace /path/to/repo   --out-root .forge-harness-runs
+poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recommend_automation_improvements.yaml   --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml   --workspace /path/to/repo   --out-root .forge-harness-runs
 ```
+
+For the alternate trust-oriented mode, swap in `examples/harness/strategies/analysis_review_trust_codex_claude.yaml`.
 
 The harness writes a run directory containing:
 - `summary.json`

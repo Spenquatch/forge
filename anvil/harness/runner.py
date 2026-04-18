@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import posixpath
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from anvil.orchestrator import reload_config
+
+from .contracts import (
+    AnalysisReviewContract,
+    build_analysis_review_contract,
+    default_blocking_class_for_kind,
+)
 from .files import load_structured_file, slugify, write_json, write_text
 from .git_utils import (
     capture_git_snapshot,
@@ -16,7 +25,6 @@ from .git_utils import (
     evaluate_workspace_write_policy,
     git_snapshot_is_dirty,
 )
-from .contracts import AnalysisReviewContract, build_analysis_review_contract, default_blocking_class_for_kind
 from .prompts import (
     build_analysis_auditor_prompt,
     build_analysis_critic_prompt,
@@ -29,8 +37,6 @@ from .prompts import (
 )
 from .providers import get_provider
 from .reporting import apply_final_artifacts
-from .selection import extract_drafts_from_summary, select_best_draft
-from .semantic_validation import validate_stage_output
 from .schemas import (
     analysis_output_schema,
     analysis_review_schema,
@@ -39,9 +45,20 @@ from .schemas import (
     proposer_schema,
     single_pass_schema,
 )
-from .types import ProviderRun, RoleConfig, StageRequest, StrategyConfig, TaskSpec, ValidationRun
+from .selection import extract_drafts_from_summary, select_best_draft
+from .semantic_validation import validate_stage_output
+from .types import (
+    ANALYSIS_REVIEW_BOUNDED_KIND,
+    ANALYSIS_REVIEW_LEGACY_KIND,
+    ProviderRun,
+    RoleConfig,
+    StageRequest,
+    StrategyConfig,
+    TaskSpec,
+    ValidationRun,
+    is_analysis_review_strategy_kind,
+)
 from .validation import preflight_validators, run_validators
-from anvil.orchestrator import reload_config
 
 
 class HarnessError(RuntimeError):
@@ -133,7 +150,7 @@ class HarnessRunner:
         try:
             self._emit_task_strategy_warnings()
             self._apply_strategy_autofit()
-            if self.strategy.kind == "analysis_review_v1":
+            if is_analysis_review_strategy_kind(self.strategy.kind):
                 self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
             write_json(self.run_dir / "task.effective.json", self.task.to_dict())
             write_json(self.run_dir / "strategy.effective.json", self.strategy.to_dict())
@@ -158,7 +175,7 @@ class HarnessRunner:
                     outcome = self._run_single_pass()
                 elif self.strategy.kind == "pfr_v1":
                     outcome = self._run_pfr_v1()
-                elif self.strategy.kind == "analysis_review_v1":
+                elif is_analysis_review_strategy_kind(self.strategy.kind):
                     outcome = self._run_analysis_review_v1()
                 else:
                     raise HarnessError(f"Unsupported strategy kind: {self.strategy.kind}")
@@ -215,6 +232,9 @@ class HarnessRunner:
         bounded_review_summary = self._build_bounded_review_summary(run_details)
         if bounded_review_summary is not None:
             run_details["bounded_review_summary"] = bounded_review_summary
+        analysis_review_status = run_details.get("analysis_review_status")
+        if isinstance(analysis_review_status, dict) and analysis_review_status:
+            run_details["analysis_review_status"] = analysis_review_status
 
         final_answer_payload = self._derive_final_answer_payload(run_details)
         recommendation_reviews = list(run_details.get("recommendation_reviews") or [])
@@ -258,6 +278,7 @@ class HarnessRunner:
             "final_git_snapshot": final_git_snapshot,
             "changed_files": final_changed_files,
             "analysis_review_contract": analysis_review_contract,
+            "analysis_review_status": analysis_review_status,
             "analysis_review_coverage": analysis_review_coverage,
             "issue_ledger": issue_ledger,
             "recommendation_reviews": recommendation_reviews,
@@ -596,12 +617,20 @@ class HarnessRunner:
         validator_verdict = self._classify_validator_verdict(validation_runs)
         content_verdict = self._analysis_content_verdict(
             final_review_payload,
+            final_analysis_payload=final_analysis_payload,
             revisions_completed=revisions_completed,
             max_loops=max_loops,
+        )
+        analysis_review_status = self._build_analysis_review_status(
+            final_analysis_payload=final_analysis_payload,
+            final_review_payload=final_review_payload,
+            content_verdict=content_verdict,
         )
 
         final_summary = self._analysis_final_summary(
             final_review_payload,
+            final_analysis_payload=final_analysis_payload,
+            content_verdict=content_verdict,
             revisions_completed=revisions_completed,
             max_loops=max_loops,
             validator_verdict=validator_verdict,
@@ -622,6 +651,7 @@ class HarnessRunner:
                 "issue_ledger": self._serialized_issue_ledger(),
                 "recommendation_reviews": self._recommendation_reviews(final_review_payload),
                 "accepted_recommendation_count": accepted_recommendation_count,
+                "analysis_review_status": analysis_review_status,
                 "review_loop_exercised": True,
             },
         }
@@ -736,7 +766,21 @@ class HarnessRunner:
         schema_validation_errors = list(run.schema_validation_errors or [])
         context = dict(semantic_context or {})
         contract = context.pop("contract", None)
+        normalized_payload: dict[str, Any] | None = None
+        payload_provenance: dict[str, Any] | None = None
         if isinstance(contract, AnalysisReviewContract):
+            if isinstance(run.structured_output, dict):
+                normalized_payload, payload_provenance = self._normalize_analysis_review_payload(
+                    run.structured_output,
+                    payload_provenance_mode=contract.trust_review.payload_provenance_mode,
+                )
+                raw_meta = dict(run.raw_meta or {})
+                raw_meta["payload_provenance"] = payload_provenance
+                run = replace(
+                    run,
+                    structured_output=normalized_payload,
+                    raw_meta=raw_meta,
+                )
             context.setdefault(
                 "workspace_paths",
                 capture_workspace_file_inventory(
@@ -752,6 +796,7 @@ class HarnessRunner:
                     "skipped_reason": f"provider_failure:{run.failure_kind}",
                     "errors": [],
                     "warnings": [],
+                    "payload_provenance": payload_provenance,
                 }
             elif schema_validation_errors:
                 semantic_payload = {
@@ -760,11 +805,12 @@ class HarnessRunner:
                     "skipped_reason": "schema_validation_failed",
                     "errors": list(schema_validation_errors),
                     "warnings": [],
+                    "payload_provenance": payload_provenance,
                 }
-            elif isinstance(run.structured_output, dict):
+            elif isinstance(normalized_payload, dict):
                 semantic_result = validate_stage_output(
                     role_name=role_name,
-                    payload=run.structured_output,
+                    payload=normalized_payload,
                     task=self.task,
                     contract=contract,
                     **context,
@@ -776,6 +822,7 @@ class HarnessRunner:
                     "skipped": False,
                     "errors": semantic_errors,
                     "warnings": semantic_warnings,
+                    "payload_provenance": payload_provenance,
                 }
             else:
                 semantic_payload = {
@@ -784,6 +831,7 @@ class HarnessRunner:
                     "skipped_reason": "structured_output_missing",
                     "errors": [],
                     "warnings": [],
+                    "payload_provenance": payload_provenance,
                 }
 
             write_json(semantic_validation_path, semantic_payload)
@@ -827,6 +875,8 @@ class HarnessRunner:
             stage_record["semantic_validation_warnings"] = semantic_warnings
         if semantic_validation_path:
             stage_record["semantic_validation_path"] = semantic_validation_path
+        if payload_provenance:
+            stage_record["semantic_validation_payload_provenance"] = payload_provenance
         if role_config.access != effective_role_config.access:
             stage_record[
                 "access_override_reason"
@@ -912,12 +962,15 @@ class HarnessRunner:
         self,
         review_payload: dict[str, Any],
         *,
+        final_analysis_payload: dict[str, Any] | None,
         revisions_completed: int,
         max_loops: int,
     ) -> str:
         if self._analysis_can_fully_accept(review_payload):
-            low_count = self._count_review_issues(review_payload, {"low"})
-            if low_count or review_payload.get("missing_topics") or self._has_recommendation_caveats(review_payload):
+            if self._analysis_warning_causes(
+                review_payload,
+                final_analysis_payload=final_analysis_payload,
+            ):
                 return "accepted_with_warnings"
             return "accepted"
         if self._analysis_can_partially_accept(review_payload):
@@ -932,15 +985,13 @@ class HarnessRunner:
         self,
         review_payload: dict[str, Any],
         *,
+        final_analysis_payload: dict[str, Any] | None,
+        content_verdict: str,
         revisions_completed: int,
         max_loops: int,
         validator_verdict: str,
     ) -> str:
-        verdict = self._analysis_content_verdict(
-            review_payload,
-            revisions_completed=revisions_completed,
-            max_loops=max_loops,
-        )
+        verdict = content_verdict
         parts = [
             f"Analysis-review loop completed after {revisions_completed} revision round(s).",
             f"Final reviewer verdict: {review_payload.get('verdict', 'unknown')}.",
@@ -963,7 +1014,14 @@ class HarnessRunner:
                 "Required validators were not applicable to this workspace. Check validator configuration."
             )
         if verdict == "accepted_with_warnings":
-            parts.append("The content is usable, but the auditor still left low-severity warnings.")
+            downgrade_causes = self._analysis_warning_causes(
+                review_payload,
+                final_analysis_payload=final_analysis_payload,
+            )
+            if downgrade_causes:
+                parts.append("Downgrade causes: " + "; ".join(downgrade_causes) + ".")
+            else:
+                parts.append("The content is usable, but the auditor still left low-severity warnings.")
         elif verdict == "accepted_partial":
             parts.append(
                 "The run reached a partial acceptance outcome. Only the accepted recommendation subset is included in the final deliverable."
@@ -1272,6 +1330,48 @@ class HarnessRunner:
             if str(issue.get("severity", "")).lower() in severities
         )
 
+    def _analysis_warning_causes(
+        self,
+        review_payload: dict[str, Any],
+        *,
+        final_analysis_payload: dict[str, Any] | None,
+    ) -> list[str]:
+        causes: list[str] = []
+        if self._count_review_issues(review_payload, {"low"}):
+            causes.append("low-severity reviewer issues remain open")
+        if review_payload.get("missing_topics"):
+            causes.append("reviewer missing_topics remain open")
+        accepted_caveat_indices = self._accepted_caveat_recommendation_indices(review_payload)
+        if accepted_caveat_indices:
+            causes.append(
+                "accepted recommendation reviews include accept_with_caveat: "
+                + ", ".join(str(item) for item in accepted_caveat_indices)
+            )
+        contract = self._analysis_contract()
+        if contract.mode == "trust":
+            semantic_warning_records = self._final_semantic_warning_records()
+            if contract.trust_review.downgrade_on_semantic_warnings and semantic_warning_records:
+                causes.append(
+                    "semantic validation warnings remain: "
+                    + "; ".join(record["warning"] for record in semantic_warning_records)
+                )
+            inferred_indices = self._accepted_inferred_recommendation_indices(
+                final_analysis_payload,
+                review_payload,
+            )
+            if contract.trust_review.downgrade_on_inferred_acceptance and inferred_indices:
+                causes.append(
+                    "accepted recommendations rely on inference-only grounding: "
+                    + ", ".join(str(item) for item in inferred_indices)
+                )
+            provenance_status = self._final_payload_provenance_status()
+            if (
+                contract.trust_review.payload_provenance_mode == "payload_hash_and_refs"
+                and provenance_status != "bound"
+            ):
+                causes.append("final payload provenance is not fully bound")
+        return causes
+
     def _analysis_contract(self) -> AnalysisReviewContract:
         if self.analysis_review_contract is None:
             self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
@@ -1388,7 +1488,6 @@ class HarnessRunner:
         resolved_ids = {str(item) for item in review_payload.get("resolved_issue_ids", []) if str(item).strip()}
         carried_ids = {str(item) for item in review_payload.get("carried_forward_issue_ids", []) if str(item).strip()}
         waived_ids = {str(item) for item in review_payload.get("waived_issue_ids", []) if str(item).strip()}
-        normalized_by_id = {str(item.get("issue_id")): item for item in normalized_issues}
 
         for issue_id in prior_open_ids:
             record = self._issue_ledger_by_id.get(issue_id)
@@ -1473,6 +1572,154 @@ class HarnessRunner:
             str(item.get("verdict") or "").strip().lower() == "accept_with_caveat"
             for item in self._recommendation_reviews(review_payload)
         )
+
+    def _accepted_caveat_recommendation_indices(self, review_payload: dict[str, Any]) -> list[int]:
+        indices: list[int] = []
+        for item in self._recommendation_reviews(review_payload):
+            if str(item.get("verdict") or "").strip().lower() != "accept_with_caveat":
+                continue
+            try:
+                indices.append(int(item.get("recommendation_index")))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(indices))
+
+    def _accepted_inferred_recommendation_indices(
+        self,
+        final_analysis_payload: dict[str, Any] | None,
+        review_payload: dict[str, Any],
+    ) -> list[int]:
+        if not isinstance(final_analysis_payload, dict):
+            return []
+        recommendations = final_analysis_payload.get("recommendations")
+        if not isinstance(recommendations, list):
+            return []
+        accepted_indices: set[int] = set()
+        for item in self._accepted_recommendation_reviews(review_payload):
+            raw_index = item.get("recommendation_index")
+            if raw_index in (None, ""):
+                continue
+            try:
+                accepted_indices.add(int(raw_index))
+            except (TypeError, ValueError):
+                continue
+        inferred_indices: list[int] = []
+        for index, item in enumerate(recommendations, start=1):
+            if index not in accepted_indices or not isinstance(item, dict):
+                continue
+            if str(item.get("grounding_mode") or "").strip().lower() == "inferred":
+                inferred_indices.append(index)
+        return inferred_indices
+
+    def _latest_successful_stage(self, *, role_names: set[str] | None = None) -> dict[str, Any] | None:
+        for stage in reversed(self.agent_stages):
+            if not isinstance(stage, dict) or not stage.get("ok"):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if role_names is not None and role_name not in role_names:
+                continue
+            payload = stage.get("structured_output")
+            if isinstance(payload, dict) and payload:
+                return stage
+        return None
+
+    def _final_semantic_warning_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        final_stages = [
+            self._resolve_bounded_review_analysis_stage(),
+            self._latest_successful_stage(role_names={"critic", "auditor"}),
+        ]
+        seen_keys: set[tuple[Any, Any, Any]] = set()
+        for stage in final_stages:
+            if not isinstance(stage, dict):
+                continue
+            for warning in stage.get("semantic_validation_warnings") or []:
+                key = (stage.get("stage_index"), stage.get("role_name"), warning)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                records.append(
+                    {
+                        "stage_index": stage.get("stage_index"),
+                        "role_name": stage.get("role_name"),
+                        "warning": warning,
+                    }
+                )
+        return records
+
+    def _final_payload_provenance_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        stage_specs = (
+            ("analysis", self._resolve_bounded_review_analysis_stage()),
+            ("review", self._latest_successful_stage(role_names={"critic", "auditor"})),
+        )
+        for surface, stage in stage_specs:
+            if not isinstance(stage, dict):
+                continue
+            provenance = stage.get("semantic_validation_payload_provenance")
+            if not isinstance(provenance, dict):
+                provenance = {"status": "missing"}
+            record = {
+                "surface": surface,
+                "stage_index": stage.get("stage_index"),
+                "role_name": stage.get("role_name"),
+                "status": provenance.get("status") or "missing",
+                "policy_mode": provenance.get("policy_mode") or "none",
+                "payload_sha256": provenance.get("payload_sha256"),
+                "normalized_ref_field_count": provenance.get("normalized_ref_field_count", 0),
+                "normalized_ref_count": provenance.get("normalized_ref_count", 0),
+            }
+            records.append(record)
+        return records
+
+    def _final_payload_provenance_status(self) -> str:
+        records = self._final_payload_provenance_records()
+        if not records:
+            return "missing"
+        statuses = {str(item.get("status") or "missing") for item in records}
+        if statuses == {"bound"}:
+            return "bound"
+        if "bound" in statuses:
+            return "partial"
+        return "missing"
+
+    def _build_analysis_review_status(
+        self,
+        *,
+        final_analysis_payload: dict[str, Any],
+        final_review_payload: dict[str, Any],
+        content_verdict: str,
+    ) -> dict[str, Any]:
+        contract = self._analysis_contract()
+        semantic_warning_records = self._final_semantic_warning_records()
+        provenance_records = self._final_payload_provenance_records()
+        accepted_caveat_indices = self._accepted_caveat_recommendation_indices(final_review_payload)
+        inferred_indices = self._accepted_inferred_recommendation_indices(
+            final_analysis_payload,
+            final_review_payload,
+        )
+        downgrade_causes = self._analysis_warning_causes(
+            final_review_payload,
+            final_analysis_payload=final_analysis_payload,
+        )
+        provenance_status = self._final_payload_provenance_status()
+        if contract.trust_review.payload_provenance_mode == "none" and provenance_status == "missing":
+            provenance_status = "not_required"
+        return {
+            "mode": contract.mode,
+            "content_verdict": content_verdict,
+            "semantic_warning_count": len(semantic_warning_records),
+            "semantic_warnings": semantic_warning_records,
+            "provenance": {
+                "status": provenance_status,
+                "policy_mode": contract.trust_review.payload_provenance_mode,
+                "required": contract.trust_review.payload_provenance_mode == "payload_hash_and_refs",
+                "stages": provenance_records,
+            },
+            "accepted_recommendations_with_caveats": accepted_caveat_indices,
+            "accepted_recommendations_with_inferred_grounding": inferred_indices,
+            "downgrade_causes": downgrade_causes,
+        }
 
     def _blocking_issues(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:
         blocking: list[dict[str, Any]] = []
@@ -1609,6 +1856,132 @@ class HarnessRunner:
         rel_str = rel.as_posix().strip("/")
         return [rel_str] if rel_str else []
 
+    def _normalize_workspace_ref(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if "://" in text:
+            return text
+        normalized = text.replace("\\", "/")
+        candidate = Path(normalized)
+        if candidate.is_absolute():
+            try:
+                normalized = candidate.resolve(strict=False).relative_to(self.workspace).as_posix()
+            except ValueError:
+                return candidate.as_posix()
+        else:
+            normalized = posixpath.normpath(normalized)
+            if normalized == ".":
+                return ""
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized
+
+    def _normalize_workspace_ref_list(self, values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        normalized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            value = self._normalize_workspace_ref(item)
+            if value:
+                normalized.append(value)
+        return normalized
+
+    def _bind_normalized_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        payload_provenance_mode: str,
+        normalized_refs: dict[str, Any],
+    ) -> dict[str, Any]:
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        normalized_ref_count = 0
+        for value in normalized_refs.values():
+            if isinstance(value, list):
+                normalized_ref_count += len(value)
+            elif value:
+                normalized_ref_count += 1
+        return {
+            "status": "bound",
+            "binding_method": "payload_hash_and_refs",
+            "policy_mode": payload_provenance_mode,
+            "payload_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+            "normalized_ref_field_count": len(normalized_refs),
+            "normalized_ref_count": normalized_ref_count,
+            "normalized_refs": normalized_refs,
+        }
+
+    def _normalize_analysis_review_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        payload_provenance_mode: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        normalized = json.loads(json.dumps(payload))
+        normalized_refs: dict[str, Any] = {}
+
+        files_reviewed = self._normalize_workspace_ref_list(normalized.get("files_reviewed"))
+        if files_reviewed:
+            normalized["files_reviewed"] = files_reviewed
+            normalized_refs["files_reviewed"] = files_reviewed
+
+        recommendations = normalized.get("recommendations")
+        if isinstance(recommendations, list):
+            for index, item in enumerate(recommendations, start=1):
+                if not isinstance(item, dict):
+                    continue
+                for field_name in (
+                    "evidence",
+                    "verified_evidence_refs",
+                    "checked_files",
+                    "affected_files",
+                ):
+                    values = self._normalize_workspace_ref_list(item.get(field_name))
+                    if values:
+                        item[field_name] = values
+                        normalized_refs[f"recommendations[{index}].{field_name}"] = values
+                review_surface = item.get("review_surface")
+                if isinstance(review_surface, dict):
+                    for field_name in ("must_check_files", "optional_check_files"):
+                        values = self._normalize_workspace_ref_list(review_surface.get(field_name))
+                        if values:
+                            review_surface[field_name] = values
+                            normalized_refs[
+                                f"recommendations[{index}].review_surface.{field_name}"
+                            ] = values
+
+        scope_escapes = normalized.get("scope_escapes")
+        if isinstance(scope_escapes, list):
+            for index, item in enumerate(scope_escapes, start=1):
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "").strip()
+                if not path:
+                    continue
+                normalized_path = self._normalize_workspace_ref(path)
+                item["path"] = normalized_path or path
+                normalized_refs[f"scope_escapes[{index}].path"] = item["path"]
+
+        return normalized, self._bind_normalized_payload(
+            normalized,
+            payload_provenance_mode=payload_provenance_mode,
+            normalized_refs=normalized_refs,
+        )
+
+    def _resolve_bounded_review_analysis_stage(self) -> dict[str, Any] | None:
+        reviser_role_names = {
+            str(stage.get("role_name") or "")
+            for stage in self.agent_stages
+            if str(stage.get("role_name") or "").startswith("reviser_round_")
+        }
+        if reviser_role_names:
+            stage = self._latest_successful_stage(role_names=reviser_role_names)
+            if stage is not None:
+                return stage
+        return self._latest_successful_stage(role_names={"proposer"})
+
     def _effective_role_config(self, role_name: str, role_config: RoleConfig) -> RoleConfig:
         effective_access = role_config.access
         forced_read_roles = {"falsifier", "critic", "auditor"}
@@ -1619,14 +1992,18 @@ class HarnessRunner:
         return replace(role_config, access=effective_access)
 
     def _emit_task_strategy_warnings(self) -> None:
+        if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
+            self.warnings.append(
+                "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
+            )
         if self.task.task_kind == "analysis_review" and self.strategy.kind in {"pfr_v1", "single_pass"}:
             self.warnings.append(
                 "This task looks like an analysis_review task, but the selected strategy is patch-oriented. "
-                "analysis_review_v1 will usually be a better fit."
+                "analysis_review_bounded_v1 or analysis_review_trust_v1 will usually be a better fit."
             )
-        if self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+        if self.task.task_kind == "patch" and is_analysis_review_strategy_kind(self.strategy.kind):
             self.warnings.append(
-                "This task requires a patch-oriented workflow, but the selected strategy is analysis_review_v1."
+                f"This task requires a patch-oriented workflow, but the selected strategy is {self.strategy.kind}."
             )
 
     def _copy_role_if_missing(self, missing_role: str, source_roles: list[str]) -> None:
@@ -1638,30 +2015,33 @@ class HarnessRunner:
                 return
 
     def _apply_strategy_autofit(self) -> None:
+        if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
+            self.strategy.kind = ANALYSIS_REVIEW_BOUNDED_KIND
         if self.task.task_kind == "analysis_review" and self.strategy.kind == "pfr_v1":
             if not self.auto_fit_strategy:
                 self.errors.append(
                     "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
                 )
                 return
-            self.strategy.kind = "analysis_review_v1"
+            self.strategy.kind = ANALYSIS_REVIEW_BOUNDED_KIND
             self._copy_role_if_missing("critic", ["falsifier"])
             self._copy_role_if_missing("reviser", ["patcher", "proposer"])
             self._copy_role_if_missing("auditor", ["critic", "falsifier"])
             self.warnings.append(
-                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_v1 for an analysis_review task."
+                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_bounded_v1 for an analysis_review task."
             )
-        elif self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+        elif self.task.task_kind == "patch" and is_analysis_review_strategy_kind(self.strategy.kind):
+            original_kind = self.strategy.kind
             if not self.auto_fit_strategy:
                 self.errors.append(
-                    "patch tasks are incompatible with analysis_review_v1 unless auto-fit is enabled."
+                    f"patch tasks are incompatible with {original_kind} unless auto-fit is enabled."
                 )
                 return
             self.strategy.kind = "pfr_v1"
             self._copy_role_if_missing("falsifier", ["critic", "auditor"])
             self._copy_role_if_missing("patcher", ["reviser", "proposer"])
             self.warnings.append(
-                "Auto-fit changed strategy kind from analysis_review_v1 to pfr_v1 for a patch task."
+                f"Auto-fit changed strategy kind from {original_kind} to pfr_v1 for a patch task."
             )
 
     def _validator_preflight_outcome(self) -> dict[str, Any] | None:

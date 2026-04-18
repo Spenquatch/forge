@@ -39,7 +39,7 @@ def _strategy() -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
-            "kind": "analysis_review_v1",
+            "kind": "analysis_review_bounded_v1",
             "roles": {
                 "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
                 "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
@@ -67,7 +67,8 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v3"
+    assert contract.contract_version == "analysis_review_v1_contract_v4"
+    assert contract.mode == "bounded"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
     assert contract.stop_policy.min_grounding_score == 0.8
@@ -87,6 +88,17 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.bounded_review.critic_new_topic_cap == 2
     assert contract.bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0 == 1
     assert contract.bounded_review.require_scope_escape_justification is True
+    assert contract.trust_review.require_taxonomy_override_reason is False
+    assert contract.trust_review.require_verified_evidence_refs_subset is False
+    assert contract.trust_review.require_affected_file_coverage is False
+    assert contract.trust_review.payload_provenance_mode == "none"
+    assert contract.trust_review.downgrade_on_semantic_warnings is False
+    assert contract.trust_review.downgrade_on_inferred_acceptance is False
+    assert contract.trust_review.late_auditor_medium_or_higher_policy == "error"
+    assert serialized["effective_strategy"] == {
+        "kind": "analysis_review_bounded_v1",
+        "mode": "bounded",
+    }
     assert serialized["bounded_review"] == {
         "max_evidence_refs_per_recommendation": 3,
         "max_must_check_files_per_recommendation": 3,
@@ -95,6 +107,49 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
         "critic_new_topic_cap": 2,
         "auditor_new_medium_or_higher_issue_cap_after_round0": 1,
         "require_scope_escape_justification": True,
+    }
+    assert serialized["trust_review"] == {
+        "require_taxonomy_override_reason": False,
+        "require_verified_evidence_refs_subset": False,
+        "require_affected_file_coverage": False,
+        "payload_provenance_mode": "none",
+        "downgrade_on_semantic_warnings": False,
+        "downgrade_on_inferred_acceptance": False,
+        "late_auditor_medium_or_higher_policy": "error",
+    }
+
+
+def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_modes():
+    task = _task(min_recommendations=2)
+
+    legacy = build_analysis_review_contract(
+        task,
+        StrategyConfig.from_dict({**_strategy().to_dict(), "kind": "analysis_review_v1"}),
+    )
+    trust = build_analysis_review_contract(
+        task,
+        StrategyConfig.from_dict({**_strategy().to_dict(), "kind": "analysis_review_trust_v1"}),
+    )
+
+    assert legacy.mode == "bounded"
+    assert legacy.strategy_kind == "analysis_review_v1"
+    assert legacy.to_dict()["effective_strategy"] == {
+        "kind": "analysis_review_v1",
+        "mode": "bounded",
+    }
+
+    assert trust.mode == "trust"
+    assert trust.strategy_kind == "analysis_review_trust_v1"
+    assert trust.trust_review.require_taxonomy_override_reason is True
+    assert trust.trust_review.require_verified_evidence_refs_subset is True
+    assert trust.trust_review.require_affected_file_coverage is True
+    assert trust.trust_review.payload_provenance_mode == "payload_hash_and_refs"
+    assert trust.trust_review.downgrade_on_semantic_warnings is True
+    assert trust.trust_review.downgrade_on_inferred_acceptance is True
+    assert trust.trust_review.late_auditor_medium_or_higher_policy == "warn"
+    assert trust.to_dict()["effective_strategy"] == {
+        "kind": "analysis_review_trust_v1",
+        "mode": "trust",
     }
 
 
@@ -110,10 +165,18 @@ def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():
 
 def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2():
     assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_v1").max_loops == 3
+    assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_bounded_v1").max_loops == 3
+    assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_trust_v1").max_loops == 3
 
-    example = load_structured_file(
-        Path("examples/harness/strategies/analysis_review_codex_claude.yaml")
+    bounded_example = load_structured_file(
+        Path("examples/harness/strategies/analysis_review_bounded_codex_claude.yaml")
     )
-    assert example["kind"] == "analysis_review_v1"
-    assert example["roles"]["proposer"]["effort"] == "medium"
-    assert example["review_loops"]["max_loops"] == 3
+    trust_example = load_structured_file(
+        Path("examples/harness/strategies/analysis_review_trust_codex_claude.yaml")
+    )
+    assert bounded_example["kind"] == "analysis_review_bounded_v1"
+    assert bounded_example["roles"]["proposer"]["effort"] == "medium"
+    assert bounded_example["review_loops"]["max_loops"] == 3
+    assert trust_example["kind"] == "analysis_review_trust_v1"
+    assert trust_example["roles"]["auditor"]["provider"] == "claude_code_sonnet"
+    assert trust_example["review_loops"]["max_loops"] == 3

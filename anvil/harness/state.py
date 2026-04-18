@@ -112,7 +112,13 @@ class HarnessState(TypedDict, total=False):
     task_spec: dict[str, Any]
     strategy_spec: dict[str, Any]
     task_kind: Literal["patch", "analysis_review"]
-    strategy_kind: Literal["single_pass", "pfr_v1", "analysis_review_v1"]
+    strategy_kind: Literal[
+        "single_pass",
+        "pfr_v1",
+        "analysis_review_bounded_v1",
+        "analysis_review_trust_v1",
+        "analysis_review_v1",
+    ]
     workspace_root: str
     out_root: str
     run_dir: str

@@ -5,6 +5,14 @@ from typing import Any, Optional
 
 
 VALID_TASK_KINDS = {"patch", "analysis_review"}
+ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
+ANALYSIS_REVIEW_TRUST_KIND = "analysis_review_trust_v1"
+ANALYSIS_REVIEW_LEGACY_KIND = "analysis_review_v1"
+ANALYSIS_REVIEW_STRATEGY_KINDS = {
+    ANALYSIS_REVIEW_BOUNDED_KIND,
+    ANALYSIS_REVIEW_TRUST_KIND,
+    ANALYSIS_REVIEW_LEGACY_KIND,
+}
 VALID_VALIDATOR_RUN_WHEN = {
     "patch_only",
     "analysis_only",
@@ -14,6 +22,10 @@ VALID_VALIDATOR_RUN_WHEN = {
     "mode_require",
 }
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
+
+
+def is_analysis_review_strategy_kind(strategy_kind: str) -> bool:
+    return strategy_kind in ANALYSIS_REVIEW_STRATEGY_KINDS
 
 
 @dataclass
@@ -257,7 +269,7 @@ class ReviewLoopPolicy:
 
     @classmethod
     def defaults_for_strategy_kind(cls, strategy_kind: str) -> "ReviewLoopPolicy":
-        if strategy_kind == "analysis_review_v1":
+        if is_analysis_review_strategy_kind(strategy_kind):
             return cls(
                 min_loops=1,
                 max_loops=3,
