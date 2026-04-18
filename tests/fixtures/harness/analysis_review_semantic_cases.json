@@ -746,5 +746,417 @@
     "actionability_score": 0.88,
     "scope_compliance_score": 0.7,
     "confidence": 0.82
+  },
+  "analysis_output_trust_surface_valid": {
+    "status": "done",
+    "summary": "Two grounded recommendations with trust metadata.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "grounding_mode": "direct",
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9,
+        "review_surface": {
+          "must_check_files": [
+            ".github/workflows/codex-cli-release-watch.yml"
+          ],
+          "optional_check_files": [
+            ".github/workflows/claude-code-release-watch.yml"
+          ],
+          "scope_note": "Validate concurrency and duplicate-trigger behavior only."
+        }
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Align timeout handling",
+        "rationale": "Consistent timeouts make failures easier to compare.",
+        "evidence": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "grounding_mode": "mixed",
+        "proposed_change": "Use explicit timeout-minutes across both workflows.",
+        "confidence": 0.82,
+        "review_surface": {
+          "must_check_files": [
+            ".github/workflows/claude-code-release-watch.yml"
+          ],
+          "optional_check_files": [],
+          "scope_note": "Check timeout handling only."
+        }
+      }
+    ],
+    "strengths": {
+      "items": [
+        "Grounded in workflow files"
+      ],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": "No material uncertainties remained after comparing the relevant files."
+    },
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
+    "confidence": 0.86
+  },
+  "analysis_output_verified_evidence_not_subset": {
+    "status": "done",
+    "summary": "The verified evidence set drifted away from the cited evidence.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/release.yml"
+        ],
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "grounding_mode": "direct",
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9,
+        "review_surface": {
+          "must_check_files": [
+            ".github/workflows/codex-cli-release-watch.yml"
+          ],
+          "optional_check_files": [],
+          "scope_note": "Check concurrency only."
+        }
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Align timeout handling",
+        "rationale": "Consistent timeouts make failures easier to compare.",
+        "evidence": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "grounding_mode": "mixed",
+        "proposed_change": "Use explicit timeout-minutes across both workflows.",
+        "confidence": 0.82,
+        "review_surface": {
+          "must_check_files": [
+            ".github/workflows/claude-code-release-watch.yml"
+          ],
+          "optional_check_files": [],
+          "scope_note": "Check timeout handling only."
+        }
+      }
+    ],
+    "strengths": {
+      "items": [
+        "Grounded in workflow files"
+      ],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": "No material uncertainties remained after comparing the relevant files."
+    },
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml",
+      ".github/workflows/release.yml"
+    ],
+    "confidence": 0.86
+  },
+  "analysis_output_uncovered_affected_files": {
+    "status": "done",
+    "summary": "A direct recommendation names affected files it did not cover.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/nightly.yml"
+        ],
+        "grounding_mode": "direct",
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9,
+        "review_surface": {
+          "must_check_files": [
+            ".github/workflows/codex-cli-release-watch.yml"
+          ],
+          "optional_check_files": [],
+          "scope_note": "Check concurrency only."
+        }
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Align timeout handling",
+        "rationale": "Consistent timeouts make failures easier to compare.",
+        "evidence": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "grounding_mode": "mixed",
+        "proposed_change": "Use explicit timeout-minutes across both workflows.",
+        "confidence": 0.82,
+        "review_surface": {
+          "must_check_files": [
+            ".github/workflows/claude-code-release-watch.yml"
+          ],
+          "optional_check_files": [],
+          "scope_note": "Check timeout handling only."
+        }
+      }
+    ],
+    "strengths": {
+      "items": [
+        "Grounded in workflow files"
+      ],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": "No material uncertainties remained after comparing the relevant files."
+    },
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml",
+      ".github/workflows/nightly.yml"
+    ],
+    "confidence": 0.86
+  },
+  "analysis_output_whitespace_normalized_paths_valid": {
+    "status": "done",
+    "summary": "Trust metadata still resolves after canonical whitespace trimming.",
+    "workspace_write_intent": "none",
+    "recommendations": [
+      {
+        "classification": "risk",
+        "priority": "high",
+        "title": "Add concurrency controls",
+        "rationale": "Overlapping release automation can duplicate work.",
+        "evidence": [
+          " .github/workflows/codex-cli-release-watch.yml "
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml "
+        ],
+        "checked_files": [
+          " .github/workflows/codex-cli-release-watch.yml ",
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "affected_files": [
+          ".github/workflows/codex-cli-release-watch.yml "
+        ],
+        "grounding_mode": "direct",
+        "proposed_change": "Add workflow concurrency keyed by ref.",
+        "confidence": 0.9,
+        "review_surface": {
+          "must_check_files": [
+            " .github/workflows/codex-cli-release-watch.yml "
+          ],
+          "optional_check_files": [
+            " .github/workflows/claude-code-release-watch.yml "
+          ],
+          "scope_note": "Check concurrency only."
+        }
+      },
+      {
+        "classification": "recommendation",
+        "priority": "medium",
+        "title": "Align timeout handling",
+        "rationale": "Consistent timeouts make failures easier to compare.",
+        "evidence": [
+          " .github/workflows/claude-code-release-watch.yml "
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml "
+        ],
+        "checked_files": [
+          " .github/workflows/claude-code-release-watch.yml "
+        ],
+        "affected_files": [
+          ".github/workflows/claude-code-release-watch.yml "
+        ],
+        "grounding_mode": "mixed",
+        "proposed_change": "Use explicit timeout-minutes across both workflows.",
+        "confidence": 0.82,
+        "review_surface": {
+          "must_check_files": [
+            " .github/workflows/claude-code-release-watch.yml "
+          ],
+          "optional_check_files": [],
+          "scope_note": "Check timeout handling only."
+        }
+      }
+    ],
+    "strengths": {
+      "items": [
+        "Grounded in workflow files"
+      ],
+      "none_reason": ""
+    },
+    "uncertainties": {
+      "items": [],
+      "none_reason": "No material uncertainties remained after comparing the relevant files."
+    },
+    "files_reviewed": [
+      " .github/workflows/codex-cli-release-watch.yml ",
+      ".github/workflows/codex-cli-release-watch.yml",
+      " .github/workflows/claude-code-release-watch.yml "
+    ],
+    "confidence": 0.86
+  },
+  "review_payload_override_reason_valid": {
+    "verdict": "accept_partial",
+    "summary": "The critic kept a trust-mode taxonomy override fully justified.",
+    "workspace_write_intent": "none",
+    "issues": [
+      {
+        "issue_id": "AR-101",
+        "severity": "low",
+        "kind": "missing_priority",
+        "blocking_class": "actionability",
+        "recommendation_index": 2,
+        "title": "Recommendation 2 still needs a concrete rollout path.",
+        "evidence": "The draft assigns a priority but does not identify the exact operational change path.",
+        "repair_hint": "Tie the recommendation to a concrete workflow edit and rollout sequence.",
+        "blocking_class_override_reason": "The priority is present already, so the blocker is actionability rather than completeness.",
+        "why_not_raised_earlier": null
+      }
+    ],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [
+          "AR-101"
+        ],
+        "summary": "Recommendation 2 is directionally sound but needs a more explicit rollout path.",
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "missing_topics": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.78,
+    "scope_compliance_score": 0.95,
+    "confidence": 0.83
+  },
+  "review_payload_override_reason_missing": {
+    "verdict": "accept_partial",
+    "summary": "The critic kept a trust-mode taxonomy override but did not justify it.",
+    "workspace_write_intent": "none",
+    "issues": [
+      {
+        "issue_id": "AR-101",
+        "severity": "low",
+        "kind": "missing_priority",
+        "blocking_class": "actionability",
+        "recommendation_index": 2,
+        "title": "Recommendation 2 still needs a concrete rollout path.",
+        "evidence": "The draft assigns a priority but does not identify the exact operational change path.",
+        "repair_hint": "Tie the recommendation to a concrete workflow edit and rollout sequence.",
+        "blocking_class_override_reason": "",
+        "why_not_raised_earlier": null
+      }
+    ],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [
+          "AR-101"
+        ],
+        "summary": "Recommendation 2 is directionally sound but needs a more explicit rollout path.",
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "missing_topics": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.78,
+    "scope_compliance_score": 0.95,
+    "confidence": 0.83
   }
 }

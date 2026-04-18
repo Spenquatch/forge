@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from anvil.harness.contracts import build_analysis_review_contract, confidence_rubric_lines
 from anvil.harness.prompts import (
     build_analysis_auditor_prompt,
@@ -42,11 +44,11 @@ def _task() -> TaskSpec:
 
 
 
-def _strategy() -> StrategyConfig:
+def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
-            "kind": "analysis_review_v1",
+            "kind": kind,
             "roles": {
                 "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
                 "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
@@ -69,10 +71,59 @@ def _strategy() -> StrategyConfig:
     )
 
 
-
-def test_analysis_prompts_share_contract_and_confidence_rubric_text():
+@pytest.mark.parametrize(
+    ("strategy_kind", "mode", "trust_lines", "payload_line", "issue_line", "acceptance_lines"),
+    [
+        (
+            "analysis_review_bounded_v1",
+            "bounded",
+            [
+                "Taxonomy override reason required: False",
+                "verified_evidence_refs must be a subset of evidence refs: False",
+                "Non-inferred affected_files require evidence or checked-file coverage: False",
+                "Payload provenance mode: none",
+                "Downgrade clean acceptance when semantic warnings remain: False",
+                "Downgrade inference-backed acceptance to caveated acceptance: False",
+                "Late auditor medium-or-higher issue policy: error",
+            ],
+            "verified_evidence_refs is optional advisory metadata in this mode; keep it a subset of evidence when you provide it.",
+            "blocking_class_override_reason is optional context when you intentionally override the default blocking_class.",
+            [
+                "In this mode, clean accept is allowed without the extra trust downgrade rules.",
+                "In this mode, semantic warning handling follows the standard bounded-review flow.",
+            ],
+        ),
+        (
+            "analysis_review_trust_v1",
+            "trust",
+            [
+                "Taxonomy override reason required: True",
+                "verified_evidence_refs must be a subset of evidence refs: True",
+                "Non-inferred affected_files require evidence or checked-file coverage: True",
+                "Payload provenance mode: payload_hash_and_refs",
+                "Downgrade clean acceptance when semantic warnings remain: True",
+                "Downgrade inference-backed acceptance to caveated acceptance: True",
+                "Late auditor medium-or-higher issue policy: warn",
+            ],
+            "In this mode, populate verified_evidence_refs with the evidence refs you directly re-checked; keep it a subset of evidence.",
+            "If you intentionally override the default blocking_class for a kind, include blocking_class_override_reason with concrete justification.",
+            [
+                "In this mode, inference-heavy recommendations should usually receive accept_with_caveat instead of clean accept.",
+                "In this mode, unresolved semantic warnings are treated as caveats, not clean acceptance.",
+            ],
+        ),
+    ],
+)
+def test_analysis_prompts_share_contract_and_confidence_rubric_text(
+    strategy_kind: str,
+    mode: str,
+    trust_lines: list[str],
+    payload_line: str,
+    issue_line: str,
+    acceptance_lines: list[str],
+):
     task = _task()
-    strategy = _strategy()
+    strategy = _strategy(strategy_kind)
     contract = build_analysis_review_contract(task, strategy)
 
     proposer = build_analysis_proposer_prompt(task, strategy.prompt_preamble, _GIT_SNAPSHOT, contract)
@@ -110,7 +161,9 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
     )
 
     common_bounded_lines = [
-        "Analysis-review contract: analysis_review_v1_contract_v3",
+        "Analysis-review contract: analysis_review_v1_contract_v4",
+        f"Effective strategy kind: {strategy_kind}",
+        f"Mode: {mode}",
         "Bounded review policy:",
         "Recommendation evidence refs: 1..3 per recommendation",
         "review_surface.must_check_files: 1..3 per recommendation",
@@ -123,6 +176,12 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
     ]
 
     for line in common_bounded_lines:
+        assert line in proposer
+        assert line in critic
+        assert line in auditor
+        assert line in reviser
+
+    for line in trust_lines:
         assert line in proposer
         assert line in critic
         assert line in auditor
@@ -142,6 +201,8 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
         "Every evidence ref must be a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in proposer
     )
+    assert "Every recommendation uses the same payload family in both modes." in proposer
+    assert "Every recommendation uses the same payload family in both modes." in reviser
     assert "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note." in proposer
     assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
     assert "Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them." in reviser
@@ -149,6 +210,13 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text():
         "Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in reviser
     )
+    assert payload_line in proposer
+    assert payload_line in reviser
+    assert issue_line in critic
+    assert issue_line in auditor
+    for line in acceptance_lines:
+        assert line in critic
+        assert line in auditor
     assert "Minimum items when a section is populated: 1" in proposer
     assert "Minimum files_reviewed entries: 1" in proposer
 
