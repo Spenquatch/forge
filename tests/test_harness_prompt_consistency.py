@@ -169,13 +169,14 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     )
 
     common_bounded_lines = [
-        "Analysis-review contract: analysis_review_v1_contract_v4",
+        "Analysis-review contract: analysis_review_v1_contract_v5",
         f"Effective strategy kind: {strategy_kind}",
         f"Mode: {mode}",
         "Bounded review policy:",
         "Recommendation evidence refs: 1..3 per recommendation",
         "review_surface.must_check_files: 1..3 per recommendation",
         "review_surface.optional_check_files: 0..2 per recommendation",
+        "Evidence cap policy: trim_to_cap",
         "review_surface.must_check_files must be a subset of files_reviewed",
         "Critic issue cap: 5",
         "Critic new-topic cap: 2",
@@ -215,18 +216,26 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
     assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer
     assert (
-        "Every evidence ref must be a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
+        "Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in proposer
     )
+    assert "Do not cite evidence as `path:line-range`" in proposer
+    assert "If multiple excerpts come from one file, cite the file once and put line-specific detail in rationale or scope_note." in proposer
     assert "Every recommendation uses the same payload family in both modes." in proposer
     assert "Every recommendation uses the same payload family in both modes." in reviser
-    assert "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note." in proposer
+    assert (
+        "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note, and keep evidence within the bounded-review cap."
+        in proposer
+    )
+    assert "keep evidence within the bounded-review cap." in proposer
     assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
     assert "Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them." in reviser
     assert (
-        "Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
+        "Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in reviser
     )
+    assert "Do not cite evidence as `path:line-range`" in reviser
+    assert "Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more." in reviser
     assert payload_line in proposer
     assert payload_line in reviser
     assert issue_line in critic

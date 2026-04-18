@@ -10,7 +10,7 @@ from anvil.harness.files import load_structured_file
 from anvil.harness.types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 
-def _task(min_recommendations: int = 2) -> TaskSpec:
+def _task(min_recommendations: int = 2, evidence_cap_policy: str = "trim_to_cap") -> TaskSpec:
     return TaskSpec.from_dict(
         {
             "id": "recommend_automation_improvements",
@@ -29,6 +29,7 @@ def _task(min_recommendations: int = 2) -> TaskSpec:
                 "require_classification": True,
                 "require_priority": True,
                 "min_recommendations": min_recommendations,
+                "evidence_cap_policy": evidence_cap_policy,
             },
         }
     )
@@ -67,7 +68,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v4"
+    assert contract.contract_version == "analysis_review_v1_contract_v5"
     assert contract.mode == "bounded"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
@@ -84,6 +85,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.bounded_review.max_evidence_refs_per_recommendation == 3
     assert contract.bounded_review.max_must_check_files_per_recommendation == 3
     assert contract.bounded_review.max_optional_check_files_per_recommendation == 2
+    assert contract.bounded_review.evidence_cap_policy == "trim_to_cap"
     assert contract.bounded_review.critic_issue_cap == 5
     assert contract.bounded_review.critic_new_topic_cap == 2
     assert contract.bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0 == 1
@@ -103,6 +105,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
         "max_evidence_refs_per_recommendation": 3,
         "max_must_check_files_per_recommendation": 3,
         "max_optional_check_files_per_recommendation": 2,
+        "evidence_cap_policy": "trim_to_cap",
         "critic_issue_cap": 5,
         "critic_new_topic_cap": 2,
         "auditor_new_medium_or_higher_issue_cap_after_round0": 1,
@@ -151,6 +154,21 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
         "kind": "analysis_review_trust_v1",
         "mode": "trust",
     }
+
+
+def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
+    default_task = TaskSpec.from_dict(
+        {
+            "id": "recommend_automation_improvements",
+            "task_kind": "analysis_review",
+            "objective": "Review the repo and recommend workflow improvements.",
+            "workspace_write_policy": {"mode": "forbid"},
+        }
+    )
+    strict_task = _task(evidence_cap_policy="strict")
+
+    assert default_task.review_requirements.evidence_cap_policy == "trim_to_cap"
+    assert strict_task.review_requirements.evidence_cap_policy == "strict"
 
 
 

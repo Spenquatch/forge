@@ -81,6 +81,7 @@ class BoundedReviewPolicy:
     max_evidence_refs_per_recommendation: int = 3
     max_must_check_files_per_recommendation: int = 3
     max_optional_check_files_per_recommendation: int = 2
+    evidence_cap_policy: Literal["trim_to_cap", "strict"] = "trim_to_cap"
     critic_issue_cap: int = 5
     critic_new_topic_cap: int = 2
     auditor_new_medium_or_higher_issue_cap_after_round0: int = 1
@@ -151,7 +152,7 @@ def build_analysis_review_contract(
     mode = derive_analysis_review_mode(strategy.kind)
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v4",
+        contract_version="analysis_review_v1_contract_v5",
         strategy_kind=str(strategy.kind),
         mode=mode,
         stop_policy=strategy.review_loops,
@@ -167,6 +168,9 @@ def build_analysis_review_contract(
             none_reason_allowed=True,
             min_items_when_populated=1,
             minimum_files_reviewed=1,
+        ),
+        bounded_review=BoundedReviewPolicy(
+            evidence_cap_policy=task.review_requirements.evidence_cap_policy,
         ),
         trust_review=TrustReviewPolicy(
             require_taxonomy_override_reason=(mode == "trust"),

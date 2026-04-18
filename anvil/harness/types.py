@@ -22,6 +22,7 @@ VALID_VALIDATOR_RUN_WHEN = {
     "mode_require",
 }
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
+VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
 
 
 def is_analysis_review_strategy_kind(strategy_kind: str) -> bool:
@@ -81,6 +82,7 @@ class ReviewRequirements:
     require_classification: bool = False
     require_priority: bool = False
     min_recommendations: int = 0
+    evidence_cap_policy: str = "trim_to_cap"
 
     @classmethod
     def defaults_for_task_kind(cls, task_kind: str) -> "ReviewRequirements":
@@ -90,6 +92,7 @@ class ReviewRequirements:
                 require_classification=True,
                 require_priority=True,
                 min_recommendations=1,
+                evidence_cap_policy="trim_to_cap",
             )
         return cls()
 
@@ -103,6 +106,15 @@ class ReviewRequirements:
         min_recommendations = int(data.get("min_recommendations", defaults.min_recommendations))
         if min_recommendations < 0:
             raise ValueError("review_requirements.min_recommendations must be >= 0.")
+        evidence_cap_policy = str(
+            data.get("evidence_cap_policy", defaults.evidence_cap_policy)
+        ).strip().lower()
+        if evidence_cap_policy not in VALID_EVIDENCE_CAP_POLICIES:
+            raise ValueError(
+                "review_requirements.evidence_cap_policy must be one of: "
+                + ", ".join(sorted(VALID_EVIDENCE_CAP_POLICIES))
+                + "."
+            )
         return cls(
             require_evidence_per_recommendation=bool(
                 data.get(
@@ -115,6 +127,7 @@ class ReviewRequirements:
             ),
             require_priority=bool(data.get("require_priority", defaults.require_priority)),
             min_recommendations=min_recommendations,
+            evidence_cap_policy=evidence_cap_policy,
         )
 
     def to_dict(self) -> dict[str, Any]:

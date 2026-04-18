@@ -307,7 +307,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
 class _HallucinatedEvidenceHarnessAdapter(_AcceptingHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
-        payload["recommendations"][1]["evidence"] = [".github/workflows/claude-code-update-snapshot.yml"]
+        payload["recommendations"][1]["evidence"] = ["does/not/exist.py"]
         return payload
 
 
@@ -545,11 +545,38 @@ class _AuditorFailingHarnessAdapter(_PartialAcceptanceHarnessAdapter):
         return super().run(request)
 
 
+class _LineQualifiedEvidenceHarnessAdapter(_AcceptingHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"][0]["evidence"] = [
+            ".github/workflows/claude-code-release-watch.yml:10-18",
+            ".github/workflows/codex-cli-release-watch.yml:20-28",
+            ".github/workflows/claude-code-update-snapshot.yml:30-44",
+            ".github/workflows/codex-cli-update-snapshot.yml:50-68",
+        ]
+        payload["files_reviewed"] = [
+            ".github/workflows/claude-code-release-watch.yml:10-18",
+            ".github/workflows/codex-cli-release-watch.yml:20-28",
+            ".github/workflows/claude-code-update-snapshot.yml:30-44",
+            ".github/workflows/codex-cli-update-snapshot.yml:50-68",
+        ]
+        payload["recommendations"][0]["review_surface"]["must_check_files"] = [
+            ".github/workflows/claude-code-release-watch.yml:10-18",
+            ".github/workflows/codex-cli-release-watch.yml:20-28",
+            ".github/workflows/claude-code-update-snapshot.yml:30-44",
+        ]
+        payload["recommendations"][0]["review_surface"]["optional_check_files"] = [
+            ".github/workflows/codex-cli-update-snapshot.yml:50-68"
+        ]
+        return payload
+
+
 
 def _write_task_and_strategy(
     tmp_path: Path,
     *,
     min_recommendations: int = 2,
+    evidence_cap_policy: str = "trim_to_cap",
     review_max_loops: int | None = None,
     strategy_kind: str = "analysis_review_bounded_v1",
 ) -> tuple[Path, Path]:
@@ -572,6 +599,7 @@ review_requirements:
   require_classification: true
   require_priority: true
   min_recommendations: {min_recommendations}
+  evidence_cap_policy: {evidence_cap_policy}
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -622,6 +650,14 @@ def _prepare_workspace(tmp_path: Path) -> Path:
         "name: claude\n",
         encoding="utf-8",
     )
+    (workspace / ".github" / "workflows" / "claude-code-update-snapshot.yml").write_text(
+        "name: claude-update\n",
+        encoding="utf-8",
+    )
+    (workspace / ".github" / "workflows" / "codex-cli-update-snapshot.yml").write_text(
+        "name: codex-update\n",
+        encoding="utf-8",
+    )
     return workspace
 
 
@@ -651,7 +687,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
-    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v4"
+    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v5"
     assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
     assert summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
@@ -750,6 +786,92 @@ def test_analysis_review_runner_legacy_alias_warns_and_normalizes_to_bounded(
         "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
         in summary["warnings"]
     )
+
+
+def test_analysis_review_runner_canonicalizes_line_qualified_refs_and_trims_evidence_by_default(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _LineQualifiedEvidenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    proposer_stage = summary["agent_stages"][0]
+    proposer_payload = proposer_stage["structured_output"]
+    assert proposer_payload["files_reviewed"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+    ]
+    assert proposer_payload["recommendations"][0]["evidence"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+    ]
+    assert proposer_payload["recommendations"][0]["review_surface"]["must_check_files"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+    ]
+    proposer_semantic = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
+    assert proposer_semantic["ok"] is True
+    assert proposer_semantic["warnings"] == [
+        "recommendations[1].evidence exceeded the bounded-review cap of 3; trimmed dropped refs: .github/workflows/codex-cli-update-snapshot.yml"
+    ]
+    assert proposer_stage["semantic_validation_warnings"] == proposer_semantic["warnings"]
+    assert any(
+        "proposer: recommendations[1].evidence exceeded the bounded-review cap of 3; trimmed dropped refs: .github/workflows/codex-cli-update-snapshot.yml"
+        == warning
+        for warning in summary["warnings"]
+    )
+
+
+def test_analysis_review_runner_strict_evidence_cap_still_fails_fast(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        evidence_cap_policy="strict",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _LineQualifiedEvidenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    proposer_stage = summary["agent_stages"][0]
+    assert any(
+        "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)." in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
+    assert proposer_stage.get("semantic_validation_warnings") in (None, [])
 
 
 def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_and_reports_provenance(
@@ -1050,12 +1172,12 @@ def test_analysis_review_runner_rejects_hallucinated_evidence_refs(
     proposer_stage = summary["agent_stages"][0]
     assert proposer_stage["ok"] is False
     assert any(
-        "recommendations[2].evidence must be a subset of files_reviewed: .github/workflows/claude-code-update-snapshot.yml"
+        "recommendations[2].evidence must be a subset of files_reviewed: does/not/exist.py"
         in error
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert any(
-        "recommendations[2].evidence contains path(s) not present in the workspace snapshot: .github/workflows/claude-code-update-snapshot.yml"
+        "recommendations[2].evidence contains path(s) not present in the workspace snapshot: does/not/exist.py"
         in error
         for error in proposer_stage["semantic_validation_errors"]
     )
@@ -1141,7 +1263,7 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
         "Add release failure categorization"
     )
     assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
-        "analysis_review_v1_contract_v4"
+        "analysis_review_v1_contract_v5"
     )
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3

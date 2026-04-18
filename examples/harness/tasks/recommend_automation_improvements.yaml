@@ -28,6 +28,7 @@ review_requirements:
   require_classification: true
   require_priority: true
   min_recommendations: 2
+  evidence_cap_policy: trim_to_cap
 files_hint:
   - .github/workflows/codex-cli-release-watch.yml
   - .github/workflows/claude-code-release-watch.yml

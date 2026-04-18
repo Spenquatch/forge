@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v4` keeps the bounded-review rules from v3, makes mode explicit, and adds one unified trust policy instead of inventing a second payload family.
+`analysis_review_v1_contract_v5` keeps the bounded-review rules from v4, makes evidence-cap handling explicit, and keeps one unified trust policy instead of inventing a second payload family.
 
 ## What the contract governs
 
@@ -27,7 +27,7 @@ The contract now serializes:
 
 ```json
 {
-  "contract_version": "analysis_review_v1_contract_v4",
+  "contract_version": "analysis_review_v1_contract_v5",
   "strategy_kind": "analysis_review_v1",
   "mode": "bounded",
   "effective_strategy": {
@@ -68,6 +68,7 @@ Current defaults:
 - recommendation evidence refs: `1..3`
 - `review_surface.must_check_files`: `1..3`
 - `review_surface.optional_check_files`: `0..2`
+- evidence cap policy: `trim_to_cap` by default, with task-level `strict` override support
 - critic issue cap: `5`
 - critic new-topic cap: `2`
 - auditor new medium-or-higher issue cap after round 0: `1`
@@ -162,6 +163,8 @@ Examples of the existing and intended v4 semantic checks:
 - recommendation evidence counts must stay within the bounded-review cap
 - recommendation evidence refs must exist in the workspace snapshot
 - recommendation evidence refs must remain a subset of `files_reviewed`
+- line-qualified refs such as `path:12-18` should canonicalize to workspace paths before semantic validation
+- in bounded mode, oversize evidence lists may be trimmed to cap before semantic validation when the task uses `evidence_cap_policy=trim_to_cap`
 - `review_surface.must_check_files` must stay within cap and remain a subset of `files_reviewed`
 - `review_surface.optional_check_files` must stay within cap
 - critics must stay within the issue cap and new-topic cap

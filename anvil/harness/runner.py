@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import json
 import posixpath
+import re
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,9 @@ class WorkspacePolicyViolationError(HarnessError):
         self.evaluation = evaluation
         message = "; ".join(evaluation.get("violations", [])) or "Workspace write policy violated."
         super().__init__(f"Workspace write policy violated at {checkpoint}: {message}")
+
+
+_WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(r"^(?P<path>.+?):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$")
 
 
 class HarnessRunner:
@@ -791,11 +795,13 @@ class HarnessRunner:
         contract = context.pop("contract", None)
         normalized_payload: dict[str, Any] | None = None
         payload_provenance: dict[str, Any] | None = None
+        normalization_warnings: list[str] = []
         if isinstance(contract, AnalysisReviewContract):
             if isinstance(run.structured_output, dict):
-                normalized_payload, payload_provenance = self._normalize_analysis_review_payload(
+                normalized_payload, payload_provenance, normalization_warnings = self._normalize_analysis_review_payload(
                     run.structured_output,
                     payload_provenance_mode=contract.trust_review.payload_provenance_mode,
+                    contract=contract,
                 )
                 raw_meta = dict(run.raw_meta or {})
                 raw_meta["payload_provenance"] = payload_provenance
@@ -839,7 +845,7 @@ class HarnessRunner:
                     **context,
                 )
                 semantic_errors = list(semantic_result.errors)
-                semantic_warnings = list(semantic_result.warnings)
+                semantic_warnings = list(normalization_warnings) + list(semantic_result.warnings)
                 semantic_payload = {
                     "ok": not semantic_errors,
                     "skipped": False,
@@ -1881,13 +1887,22 @@ class HarnessRunner:
         rel_str = rel.as_posix().strip("/")
         return [rel_str] if rel_str else []
 
+    def _strip_workspace_ref_location_suffix(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text or "://" in text:
+            return text
+        match = _WORKSPACE_REF_LOCATION_SUFFIX_RE.match(text)
+        if not match:
+            return text
+        return match.group("path")
+
     def _normalize_workspace_ref(self, value: str) -> str:
         text = str(value or "").strip()
         if not text:
             return ""
         if "://" in text:
             return text
-        normalized = text.replace("\\", "/")
+        normalized = self._strip_workspace_ref_location_suffix(text).replace("\\", "/")
         candidate = Path(normalized)
         if candidate.is_absolute():
             try:
@@ -1913,6 +1928,17 @@ class HarnessRunner:
             if value:
                 normalized.append(value)
         return normalized
+
+    @staticmethod
+    def _dedupe_preserving_order(values: list[str]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
 
     def _bind_normalized_payload(
         self,
@@ -1950,12 +1976,15 @@ class HarnessRunner:
         payload: dict[str, Any],
         *,
         payload_provenance_mode: str,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        contract: AnalysisReviewContract,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         normalized = json.loads(json.dumps(payload))
         normalized_refs: dict[str, Any] = {}
+        warnings: list[str] = []
 
         files_reviewed = self._normalize_workspace_ref_list(normalized.get("files_reviewed"))
         if files_reviewed:
+            files_reviewed = self._dedupe_preserving_order(files_reviewed)
             normalized["files_reviewed"] = files_reviewed
             normalized_refs["files_reviewed"] = files_reviewed
 
@@ -1964,14 +1993,28 @@ class HarnessRunner:
             for index, item in enumerate(recommendations, start=1):
                 if not isinstance(item, dict):
                     continue
-                for field_name in (
-                    "evidence",
-                    "verified_evidence_refs",
-                    "checked_files",
-                    "affected_files",
-                ):
+                evidence_values = self._dedupe_preserving_order(
+                    self._normalize_workspace_ref_list(item.get("evidence"))
+                )
+                if evidence_values:
+                    cap = contract.bounded_review.max_evidence_refs_per_recommendation
+                    if (
+                        contract.mode == "bounded"
+                        and contract.bounded_review.evidence_cap_policy == "trim_to_cap"
+                        and len(evidence_values) > cap
+                    ):
+                        dropped_refs = evidence_values[cap:]
+                        evidence_values = evidence_values[:cap]
+                        warnings.append(
+                            f"recommendations[{index}].evidence exceeded the bounded-review cap of {cap}; trimmed dropped refs: "
+                            + ", ".join(dropped_refs)
+                        )
+                    item["evidence"] = evidence_values
+                    normalized_refs[f"recommendations[{index}].evidence"] = evidence_values
+                for field_name in ("verified_evidence_refs", "checked_files", "affected_files"):
                     values = self._normalize_workspace_ref_list(item.get(field_name))
                     if values:
+                        values = self._dedupe_preserving_order(values)
                         item[field_name] = values
                         normalized_refs[f"recommendations[{index}].{field_name}"] = values
                 review_surface = item.get("review_surface")
@@ -1979,6 +2022,7 @@ class HarnessRunner:
                     for field_name in ("must_check_files", "optional_check_files"):
                         values = self._normalize_workspace_ref_list(review_surface.get(field_name))
                         if values:
+                            values = self._dedupe_preserving_order(values)
                             review_surface[field_name] = values
                             normalized_refs[
                                 f"recommendations[{index}].review_surface.{field_name}"
@@ -1996,10 +2040,14 @@ class HarnessRunner:
                 item["path"] = normalized_path or path
                 normalized_refs[f"scope_escapes[{index}].path"] = item["path"]
 
-        return normalized, self._bind_normalized_payload(
+        return (
             normalized,
-            payload_provenance_mode=payload_provenance_mode,
-            normalized_refs=normalized_refs,
+            self._bind_normalized_payload(
+                normalized,
+                payload_provenance_mode=payload_provenance_mode,
+                normalized_refs=normalized_refs,
+            ),
+            warnings,
         )
 
     def _resolve_bounded_review_analysis_stage(self) -> dict[str, Any] | None:

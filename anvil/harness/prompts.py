@@ -260,6 +260,7 @@ def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
                 "- review_surface.optional_check_files: "
                 f"0..{bounded.max_optional_check_files_per_recommendation} per recommendation"
             ),
+            f"- Evidence cap policy: {bounded.evidence_cap_policy}",
             "- review_surface.must_check_files must be a subset of files_reviewed",
             f"- Critic issue cap: {bounded.critic_issue_cap}",
             f"- Critic new-topic cap: {bounded.critic_new_topic_cap}",
@@ -282,6 +283,8 @@ def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
         "Recommendation payload fields:",
         "- Every recommendation uses the same payload family in both modes.",
         "- Always populate classification, priority, rationale, evidence, proposed_change, confidence, and review_surface.",
+        "- Evidence refs must be path-only workspace refs. Do not append line numbers or line ranges such as path:12-18.",
+        "- If multiple excerpts come from one file, cite the file once and put line-specific detail in rationale or scope_note.",
         f"- grounding_mode, when present, must be one of: {grounding_modes}.",
         "- checked_files should list the concrete files you personally inspected to verify the recommendation.",
         "- affected_files should name the concrete files the recommendation says are affected.",
@@ -502,10 +505,11 @@ Your job:
 6. Populate strengths and uncertainties as objects with `items` and `none_reason`.
 7. For strengths/uncertainties: include concrete items when you have them; otherwise leave `items` empty and explain why in `none_reason`.
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
-9. Every evidence ref must be a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
-10. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note.
-11. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
-12. Use workspace_write_intent=`none` unless you truly changed the repo.
+9. Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+10. Do not cite evidence as `path:line-range`; if line detail matters, put it in rationale or scope_note while citing the file path once.
+11. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note, and keep evidence within the bounded-review cap.
+12. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
+13. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
@@ -665,10 +669,12 @@ Your job:
 4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
 5. Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them.
 6. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
-7. Every evidence ref must stay a concrete workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
-8. Use the shared confidence rubric below when revising confidence values.
-9. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-10. Use workspace_write_intent=`none` unless you truly changed the repo.
+7. Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+8. Do not cite evidence as `path:line-range`; if line detail matters, keep the evidence ref at file granularity and move the excerpt detail into rationale or scope_note.
+9. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more.
+10. Use the shared confidence rubric below when revising confidence values.
+11. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+12. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}

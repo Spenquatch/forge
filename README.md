@@ -207,6 +207,8 @@ poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recom
 
 For the alternate trust-oriented mode, swap in `examples/harness/strategies/analysis_review_trust_codex_claude.yaml`.
 
+For analysis-review tasks, `review_requirements.evidence_cap_policy` defaults to `trim_to_cap`, which canonicalizes path-like refs and trims oversize evidence lists before semantic validation. Set it to `strict` when you want fail-fast bounded-review enforcement instead.
+
 The harness writes a run directory containing:
 - `summary.json`
 - `REPORT.md`
