@@ -56,6 +56,71 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _recommendation_review_lookup(summary: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    reviews = summary.get("recommendation_reviews") or []
+    lookup: dict[int, dict[str, Any]] = {}
+    for item in reviews:
+        if not isinstance(item, dict):
+            continue
+        try:
+            recommendation_index = int(item.get("recommendation_index"))
+        except (TypeError, ValueError):
+            continue
+        lookup[recommendation_index] = item
+    return lookup
+
+
+def _recommendation_source_indices(payload: dict[str, Any], recommendation_count: int) -> list[int]:
+    source_indices = payload.get("included_recommendation_indices")
+    if isinstance(source_indices, list):
+        normalized_indices: list[int] = []
+        for item in source_indices:
+            try:
+                normalized_indices.append(int(item))
+            except (TypeError, ValueError):
+                return list(range(1, recommendation_count + 1))
+        if len(normalized_indices) == recommendation_count:
+            return normalized_indices
+    return list(range(1, recommendation_count + 1))
+
+
+def _recommendation_caveat_lines(
+    *,
+    recommendation_index: int,
+    review_lookup: dict[int, dict[str, Any]],
+    analysis_status: dict[str, Any],
+) -> list[str]:
+    caveat_lines: list[str] = []
+    review = review_lookup.get(recommendation_index) or {}
+    verdict = str(review.get("verdict") or "").strip().lower()
+    if verdict == "accept_with_caveat":
+        review_summary = str(review.get("summary") or "").strip()
+        caveat_lines.append(
+            review_summary or "This recommendation was accepted with caveats."
+        )
+    inferred_indices: set[int] = set()
+    for item in (analysis_status.get("accepted_recommendations_with_inferred_grounding") or []):
+        try:
+            inferred_indices.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    if recommendation_index in inferred_indices:
+        caveat_lines.append(
+            "This recommendation relies on inference-only grounding rather than direct verified evidence."
+        )
+    return caveat_lines
+
+
+def _append_recommendation_caveat_callout(lines: list[str], caveat_lines: list[str]) -> None:
+    if not caveat_lines:
+        return
+    lines.append("> [!NOTE]")
+    lines.append("> This recommendation carries review caveats:")
+    for item in caveat_lines:
+        lines.append(f"> - {item}")
+    lines.append("")
+
+
 def _render_analysis_section(lines: list[str], title: str, section: Any) -> None:
     if not isinstance(section, dict):
         return
@@ -136,6 +201,7 @@ def render_deliverable_markdown(
     lines: list[str] = [f"# {artifact_label}: {task_id}", ""]
     verdict = str((summary or {}).get("verdict") or "").strip()
     analysis_status = _analysis_review_status(summary or {})
+    review_lookup = _recommendation_review_lookup(summary or {})
     if not accepted:
         lines.extend(
             [
@@ -192,19 +258,29 @@ def render_deliverable_markdown(
 
     recommendations = payload.get("recommendations")
     if isinstance(recommendations, list) and recommendations:
+        source_indices = _recommendation_source_indices(payload, len(recommendations))
         lines.extend(["## Recommendations", ""])
-        for index, item in enumerate(recommendations, start=1):
+        for display_index, item in enumerate(recommendations, start=1):
             if not isinstance(item, dict):
                 continue
-            title = str(item.get("title") or f"Recommendation {index}")
+            title = str(item.get("title") or f"Recommendation {display_index}")
             classification = str(item.get("classification") or "").strip()
             priority = str(item.get("priority") or "").strip()
             header_parts = [title]
             meta = ", ".join(bit for bit in (classification, priority) if bit)
             if meta:
                 header_parts.append(f"({meta})")
-            lines.append(f"### {index}. {' '.join(header_parts)}")
+            lines.append(f"### {display_index}. {' '.join(header_parts)}")
             lines.append("")
+            recommendation_index = source_indices[display_index - 1]
+            _append_recommendation_caveat_callout(
+                lines,
+                _recommendation_caveat_lines(
+                    recommendation_index=recommendation_index,
+                    review_lookup=review_lookup,
+                    analysis_status=analysis_status,
+                ),
+            )
             for field_name, label in (
                 ("rationale", "Rationale"),
                 ("proposed_change", "Suggested change"),

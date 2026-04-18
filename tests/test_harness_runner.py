@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from anvil.harness.files import load_structured_file
-
 from anvil.harness.runner import HarnessRunner
 from anvil.harness.types import ProviderRun
 
@@ -650,14 +649,21 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     proposer_semantic = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
     assert proposer_semantic["ok"] is True
     assert proposer_semantic["skipped"] is False
+    assert proposer_semantic["payload_provenance"]["status"] == "not_required"
+    assert proposer_semantic["payload_provenance"]["policy_mode"] == "none"
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    assert "## Bounded Review" in report_text
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    assert "## Review Scope" in report_text
+    assert "## Bounded Review" not in report_text
     assert "## Analysis Review Status" in report_text
     assert "- Mode: `bounded`" in report_text
+    assert "- Provenance status: `not_required`" in report_text
     assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
     assert '"rendered_in_report_section": true' in report_text
     assert '"bounded_review_summary": {' in report_text
     assert '"review_stages"' not in report_text.split('"bounded_review_summary": {', 1)[1].split("}", 1)[0]
+    assert "- Provenance status: `not_required`" in final_answer_text
+    assert "- Provenance status: `bound`" not in final_answer_text
 
 
 def test_analysis_review_runner_legacy_alias_warns_and_normalizes_to_bounded(
@@ -729,10 +735,23 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert semantic_payload["payload_provenance"]["status"] == "bound"
     assert semantic_payload["payload_provenance"]["policy_mode"] == "payload_hash_and_refs"
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    recommendation_two_section = final_answer_text.split("### 2. Align timeout handling", 1)[1]
+    recommendation_two_section = recommendation_two_section.split("### ", 1)[0]
+    recommendation_one_section = final_answer_text.split("### 1. Add concurrency controls", 1)[1]
+    recommendation_one_section = recommendation_one_section.split("### ", 1)[0]
+    assert "## Review Scope" in report_text
+    assert "## Bounded Review" not in report_text
     assert "## Analysis Review Status" in report_text
     assert "- Mode: `trust`" in report_text
     assert "- Provenance status: `bound`" in report_text
     assert "Accepted recommendations with inference-only grounding: 2" in report_text
+    assert "This recommendation carries review caveats:" in recommendation_two_section
+    assert (
+        "This recommendation relies on inference-only grounding rather than direct verified evidence."
+        in recommendation_two_section
+    )
+    assert "This recommendation carries review caveats:" not in recommendation_one_section
 
 
 def test_analysis_review_runner_trust_mode_downgrades_when_semantic_warnings_remain(
@@ -852,7 +871,8 @@ def test_analysis_review_runner_reports_non_zero_scope_escapes(
     assert bounded_review_summary["review_stages"][1]["scope_escape_count"] == 0
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    assert "## Bounded Review" in report_text
+    assert "## Review Scope" in report_text
+    assert "## Bounded Review" not in report_text
     assert "- Total scope escapes: `1`" in report_text
     assert "### Scope Escapes" in report_text
     assert (

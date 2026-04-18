@@ -1681,6 +1681,8 @@ class HarnessRunner:
             return "bound"
         if "bound" in statuses:
             return "partial"
+        if "not_required" in statuses and statuses <= {"not_required", "missing"}:
+            return "not_required"
         return "missing"
 
     def _build_analysis_review_status(
@@ -1896,13 +1898,20 @@ class HarnessRunner:
         payload_provenance_mode: str,
         normalized_refs: dict[str, Any],
     ) -> dict[str, Any]:
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         normalized_ref_count = 0
         for value in normalized_refs.values():
             if isinstance(value, list):
                 normalized_ref_count += len(value)
             elif value:
                 normalized_ref_count += 1
+        if payload_provenance_mode == "none":
+            return {
+                "status": "not_required",
+                "policy_mode": payload_provenance_mode,
+                "normalized_ref_field_count": len(normalized_refs),
+                "normalized_ref_count": normalized_ref_count,
+            }
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return {
             "status": "bound",
             "binding_method": "payload_hash_and_refs",

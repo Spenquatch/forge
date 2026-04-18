@@ -52,12 +52,12 @@ def _render_cap_usage(used: Any, cap: Any) -> str:
     return f"`{used_value}` / `{cap}`"
 
 
-def _append_bounded_review_section(lines: list[str], summary: dict[str, Any]) -> None:
+def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> None:
     bounded_review = _bounded_review_summary(summary)
     if not bounded_review:
         return
 
-    lines.append("## Bounded Review")
+    lines.append("## Review Scope")
     lines.append("")
     lines.append(f"- Mode: `{bounded_review.get('mode', 'unknown')}`")
     lines.append(
@@ -147,7 +147,7 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
             )
 
     provenance_stages = provenance.get("stages") or []
-    if provenance_stages:
+    if any(str(item.get("status") or "").strip().lower() == "bound" for item in provenance_stages):
         lines.append("")
         lines.append("### Provenance Binding")
         lines.append("")
@@ -245,7 +245,7 @@ def render_report(summary: dict[str, Any]) -> str:
             )
         lines.append("")
 
-    _append_bounded_review_section(lines, summary)
+        _append_review_scope_section(lines, summary)
     _append_analysis_review_status_section(lines, summary)
 
     if run_details:
