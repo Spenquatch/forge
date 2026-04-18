@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import anvil.cli as cli_module
 
@@ -145,3 +146,38 @@ def test_harness_run_cli_returns_nonzero_for_failed_run_verdict(monkeypatch):
     )
 
     assert exit_code == 1
+
+
+def test_harness_run_cli_reports_missing_task_file_without_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    strategy_path = tmp_path / "strategy.yaml"
+    strategy_path.write_text(
+        "name: qa-single-pass\n"
+        "kind: single_pass\n"
+        "roles:\n"
+        "  solver:\n"
+        "    provider: codex_gpt_5_4_mini\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    exit_code = asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                str(tmp_path / "missing-task.yaml"),
+                "--strategy",
+                str(strategy_path),
+                "--workspace",
+                str(workspace),
+            ]
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "❌ HARNESS RUN FAILED: Task spec file not found:" in captured.out
+    assert "Traceback" not in captured.err

@@ -60,7 +60,7 @@ from anvil.orchestrator import reload_config
 # Enhanced Phase 2 modules
 from anvil.performance_monitor import MetricType, get_performance_monitor
 from anvil.persistence_manager import get_persistence_manager
-from anvil.providers import get_provider
+from anvil.providers import get_provider_exact
 from anvil.usage import TokenUsage, estimate_cost_usd
 from anvil.harness.cli import _summary_exit_code
 from anvil.harness.executor import HarnessLangGraphExecutor
@@ -941,11 +941,14 @@ async def run_stream_command(
                 print(f"   • {node_name}: {node_counts[node_name]} event(s)")
 
 
-async def test_provider(provider_name: str) -> None:
+async def test_provider(provider_name: str) -> int:
     print(f"Testing provider: {provider_name}")
-    reload_config()
+    providers, _ = reload_config()
+    if provider_name not in providers:
+        print(f"Error testing provider {provider_name}: provider is not configured")
+        return 2
     try:
-        provider = get_provider(provider_name)
+        provider = get_provider_exact(provider_name)
         if provider is None:
             raise RuntimeError(f"Provider not available: {provider_name}")
         info = await provider.get_model_info()
@@ -966,8 +969,10 @@ async def test_provider(provider_name: str) -> None:
         print("\nTesting chat with messages about reinforcement learning")
         result = await provider.chat(cast(Any, messages), max_tokens=50, **test_kwargs)
         print(f"Result: {result}")
+        return 0
     except Exception as e:
         print(f"Error testing provider {provider_name}: {e}")
+        return 2
 
 
 async def list_providers() -> None:
@@ -1246,8 +1251,7 @@ async def main_async(argv=None) -> int:
             auto_fit_strategy=(args.auto_fit_strategy == "true"),
         )
     elif args.command == "test":
-        await test_provider(args.provider)
-        return 0
+        return await test_provider(args.provider)
     elif args.command == "list":
         await list_providers()
         return 0

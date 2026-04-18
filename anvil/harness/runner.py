@@ -94,6 +94,7 @@ class HarnessRunner:
         self.config_path = Path(config_path)
         self.thread_id = thread_id
         self.auto_fit_strategy = auto_fit_strategy
+        self._validate_inputs()
         task_payload = task_data if task_data is not None else load_structured_file(self.task_path)
         strategy_payload = strategy_data if strategy_data is not None else load_structured_file(self.strategy_path)
         self.task = TaskSpec.from_dict(task_payload)
@@ -110,6 +111,21 @@ class HarnessRunner:
         self.policy_ignored_rel_paths = self._workspace_ignored_rel_paths()
         self.initial_git_snapshot: dict[str, Any] | None = None
         self.initial_non_git_state: dict[str, Any] | None = None
+
+    def _validate_inputs(self) -> None:
+        for label, path in (
+            ("Task spec", self.task_path),
+            ("Strategy spec", self.strategy_path),
+        ):
+            if not path.exists():
+                raise HarnessError(f"{label} file not found: {path}")
+            if not path.is_file():
+                raise HarnessError(f"{label} path is not a file: {path}")
+
+        if not self.workspace.exists():
+            raise HarnessError(f"Workspace directory not found: {self.workspace}")
+        if not self.workspace.is_dir():
+            raise HarnessError(f"Workspace path is not a directory: {self.workspace}")
 
     def run(self) -> dict[str, Any]:
         reload_config(str(self.config_path))
