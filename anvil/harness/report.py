@@ -34,6 +34,17 @@ def _sanitize_run_details_for_report(run_details: dict[str, Any]) -> dict[str, A
     return sanitized
 
 
+def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
+    status = summary.get("analysis_review_status")
+    if isinstance(status, dict) and status:
+        return status
+    run_details = summary.get("run_details") or {}
+    status = run_details.get("analysis_review_status")
+    if isinstance(status, dict) and status:
+        return status
+    return {}
+
+
 def _render_cap_usage(used: Any, cap: Any) -> str:
     used_value = 0 if used is None else used
     if cap is None:
@@ -93,6 +104,63 @@ def _append_bounded_review_section(lines: list[str], summary: dict[str, Any]) ->
         lines.append("")
 
 
+def _append_analysis_review_status_section(lines: list[str], summary: dict[str, Any]) -> None:
+    status = _analysis_review_status(summary)
+    if not status:
+        return
+
+    provenance = status.get("provenance") or {}
+    lines.append("## Analysis Review Status")
+    lines.append("")
+    lines.append(f"- Mode: `{status.get('mode', 'unknown')}`")
+    lines.append(f"- Content verdict: `{status.get('content_verdict', 'unknown')}`")
+    lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
+    lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
+    lines.append(f"- Provenance required: `{provenance.get('required', False)}`")
+    lines.append(f"- Semantic warnings: `{status.get('semantic_warning_count', 0)}`")
+    downgrade_causes = status.get("downgrade_causes") or []
+    if downgrade_causes:
+        lines.append("- Downgrade causes:")
+        for item in downgrade_causes:
+            lines.append(f"  - {item}")
+    caveat_indices = status.get("accepted_recommendations_with_caveats") or []
+    if caveat_indices:
+        lines.append(
+            "- Accepted recommendations with caveats: "
+            + ", ".join(str(item) for item in caveat_indices)
+        )
+    inferred_indices = status.get("accepted_recommendations_with_inferred_grounding") or []
+    if inferred_indices:
+        lines.append(
+            "- Accepted recommendations with inference-only grounding: "
+            + ", ".join(str(item) for item in inferred_indices)
+        )
+
+    semantic_warnings = status.get("semantic_warnings") or []
+    if semantic_warnings:
+        lines.append("")
+        lines.append("### Final Semantic Warnings")
+        lines.append("")
+        for item in semantic_warnings:
+            lines.append(
+                f"- Stage `{item.get('stage_index')}` `{item.get('role_name')}`: {item.get('warning')}"
+            )
+
+    provenance_stages = provenance.get("stages") or []
+    if provenance_stages:
+        lines.append("")
+        lines.append("### Provenance Binding")
+        lines.append("")
+        for item in provenance_stages:
+            digest = str(item.get("payload_sha256") or "").strip()
+            digest_text = digest[:12] if digest else "n/a"
+            lines.append(
+                f"- `{item.get('surface')}` via stage `{item.get('stage_index')}` `{item.get('role_name')}`: "
+                f"`{item.get('status', 'unknown')}` (sha `{digest_text}`, refs `{item.get('normalized_ref_count', 0)}` across `{item.get('normalized_ref_field_count', 0)}` field(s))"
+            )
+    lines.append("")
+
+
 def render_report(summary: dict[str, Any]) -> str:
     lines: list[str] = ["# Forge Harness Report", ""]
 
@@ -102,6 +170,8 @@ def render_report(summary: dict[str, Any]) -> str:
     run_details = summary.get("run_details") or {}
     contract = summary.get("analysis_review_contract") or {}
     review_coverage = summary.get("analysis_review_coverage") or {}
+    analysis_status = _analysis_review_status(summary)
+    provenance = analysis_status.get("provenance") or {}
 
     lines.append("## Overview")
     lines.append("")
@@ -114,6 +184,12 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append(f"- Task ID: `{task.get('id', 'task')}`")
     lines.append(f"- Task kind: `{task.get('task_kind', 'unknown')}`")
     lines.append(f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})")
+    if analysis_status:
+        lines.append(f"- Review mode: `{analysis_status.get('mode', 'unknown')}`")
+        lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
+        downgrade_causes = analysis_status.get("downgrade_causes") or []
+        if downgrade_causes:
+            lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))
     lines.append(f"- Workspace: `{summary.get('workspace')}`")
     final_artifact = (summary.get("artifacts") or {}).get("final_artifact")
     final_artifact_kind = (summary.get("artifacts") or {}).get("final_artifact_kind")
@@ -170,6 +246,7 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("")
 
     _append_bounded_review_section(lines, summary)
+    _append_analysis_review_status_section(lines, summary)
 
     if run_details:
         lines.append("## Run Details")
@@ -391,6 +468,19 @@ def render_report(summary: dict[str, Any]) -> str:
         semantic_path = stage.get("semantic_validation_path")
         if semantic_path:
             lines.append(f"- Semantic validation artifact: `{semantic_path}`")
+        payload_provenance = stage.get("semantic_validation_payload_provenance") or {}
+        if payload_provenance:
+            digest = str(payload_provenance.get("payload_sha256") or "").strip()
+            digest_text = digest[:12] if digest else "n/a"
+            lines.append(
+                "- Payload provenance: "
+                f"`{payload_provenance.get('status', 'unknown')}`"
+                + (
+                    f" — policy `{payload_provenance.get('policy_mode', 'none')}`"
+                    f", sha `{digest_text}`"
+                    f", refs `{payload_provenance.get('normalized_ref_count', 0)}`"
+                )
+            )
         semantic_errors = stage.get("semantic_validation_errors") or []
         if semantic_errors:
             lines.append("- Semantic validation errors:")
