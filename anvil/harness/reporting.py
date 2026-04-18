@@ -45,6 +45,17 @@ def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
     return sorted(set(indices))
 
 
+def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
+    status = summary.get("analysis_review_status")
+    if isinstance(status, dict) and status:
+        return status
+    run_details = summary.get("run_details") or {}
+    status = run_details.get("analysis_review_status")
+    if isinstance(status, dict) and status:
+        return status
+    return {}
+
+
 def _render_analysis_section(lines: list[str], title: str, section: Any) -> None:
     if not isinstance(section, dict):
         return
@@ -120,8 +131,11 @@ def render_deliverable_markdown(
     *,
     artifact_label: str,
     accepted: bool,
+    summary: dict[str, Any] | None = None,
 ) -> str:
     lines: list[str] = [f"# {artifact_label}: {task_id}", ""]
+    verdict = str((summary or {}).get("verdict") or "").strip()
+    analysis_status = _analysis_review_status(summary or {})
     if not accepted:
         lines.extend(
             [
@@ -130,6 +144,28 @@ def render_deliverable_markdown(
                 "",
             ]
         )
+    elif verdict == "accepted_with_warnings":
+        lines.extend(
+            [
+                "> [!NOTE]",
+                "> This deliverable was accepted with warnings. Review mode, provenance status, and downgrade causes are listed below.",
+                "",
+            ]
+        )
+
+    if analysis_status:
+        provenance = analysis_status.get("provenance") or {}
+        lines.extend(["## Review Status", ""])
+        if verdict:
+            lines.append(f"- Verdict: `{verdict}`")
+        lines.append(f"- Mode: `{analysis_status.get('mode', 'unknown')}`")
+        lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
+        lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
+        lines.append(f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`")
+        downgrade_causes = analysis_status.get("downgrade_causes") or []
+        if downgrade_causes:
+            lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))
+        lines.append("")
 
     summary_text = str(payload.get("summary", "") or "").strip()
     if summary_text:
@@ -282,6 +318,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
                     else "Best Draft"
                 ),
                 accepted=fully_accepted,
+                summary=summary,
             ),
         )
         artifacts["final_artifact"] = str(artifact_md_path)

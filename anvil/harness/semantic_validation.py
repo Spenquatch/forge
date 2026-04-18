@@ -10,7 +10,7 @@ per-stage issue-ledger coverage, and required analysis sections.
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .contracts import AnalysisReviewContract
+from .contracts import AnalysisReviewContract, default_blocking_class_for_kind
 from .types import TaskSpec
 
 
@@ -128,9 +128,9 @@ def validate_analysis_output_payload(
             result.errors.append(f"recommendations[{index}] is missing classification.")
         if review_requirements.require_priority and not str(item.get("priority") or "").strip():
             result.errors.append(f"recommendations[{index}] is missing priority.")
+        evidence = item.get("evidence") or []
+        evidence_items = _non_empty_strings(evidence if isinstance(evidence, list) else [])
         if review_requirements.require_evidence_per_recommendation:
-            evidence = item.get("evidence") or []
-            evidence_items = _non_empty_strings(evidence if isinstance(evidence, list) else [])
             if not evidence_items:
                 result.errors.append(
                     f"recommendations[{index}] must include at least one non-empty evidence item."
@@ -155,6 +155,15 @@ def validate_analysis_output_payload(
             workspace_paths=workspace_path_set,
             contract=contract,
         )
+        if contract.mode == "trust":
+            _validate_trust_recommendation_metadata(
+                result,
+                recommendation=item,
+                recommendation_index=index,
+                evidence_items=evidence_items,
+                workspace_paths=workspace_path_set,
+                contract=contract,
+            )
 
     required_sections = contract.required_sections
     _validate_section(
@@ -244,6 +253,14 @@ def validate_analysis_review_payload(
             result.errors.append(f"issues[{index}] must include a non-empty issue_id.")
             continue
         issue_id_order.append(issue_id)
+        if contract.mode == "trust":
+            issue_kind = str(issue.get("kind") or "other").strip().lower()
+            blocking_class = str(issue.get("blocking_class") or "").strip().lower()
+            override_reason = str(issue.get("blocking_class_override_reason") or "").strip()
+            if blocking_class and blocking_class != default_blocking_class_for_kind(issue_kind) and not override_reason:
+                result.errors.append(
+                    f"issues[{index}] overrides blocking_class for kind={issue_kind} but is missing blocking_class_override_reason."
+                )
         recommendation_index = issue.get("recommendation_index")
         if recommendation_index not in (None, ""):
             try:
@@ -280,10 +297,14 @@ def validate_analysis_review_payload(
         and len(new_medium_or_higher_issue_ids)
         > bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0
     ):
-        result.errors.append(
+        overflow_message = (
             "new medium-or-higher auditor issues exceed the bounded-review cap of "
             f"{bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0} after round 0."
         )
+        if contract.mode == "trust" and contract.trust_review.late_auditor_medium_or_higher_policy == "warn":
+            result.warnings.append(overflow_message)
+        else:
+            result.errors.append(overflow_message)
 
     recommendation_reviews = payload.get("recommendation_reviews") or []
     if not isinstance(recommendation_reviews, list):
@@ -503,6 +524,63 @@ def _validate_recommendation_evidence(
             f"recommendations[{recommendation_index}].evidence contains path(s) not present in the workspace snapshot: "
             + ", ".join(unknown_files)
         )
+
+
+def _validate_trust_recommendation_metadata(
+    result: SemanticValidationResult,
+    *,
+    recommendation: dict[str, Any],
+    recommendation_index: int,
+    evidence_items: list[str],
+    workspace_paths: set[str],
+    contract: AnalysisReviewContract,
+) -> None:
+    verified_items = _non_empty_strings(
+        (recommendation.get("verified_evidence_refs") or [])
+        if isinstance(recommendation.get("verified_evidence_refs"), list)
+        else []
+    )
+    checked_items = _non_empty_strings(
+        (recommendation.get("checked_files") or [])
+        if isinstance(recommendation.get("checked_files"), list)
+        else []
+    )
+    affected_items = _non_empty_strings(
+        (recommendation.get("affected_files") or [])
+        if isinstance(recommendation.get("affected_files"), list)
+        else []
+    )
+
+    unknown_checked_files = sorted(set(checked_items) - workspace_paths)
+    if unknown_checked_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].checked_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_checked_files)
+        )
+    unknown_affected_files = sorted(set(affected_items) - workspace_paths)
+    if unknown_affected_files:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].affected_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_affected_files)
+        )
+
+    if contract.trust_review.require_verified_evidence_refs_subset:
+        unexpected_verified = sorted(set(verified_items) - set(evidence_items))
+        if unexpected_verified:
+            result.errors.append(
+                f"recommendations[{recommendation_index}].verified_evidence_refs must be a subset of evidence: "
+                + ", ".join(unexpected_verified)
+            )
+
+    grounding_mode = str(recommendation.get("grounding_mode") or "").strip().lower()
+    if contract.trust_review.require_affected_file_coverage and grounding_mode != "inferred":
+        supported_refs = set(evidence_items) | set(verified_items) | set(checked_items)
+        uncovered_affected_files = sorted(set(affected_items) - supported_refs)
+        if uncovered_affected_files:
+            result.errors.append(
+                f"recommendations[{recommendation_index}].affected_files must be covered by evidence or checked_files when grounding_mode is not inferred: "
+                + ", ".join(uncovered_affected_files)
+            )
 
 
 def _non_empty_strings(values: Iterable[Any]) -> list[str]:
