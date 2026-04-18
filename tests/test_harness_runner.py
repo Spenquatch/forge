@@ -403,6 +403,35 @@ class _LateAuditorIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"][0]["verified_evidence_refs"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["checked_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["affected_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["grounding_mode"] = "direct"
+        payload["recommendations"][1]["verified_evidence_refs"] = []
+        payload["recommendations"][1]["checked_files"] = []
+        payload["recommendations"][1]["affected_files"] = [
+            ".github/workflows/claude-code-release-watch.yml"
+        ]
+        payload["recommendations"][1]["grounding_mode"] = "inferred"
+        return payload
+
+
+class _TrustSemanticWarningHarnessAdapter(_TrustInferenceHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["strengths"]["none_reason"] = "The summary section still includes a redundant none_reason."
+        return payload
+
+
 class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
     def run(self, request):
         if request.role_name == "critic":
@@ -467,6 +496,7 @@ def _write_task_and_strategy(
     *,
     min_recommendations: int = 2,
     review_max_loops: int | None = None,
+    strategy_kind: str = "analysis_review_bounded_v1",
 ) -> tuple[Path, Path]:
     task_path = tmp_path / "task.yaml"
     task_path.write_text(
@@ -502,7 +532,7 @@ review_loops:
     strategy_path.write_text(
         f"""
 name: analysis-review-fake
-kind: analysis_review_v1
+kind: {strategy_kind}
 roles:
   proposer:
     provider: fake
@@ -566,7 +596,8 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
-    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v3"
+    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v4"
+    assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
     assert summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
     assert summary["final_answer"]["recommendations"][0]["title"] == "Add concurrency controls"
@@ -621,11 +652,120 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert proposer_semantic["skipped"] is False
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
     assert "## Bounded Review" in report_text
+    assert "## Analysis Review Status" in report_text
+    assert "- Mode: `bounded`" in report_text
     assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
     assert '"rendered_in_report_section": true' in report_text
     assert '"bounded_review_summary": {' in report_text
     assert '"review_stages"' not in report_text.split('"bounded_review_summary": {', 1)[1].split("}", 1)[0]
 
+
+def test_analysis_review_runner_legacy_alias_warns_and_normalizes_to_bounded(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: _AcceptingHarnessAdapter())
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    assert summary["strategy_kind"] == "analysis_review_bounded_v1"
+    assert summary["analysis_review_contract"]["mode"] == "bounded"
+    assert (
+        "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
+        in summary["warnings"]
+    )
+
+
+def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_and_reports_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustInferenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    assert summary["analysis_review_contract"]["mode"] == "trust"
+    assert summary["analysis_review_status"]["mode"] == "trust"
+    assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
+    assert summary["analysis_review_status"]["accepted_recommendations_with_inferred_grounding"] == [2]
+    assert (
+        "accepted recommendations rely on inference-only grounding: 2"
+        in summary["analysis_review_status"]["downgrade_causes"]
+    )
+
+    proposer_stage = summary["agent_stages"][0]
+    semantic_payload = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
+    assert semantic_payload["payload_provenance"]["status"] == "bound"
+    assert semantic_payload["payload_provenance"]["policy_mode"] == "payload_hash_and_refs"
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "## Analysis Review Status" in report_text
+    assert "- Mode: `trust`" in report_text
+    assert "- Provenance status: `bound`" in report_text
+    assert "Accepted recommendations with inference-only grounding: 2" in report_text
+
+
+def test_analysis_review_runner_trust_mode_downgrades_when_semantic_warnings_remain(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustSemanticWarningHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    assert summary["analysis_review_status"]["mode"] == "trust"
+    assert summary["analysis_review_status"]["semantic_warning_count"] >= 1
+    assert any(
+        "semantic validation warnings remain:" in cause
+        for cause in summary["analysis_review_status"]["downgrade_causes"]
+    )
 
 
 def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
@@ -874,7 +1014,7 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
         "Add release failure categorization"
     )
     assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
-        "analysis_review_v1_contract_v3"
+        "analysis_review_v1_contract_v4"
     )
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3
