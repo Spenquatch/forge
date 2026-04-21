@@ -516,8 +516,14 @@ def render_deliverable_markdown(
             and str(provenance.get("status") or "").strip().lower() != "bound"
         ):
             incomplete_parts: list[str] = []
+            uncovered_recommendation_indices = provenance.get("uncovered_recommendation_indices") or []
             uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or []
             uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or []
+            if uncovered_recommendation_indices:
+                incomplete_parts.append(
+                    "recommendation-linked closures for recommendation indices "
+                    + ", ".join(str(item) for item in uncovered_recommendation_indices)
+                )
             if uncovered_global_issue_ids:
                 incomplete_parts.append(
                     "uncovered global issue closures: "
@@ -707,7 +713,9 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
 
     if artifact_json_path is not None and artifact_md_path is not None and isinstance(payload, dict) and payload:
         render_summary = (
-            _build_partial_artifact_summary(summary, payload) if partially_accepted else summary
+            _build_partial_artifact_summary(summary, payload)
+            if artifact_kind == "partial_answer"
+            else summary
         )
         write_json(artifact_json_path, payload)
         write_text(
@@ -729,11 +737,11 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
         artifacts["final_artifact"] = str(artifact_md_path)
         artifacts["final_artifact_json"] = str(artifact_json_path)
         artifacts["final_artifact_kind"] = artifact_kind
-        if fully_accepted:
+        if artifact_kind == "final_answer":
             artifacts["final_answer_json"] = str(artifact_json_path)
             artifacts["final_answer_md"] = str(artifact_md_path)
             summary["final_answer"] = payload
-        elif partially_accepted:
+        elif artifact_kind == "partial_answer":
             artifacts["partial_answer_json"] = str(artifact_json_path)
             artifacts["partial_answer_md"] = str(artifact_md_path)
         else:

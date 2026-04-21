@@ -2237,6 +2237,9 @@ class HarnessRunner:
                 "closure_complete_topic_ids": list(
                     review_provenance.get("closure_complete_topic_ids") or []
                 ),
+                "uncovered_recommendation_indices": list(
+                    review_provenance.get("uncovered_recommendation_indices") or []
+                ),
                 "uncovered_global_issue_ids": list(
                     review_provenance.get("uncovered_global_issue_ids") or []
                 ),
@@ -3010,6 +3013,9 @@ class HarnessRunner:
 
         if canonical_role_name in {"critic", "auditor"}:
             prior_open_topics_exist = bool(prior_open_topic_records)
+            for field_name in ("issue_closure_reviews", "topic_closure_reviews"):
+                if field_name not in normalized:
+                    normalized[field_name] = []
             reserved_topic_ids = {
                 str(item.get("topic_id") or "").strip()
                 for item in normalized.get("topics", []) or []

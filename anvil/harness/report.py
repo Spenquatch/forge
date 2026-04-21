@@ -281,6 +281,9 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
         "closure_complete_topic_ids",
         [],
     )
+    uncovered_recommendation_indices = provenance.get(
+        "uncovered_recommendation_indices"
+    ) or review_stage.get("uncovered_recommendation_indices", [])
     uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or review_stage.get(
         "uncovered_global_issue_ids",
         [],
@@ -299,6 +302,7 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
         or topic_ref_count
         or closure_complete_issue_ids
         or closure_complete_topic_ids
+        or uncovered_recommendation_indices
         or uncovered_global_issue_ids
         or uncovered_global_topic_ids
         or closure_proof_by_id
@@ -315,6 +319,10 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
     )
     lines.append(
         "- Closure-complete topic IDs: " + _render_id_list(list(closure_complete_topic_ids))
+    )
+    lines.append(
+        "- Uncovered recommendation indices: "
+        + _render_id_list(list(uncovered_recommendation_indices))
     )
     lines.append(
         "- Uncovered global issue IDs: " + _render_id_list(list(uncovered_global_issue_ids))

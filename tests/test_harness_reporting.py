@@ -266,6 +266,58 @@ def test_build_partial_answer_payload_returns_none_when_trust_provenance_is_inco
     assert partial_payload is None
 
 
+def test_render_deliverable_markdown_names_uncovered_recommendation_indices_in_trust_mode():
+    payload = {
+        "summary": "Accepted recommendations with incomplete trust provenance.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Clarify operator fallback path",
+                "rationale": "Operators need a concrete fallback path.",
+                "evidence": ["docs/runbook.md"],
+                "proposed_change": "Document the fallback handling path.",
+                "confidence": 0.74,
+            }
+        ],
+    }
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "analysis_review_status": {
+            "mode": "trust",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+                "uncovered_recommendation_indices": [1, 2],
+                "uncovered_global_issue_ids": ["AR-001"],
+                "uncovered_global_topic_ids": ["TOPIC-001"],
+            },
+            "topic_ledger_count": 0,
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": [],
+            "downgrade_causes": ["final payload provenance is not fully bound"],
+        },
+        "topic_ledger": [],
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-trust-incomplete",
+        payload,
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary=summary,
+    )
+
+    assert (
+        "- Closure proof incomplete: recommendation-linked closures for recommendation indices 1, 2; uncovered global issue closures: AR-001; uncovered global topic closures: TOPIC-001"
+        in markdown
+    )
+
+
 def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_recommendations(
     tmp_path,
 ):
@@ -1058,6 +1110,7 @@ def test_render_report_renders_review_provenance_section_for_scoped_global_closu
                 "topic_closure_review_ref_count": 2,
                 "closure_complete_issue_ids": [],
                 "closure_complete_topic_ids": ["TOPIC-001"],
+                "uncovered_recommendation_indices": [2],
                 "uncovered_global_issue_ids": [],
                 "uncovered_global_topic_ids": ["TOPIC-002"],
                 "closure_proof_by_id": {
@@ -1079,6 +1132,7 @@ def test_render_report_renders_review_provenance_section_for_scoped_global_closu
                         "topic_closure_review_ref_count": 2,
                         "closure_complete_issue_ids": [],
                         "closure_complete_topic_ids": ["TOPIC-001"],
+                        "uncovered_recommendation_indices": [2],
                         "uncovered_global_issue_ids": [],
                         "uncovered_global_topic_ids": ["TOPIC-002"],
                         "closure_proof_by_id": {
@@ -1114,6 +1168,7 @@ def test_render_report_renders_review_provenance_section_for_scoped_global_closu
     assert "## Review Provenance" in report
     assert "- Topic closure review refs: `2`" in report
     assert "- Closure-complete topic IDs: `TOPIC-001`" in report
+    assert "- Uncovered recommendation indices: `2`" in report
     assert "- Uncovered global topic IDs: `TOPIC-002`" in report
     assert "| `TOPIC-001` | `scoped` | `review_attested` | `carried_forward` | .github/workflows/claude-code-release-watch.yml | .github/workflows/claude-code-release-watch.yml |" in report
 

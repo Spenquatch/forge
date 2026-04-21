@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from anvil.harness.files import load_structured_file
+from anvil.harness.providers import _soft_validate_schema
 from anvil.harness.runner import HarnessRunner
+from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.types import ProviderRun
 
@@ -1566,6 +1568,7 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert summary["analysis_review_contract"]["mode"] == "trust"
     assert summary["analysis_review_status"]["mode"] == "trust"
     assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
+    assert summary["analysis_review_status"]["provenance"]["uncovered_recommendation_indices"] == []
     assert summary["analysis_review_status"]["accepted_recommendations_with_inferred_grounding"] == [2]
     assert (
         "accepted recommendations rely on inference-only grounding: 2"
@@ -1665,6 +1668,47 @@ def test_analysis_review_runner_trust_review_normalization_binds_structured_revi
     }
 
 
+def test_analysis_review_runner_trust_review_backfills_missing_closure_review_arrays_before_schema_revalidation(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustInferenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustInferenceHarnessAdapter()._payload_for_role("critic")
+    payload.pop("issue_closure_reviews", None)
+    payload.pop("topic_closure_reviews", None)
+
+    normalized, payload_provenance, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+    schema_errors = _soft_validate_schema(normalized, analysis_review_schema())
+
+    assert warnings == []
+    assert normalized["issue_closure_reviews"] == []
+    assert normalized["topic_closure_reviews"] == []
+    assert schema_errors == []
+    assert payload_provenance["status"] == "bound"
+
+
 def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insufficient(
     tmp_path,
     monkeypatch,
@@ -1708,6 +1752,62 @@ def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insuff
         "trust review payload lacks provenance-complete structured review refs for recommendation-linked closures for recommendation indices 1, 2."
         in "\n".join(critic_stage["semantic_validation_errors"])
     )
+
+
+def test_analysis_review_runner_status_surfaces_uncovered_recommendation_indices(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustTopLevelOnlyRefReviewHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    contract = runner._analysis_contract()
+    final_analysis_payload = _TrustTopLevelOnlyRefReviewHarnessAdapter()._payload_for_role("proposer")
+    final_review_payload = _TrustTopLevelOnlyRefReviewHarnessAdapter()._payload_for_role("critic")
+    _, review_provenance, warnings = runner._normalize_analysis_review_payload(
+        final_review_payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=contract,
+    )
+
+    assert warnings == []
+    runner.agent_stages = [
+        {
+            "stage_index": 1,
+            "role_name": "critic",
+            "ok": True,
+            "structured_output": final_review_payload,
+            "semantic_validation_payload_provenance": review_provenance,
+        }
+    ]
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["provenance"]["status"] == "insufficient"
+    assert status["provenance"]["uncovered_recommendation_indices"] == [1, 2]
+    assert status["provenance"]["uncovered_global_issue_ids"] == []
+    assert status["provenance"]["uncovered_global_topic_ids"] == []
+    assert "final payload provenance is not fully bound" in status["downgrade_causes"]
 
 
 def test_analysis_review_runner_trust_review_marks_global_topic_closure_as_uncovered_debt(
@@ -1936,6 +2036,7 @@ def test_analysis_review_runner_trust_review_keeps_proven_global_issue_bound_end
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
     assert "## Review Provenance" in report_text
+    assert "- Uncovered recommendation indices: none" in report_text
     assert "- Issue closure review refs: `2`" in report_text
     assert "`AR-001`" in report_text
     assert "- Closure proof incomplete:" not in report_text
