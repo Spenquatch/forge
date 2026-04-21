@@ -77,6 +77,25 @@ def _accepted_recommendation_count(payload: dict[str, Any]) -> int:
     )
 
 
+def _remaining_topic_counts(payload: dict[str, Any]) -> tuple[int, int, int]:
+    """Return unresolved topic counts for a completed review payload.
+
+    carried_forward_topic_ids represents prior topics that remain unresolved for the
+    current draft, so those IDs must count as remaining topic debt during draft
+    reconstruction and ranking.
+    """
+
+    new_topic_count = len(payload.get("topics", []) or [])
+    if not new_topic_count:
+        new_topic_count = len(payload.get("missing_topics", []) or [])
+    carried_forward_topic_count = len(payload.get("carried_forward_topic_ids", []) or [])
+    return (
+        new_topic_count,
+        carried_forward_topic_count,
+        new_topic_count + carried_forward_topic_count,
+    )
+
+
 def _is_candidate_stage(stage: dict[str, Any]) -> bool:
     role_name = str(stage.get("role_name") or "")
     return role_name.startswith(_CANDIDATE_PREFIXES)
@@ -185,16 +204,28 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             review_counts = _count_issue_severities(payload)
             for key, value in review_counts.items():
                 issue_counts[key] = max(int(issue_counts.get(key, 0)), int(value))
-            topic_count = len(payload.get("topics", []) or [])
-            if not topic_count:
-                topic_count = len(payload.get("missing_topics", []) or [])
+            new_topic_count, carried_forward_topic_count, open_topic_count = _remaining_topic_counts(
+                payload
+            )
             issue_counts["topics"] = max(
                 int(issue_counts.get("topics", 0)),
-                topic_count,
+                open_topic_count,
             )
             issue_counts["missing_topics"] = max(
                 int(issue_counts.get("missing_topics", 0)),
-                topic_count,
+                open_topic_count,
+            )
+            issue_counts["new_topics"] = max(
+                int(issue_counts.get("new_topics", 0)),
+                new_topic_count,
+            )
+            issue_counts["carried_forward_topics"] = max(
+                int(issue_counts.get("carried_forward_topics", 0)),
+                carried_forward_topic_count,
+            )
+            issue_counts["open_topics"] = max(
+                int(issue_counts.get("open_topics", 0)),
+                open_topic_count,
             )
             issue_counts["accepted_recommendations"] = max(
                 int(issue_counts.get("accepted_recommendations", 0)),
@@ -261,6 +292,7 @@ def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
         accepted_recommendations = int(issue_counts.get("accepted_recommendations", 0))
         blocking_medium_plus = int(issue_counts.get("blocking_medium_or_higher", 0))
         medium_plus = int(issue_counts.get("medium_or_higher", 0))
+        open_topics = int(issue_counts.get("open_topics", issue_counts.get("topics", 0)))
         grounding = float(scores.get("grounding_score", -1.0))
         validator_failures = int(issue_counts.get("required_validator_failures", 0))
         round_index = int(draft.get("round_index", 0))
@@ -269,6 +301,8 @@ def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
             _status_rank(draft),
             0 if blocking_medium_plus == 0 else 1,
             0 if medium_plus == 0 else 1,
+            0 if open_topics == 0 else 1,
+            open_topics,
             -accepted_recommendations,
             validator_failures,
             -grounding,

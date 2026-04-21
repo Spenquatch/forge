@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from anvil.harness.report import render_report
-from anvil.harness.reporting import render_deliverable_markdown
+from anvil.harness.reporting import apply_final_artifacts, render_deliverable_markdown
 
 
 def _rendered_section(markdown: str, heading_prefix: str) -> str:
@@ -171,6 +171,95 @@ def test_render_deliverable_markdown_uses_original_indices_for_partial_answers()
         "This recommendation relies on inference-only grounding rather than direct verified evidence."
         in recommendation_two
     )
+
+
+def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accepted_draft(
+    tmp_path,
+):
+    clean_payload = {
+        "summary": "Clean accepted draft.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Clean recommendation",
+                "rationale": "Grounded and caveat-free.",
+                "evidence": ["clean.py"],
+                "proposed_change": "Apply the clean change.",
+                "confidence": 0.61,
+            }
+        ],
+    }
+    caveated_payload = {
+        "summary": "Accepted draft with carried-forward topic debt.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Caveated recommendation",
+                "rationale": "Higher grounding but still caveated.",
+                "evidence": ["caveated.py"],
+                "proposed_change": "Apply the caveated change.",
+                "confidence": 0.92,
+            }
+        ],
+    }
+    summary = {
+        "task": {"id": "task-selection"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "drafts": [
+            {
+                "draft_id": "draft-clean",
+                "review_status": "accepted",
+                "review_state": "evaluated",
+                "round_index": 0,
+                "summary": clean_payload["summary"],
+                "issue_counts": {
+                    "blocking_medium_or_higher": 0,
+                    "medium_or_higher": 0,
+                    "accepted_recommendations": 1,
+                    "required_validator_failures": 0,
+                    "topics": 0,
+                    "open_topics": 0,
+                },
+                "scores": {
+                    "grounding_score": 0.62,
+                    "actionability_score": 0.80,
+                    "scope_compliance_score": 0.90,
+                },
+                "metadata": {"stage_index": 1, "payload": clean_payload},
+            },
+            {
+                "draft_id": "draft-caveated",
+                "review_status": "accepted",
+                "review_state": "evaluated",
+                "round_index": 1,
+                "summary": caveated_payload["summary"],
+                "issue_counts": {
+                    "blocking_medium_or_higher": 0,
+                    "medium_or_higher": 0,
+                    "accepted_recommendations": 1,
+                    "required_validator_failures": 0,
+                    "topics": 1,
+                    "open_topics": 1,
+                    "carried_forward_topics": 1,
+                },
+                "scores": {
+                    "grounding_score": 0.99,
+                    "actionability_score": 0.83,
+                    "scope_compliance_score": 0.92,
+                },
+                "metadata": {"stage_index": 3, "payload": caveated_payload},
+            },
+        ],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["best_draft_id"] == "draft-clean"
+    assert updated["selected_draft_id"] == "draft-clean"
+    assert updated["final_answer"]["summary"] == "Clean accepted draft."
 
 
 def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics_exist():
