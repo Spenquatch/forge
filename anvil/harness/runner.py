@@ -807,7 +807,8 @@ class HarnessRunner:
         semantic_errors: list[str] = []
         semantic_warnings: list[str] = []
         semantic_validation_path: str | None = None
-        schema_validation_errors = list(run.schema_validation_errors or [])
+        provider_schema_validation_errors = list(run.schema_validation_errors or [])
+        schema_validation_errors = list(provider_schema_validation_errors)
         context = dict(semantic_context or {})
         contract = context.pop("contract", None)
         normalized_payload: dict[str, Any] | None = None
@@ -829,9 +830,26 @@ class HarnessRunner:
                     structured_output=normalized_payload,
                     raw_meta=raw_meta,
                 )
-            if schema_validation_errors and not run.failure_kind:
+            if (
+                provider_schema_validation_errors
+                and not schema_validation_errors
+                and run.failure_kind is None
+            ):
                 run = replace(
                     run,
+                    ok=(
+                        run.exit_code == 0
+                        and run.structured_output is not None
+                        and run.failure_kind is None
+                    ),
+                    error=None,
+                    failure_summary=None,
+                    schema_validation_errors=[],
+                )
+            elif schema_validation_errors and not run.failure_kind:
+                run = replace(
+                    run,
+                    ok=False,
                     failure_kind="schema_validation_error",
                     failure_summary="Schema validation failed.",
                 )
@@ -1601,19 +1619,29 @@ class HarnessRunner:
         reviser_output: dict[str, Any] | None,
         topic_id: str,
     ) -> str:
-        if not isinstance(reviser_output, dict):
+        entry = self._topic_resolution_entry_from_reviser(reviser_output, topic_id)
+        if not isinstance(entry, dict):
             return ""
+        status = str(entry.get("status") or "")
+        change_summary = str(entry.get("change_summary") or "")
+        residual_risk = str(entry.get("residual_risk") or "")
+        note_bits = [bit for bit in (status, change_summary, residual_risk) if bit]
+        return " | ".join(note_bits)
+
+    @staticmethod
+    def _topic_resolution_entry_from_reviser(
+        reviser_output: dict[str, Any] | None,
+        topic_id: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(reviser_output, dict):
+            return None
         for item in reviser_output.get("topic_resolution_map", []) or []:
             if not isinstance(item, dict):
                 continue
             if str(item.get("topic_id") or "") != topic_id:
                 continue
-            status = str(item.get("status") or "")
-            change_summary = str(item.get("change_summary") or "")
-            residual_risk = str(item.get("residual_risk") or "")
-            note_bits = [bit for bit in (status, change_summary, residual_risk) if bit]
-            return " | ".join(note_bits)
-        return ""
+            return item
+        return None
 
     def _ingest_review_payload(
         self,
@@ -1741,7 +1769,18 @@ class HarnessRunner:
             record = self._topic_ledger_by_id.get(topic_id)
             if record is None:
                 continue
+            resolution_entry = self._topic_resolution_entry_from_reviser(reviser_output, topic_id)
             resolution_note = self._topic_resolution_note_from_reviser(reviser_output, topic_id)
+            resolution_recommendation_index = None
+            if isinstance(resolution_entry, dict):
+                raw_resolution_recommendation_index = resolution_entry.get("recommendation_index")
+                if raw_resolution_recommendation_index not in (None, ""):
+                    try:
+                        resolution_recommendation_index = int(raw_resolution_recommendation_index)
+                    except (TypeError, ValueError):
+                        resolution_recommendation_index = None
+            if resolution_recommendation_index is not None:
+                record["recommendation_index"] = resolution_recommendation_index
             if topic_id in resolved_topic_ids:
                 record["resolution_status"] = "resolved"
                 if resolution_note:
@@ -1772,10 +1811,8 @@ class HarnessRunner:
                 record = self._topic_ledger_by_id[topic_id]
                 record.update(
                     {
-                        "source_stage_id": stage_id,
                         "last_seen_round": round_index,
                         "severity": topic.get("severity"),
-                        "recommendation_index": topic.get("recommendation_index"),
                         "title": topic.get("title"),
                         "evidence": topic.get("evidence"),
                         "repair_hint": topic.get("repair_hint"),
@@ -1784,6 +1821,9 @@ class HarnessRunner:
                         ),
                     }
                 )
+                topic_recommendation_index = topic.get("recommendation_index")
+                if topic_recommendation_index not in (None, ""):
+                    record["recommendation_index"] = topic_recommendation_index
             else:
                 record = {
                     "topic_id": topic_id,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from anvil.harness.files import load_structured_file
@@ -609,6 +610,93 @@ class _LegacyMissingTopicsHarnessAdapter(_AcceptingHarnessAdapter):
                 "confidence": 0.82,
                 "scope_escapes": [],
             }
+        return super()._payload_for_role(role_name)
+
+
+class _LegacyMissingTopicsFullRunHarnessAdapter(_TopicLifecycleHarnessAdapter):
+    _TOPIC_ID = "AT-001"
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            topic = payload.pop("topics")[0]
+            payload["missing_topics"] = [topic["title"]]
+            return payload
+        return super()._payload_for_role(role_name)
+
+    def run(self, request):
+        run = super().run(request)
+        if request.role_name != "critic":
+            return run
+        return replace(
+            run,
+            ok=False,
+            error="Schema validation failed.",
+            schema_validation_errors=[
+                "$.missing_topics: additional properties not allowed",
+                "$.topics: required property missing",
+            ],
+        )
+
+
+class _TopicCarryForwardHarnessAdapter(_TopicLifecycleHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        if role_name == "reviser_round_1":
+            payload = self._base_analysis(revised=True)
+            payload["topic_resolution_map"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "status": "not_addressed",
+                    "recommendation_index": 2,
+                    "change_summary": "The recommendation text improved, but the fallback classification is still too implicit.",
+                    "residual_risk": "Operators still need a concrete fallback label.",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            return {
+                "verdict": "accept",
+                "summary": "The revision improved recommendation 2, but the topic remains open.",
+                "workspace_write_intent": "none",
+                "issues": [],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": [],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": 1,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 1 remains acceptable.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 2,
+                        "verdict": "accept_with_caveat",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 2 improved, but the fallback classification is still implicit.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                ],
+                "topics": [],
+                "resolved_topic_ids": [],
+                "carried_forward_topic_ids": [self._TOPIC_ID],
+                "waived_topic_ids": [],
+                "grounding_score": 0.92,
+                "actionability_score": 0.83,
+                "scope_compliance_score": 0.95,
+                "confidence": 0.88,
+                "scope_escapes": [],
+            }
+        return super()._payload_for_role(role_name)
+
+
+class _TopicResolutionRecommendationHarnessAdapter(_TopicLifecycleHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            payload["topics"][0]["recommendation_index"] = None
+            return payload
         return super()._payload_for_role(role_name)
 
 
@@ -1287,6 +1375,106 @@ def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_
     assert "missing_topics" not in final_answer_text
 
 
+def test_analysis_review_runner_preserves_topic_introduction_source_when_carried_forward(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TopicCarryForwardHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["topic_ledger"] == [
+        {
+            "topic_id": "TOPIC-001",
+            "source_stage_id": "stage-02-critic",
+            "first_seen_round": 0,
+            "last_seen_round": 1,
+            "severity": "medium",
+            "recommendation_index": 2,
+            "title": "Recommendation 2 needs a concrete fallback classification.",
+            "evidence": "The workflow recommendation names the operator path but leaves the fallback state implicit.",
+            "repair_hint": "Name the fallback classification directly in recommendation 2.",
+            "resolution_status": "carried_forward",
+            "resolution_note": "not_addressed | The recommendation text improved, but the fallback classification is still too implicit. | Operators still need a concrete fallback label.",
+        }
+    ]
+    assert summary["analysis_review_status"]["open_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    assert "- Introduced by: `critic`" in report_text
+    assert "- Source stage: `stage-02-critic`" in report_text
+    assert (
+        "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 2 needs a concrete fallback classification."
+        in final_answer_text
+    )
+
+    runner._ingest_review_payload(
+        {
+            "topics": [
+                {
+                    "topic_id": "TOPIC-001",
+                    "severity": "medium",
+                    "title": "Recommendation 2 needs a concrete fallback classification.",
+                    "evidence": "The updated recommendation still hints at the fallback behavior without naming the concrete classification.",
+                    "repair_hint": "Name the fallback classification directly in recommendation 2.",
+                    "recommendation_index": 2,
+                }
+            ],
+            "resolved_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "waived_topic_ids": [],
+        },
+        round_index=2,
+        role_name="auditor",
+        reviser_output=None,
+    )
+    assert runner.topic_ledger[0]["source_stage_id"] == "stage-02-critic"
+    assert runner.topic_ledger[0]["first_seen_round"] == 0
+
+
+def test_analysis_review_runner_persists_addressed_topic_recommendation_index_from_reviser(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TopicResolutionRecommendationHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["topic_ledger"][0]["source_stage_id"] == "stage-02-critic"
+    assert summary["topic_ledger"][0]["recommendation_index"] == 2
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "- Recommendation index: `2`" in report_text
+
+
 def test_analysis_review_runner_normalizes_legacy_missing_topics_into_topics(
     tmp_path,
     monkeypatch,
@@ -1322,6 +1510,54 @@ def test_analysis_review_runner_normalizes_legacy_missing_topics_into_topics(
     assert len(normalized["topics"]) == 1
     assert normalized["topics"][0]["topic_id"].startswith("AT-")
     assert normalized["topics"][0]["title"] == "Recommendation 2 still needs a concrete fallback classification."
+
+
+def test_analysis_review_runner_allows_legacy_missing_topics_full_run_after_normalization(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _LegacyMissingTopicsFullRunHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    critic_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "critic"
+    )
+    assert critic_stage["ok"] is True
+    assert critic_stage.get("failure_kind") is None
+    assert critic_stage.get("schema_validation_errors") in (None, [])
+    assert critic_stage["semantic_validation_warnings"] == [
+        "Normalized legacy missing_topics into topics with stable topic IDs."
+    ]
+
+    semantic_payload = load_structured_file(Path(critic_stage["semantic_validation_path"]))
+    assert semantic_payload["ok"] is True
+    assert semantic_payload["skipped"] is False
+    assert semantic_payload["errors"] == []
+    assert semantic_payload["warnings"] == [
+        "Normalized legacy missing_topics into topics with stable topic IDs."
+    ]
+
+    run_envelope = load_structured_file(
+        Path(runner.artifacts_dir) / "02_critic" / "run.envelope.json"
+    )
+    assert run_envelope["ok"] is True
+    assert run_envelope.get("failure_kind") is None
+    assert run_envelope.get("schema_validation_errors") in (None, [])
 
 
 def test_analysis_review_runner_reports_non_zero_scope_escapes(
