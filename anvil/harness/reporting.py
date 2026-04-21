@@ -50,17 +50,38 @@ def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
     return sorted(set(indices))
 
 
-def _eligible_partial_answer_indices(summary: dict[str, Any]) -> list[int]:
+def _partial_answer_eligibility(summary: dict[str, Any]) -> tuple[bool, list[int]]:
     accepted_indices = _accepted_recommendation_indices(summary)
     if not accepted_indices:
-        return []
+        return (False, [])
+
+    analysis_status = _analysis_review_status(summary)
+    provenance = analysis_status.get("provenance") or {}
+    review_mode = str(analysis_status.get("mode") or "").strip().lower()
+    provenance_policy = str(provenance.get("policy_mode") or "").strip().lower()
+    provenance_status = str(provenance.get("status") or "").strip().lower()
+    if review_mode == "trust" and provenance_policy == "payload_hash_and_refs":
+        if provenance_status != "bound":
+            return (False, [])
+
     topic_eligibility = partial_accept_topic_eligibility(
         _topic_ledger(summary),
         accepted_recommendation_indices=accepted_indices,
     )
     if topic_eligibility["global_blocking_topic_ids"]:
+        return (False, [])
+
+    eligible_indices = list(topic_eligibility["eligible_recommendation_indices"])
+    if not eligible_indices:
+        return (False, [])
+    return (True, eligible_indices)
+
+
+def _eligible_partial_answer_indices(summary: dict[str, Any]) -> list[int]:
+    eligible, recommendation_indices = _partial_answer_eligibility(summary)
+    if not eligible:
         return []
-    return list(topic_eligibility["eligible_recommendation_indices"])
+    return recommendation_indices
 
 
 def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
@@ -359,7 +380,9 @@ def _render_analysis_section(lines: list[str], title: str, section: Any) -> None
 def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or not payload:
         return None
-    recommendation_indices = _eligible_partial_answer_indices(summary)
+    eligible, recommendation_indices = _partial_answer_eligibility(summary)
+    if not eligible:
+        return None
     recommendations = payload.get("recommendations")
     if not isinstance(recommendations, list) or not recommendations or not recommendation_indices:
         return None
@@ -417,6 +440,21 @@ def _augment_best_draft_payload(best_draft: dict[str, Any], payload: dict[str, A
     if caveats:
         enriched["caveats"] = caveats
     return enriched
+
+
+def _clear_partial_artifact_state(summary: dict[str, Any], artifacts: dict[str, Any]) -> None:
+    summary.pop("partial_answer", None)
+    artifacts.pop("partial_answer_json", None)
+    artifacts.pop("partial_answer_md", None)
+
+    if str(artifacts.get("final_artifact_kind") or "").strip() == "partial_answer":
+        artifacts.pop("final_artifact_kind", None)
+    final_artifact = str(artifacts.get("final_artifact") or "").strip()
+    if "PARTIAL_ANSWER" in final_artifact:
+        artifacts.pop("final_artifact", None)
+    final_artifact_json = str(artifacts.get("final_artifact_json") or "").strip()
+    if "PARTIAL_ANSWER" in final_artifact_json:
+        artifacts.pop("final_artifact_json", None)
 
 
 def render_deliverable_markdown(
@@ -641,18 +679,23 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             artifact_json_path = run_dir / "FINAL_ANSWER.json"
             artifact_md_path = run_dir / "FINAL_ANSWER.md"
     elif partially_accepted:
-        payload = summary.get("partial_answer")
-        if not isinstance(payload, dict) or not payload:
-            source_payload = summary.get("final_answer")
-            if (not isinstance(source_payload, dict) or not source_payload) and best_draft is not None:
-                source_payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
-            payload = build_partial_answer_payload(summary, source_payload)
-        if isinstance(payload, dict) and payload:
-            artifact_kind = "partial_answer"
-            artifact_json_path = run_dir / "PARTIAL_ANSWER.json"
-            artifact_md_path = run_dir / "PARTIAL_ANSWER.md"
-            summary["partial_answer"] = payload
-    else:
+        partial_allowed, _ = _partial_answer_eligibility(summary)
+        if partial_allowed:
+            payload = summary.get("partial_answer")
+            if not isinstance(payload, dict) or not payload:
+                source_payload = summary.get("final_answer")
+                if (not isinstance(source_payload, dict) or not source_payload) and best_draft is not None:
+                    source_payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
+                payload = build_partial_answer_payload(summary, source_payload)
+            if isinstance(payload, dict) and payload:
+                artifact_kind = "partial_answer"
+                artifact_json_path = run_dir / "PARTIAL_ANSWER.json"
+                artifact_md_path = run_dir / "PARTIAL_ANSWER.md"
+                summary["partial_answer"] = payload
+        else:
+            _clear_partial_artifact_state(summary, artifacts)
+
+    if artifact_kind is None and not fully_accepted:
         if best_draft is not None:
             payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
             if isinstance(payload, dict) and payload:

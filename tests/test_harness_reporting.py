@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from anvil.harness.nodes.write_artifacts import write_artifacts_node
 from anvil.harness.report import render_report
 from anvil.harness.reporting import (
     apply_final_artifacts,
@@ -13,6 +14,30 @@ def _rendered_section(markdown: str, heading_prefix: str) -> str:
     if "\n### " in section:
         section = section.split("\n### ", 1)[0]
     return section
+
+
+def _best_draft_record(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "draft_id": "draft-clean",
+        "review_status": "accepted",
+        "review_state": "evaluated",
+        "round_index": 0,
+        "summary": str(payload.get("summary") or ""),
+        "issue_counts": {
+            "blocking_medium_or_higher": 0,
+            "medium_or_higher": 0,
+            "accepted_recommendations": len(payload.get("recommendations") or []),
+            "required_validator_failures": 0,
+            "topics": 0,
+            "open_topics": 0,
+        },
+        "scores": {
+            "grounding_score": 0.72,
+            "actionability_score": 0.81,
+            "scope_compliance_score": 0.88,
+        },
+        "metadata": {"stage_index": 1, "payload": payload},
+    }
 
 
 def test_render_deliverable_markdown_attaches_caveats_to_affected_recommendations():
@@ -212,6 +237,35 @@ def test_build_partial_answer_payload_filters_topic_blocked_accepted_recommendat
     ] == [1, 3]
 
 
+def test_build_partial_answer_payload_returns_none_when_trust_provenance_is_incomplete():
+    payload = {
+        "summary": "Partial acceptance output.",
+        "recommendations": [
+            {"title": "First", "classification": "recommendation", "priority": "medium"},
+            {"title": "Second", "classification": "recommendation", "priority": "medium"},
+        ],
+    }
+    summary = {
+        "verdict": "accepted_partial",
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 2, "verdict": "accept", "summary": "Also clean."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+            },
+        },
+        "topic_ledger": [],
+    }
+
+    partial_payload = build_partial_answer_payload(summary, payload)
+
+    assert partial_payload is None
+
+
 def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_recommendations(
     tmp_path,
 ):
@@ -309,6 +363,218 @@ def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_r
     assert "TOPIC-001" not in markdown
     assert "accept_with_caveat: 2" not in markdown
     assert "## Topic Lifecycle" not in markdown
+
+
+def test_apply_final_artifacts_blocks_partial_answer_when_trust_provenance_is_incomplete(
+    tmp_path,
+):
+    summary = {
+        "task": {"id": "task-partial-blocked"},
+        "verdict": "accepted_partial",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "final_answer": {
+            "summary": "Draft that should not be published as a partial artifact.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "First",
+                    "rationale": "Supported recommendation.",
+                    "evidence": ["a.py"],
+                    "proposed_change": "Ship it.",
+                    "confidence": 0.71,
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Second",
+                    "rationale": "Also supported.",
+                    "evidence": ["b.py"],
+                    "proposed_change": "Ship that too.",
+                    "confidence": 0.69,
+                },
+            ],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 2, "verdict": "accept", "summary": "Clean."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 1,
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "downgrade_causes": ["final payload provenance is not fully bound"],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert "partial_answer" not in updated
+    assert "partial_answer_json" not in updated["artifacts"]
+    assert "partial_answer_md" not in updated["artifacts"]
+    assert updated["artifacts"]["final_artifact"] == ""
+    assert updated["artifacts"]["final_artifact_kind"] == "none"
+    assert "final_artifact_json" not in updated["artifacts"]
+    assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
+    assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
+
+
+def test_apply_final_artifacts_clears_stale_partial_metadata_and_falls_back_to_best_draft(
+    tmp_path,
+):
+    best_payload = {
+        "summary": "Fallback best draft.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Best draft recommendation",
+                "rationale": "Safe fallback.",
+                "evidence": ["draft.py"],
+                "proposed_change": "Publish the fallback draft.",
+                "confidence": 0.75,
+            }
+        ],
+    }
+    summary = {
+        "task": {"id": "task-stale-partial"},
+        "verdict": "accepted_partial",
+        "artifacts": {
+            "run_dir": str(tmp_path),
+            "partial_answer_json": str(tmp_path / "PARTIAL_ANSWER.json"),
+            "partial_answer_md": str(tmp_path / "PARTIAL_ANSWER.md"),
+            "final_artifact": str(tmp_path / "PARTIAL_ANSWER.md"),
+            "final_artifact_json": str(tmp_path / "PARTIAL_ANSWER.json"),
+            "final_artifact_kind": "partial_answer",
+        },
+        "partial_answer": {
+            "summary": "Stale partial answer.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Stale recommendation",
+                }
+            ],
+            "included_recommendation_indices": [1],
+            "excluded_recommendation_indices": [],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 1,
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "downgrade_causes": ["final payload provenance is not fully bound"],
+        },
+        "drafts": [_best_draft_record(best_payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert "partial_answer" not in updated
+    assert "partial_answer_json" not in updated["artifacts"]
+    assert "partial_answer_md" not in updated["artifacts"]
+    assert updated["artifacts"]["final_artifact"].endswith("BEST_DRAFT.md")
+    assert updated["artifacts"]["final_artifact_json"].endswith("BEST_DRAFT.json")
+    assert updated["artifacts"]["final_artifact_kind"] == "best_draft"
+    assert updated["best_draft"]["summary"] == "Fallback best draft."
+    assert (tmp_path / "BEST_DRAFT.json").exists()
+    assert (tmp_path / "BEST_DRAFT.md").exists()
+    assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
+    assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
+
+
+def test_write_artifacts_node_clears_ineligible_partial_artifacts_and_falls_back_to_best_draft(
+    tmp_path,
+):
+    best_payload = {
+        "summary": "Fallback best draft.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Best draft recommendation",
+                "rationale": "Safe fallback.",
+                "evidence": ["draft.py"],
+                "proposed_change": "Publish the fallback draft.",
+                "confidence": 0.75,
+            }
+        ],
+    }
+    summary = {
+        "task": {"id": "task-write-node"},
+        "verdict": "accepted_partial",
+        "artifacts": {
+            "run_dir": str(tmp_path),
+            "partial_answer_json": str(tmp_path / "PARTIAL_ANSWER.json"),
+            "partial_answer_md": str(tmp_path / "PARTIAL_ANSWER.md"),
+            "final_artifact": str(tmp_path / "PARTIAL_ANSWER.md"),
+            "final_artifact_json": str(tmp_path / "PARTIAL_ANSWER.json"),
+            "final_artifact_kind": "partial_answer",
+        },
+        "partial_answer": {
+            "summary": "Stale partial answer.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Stale recommendation",
+                }
+            ],
+            "included_recommendation_indices": [1],
+            "excluded_recommendation_indices": [],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 1,
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "downgrade_causes": ["final payload provenance is not fully bound"],
+        },
+        "drafts": [_best_draft_record(best_payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+    state = {
+        "thread_id": "thread-123",
+        "task_path": "task.md",
+        "strategy_path": "strategy.md",
+        "summary_payload": summary,
+    }
+
+    updated_state = write_artifacts_node(state)
+    updated_summary = updated_state["summary_payload"]
+
+    assert "partial_answer" not in updated_summary
+    assert "partial_answer_json" not in updated_summary["artifacts"]
+    assert "partial_answer_md" not in updated_summary["artifacts"]
+    assert updated_summary["artifacts"]["final_artifact"].endswith("BEST_DRAFT.md")
+    assert updated_summary["artifacts"]["final_artifact_json"].endswith("BEST_DRAFT.json")
+    assert updated_summary["artifacts"]["final_artifact_kind"] == "best_draft"
+    assert updated_state["artifact_index"]["best_draft_md"]["path"].endswith("BEST_DRAFT.md")
+    assert "partial_answer_md" not in updated_state["artifact_index"]
+    assert (tmp_path / "BEST_DRAFT.md").exists()
+    assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
 
 
 def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accepted_draft(
