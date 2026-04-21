@@ -721,6 +721,12 @@
         "verdict": "accept",
         "open_issue_ids": [],
         "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       },
       {
@@ -778,12 +784,20 @@
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
         "verdict": "accept",
         "open_issue_ids": [],
         "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       },
       {
@@ -811,6 +825,8 @@
       "TOPIC-002"
     ],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "scope_escapes": [],
     "grounding_score": 0.89,
     "actionability_score": 0.81,
@@ -845,6 +861,8 @@
     "resolved_topic_ids": [],
     "carried_forward_topic_ids": [],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "scope_escapes": [],
     "grounding_score": 0.9,
     "actionability_score": 0.88,
@@ -883,6 +901,8 @@
     "resolved_topic_ids": [],
     "carried_forward_topic_ids": [],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "scope_escapes": [],
     "grounding_score": 0.9,
     "actionability_score": 0.88,
@@ -925,6 +945,8 @@
       "TOPIC-001"
     ],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "scope_escapes": [],
     "grounding_score": 0.9,
     "actionability_score": 0.88,
@@ -974,6 +996,8 @@
       "TOPIC-002"
     ],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "scope_escapes": [],
     "grounding_score": 0.89,
     "actionability_score": 0.81,
@@ -992,6 +1016,8 @@
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
@@ -1043,6 +1069,8 @@
       "AR-001"
     ],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
@@ -1097,6 +1125,8 @@
       "AR-001"
     ],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
@@ -1137,6 +1167,8 @@
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
@@ -1180,6 +1212,8 @@
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
@@ -1556,12 +1590,20 @@
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
     "waived_issue_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [],
     "recommendation_reviews": [
       {
         "recommendation_index": 1,
         "verdict": "accept",
         "open_issue_ids": [],
         "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       },
       {
@@ -1571,6 +1613,12 @@
           "AR-101"
         ],
         "summary": "Recommendation 2 is directionally sound but needs a more explicit rollout path.",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       }
     ],
@@ -1615,6 +1663,12 @@
         "verdict": "accept",
         "open_issue_ids": [],
         "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       },
       {
@@ -1624,6 +1678,12 @@
           "AR-101"
         ],
         "summary": "Recommendation 2 is directionally sound but needs a more explicit rollout path.",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       }
     ],
@@ -1683,6 +1743,19 @@
       "TOPIC-001"
     ],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [
+      {
+        "topic_id": "TOPIC-001",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "summary": "The carried-forward global topic was re-checked directly."
+      }
+    ],
     "scope_escapes": [],
     "grounding_score": 0.9,
     "actionability_score": 0.8,
@@ -1707,6 +1780,12 @@
         "verdict": "accept",
         "open_issue_ids": [],
         "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       },
       {
@@ -1714,6 +1793,12 @@
         "verdict": "accept_with_caveat",
         "open_issue_ids": [],
         "summary": "Recommendation 2 improved but still carries one open topic.",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
         "confidence_assessment": "well_calibrated"
       }
     ],
@@ -1723,6 +1808,15 @@
       "TOPIC-001"
     ],
     "waived_topic_ids": [],
+    "issue_closure_reviews": [],
+    "topic_closure_reviews": [
+      {
+        "topic_id": "TOPIC-001",
+        "checked_files": [],
+        "verified_evidence_refs": [],
+        "summary": "The review classified the global topic without attaching scoped proof refs."
+      }
+    ],
     "scope_escapes": [],
     "grounding_score": 0.9,
     "actionability_score": 0.8,

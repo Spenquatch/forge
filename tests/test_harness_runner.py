@@ -47,6 +47,8 @@ class _AcceptingHarnessAdapter:
             "resolved_topic_ids": [],
             "carried_forward_topic_ids": [],
             "waived_topic_ids": [],
+            "issue_closure_reviews": [],
+            "topic_closure_reviews": [],
         }
 
     @staticmethod
@@ -70,6 +72,9 @@ class _AcceptingHarnessAdapter:
         (out_dir / "response.txt").write_text("ok", encoding="utf-8")
         (out_dir / "error.txt").write_text("", encoding="utf-8")
         payload = self._payload_for_role(request.role_name)
+        if request.role_name in {"critic", "auditor"} and isinstance(payload, dict):
+            payload.setdefault("issue_closure_reviews", [])
+            payload.setdefault("topic_closure_reviews", [])
         return ProviderRun(
             role_name=request.role_name,
             provider="fake",
@@ -992,16 +997,9 @@ class _TrustGlobalTopicClosureHarnessAdapter(_TrustInferenceHarnessAdapter):
     def _payload_for_role(self, role_name: str):
         payload = super()._payload_for_role(role_name)
         if role_name in {"critic", "auditor"}:
-            payload["topics"] = [
-                {
-                    "topic_id": "TOPIC-001",
-                    "severity": "medium",
-                    "title": "A global fallback policy remains unresolved.",
-                    "evidence": "The review still describes a run-level gap rather than a recommendation-local one.",
-                    "repair_hint": "Add a dedicated global ref surface or avoid claiming global closure.",
-                    "recommendation_index": None,
-                }
-            ]
+            payload["topics"] = []
+            payload["carried_forward_topic_ids"] = ["TOPIC-001"]
+            payload["topic_closure_reviews"] = []
         return payload
 
 
@@ -1009,23 +1007,9 @@ class _TrustGlobalIssueClosureHarnessAdapter(_TrustInferenceHarnessAdapter):
     def _payload_for_role(self, role_name: str):
         payload = super()._payload_for_role(role_name)
         if role_name in {"critic", "auditor"}:
-            payload["issues"] = [
-                {
-                    "issue_id": "AR-001",
-                    "severity": "medium",
-                    "kind": "missing_evidence",
-                    "blocking_class": "correctness",
-                    "recommendation_index": None,
-                    "title": "A global evidence gap remains unresolved.",
-                    "evidence": "The review claims a run-wide invariant without a dedicated scoped ref surface.",
-                    "repair_hint": "Add a future issue-scoped ref surface or narrow the claim.",
-                    "why_not_raised_earlier": (
-                        "The run-level claim only became explicit in this trust review."
-                        if role_name == "auditor"
-                        else None
-                    ),
-                }
-            ]
+            payload["issues"] = []
+            payload["carried_forward_issue_ids"] = ["AR-001"]
+            payload["issue_closure_reviews"] = []
         return payload
 
 
@@ -1662,7 +1646,7 @@ def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insuff
         is False
     )
     assert (
-        "trust review payload lacks provenance-complete recommendation-level structured review refs for recommendation indices 1, 2."
+        "trust review payload lacks provenance-complete structured review refs for recommendation-linked closures for recommendation indices 1, 2."
         in "\n".join(critic_stage["semantic_validation_errors"])
     )
 
@@ -1743,6 +1727,59 @@ def test_analysis_review_runner_trust_review_marks_global_issue_closure_as_uncov
     assert payload_provenance["uncovered_global_issue_ids"] == ["AR-001"]
     assert payload_provenance["uncovered_global_topic_ids"] == []
     assert payload_provenance["closure_provenance_satisfied"] is False
+
+
+def test_analysis_review_runner_trust_review_marks_scoped_global_topic_closure_as_complete(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalTopicClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalTopicClosureHarnessAdapter()._payload_for_role("critic")
+    payload["topic_closure_reviews"] = [
+        {
+            "topic_id": "TOPIC-001",
+            "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+            "summary": "The carried-forward global topic was re-checked directly.",
+        }
+    ]
+    _, payload_provenance, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+
+    assert warnings == []
+    assert payload_provenance["status"] == "bound"
+    assert payload_provenance["closure_provenance_satisfied"] is True
+    assert payload_provenance["closure_complete_topic_ids"] == ["TOPIC-001"]
+    assert payload_provenance["uncovered_global_topic_ids"] == []
+    assert payload_provenance["topic_closure_review_ref_count"] == 2
+    assert payload_provenance["closure_proof_by_id"]["TOPIC-001"] == {
+        "proof_path": "scoped",
+        "classification_status": "carried_forward",
+        "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+        "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+        "proof_strength": "review_attested",
+    }
 
 
 def test_analysis_review_runner_trust_mode_rejects_concrete_verdicts_without_per_verdict_refs(

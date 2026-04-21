@@ -691,7 +691,14 @@ def test_trust_review_semantic_validation_requires_blocking_class_override_reaso
         payload_provenance={
             "status": "bound",
             "policy_mode": "payload_hash_and_refs",
-            "normalized_ref_count": 2,
+            "normalized_ref_count": 6,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
         },
     )
 
@@ -743,11 +750,19 @@ def test_trust_review_semantic_validation_accepts_override_reason_and_warns_on_l
         contract=contract,
         workspace_paths=_workspace_paths(),
         prior_open_issue_ids=["AR-001"],
+        prior_open_issue_records=[{"issue_id": "AR-001", "recommendation_index": 2}],
         expected_recommendation_count=2,
         payload_provenance={
             "status": "bound",
             "policy_mode": "payload_hash_and_refs",
-            "normalized_ref_count": 2,
+            "normalized_ref_count": 6,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
         },
     )
 
@@ -807,20 +822,21 @@ def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification(
         payload_provenance={
             "status": "insufficient",
             "policy_mode": "payload_hash_and_refs",
-            "normalized_ref_count": 2,
-            "recommendation_review_ref_count": 0,
-            "recommendation_review_ref_field_count": 0,
+            "normalized_ref_count": 4,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "topic_closure_review_ref_count": 0,
             "closure_provenance_satisfied": False,
-            "covered_recommendation_indices": [],
-            "uncovered_recommendation_indices": [1, 2],
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
             "uncovered_global_issue_ids": [],
-            "uncovered_global_topic_ids": [],
+            "uncovered_global_topic_ids": ["TOPIC-001"],
         },
     )
 
     assert result.ok is False
     assert (
-        "trust review payload lacks provenance-complete recommendation-level structured review refs for recommendation indices 1, 2. files_reviewed alone is not sufficient."
+        "trust review payload lacks provenance-complete structured review refs for global topic closures TOPIC-001. files_reviewed alone is not sufficient."
         in result.errors
     )
 
@@ -840,6 +856,7 @@ def test_trust_review_semantic_validation_rejects_global_topic_without_recommend
         }
     ]
     payload["carried_forward_topic_ids"] = []
+    payload["topic_closure_reviews"] = []
 
     result = validate_analysis_review_payload(
         payload,
@@ -866,7 +883,7 @@ def test_trust_review_semantic_validation_rejects_global_topic_without_recommend
 
     assert result.ok is False
     assert (
-        "trust review payload lacks provenance-complete recommendation-level structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
+        "trust review payload lacks provenance-complete structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
         in result.errors
     )
 
@@ -886,6 +903,8 @@ def test_trust_review_semantic_validation_rejects_global_topic_when_recommendati
         }
     ]
     payload["resolved_topic_ids"] = []
+    payload["carried_forward_topic_ids"] = []
+    payload["topic_closure_reviews"] = []
 
     result = validate_analysis_review_payload(
         payload,
@@ -912,7 +931,7 @@ def test_trust_review_semantic_validation_rejects_global_topic_when_recommendati
 
     assert result.ok is False
     assert (
-        "trust review payload lacks provenance-complete recommendation-level structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
+        "trust review payload lacks provenance-complete structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
         in result.errors
     )
 
@@ -936,6 +955,8 @@ def test_trust_review_semantic_validation_rejects_global_issue_when_recommendati
         }
     ]
     payload["resolved_issue_ids"] = []
+    payload["carried_forward_topic_ids"] = []
+    payload["topic_closure_reviews"] = []
 
     result = validate_analysis_review_payload(
         payload,
@@ -962,7 +983,98 @@ def test_trust_review_semantic_validation_rejects_global_issue_when_recommendati
 
     assert result.ok is False
     assert (
-        "trust review payload lacks provenance-complete recommendation-level structured review refs for global issue closures AR-002. files_reviewed alone is not sufficient."
+        "trust review payload lacks provenance-complete structured review refs for global issue closures AR-002. files_reviewed alone is not sufficient."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_rejects_duplicate_topic_closure_review_ids():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
+    payload["topic_closure_reviews"] = [
+        {
+            "topic_id": "TOPIC-001",
+            "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+            "summary": "First proof entry.",
+        },
+        {
+            "topic_id": "TOPIC-001",
+            "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+            "summary": "Duplicate proof entry.",
+        },
+    ]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 10,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "topic_closure_review_ref_count": 4,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is False
+    assert "topic_closure_reviews contains duplicate topic_ids: TOPIC-001" in result.errors
+
+
+def test_trust_review_semantic_validation_rejects_topic_closure_verified_refs_outside_checked_files():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
+    payload["topic_closure_reviews"] = [
+        {
+            "topic_id": "TOPIC-001",
+            "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+            "summary": "The proof overclaims beyond the checked file set.",
+        }
+    ]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 8,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "topic_closure_review_ref_count": 2,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": ["TOPIC-001"],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "topic_closure_reviews[1].verified_evidence_refs must be a subset of checked_files: .github/workflows/codex-cli-release-watch.yml"
         in result.errors
     )
 

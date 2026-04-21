@@ -172,10 +172,24 @@ def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
     assert strict_task.review_requirements.evidence_cap_policy == "strict"
 
 
-def test_analysis_review_schema_requires_files_reviewed():
+def test_analysis_review_schema_requires_files_reviewed_and_closure_review_arrays():
     schema = analysis_review_schema()
 
     assert "files_reviewed" in schema["required"]
+    assert "issue_closure_reviews" in schema["required"]
+    assert "topic_closure_reviews" in schema["required"]
+    assert schema["properties"]["issue_closure_reviews"]["items"]["required"] == [
+        "issue_id",
+        "checked_files",
+        "verified_evidence_refs",
+        "summary",
+    ]
+    assert schema["properties"]["topic_closure_reviews"]["items"]["required"] == [
+        "topic_id",
+        "checked_files",
+        "verified_evidence_refs",
+        "summary",
+    ]
 
 
 def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():

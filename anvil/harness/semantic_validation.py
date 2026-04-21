@@ -443,6 +443,19 @@ def validate_analysis_review_payload(
             "prior open issue IDs are missing from resolved/carried_forward/waived arrays: "
             + ", ".join(missing_classifications)
         )
+    required_global_issue_closure_ids = sorted(
+        issue_id for issue_id in classification_union if prior_open_issue_record_map.get(issue_id) is None
+    )
+    _validate_scoped_closure_reviews(
+        result,
+        field_name="issue_closure_reviews",
+        values=payload.get("issue_closure_reviews"),
+        id_field="issue_id",
+        known_ids=prior_open_ids,
+        required_ids=required_global_issue_closure_ids if contract.mode == "trust" else [],
+        files_reviewed=files_reviewed_set,
+        workspace_paths=workspace_path_set,
+    )
 
     topics = payload.get("topics") or []
     topic_id_order: list[str] = []
@@ -553,6 +566,21 @@ def validate_analysis_review_payload(
             "topics contains newly introduced topic IDs that also appear in resolved_topic_ids/carried_forward_topic_ids/waived_topic_ids: "
             + ", ".join(introduced_and_classified_topic_ids)
         )
+    required_global_topic_closure_ids = sorted(
+        topic_id
+        for topic_id in classified_topic_ids
+        if prior_open_topic_record_map.get(topic_id) is None
+    )
+    _validate_scoped_closure_reviews(
+        result,
+        field_name="topic_closure_reviews",
+        values=payload.get("topic_closure_reviews"),
+        id_field="topic_id",
+        known_ids=prior_open_topic_id_set,
+        required_ids=required_global_topic_closure_ids if contract.mode == "trust" else [],
+        files_reviewed=files_reviewed_set,
+        workspace_paths=workspace_path_set,
+    )
 
     scope_escapes = payload.get("scope_escapes") or []
     if not isinstance(scope_escapes, list):
@@ -862,7 +890,7 @@ def _validate_review_payload_provenance(
         coverage_parts: list[str] = []
         if uncovered_recommendation_indices:
             coverage_parts.append(
-                "recommendation indices "
+                "recommendation-linked closures for recommendation indices "
                 + ", ".join(str(item) for item in uncovered_recommendation_indices)
             )
         if uncovered_global_issue_ids:
@@ -874,7 +902,7 @@ def _validate_review_payload_provenance(
                 "global topic closures " + ", ".join(uncovered_global_topic_ids)
             )
         result.errors.append(
-            "trust review payload lacks provenance-complete recommendation-level structured review refs for "
+            "trust review payload lacks provenance-complete structured review refs for "
             + "; ".join(coverage_parts)
             + ". files_reviewed alone is not sufficient."
         )
@@ -882,14 +910,24 @@ def _validate_review_payload_provenance(
     if closure_provenance_satisfied:
         return
     recommendation_review_ref_count = provenance.get("recommendation_review_ref_count", 0)
+    issue_closure_review_ref_count = provenance.get("issue_closure_review_ref_count", 0)
+    topic_closure_review_ref_count = provenance.get("topic_closure_review_ref_count", 0)
     try:
         ref_count = int(recommendation_review_ref_count)
     except (TypeError, ValueError):
         ref_count = 0
-    if ref_count > 0:
+    try:
+        issue_ref_count = int(issue_closure_review_ref_count)
+    except (TypeError, ValueError):
+        issue_ref_count = 0
+    try:
+        topic_ref_count = int(topic_closure_review_ref_count)
+    except (TypeError, ValueError):
+        topic_ref_count = 0
+    if ref_count > 0 or issue_ref_count > 0 or topic_ref_count > 0:
         return
     result.errors.append(
-        "trust review payload introduced or classified issues/topics without recommendation-level structured review refs; files_reviewed alone is not sufficient, so provide recommendation_reviews checked_files/verified_evidence_refs."
+        "trust review payload introduced or classified issues/topics without structured closure proof; files_reviewed alone is not sufficient, so provide recommendation_reviews checked_files/verified_evidence_refs for recommendation-linked closures and issue_closure_reviews/topic_closure_reviews for recommendation_index=null global closures."
     )
 
 
@@ -977,6 +1015,80 @@ def _validated_id_list(
     if duplicates:
         result.errors.append(f"{field_name} contains duplicate {id_label}s: " + ", ".join(duplicates))
     return normalized_ids
+
+
+def _validate_scoped_closure_reviews(
+    result: SemanticValidationResult,
+    *,
+    field_name: str,
+    values: Any,
+    id_field: str,
+    known_ids: set[str],
+    required_ids: list[str],
+    files_reviewed: set[str],
+    workspace_paths: set[str],
+) -> None:
+    if values is None:
+        values = []
+    if not isinstance(values, list):
+        result.errors.append(f"{field_name} must be a list.")
+        return
+    seen_ids: list[str] = []
+    for index, item in enumerate(values, start=1):
+        if not isinstance(item, dict):
+            result.errors.append(f"{field_name}[{index}] must be an object.")
+            continue
+        record_id = str(item.get(id_field) or "").strip()
+        if not record_id:
+            result.errors.append(f"{field_name}[{index}].{id_field} must be a non-empty ID.")
+            continue
+        seen_ids.append(record_id)
+        if record_id not in known_ids:
+            result.errors.append(
+                f"{field_name}[{index}].{id_field} references an unknown prior open ID: {record_id}"
+            )
+        checked_items = _non_empty_strings(
+            item.get("checked_files") if isinstance(item.get("checked_files"), list) else []
+        )
+        verified_items = _non_empty_strings(
+            item.get("verified_evidence_refs")
+            if isinstance(item.get("verified_evidence_refs"), list)
+            else []
+        )
+        missing_checked_files = sorted(set(checked_items) - files_reviewed)
+        if missing_checked_files:
+            result.errors.append(
+                f"{field_name}[{index}].checked_files must be a subset of files_reviewed: "
+                + ", ".join(missing_checked_files)
+            )
+        unknown_checked_files = sorted(set(checked_items) - workspace_paths)
+        if unknown_checked_files:
+            result.errors.append(
+                f"{field_name}[{index}].checked_files contains path(s) not present in the workspace snapshot: "
+                + ", ".join(unknown_checked_files)
+            )
+        unexpected_verified_refs = sorted(set(verified_items) - set(checked_items))
+        if unexpected_verified_refs:
+            result.errors.append(
+                f"{field_name}[{index}].verified_evidence_refs must be a subset of checked_files: "
+                + ", ".join(unexpected_verified_refs)
+            )
+        unknown_verified_refs = sorted(set(verified_items) - workspace_paths)
+        if unknown_verified_refs:
+            result.errors.append(
+                f"{field_name}[{index}].verified_evidence_refs contains path(s) not present in the workspace snapshot: "
+                + ", ".join(unknown_verified_refs)
+            )
+    duplicates = sorted({item for item in seen_ids if seen_ids.count(item) > 1})
+    if duplicates:
+        result.errors.append(
+            f"{field_name} contains duplicate {id_field}s: " + ", ".join(duplicates)
+        )
+    missing_required_ids = sorted(set(required_ids) - set(seen_ids))
+    if missing_required_ids:
+        result.errors.append(
+            f"{field_name} is missing scoped closure proof IDs: " + ", ".join(missing_required_ids)
+        )
 
 
 def _validate_topic_resolution_map(

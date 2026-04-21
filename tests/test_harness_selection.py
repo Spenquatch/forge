@@ -176,3 +176,45 @@ def test_select_best_draft_prefers_clean_accepted_draft_over_higher_grounding_to
     assert best is not None
     assert best["draft_id"] == "draft-clean"
     assert best["review_status"] == "best"
+
+
+def test_select_best_draft_penalizes_incomplete_closure_provenance():
+    clean_draft = {
+        "draft_id": "draft-proven",
+        "review_status": "accepted",
+        "round_index": 0,
+        "issue_counts": {
+            "blocking_medium_or_higher": 0,
+            "medium_or_higher": 0,
+            "accepted_recommendations": 1,
+            "required_validator_failures": 0,
+            "topics": 0,
+            "open_topics": 0,
+            "provenance_incomplete": 0,
+            "uncovered_closure_count": 0,
+        },
+        "scores": {"grounding_score": 0.72},
+        "metadata": {"stage_index": 1},
+    }
+    unproven_draft = {
+        "draft_id": "draft-unproven",
+        "review_status": "accepted",
+        "round_index": 1,
+        "issue_counts": {
+            "blocking_medium_or_higher": 0,
+            "medium_or_higher": 0,
+            "accepted_recommendations": 1,
+            "required_validator_failures": 0,
+            "topics": 0,
+            "open_topics": 0,
+            "provenance_incomplete": 1,
+            "uncovered_closure_count": 1,
+        },
+        "scores": {"grounding_score": 0.99},
+        "metadata": {"stage_index": 3},
+    }
+
+    best = select_best_draft([unproven_draft, clean_draft])
+
+    assert best is not None
+    assert best["draft_id"] == "draft-proven"

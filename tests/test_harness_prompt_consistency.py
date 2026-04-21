@@ -275,11 +275,11 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
             in critic
         )
         assert (
-            "In trust mode, if you introduce or classify issues/topics, those closures must map to a covered recommendation review; unrelated recommendation refs do not count."
+            "In trust mode, recommendation-linked closures must map to the covered recommendation review, and recommendation_index=null closures must map to the matching issue_closure_reviews/topic_closure_reviews entry."
             in critic
         )
         assert (
-            "In trust mode, global issues/topics remain provenance-incomplete under this contract without a future issue/topic-scoped ref surface, even if the payload hash is recorded."
+            "Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null."
             in critic
         )
         assert (
@@ -287,24 +287,24 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
             in auditor
         )
         assert (
-            "In trust mode, if you introduce or classify issues/topics, those closures must map to a covered recommendation review; unrelated recommendation refs do not count."
+            "In trust mode, recommendation-linked closures must map to the covered recommendation review, and recommendation_index=null closures must map to the matching issue_closure_reviews/topic_closure_reviews entry."
             in auditor
         )
         assert (
-            "In trust mode, global issues/topics remain provenance-incomplete under this contract without a future issue/topic-scoped ref surface, even if the payload hash is recorded."
+            "Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null."
             in auditor
         )
         assert (
-            "In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract."
+            "files_reviewed is review context, not proof by itself."
             in critic
         )
         assert (
-            "In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract."
+            "files_reviewed is review context, not proof by itself."
             in auditor
         )
     else:
-        assert "In bounded mode, these review-stage refs are optional advisory metadata, but populate them when it is cheap and concrete." in critic
-        assert "In bounded mode, these review-stage refs are optional advisory metadata, but populate them when it is cheap and concrete." in auditor
+        assert "In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support." in critic
+        assert "In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support." in auditor
     assert issue_line in auditor
     for line in acceptance_lines:
         assert line in critic

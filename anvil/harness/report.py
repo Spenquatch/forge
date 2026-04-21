@@ -234,7 +234,10 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
             )
 
     provenance_stages = provenance.get("stages") or []
-    if any(str(item.get("status") or "").strip().lower() == "bound" for item in provenance_stages):
+    if any(
+        str(item.get("status") or "").strip().lower() in {"bound", "insufficient"}
+        for item in provenance_stages
+    ):
         lines.append("")
         lines.append("### Provenance Binding")
         lines.append("")
@@ -246,6 +249,106 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
                 f"`{item.get('status', 'unknown')}` (sha `{digest_text}`, refs `{item.get('normalized_ref_count', 0)}` across `{item.get('normalized_ref_field_count', 0)}` field(s))"
             )
     lines.append("")
+
+
+def _append_review_provenance_section(lines: list[str], summary: dict[str, Any]) -> None:
+    status = _analysis_review_status(summary)
+    if not status:
+        return
+    provenance = status.get("provenance") or {}
+    provenance_stages = provenance.get("stages") or []
+    review_stage = next(
+        (item for item in provenance_stages if str(item.get("surface") or "") == "review"),
+        {},
+    )
+    recommendation_ref_count = review_stage.get(
+        "recommendation_review_ref_count",
+        provenance.get("recommendation_review_ref_count", 0),
+    )
+    issue_ref_count = provenance.get(
+        "issue_closure_review_ref_count",
+        review_stage.get("issue_closure_review_ref_count", 0),
+    )
+    topic_ref_count = provenance.get(
+        "topic_closure_review_ref_count",
+        review_stage.get("topic_closure_review_ref_count", 0),
+    )
+    closure_complete_issue_ids = provenance.get("closure_complete_issue_ids") or review_stage.get(
+        "closure_complete_issue_ids",
+        [],
+    )
+    closure_complete_topic_ids = provenance.get("closure_complete_topic_ids") or review_stage.get(
+        "closure_complete_topic_ids",
+        [],
+    )
+    uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or review_stage.get(
+        "uncovered_global_issue_ids",
+        [],
+    )
+    uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or review_stage.get(
+        "uncovered_global_topic_ids",
+        [],
+    )
+    closure_proof_by_id = provenance.get("closure_proof_by_id") or review_stage.get(
+        "closure_proof_by_id",
+        {},
+    )
+    if not (
+        recommendation_ref_count
+        or issue_ref_count
+        or topic_ref_count
+        or closure_complete_issue_ids
+        or closure_complete_topic_ids
+        or uncovered_global_issue_ids
+        or uncovered_global_topic_ids
+        or closure_proof_by_id
+    ):
+        return
+
+    lines.append("## Review Provenance")
+    lines.append("")
+    lines.append(f"- Recommendation review refs: `{recommendation_ref_count}`")
+    lines.append(f"- Issue closure review refs: `{issue_ref_count}`")
+    lines.append(f"- Topic closure review refs: `{topic_ref_count}`")
+    lines.append(
+        "- Closure-complete issue IDs: " + _render_id_list(list(closure_complete_issue_ids))
+    )
+    lines.append(
+        "- Closure-complete topic IDs: " + _render_id_list(list(closure_complete_topic_ids))
+    )
+    lines.append(
+        "- Uncovered global issue IDs: " + _render_id_list(list(uncovered_global_issue_ids))
+    )
+    lines.append(
+        "- Uncovered global topic IDs: " + _render_id_list(list(uncovered_global_topic_ids))
+    )
+    lines.append("")
+    if closure_proof_by_id:
+        lines.append(
+            "| ID | Proof Path | Proof Strength | Classification | Checked Files | Verified Evidence Refs |"
+        )
+        lines.append("|---|---|---|---|---|---|")
+        for record_id in sorted(closure_proof_by_id):
+            item = closure_proof_by_id.get(record_id) or {}
+            checked_files = ", ".join(str(value) for value in (item.get("checked_files") or [])) or "n/a"
+            verified_refs = ", ".join(
+                str(value) for value in (item.get("verified_evidence_refs") or [])
+            ) or "n/a"
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _table_cell(f"`{record_id}`"),
+                        _table_cell(f"`{item.get('proof_path', 'unknown')}`"),
+                        _table_cell(f"`{item.get('proof_strength', 'unknown')}`"),
+                        _table_cell(f"`{item.get('classification_status', 'unknown')}`"),
+                        _table_cell(checked_files),
+                        _table_cell(verified_refs),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
 
 
 def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -> None:
@@ -400,6 +503,7 @@ def render_report(summary: dict[str, Any]) -> str:
 
         _append_review_scope_section(lines, summary)
     _append_analysis_review_status_section(lines, summary)
+    _append_review_provenance_section(lines, summary)
 
     if run_details:
         lines.append("## Run Details")

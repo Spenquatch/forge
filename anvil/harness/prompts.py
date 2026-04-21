@@ -313,21 +313,27 @@ def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
     lines = [
         "Review payload evidence refs:",
         "- files_reviewed should list the concrete workspace files you inspected during this review stage.",
+        "- files_reviewed is review context, not proof by itself.",
         "- recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict.",
         "- recommendation_reviews[*].verified_evidence_refs should name the concrete evidence refs you directly re-checked for that recommendation verdict.",
+        "- recommendation_reviews prove recommendation-linked issue/topic closures when the closed item has a non-null recommendation_index covered by that recommendation review.",
+        "- Recommendation-linked closures do not need extra scoped proof when their recommendation is covered.",
+        "- issue_closure_reviews[*] prove global issue closures when the closed issue's recommendation_index is null.",
+        "- topic_closure_reviews[*] prove global topic closures when the closed topic's recommendation_index is null.",
+        "- One issue_closure_reviews entry maps to exactly one issue_id, and one topic_closure_reviews entry maps to exactly one topic_id.",
+        "- Unrelated recommendation review refs do not satisfy global issue/topic closure proof.",
+        "- Keep issue_closure_reviews and topic_closure_reviews as empty arrays when there are no recommendation_index=null closures to prove.",
     ]
     if trust.payload_provenance_mode == "payload_hash_and_refs":
         lines.extend(
             [
-                "- In trust mode, files_reviewed is necessary review context but not sufficient closure provenance on its own.",
                 "- In trust mode, every concrete recommendation_reviews verdict must carry its own checked_files or verified_evidence_refs.",
-                "- In trust mode, if you introduce or classify issues/topics, those closures must map to a covered recommendation review; unrelated recommendation refs do not count.",
-                "- In trust mode, global issues/topics remain provenance-incomplete under this contract without a future issue/topic-scoped ref surface, even if the payload hash is recorded.",
+                "- In trust mode, recommendation-linked closures must map to the covered recommendation review, and recommendation_index=null closures must map to the matching issue_closure_reviews/topic_closure_reviews entry.",
             ]
         )
     else:
         lines.append(
-            "- In bounded mode, these review-stage refs are optional advisory metadata, but populate them when it is cheap and concrete."
+            "- In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support."
         )
     return "\n".join(lines)
 
@@ -575,7 +581,7 @@ Your job:
 6. Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`.
 7. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics. Do not put IDs from this stage's new `topics` array into those classification arrays.
 8. Populate `files_reviewed` with the concrete workspace files you inspected during this review stage.
-9. In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract.
+9. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
 10. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
 11. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
@@ -639,7 +645,7 @@ Your job:
 4. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
 5. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only for prior open topics. Do not classify IDs from this stage's new `topics` array there.
 6. Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage.
-7. In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract.
+7. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
 8. Review every recommendation individually and return recommendation-level verdicts.
 9. Stay inside each recommendation's bounded review_surface unless you must leave it.
 10. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.

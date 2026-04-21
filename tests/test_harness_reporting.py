@@ -764,3 +764,89 @@ def test_render_report_renders_disagreed_topic_status_section():
 
     assert "- Disagreed topic IDs: `TOPIC-001`" in report
     assert "- Disagreed topics: `1` (`TOPIC-001`)" in report
+
+
+def test_render_report_renders_review_provenance_section_for_scoped_global_closure():
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "task": {"id": "task-provenance"},
+        "verdicts": {
+            "content_verdict": "accepted_with_warnings",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_with_warnings",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+                "required": True,
+                "issue_closure_review_ref_count": 0,
+                "topic_closure_review_ref_count": 2,
+                "closure_complete_issue_ids": [],
+                "closure_complete_topic_ids": ["TOPIC-001"],
+                "uncovered_global_issue_ids": [],
+                "uncovered_global_topic_ids": ["TOPIC-002"],
+                "closure_proof_by_id": {
+                    "TOPIC-001": {
+                        "proof_path": "scoped",
+                        "classification_status": "carried_forward",
+                        "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+                        "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+                        "proof_strength": "review_attested",
+                    }
+                },
+                "stages": [
+                    {
+                        "surface": "review",
+                        "status": "insufficient",
+                        "policy_mode": "payload_hash_and_refs",
+                        "recommendation_review_ref_count": 4,
+                        "issue_closure_review_ref_count": 0,
+                        "topic_closure_review_ref_count": 2,
+                        "closure_complete_issue_ids": [],
+                        "closure_complete_topic_ids": ["TOPIC-001"],
+                        "uncovered_global_issue_ids": [],
+                        "uncovered_global_topic_ids": ["TOPIC-002"],
+                        "closure_proof_by_id": {
+                            "TOPIC-001": {
+                                "proof_path": "scoped",
+                                "classification_status": "carried_forward",
+                                "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+                                "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+                                "proof_strength": "review_attested",
+                            }
+                        },
+                    }
+                ],
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": ["TOPIC-001"],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "downgrade_causes": ["final payload provenance is not fully bound"],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert "## Review Provenance" in report
+    assert "- Topic closure review refs: `2`" in report
+    assert "- Closure-complete topic IDs: `TOPIC-001`" in report
+    assert "- Uncovered global topic IDs: `TOPIC-002`" in report
+    assert "| `TOPIC-001` | `scoped` | `review_attested` | `carried_forward` | .github/workflows/claude-code-release-watch.yml | .github/workflows/claude-code-release-watch.yml |" in report

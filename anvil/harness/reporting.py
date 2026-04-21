@@ -473,6 +473,26 @@ def render_deliverable_markdown(
             lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
             lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
             lines.append(f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`")
+        if (
+            str(analysis_status.get("mode") or "").strip().lower() == "trust"
+            and str(provenance.get("status") or "").strip().lower() != "bound"
+        ):
+            incomplete_parts: list[str] = []
+            uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or []
+            uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or []
+            if uncovered_global_issue_ids:
+                incomplete_parts.append(
+                    "uncovered global issue closures: "
+                    + ", ".join(str(item) for item in uncovered_global_issue_ids)
+                )
+            if uncovered_global_topic_ids:
+                incomplete_parts.append(
+                    "uncovered global topic closures: "
+                    + ", ".join(str(item) for item in uncovered_global_topic_ids)
+                )
+            if not incomplete_parts:
+                incomplete_parts.append("structured review provenance is not fully bound")
+            lines.append("- Closure proof incomplete: " + "; ".join(incomplete_parts))
         topic_ledger_count = analysis_status.get("topic_ledger_count")
         effective_count = topic_ledger_count
         if effective_count is None:

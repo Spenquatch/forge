@@ -184,8 +184,21 @@ Review-stage critic and auditor payloads also support structured review refs on 
 - required top-level `files_reviewed`
 - `recommendation_reviews[*].checked_files`
 - `recommendation_reviews[*].verified_evidence_refs`
+- required top-level `issue_closure_reviews`
+- required top-level `topic_closure_reviews`
 
-Those refs are the path-based audit surface for review provenance. `files_reviewed` records review-stage context, but trust-mode closure provenance comes from the recommendation-level review refs. Each concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`; one recommendation's refs do not prove another recommendation's verdict or closure state. Human-readable topic or issue `evidence` text remains narrative; provenance binds to these structured path refs. Under the current contract, truly global issues/topics still are not provenance-complete unless a future topic/issue-scoped ref surface is added.
+Those refs are the path-based audit surface for review provenance. `files_reviewed` records review-stage context, not proof by itself. The contract now has two closure-proof paths:
+
+- `recommendation_reviews[*]` prove recommendation-linked closures for issues or topics whose `recommendation_index` points at the reviewed recommendation
+- `issue_closure_reviews[*]` and `topic_closure_reviews[*]` prove global closures when the closed issue or topic has `recommendation_index = null`
+
+Additional rules:
+
+- one scoped closure review maps to exactly one ID: one `issue_closure_reviews[*]` entry per `issue_id`, one `topic_closure_reviews[*]` entry per `topic_id`
+- unrelated recommendation review refs do not satisfy global issue/topic closure proof
+- recommendation-linked closures do not need extra scoped proof when their recommendation is already covered by the matching `recommendation_reviews[*]` entry
+- human-readable issue/topic `evidence` text remains narrative; closure proof binds to the structured path refs above
+- `issue_closure_reviews` and `topic_closure_reviews` are required top-level arrays but may be empty when no `recommendation_index = null` closures are being proven
 
 ## Trust semantics
 
@@ -227,7 +240,8 @@ Examples of the existing and intended v4 semantic checks:
 - in trust mode, `verified_evidence_refs` should stay a subset of `evidence`
 - in trust mode, non-inferred `affected_files` should be covered by evidence or checked files
 - in trust mode, `blocking_class_override_reason` should explain intentional taxonomy overrides
-- in trust mode, review payloads that introduce or classify issues/topics must bind at least one recommendation-level structured review ref; `files_reviewed` plus a payload hash alone is insufficient
+- in trust mode, `files_reviewed` is review context only; closure proof must bind to `recommendation_reviews[*]` for recommendation-linked closures or to `issue_closure_reviews[*]` / `topic_closure_reviews[*]` for `recommendation_index = null` closures
+- in trust mode, each scoped closure review must bind exactly one ID, and unrelated recommendation refs do not satisfy global closure proof
 
 Semantic validation failures are surfaced as stage errors and written to a per-stage `semantic_validation.json` artifact.
 

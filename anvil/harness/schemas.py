@@ -266,6 +266,32 @@ RECOMMENDATION_REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+REVIEW_ISSUE_CLOSURE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "issue_id": {"type": "string"},
+        "checked_files": {"type": "array", "items": {"type": "string"}},
+        "verified_evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+    },
+    "required": ["issue_id", "checked_files", "verified_evidence_refs", "summary"],
+    "additionalProperties": False,
+}
+
+
+REVIEW_TOPIC_CLOSURE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "topic_id": {"type": "string"},
+        "checked_files": {"type": "array", "items": {"type": "string"}},
+        "verified_evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+    },
+    "required": ["topic_id", "checked_files", "verified_evidence_refs", "summary"],
+    "additionalProperties": False,
+}
+
+
 SECTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -444,6 +470,14 @@ def analysis_review_schema() -> dict[str, Any]:
                 "items": RECOMMENDATION_REVIEW_SCHEMA,
                 "minItems": 1,
             },
+            "issue_closure_reviews": {
+                "type": "array",
+                "items": REVIEW_ISSUE_CLOSURE_SCHEMA,
+            },
+            "topic_closure_reviews": {
+                "type": "array",
+                "items": REVIEW_TOPIC_CLOSURE_SCHEMA,
+            },
             "scope_escapes": {"type": "array", "items": SCOPE_ESCAPE_SCHEMA},
             "grounding_score": {"type": "number", "minimum": 0, "maximum": 1},
             "actionability_score": {"type": "number", "minimum": 0, "maximum": 1},
@@ -463,6 +497,8 @@ def analysis_review_schema() -> dict[str, Any]:
             "carried_forward_topic_ids",
             "waived_topic_ids",
             "recommendation_reviews",
+            "issue_closure_reviews",
+            "topic_closure_reviews",
             "scope_escapes",
             "grounding_score",
             "actionability_score",
