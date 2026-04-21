@@ -182,6 +182,7 @@ def test_review_semantic_validation_requires_recommendation_and_issue_coverage()
         role_name="critic",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=["AR-001"],
         expected_recommendation_count=2,
     )
@@ -204,6 +205,7 @@ def test_review_semantic_validation_accepts_valid_topic_lifecycle():
         role_name="auditor",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         prior_open_topic_ids=["TOPIC-001", "TOPIC-002"],
         expected_recommendation_count=2,
@@ -433,6 +435,7 @@ def test_critic_semantic_validation_rejects_issue_cap_overflow():
         role_name="critic",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         expected_recommendation_count=2,
     )
@@ -451,6 +454,7 @@ def test_critic_semantic_validation_rejects_new_topic_cap_overflow():
         role_name="critic",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         expected_recommendation_count=2,
     )
@@ -469,6 +473,7 @@ def test_review_semantic_validation_requires_topic_classification_for_every_open
         role_name="auditor",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         prior_open_topic_ids=["TOPIC-001"],
         expected_recommendation_count=2,
@@ -491,6 +496,7 @@ def test_review_semantic_validation_rejects_unknown_topic_classification_ids():
         role_name="auditor",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         prior_open_topic_ids=["TOPIC-001"],
         expected_recommendation_count=2,
@@ -499,6 +505,30 @@ def test_review_semantic_validation_rejects_unknown_topic_classification_ids():
     assert result.ok is False
     assert (
         "topic classification arrays reference unknown prior open topic IDs: TOPIC-999"
+        in result.errors
+    )
+
+
+def test_review_semantic_validation_rejects_historical_resolved_topic_id_reuse():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_reused_historical_topic_id"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-002"],
+        historical_topic_ids=["TOPIC-001", "TOPIC-002"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert (
+        "topics reuses historical topic IDs that are not currently open: TOPIC-001"
         in result.errors
     )
 
@@ -513,6 +543,7 @@ def test_auditor_semantic_validation_requires_why_not_raised_earlier_for_new_med
         role_name="auditor",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=["AR-001"],
         expected_recommendation_count=2,
     )
@@ -534,6 +565,7 @@ def test_auditor_semantic_validation_accepts_new_medium_issue_with_why_not_raise
         role_name="auditor",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=["AR-001"],
         expected_recommendation_count=2,
     )
@@ -552,6 +584,7 @@ def test_review_semantic_validation_rejects_empty_scope_escape_reason():
         role_name="critic",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         expected_recommendation_count=2,
     )
@@ -573,6 +606,7 @@ def test_review_semantic_validation_accepts_scope_escape_with_reason():
         role_name="critic",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         expected_recommendation_count=2,
     )
@@ -774,3 +808,21 @@ def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification(
     assert result.errors == [
         "trust review payload introduced or classified issues/topics without any structured review refs; provide files_reviewed and recommendation_reviews checked_files/verified_evidence_refs."
     ]
+def test_review_semantic_validation_requires_review_stage_files_reviewed():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_missing_files_reviewed"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert "files_reviewed must contain at least 1 non-empty path(s)." in result.errors
+

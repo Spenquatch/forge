@@ -736,6 +736,11 @@ class HarnessRunner:
             for item in self._open_topic_records()
             if str(item.get("topic_id") or "").strip()
         ]
+        historical_topic_ids = [
+            str(item.get("topic_id"))
+            for item in self.topic_ledger
+            if str(item.get("topic_id") or "").strip()
+        ]
         expected_recommendation_count = 0
         if isinstance(prior_output, dict):
             recommendations = prior_output.get("recommendations")
@@ -777,6 +782,7 @@ class HarnessRunner:
                 "contract": contract,
                 "prior_open_issue_ids": prior_open_issue_ids,
                 "prior_open_topic_ids": prior_open_topic_ids,
+                "historical_topic_ids": historical_topic_ids,
                 "expected_recommendation_count": expected_recommendation_count,
             },
         )
@@ -1809,6 +1815,10 @@ class HarnessRunner:
         for topic in normalized_topics:
             topic_id = str(topic.get("topic_id"))
             if topic_id in self._topic_ledger_by_id:
+                if topic_id not in prior_open_topic_ids:
+                    raise ValueError(
+                        f"Review stage '{role_name}' reused historical topic ID {topic_id} even though it is not currently open."
+                    )
                 record = self._topic_ledger_by_id[topic_id]
                 record.update(
                     {

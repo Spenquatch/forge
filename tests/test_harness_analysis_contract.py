@@ -7,6 +7,7 @@ from anvil.harness.contracts import (
     default_blocking_class_for_kind,
 )
 from anvil.harness.files import load_structured_file
+from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 
@@ -170,6 +171,11 @@ def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
     assert default_task.review_requirements.evidence_cap_policy == "trim_to_cap"
     assert strict_task.review_requirements.evidence_cap_policy == "strict"
 
+
+def test_analysis_review_schema_requires_files_reviewed():
+    schema = analysis_review_schema()
+
+    assert "files_reviewed" in schema["required"]
 
 
 def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():

@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from anvil.harness.files import load_structured_file
 from anvil.harness.runner import HarnessRunner
 from anvil.harness.types import ProviderRun
@@ -46,6 +48,13 @@ class _AcceptingHarnessAdapter:
             "carried_forward_topic_ids": [],
             "waived_topic_ids": [],
         }
+
+    @staticmethod
+    def _review_files_reviewed() -> list[str]:
+        return [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+        ]
 
     @staticmethod
     def _review_surface(*, must_check_files: list[str], optional_check_files: list[str], scope_note: str) -> dict:
@@ -144,6 +153,7 @@ class _AcceptingHarnessAdapter:
                 "verdict": "accept",
                 "summary": "Grounded and actionable analysis.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [],
                 "resolved_issue_ids": [],
                 "carried_forward_issue_ids": [],
@@ -204,6 +214,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "verdict": "revise",
                 "summary": "Two recommendations are good, but recommendation 3 needs more specificity.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [
                     {
                         "issue_id": "AR-001",
@@ -267,6 +278,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "verdict": "accept_partial",
                 "summary": "Recommendations 1 and 2 are usable. Recommendation 3 still needs more specificity.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [
                     {
                         "issue_id": "AR-001",
@@ -368,6 +380,10 @@ class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
         run = super().run(request)
         if request.role_name != "proposer":
             return run
+        payload = dict(run.structured_output or {})
+        if isinstance(payload.get("recommendations"), list) and payload["recommendations"]:
+            payload["recommendations"][0] = dict(payload["recommendations"][0])
+            payload["recommendations"][0]["confidence"] = "not-a-number"
         return ProviderRun(
             role_name=run.role_name,
             provider=run.provider,
@@ -383,7 +399,7 @@ class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
             prompt_path=run.prompt_path,
             schema_path=run.schema_path,
             output_path=run.output_path,
-            structured_output=run.structured_output,
+            structured_output=payload,
             raw_meta=run.raw_meta,
             error="Schema validation failed.",
             schema_validation_errors=["$.recommendations[0].affected_files: expected array"],
@@ -410,6 +426,7 @@ class _LateAuditorIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
                 "verdict": "revise",
                 "summary": "The auditor found a new medium-severity issue after the revision rewrote recommendation 2.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [
                     {
                         "issue_id": "AR-001",
@@ -482,6 +499,7 @@ class _TopicLifecycleHarnessAdapter(_AcceptingHarnessAdapter):
                 "verdict": "revise",
                 "summary": "Recommendation 2 still needs an explicit operator fallback classification.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [],
                 "resolved_issue_ids": [],
                 "carried_forward_issue_ids": [],
@@ -541,6 +559,7 @@ class _TopicLifecycleHarnessAdapter(_AcceptingHarnessAdapter):
                 "verdict": "accept",
                 "summary": "The revision resolved the open topic without introducing new issues.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [],
                 "resolved_issue_ids": [],
                 "carried_forward_issue_ids": [],
@@ -581,6 +600,7 @@ class _LegacyMissingTopicsHarnessAdapter(_AcceptingHarnessAdapter):
                 "verdict": "revise",
                 "summary": "Legacy critic payload still emits missing_topics for recommendation 2.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [],
                 "resolved_issue_ids": [],
                 "carried_forward_issue_ids": [],
@@ -658,6 +678,7 @@ class _TopicCarryForwardHarnessAdapter(_TopicLifecycleHarnessAdapter):
                 "verdict": "accept",
                 "summary": "The revision improved recommendation 2, but the topic remains open.",
                 "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
                 "issues": [],
                 "resolved_issue_ids": [],
                 "carried_forward_issue_ids": [],
@@ -767,6 +788,12 @@ class _TrustZeroRefReviewHarnessAdapter(_TopicLifecycleHarnessAdapter):
             ".github/workflows/claude-code-release-watch.yml"
         ]
         payload["recommendations"][1]["grounding_mode"] = "direct"
+        return payload
+
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["files_reviewed"] = []
         return payload
 
 
@@ -1326,9 +1353,12 @@ def test_analysis_review_runner_trust_review_fails_when_topic_closure_has_zero_s
     assert critic_stage["failure_kind"] == "semantic_validation_error"
     assert critic_stage["semantic_validation_payload_provenance"]["status"] == "insufficient"
     assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] == 0
+    assert "files_reviewed must contain at least 1 non-empty path(s)." in critic_stage[
+        "semantic_validation_errors"
+    ]
     assert (
         "trust review payload introduced or classified issues/topics without any structured review refs"
-        in critic_stage["semantic_validation_errors"][0]
+        in "\n".join(critic_stage["semantic_validation_errors"])
     )
 
 
@@ -1583,6 +1613,57 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
     )
     assert runner.topic_ledger[0]["source_stage_id"] == "stage-02-critic"
     assert runner.topic_ledger[0]["first_seen_round"] == 0
+
+
+def test_analysis_review_runner_rejects_reuse_of_resolved_topic_id(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TopicLifecycleHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    runner.run()
+
+    with pytest.raises(
+        ValueError,
+        match="reused historical topic ID TOPIC-001 even though it is not currently open",
+    ):
+        runner._ingest_review_payload(
+            {
+                "files_reviewed": [".github/workflows/claude-code-release-watch.yml"],
+                "topics": [
+                    {
+                        "topic_id": "TOPIC-001",
+                        "severity": "medium",
+                        "title": "Recommendation 2 needs a concrete fallback classification.",
+                        "evidence": "A later auditor tried to reopen the already resolved topic.",
+                        "repair_hint": "Allocate a new topic ID instead of mutating the historical row.",
+                        "recommendation_index": 2,
+                    }
+                ],
+                "resolved_topic_ids": [],
+                "carried_forward_topic_ids": [],
+                "waived_topic_ids": [],
+            },
+            round_index=2,
+            role_name="auditor",
+            reviser_output=None,
+        )
+
+    assert runner.topic_ledger[0]["resolution_status"] == "resolved"
+    assert runner.topic_ledger[0]["last_seen_round"] == 1
 
 
 def test_analysis_review_runner_persists_addressed_topic_recommendation_index_from_reviser(

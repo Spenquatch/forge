@@ -551,6 +551,10 @@
     "verdict": "revise",
     "summary": "Recommendation 1 is solid, but recommendation 2 still needs work.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [
       {
         "issue_id": "AR-001",
@@ -590,6 +594,10 @@
     "verdict": "revise",
     "summary": "The critic restarted the task instead of staying bounded.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [
       {
         "issue_id": "AR-001",
@@ -699,6 +707,10 @@
     "verdict": "revise",
     "summary": "The critic found too many new topics for a bounded pass.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -758,6 +770,10 @@
     "verdict": "revise",
     "summary": "The auditor preserved prior open topics and introduced one new bounded topic.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -801,10 +817,48 @@
     "scope_compliance_score": 0.93,
     "confidence": 0.84
   },
+  "review_payload_missing_files_reviewed": {
+    "verdict": "accept_partial",
+    "summary": "The critic accepted the review without naming any inspected files.",
+    "workspace_write_intent": "none",
+    "issues": [],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 2 is acceptable.",
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "topics": [],
+    "resolved_topic_ids": [],
+    "carried_forward_topic_ids": [],
+    "waived_topic_ids": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.88,
+    "scope_compliance_score": 0.94,
+    "confidence": 0.82
+  },
   "review_payload_missing_topic_classification": {
     "verdict": "revise",
     "summary": "The auditor forgot to classify a prior open topic.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -839,6 +893,10 @@
     "verdict": "revise",
     "summary": "The auditor classified an unknown topic ID.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -873,10 +931,63 @@
     "scope_compliance_score": 0.94,
     "confidence": 0.82
   },
+  "review_payload_reused_historical_topic_id": {
+    "verdict": "revise",
+    "summary": "The auditor reused the ID of a resolved historical topic instead of allocating a new one.",
+    "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
+    "issues": [],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [],
+        "summary": "Recommendation 2 is usable, but the reviewer mislabeled a new topic with a historical ID.",
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "topics": [
+      {
+        "topic_id": "TOPIC-001",
+        "severity": "low",
+        "title": "Document the operator fallback label.",
+        "evidence": "The reviewer found a fresh follow-up, but incorrectly reused a resolved topic ID.",
+        "repair_hint": "Allocate a new topic ID for the new follow-up.",
+        "recommendation_index": 2
+      }
+    ],
+    "resolved_topic_ids": [],
+    "carried_forward_topic_ids": [
+      "TOPIC-002"
+    ],
+    "waived_topic_ids": [],
+    "scope_escapes": [],
+    "grounding_score": 0.89,
+    "actionability_score": 0.81,
+    "scope_compliance_score": 0.93,
+    "confidence": 0.84
+  },
   "review_payload_legacy_missing_topics_compatibility": {
     "verdict": "revise",
     "summary": "Legacy payload still emits missing_topics and relies on runner normalization.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -910,6 +1021,10 @@
     "verdict": "revise",
     "summary": "A new blocker appeared without justification.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [
       {
         "issue_id": "AR-002",
@@ -960,6 +1075,10 @@
     "verdict": "revise",
     "summary": "A newly introduced blocker is justified.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [
       {
         "issue_id": "AR-002",
@@ -1010,6 +1129,10 @@
     "verdict": "accept_partial",
     "summary": "The critic left the bounded surface but failed to explain why.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -1049,6 +1172,10 @@
     "verdict": "accept_partial",
     "summary": "The critic left the bounded surface and justified it.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],
@@ -1408,6 +1535,10 @@
     "verdict": "accept_partial",
     "summary": "The critic kept a trust-mode taxonomy override fully justified.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [
       {
         "issue_id": "AR-101",
@@ -1457,6 +1588,10 @@
     "verdict": "accept_partial",
     "summary": "The critic kept a trust-mode taxonomy override but did not justify it.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [
       {
         "issue_id": "AR-101",
@@ -1558,6 +1693,10 @@
     "verdict": "accept_partial",
     "summary": "The trust-mode review classified an open topic without any structured review refs.",
     "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
     "issues": [],
     "resolved_issue_ids": [],
     "carried_forward_issue_ids": [],

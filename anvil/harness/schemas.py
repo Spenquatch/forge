@@ -453,6 +453,7 @@ def analysis_review_schema() -> dict[str, Any]:
             "verdict",
             "summary",
             "workspace_write_intent",
+            "files_reviewed",
             "issues",
             "resolved_issue_ids",
             "carried_forward_issue_ids",

@@ -48,6 +48,7 @@ def validate_stage_output(
     expected_open_topic_ids: Iterable[str] | None = None,
     prior_open_issue_ids: Iterable[str] | None = None,
     prior_open_topic_ids: Iterable[str] | None = None,
+    historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
     payload_provenance: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
@@ -82,6 +83,7 @@ def validate_stage_output(
                 workspace_paths=workspace_paths,
                 prior_open_issue_ids=prior_open_issue_ids,
                 prior_open_topic_ids=prior_open_topic_ids,
+                historical_topic_ids=historical_topic_ids,
                 expected_recommendation_count=expected_recommendation_count,
                 payload_provenance=payload_provenance,
             )
@@ -246,6 +248,7 @@ def validate_analysis_review_payload(
     workspace_paths: Iterable[str] | None = None,
     prior_open_issue_ids: Iterable[str] | None = None,
     prior_open_topic_ids: Iterable[str] | None = None,
+    historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
     payload_provenance: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
@@ -332,6 +335,10 @@ def validate_analysis_review_payload(
 
     files_reviewed = payload.get("files_reviewed") or []
     review_file_items = _non_empty_strings(files_reviewed if isinstance(files_reviewed, list) else [])
+    if len(review_file_items) < int(contract.required_sections.minimum_files_reviewed or 0):
+        result.errors.append(
+            f"files_reviewed must contain at least {contract.required_sections.minimum_files_reviewed} non-empty path(s)."
+        )
     files_reviewed_set = set(review_file_items)
     unknown_files_reviewed = sorted(files_reviewed_set - workspace_path_set)
     if unknown_files_reviewed:
@@ -465,6 +472,17 @@ def validate_analysis_review_payload(
     prior_open_topic_id_set = {
         str(item).strip() for item in (prior_open_topic_ids or []) if str(item).strip()
     }
+    historical_topic_id_set = {
+        str(item).strip() for item in (historical_topic_ids or []) if str(item).strip()
+    }
+    reused_historical_topic_ids = sorted(
+        set(topic_id_order) & (historical_topic_id_set - prior_open_topic_id_set)
+    )
+    if reused_historical_topic_ids:
+        result.errors.append(
+            "topics reuses historical topic IDs that are not currently open: "
+            + ", ".join(reused_historical_topic_ids)
+        )
     resolved_topic_ids = _validated_id_list(
         result,
         field_name="resolved_topic_ids",

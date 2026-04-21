@@ -137,7 +137,7 @@ Critic and auditor issue payloads stay on the same shared family and add `blocki
 
 Review-stage critic and auditor payloads also support structured review refs on the shared family:
 
-- top-level `files_reviewed`
+- required top-level `files_reviewed`
 - `recommendation_reviews[*].checked_files`
 - `recommendation_reviews[*].verified_evidence_refs`
 
