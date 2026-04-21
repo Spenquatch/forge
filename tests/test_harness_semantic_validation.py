@@ -776,6 +776,13 @@ def test_trust_review_semantic_validation_accepts_structured_review_refs_for_top
             "status": "bound",
             "policy_mode": "payload_hash_and_refs",
             "normalized_ref_count": 6,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
         },
     )
 
@@ -800,14 +807,203 @@ def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification(
         payload_provenance={
             "status": "insufficient",
             "policy_mode": "payload_hash_and_refs",
-            "normalized_ref_count": 0,
+            "normalized_ref_count": 2,
+            "recommendation_review_ref_count": 0,
+            "recommendation_review_ref_field_count": 0,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [],
+            "uncovered_recommendation_indices": [1, 2],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
         },
     )
 
     assert result.ok is False
-    assert result.errors == [
-        "trust review payload introduced or classified issues/topics without any structured review refs; provide files_reviewed and recommendation_reviews checked_files/verified_evidence_refs."
+    assert (
+        "trust review payload lacks provenance-complete recommendation-level structured review refs for recommendation indices 1, 2. files_reviewed alone is not sufficient."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_rejects_global_topic_without_recommendation_level_refs():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_trust_topic_closure_zero_refs"])
+    payload["topics"] = [
+        {
+            "topic_id": "TOPIC-002",
+            "severity": "medium",
+            "title": "A global fallback policy is still missing.",
+            "evidence": "The review describes the gap at the run level rather than on a single recommendation.",
+            "repair_hint": "Add an explicit global fallback policy or introduce a future topic-scoped ref surface.",
+            "recommendation_index": None,
+        }
     ]
+    payload["carried_forward_topic_ids"] = []
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 2,
+            "recommendation_review_ref_count": 0,
+            "recommendation_review_ref_field_count": 0,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": ["TOPIC-002"],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "trust review payload lacks provenance-complete recommendation-level structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_rejects_global_topic_when_recommendations_are_covered():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
+    payload["topics"] = [
+        {
+            "topic_id": "TOPIC-002",
+            "severity": "medium",
+            "title": "A global fallback policy is still missing.",
+            "evidence": "The review still describes a run-level gap rather than a recommendation-local one.",
+            "repair_hint": "Add a dedicated global ref surface or avoid claiming global closure.",
+            "recommendation_index": None,
+        }
+    ]
+    payload["resolved_topic_ids"] = []
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 6,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": ["TOPIC-002"],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "trust review payload lacks provenance-complete recommendation-level structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_rejects_global_issue_when_recommendations_are_covered():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
+    payload["issues"] = [
+        {
+            "issue_id": "AR-002",
+            "severity": "medium",
+            "kind": "missing_evidence",
+            "blocking_class": "correctness",
+            "recommendation_index": None,
+            "title": "A global evidence gap is still open.",
+            "evidence": "The review claims a run-wide invariant without a dedicated scoped ref surface.",
+            "repair_hint": "Add an issue-scoped ref surface or narrow the claim.",
+            "blocking_class_override_reason": None,
+            "why_not_raised_earlier": None,
+        }
+    ]
+    payload["resolved_issue_ids"] = []
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 6,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": ["AR-002"],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "trust review payload lacks provenance-complete recommendation-level structured review refs for global issue closures AR-002. files_reviewed alone is not sufficient."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_requires_per_verdict_structured_refs():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_override_reason_valid"])
+    for item in payload["recommendation_reviews"]:
+        item.pop("checked_files", None)
+        item.pop("verified_evidence_refs", None)
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 2,
+            "recommendation_review_ref_count": 0,
+            "recommendation_review_ref_field_count": 0,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [],
+            "uncovered_recommendation_indices": [1, 2],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendation_reviews[1] must include checked_files or verified_evidence_refs for trust-mode verdict provenance."
+        in result.errors
+    )
+
+
 def test_review_semantic_validation_requires_review_stage_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
@@ -825,4 +1021,3 @@ def test_review_semantic_validation_requires_review_stage_files_reviewed():
 
     assert result.ok is False
     assert "files_reviewed must contain at least 1 non-empty path(s)." in result.errors
-

@@ -212,6 +212,105 @@ def test_build_partial_answer_payload_filters_topic_blocked_accepted_recommendat
     ] == [1, 3]
 
 
+def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_recommendations(
+    tmp_path,
+):
+    summary = {
+        "task": {"id": "task-partial-scope"},
+        "verdict": "accepted_partial",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "final_answer": {
+            "summary": "Partial acceptance output.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "First",
+                    "rationale": "Clean recommendation.",
+                    "evidence": ["a.py"],
+                    "proposed_change": "Ship it.",
+                    "confidence": 0.71,
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Second",
+                    "rationale": "Carries excluded topic debt.",
+                    "evidence": ["b.py"],
+                    "proposed_change": "Do not ship this one.",
+                    "confidence": 0.62,
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Third",
+                    "rationale": "Included, but inference-backed.",
+                    "evidence": ["c.py"],
+                    "proposed_change": "Ship with narrower claim.",
+                    "confidence": 0.58,
+                },
+            ],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {
+                "recommendation_index": 2,
+                "verdict": "accept_with_caveat",
+                "summary": "Carries topic debt.",
+            },
+            {"recommendation_index": 3, "verdict": "accept", "summary": "Inference-backed."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 1,
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "accepted_recommendations_with_inferred_grounding": [3],
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": ["TOPIC-001"],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": [],
+            "topic_ledger_count": 1,
+            "downgrade_causes": [
+                "review topics remain open: TOPIC-001",
+                "accepted recommendation reviews include accept_with_caveat: 2",
+                "accepted recommendations rely on inference-only grounding: 3",
+            ],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "title": "Recommendation 2 still needs a concrete fallback classification.",
+                "severity": "medium",
+                "evidence": "The second recommendation still leaves fallback handling implicit.",
+                "recommendation_index": 2,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_status": "carried_forward",
+                "resolution_note": "not_addressed | Still unresolved.",
+                "resolved_in_stage_index": None,
+            }
+        ],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+
+    assert updated["partial_answer"]["included_recommendation_indices"] == [1, 3]
+    assert "- Review status scope: `included recommendations only`" in markdown
+    assert "- Run-level provenance status: `bound`" in markdown
+    assert "- Run-level semantic warnings: `1`" in markdown
+    assert "accepted recommendations rely on inference-only grounding: 3" in markdown
+    assert "TOPIC-001" not in markdown
+    assert "accept_with_caveat: 2" not in markdown
+    assert "## Topic Lifecycle" not in markdown
+
+
 def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accepted_draft(
     tmp_path,
 ):

@@ -15,6 +15,7 @@ from anvil.orchestrator import reload_config
 
 from .contracts import (
     AnalysisReviewContract,
+    PartialAcceptancePolicy,
     build_analysis_review_contract,
     default_blocking_class_for_kind,
 )
@@ -731,14 +732,16 @@ class HarnessRunner:
     ) -> ProviderRun:
         contract = self._analysis_contract()
         git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        prior_open_issue_records = self._open_issue_records()
+        prior_open_topic_records = self._open_topic_records()
         prior_open_issue_ids = [
             str(item.get("issue_id"))
-            for item in self._open_issue_records()
+            for item in prior_open_issue_records
             if str(item.get("issue_id") or "").strip()
         ]
         prior_open_topic_ids = [
             str(item.get("topic_id"))
-            for item in self._open_topic_records()
+            for item in prior_open_topic_records
             if str(item.get("topic_id") or "").strip()
         ]
         historical_topic_ids = [
@@ -761,8 +764,8 @@ class HarnessRunner:
                 git_snapshot,
                 self.strategy.review_loops,
                 contract,
-                self._open_issue_records(),
-                self._open_topic_records(),
+                prior_open_issue_records,
+                prior_open_topic_records,
                 round_index,
             )
         else:
@@ -777,6 +780,8 @@ class HarnessRunner:
             )
             prior_open_issue_ids = []
             prior_open_topic_ids = []
+            prior_open_issue_records = []
+            prior_open_topic_records = []
         return self._run_agent_stage(
             role_name,
             role_cfg.provider,
@@ -786,7 +791,9 @@ class HarnessRunner:
             semantic_context={
                 "contract": contract,
                 "prior_open_issue_ids": prior_open_issue_ids,
+                "prior_open_issue_records": prior_open_issue_records,
                 "prior_open_topic_ids": prior_open_topic_ids,
+                "prior_open_topic_records": prior_open_topic_records,
                 "historical_topic_ids": historical_topic_ids,
                 "expected_recommendation_count": expected_recommendation_count,
             },
@@ -2015,7 +2022,7 @@ class HarnessRunner:
                 surface == "review"
                 and status == "bound"
                 and provenance.get("policy_mode") == "payload_hash_and_refs"
-                and int(provenance.get("normalized_ref_count", 0) or 0) == 0
+                and not bool(provenance.get("closure_provenance_satisfied"))
             ):
                 status = "insufficient"
             record = {
@@ -2027,6 +2034,29 @@ class HarnessRunner:
                 "payload_sha256": provenance.get("payload_sha256"),
                 "normalized_ref_field_count": provenance.get("normalized_ref_field_count", 0),
                 "normalized_ref_count": provenance.get("normalized_ref_count", 0),
+                "recommendation_review_ref_field_count": provenance.get(
+                    "recommendation_review_ref_field_count",
+                    0,
+                ),
+                "recommendation_review_ref_count": provenance.get(
+                    "recommendation_review_ref_count",
+                    0,
+                ),
+                "closure_provenance_satisfied": bool(
+                    provenance.get("closure_provenance_satisfied")
+                ),
+                "covered_recommendation_indices": list(
+                    provenance.get("covered_recommendation_indices") or []
+                ),
+                "uncovered_recommendation_indices": list(
+                    provenance.get("uncovered_recommendation_indices") or []
+                ),
+                "uncovered_global_issue_ids": list(
+                    provenance.get("uncovered_global_issue_ids") or []
+                ),
+                "uncovered_global_topic_ids": list(
+                    provenance.get("uncovered_global_topic_ids") or []
+                ),
             }
             records.append(record)
         return records
@@ -2166,48 +2196,34 @@ class HarnessRunner:
         if len(accepted_reviews) < policy.min_accepted_recommendations:
             return False
 
-        issues_by_id: dict[str, dict[str, Any]] = {}
-        for issue in review_payload.get("issues", []) or []:
-            if not isinstance(issue, dict):
-                continue
-            issues_by_id[str(issue.get("issue_id") or "")] = issue
-            severity = str(issue.get("severity") or "").strip().lower()
-            recommendation_index = issue.get("recommendation_index")
-            blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
-            if recommendation_index in (None, "") and severity in {"medium", "high", "critical"} and blocking_class in {
-                "correctness",
-                "actionability",
-                "completeness",
-            }:
-                return False
-            if recommendation_index in (None, "") and severity in {"high", "critical"}:
-                return False
-
-        for review in accepted_reviews:
-            for issue_id in review.get("open_issue_ids", []) or []:
-                issue = issues_by_id.get(str(issue_id))
-                if not isinstance(issue, dict):
-                    continue
-                severity = str(issue.get("severity") or "").strip().lower()
-                blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
-                if severity in {"high", "critical"}:
-                    return False
-                if severity == "medium" and blocking_class in {
-                    "correctness",
-                    "actionability",
-                    "completeness",
-                }:
-                    return False
-
         accepted_recommendation_indices: list[int] = []
+        accepted_issue_ids: set[str] = set()
         for review in accepted_reviews:
             raw_index = review.get("recommendation_index")
             if raw_index in (None, ""):
+                pass
+            else:
+                try:
+                    accepted_recommendation_indices.append(int(raw_index))
+                except (TypeError, ValueError):
+                    pass
+            for issue_id in review.get("open_issue_ids", []) or []:
+                normalized_issue_id = str(issue_id or "").strip()
+                if normalized_issue_id:
+                    accepted_issue_ids.add(normalized_issue_id)
+
+        accepted_recommendation_index_set = set(accepted_recommendation_indices)
+        for issue in review_payload.get("issues", []) or []:
+            if not isinstance(issue, dict):
                 continue
-            try:
-                accepted_recommendation_indices.append(int(raw_index))
-            except (TypeError, ValueError):
-                continue
+            if self._issue_blocks_partial_accept(
+                issue,
+                accepted_recommendation_indices=accepted_recommendation_index_set,
+                accepted_issue_ids=accepted_issue_ids,
+                policy=policy,
+            ):
+                return False
+
         topic_eligibility = partial_accept_topic_eligibility(
             self.topic_ledger,
             accepted_recommendation_indices=accepted_recommendation_indices,
@@ -2220,6 +2236,39 @@ class HarnessRunner:
         ):
             return False
 
+        return True
+
+    @staticmethod
+    def _issue_blocks_partial_accept(
+        issue: dict[str, Any],
+        *,
+        accepted_recommendation_indices: set[int],
+        accepted_issue_ids: set[str],
+        policy: PartialAcceptancePolicy,
+    ) -> bool:
+        severity = str(issue.get("severity") or "").strip().lower()
+        if severity not in {"medium", "high", "critical"}:
+            return False
+
+        issue_id = str(issue.get("issue_id") or "").strip()
+        recommendation_index = HarnessRunner._normalized_recommendation_index(
+            issue.get("recommendation_index")
+        )
+        if recommendation_index is None:
+            return True
+        if (
+            recommendation_index not in accepted_recommendation_indices
+            and issue_id not in accepted_issue_ids
+        ):
+            return False
+        if severity in {"high", "critical"}:
+            return True
+
+        blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
+        if blocking_class == "correctness":
+            return policy.forbid_correctness_blockers_on_accepted_recommendations
+        if blocking_class in {"actionability", "completeness", "presentation"}:
+            return not policy.allow_localized_medium_non_correctness_issues
         return True
 
     def _require_role(self, role_name: str) -> RoleConfig:
@@ -2313,6 +2362,8 @@ class HarnessRunner:
         *,
         payload_provenance_mode: str,
         normalized_refs: dict[str, Any],
+        prior_open_issue_records: list[dict[str, Any]] | None = None,
+        prior_open_topic_records: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         normalized_ref_count = 0
         for value in normalized_refs.values():
@@ -2320,12 +2371,30 @@ class HarnessRunner:
                 normalized_ref_count += len(value)
             elif value:
                 normalized_ref_count += 1
+        (
+            recommendation_review_ref_count,
+            recommendation_review_ref_field_count,
+        ) = self._recommendation_review_ref_stats(normalized_refs)
+        coverage = self._review_payload_ref_coverage(
+            payload,
+            prior_open_issue_records=prior_open_issue_records,
+            prior_open_topic_records=prior_open_topic_records,
+        )
+        closure_provenance_satisfied = (
+            not coverage["uncovered_recommendation_indices"]
+            and not coverage["uncovered_global_issue_ids"]
+            and not coverage["uncovered_global_topic_ids"]
+        )
         if payload_provenance_mode == "none":
             return {
                 "status": "not_required",
                 "policy_mode": payload_provenance_mode,
                 "normalized_ref_field_count": len(normalized_refs),
                 "normalized_ref_count": normalized_ref_count,
+                "recommendation_review_ref_field_count": recommendation_review_ref_field_count,
+                "recommendation_review_ref_count": recommendation_review_ref_count,
+                "closure_provenance_satisfied": closure_provenance_satisfied,
+                **coverage,
             }
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return {
@@ -2335,8 +2404,175 @@ class HarnessRunner:
             "payload_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
             "normalized_ref_field_count": len(normalized_refs),
             "normalized_ref_count": normalized_ref_count,
+            "recommendation_review_ref_field_count": recommendation_review_ref_field_count,
+            "recommendation_review_ref_count": recommendation_review_ref_count,
+            "closure_provenance_satisfied": closure_provenance_satisfied,
+            **coverage,
             "normalized_refs": normalized_refs,
         }
+
+    @staticmethod
+    def _normalized_recommendation_index(value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        if normalized < 1:
+            return None
+        return normalized
+
+    @staticmethod
+    def _record_recommendation_index_map(
+        records: list[dict[str, Any]] | None,
+        *,
+        id_field: str,
+    ) -> dict[str, int | None]:
+        mapping: dict[str, int | None] = {}
+        for item in records or []:
+            if not isinstance(item, dict):
+                continue
+            record_id = str(item.get(id_field) or "").strip()
+            if not record_id:
+                continue
+            mapping[record_id] = HarnessRunner._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+        return mapping
+
+    def _review_payload_ref_coverage(
+        self,
+        payload: dict[str, Any],
+        *,
+        prior_open_issue_records: list[dict[str, Any]] | None,
+        prior_open_topic_records: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        covered_recommendation_indices: set[int] = set()
+        uncovered_recommendation_indices: set[int] = set()
+
+        for item in payload.get("recommendation_reviews", []) or []:
+            if not isinstance(item, dict):
+                continue
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if not verdict:
+                continue
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is None:
+                continue
+            checked_files = [
+                str(value).strip()
+                for value in (item.get("checked_files") or [])
+                if str(value).strip()
+            ]
+            verified_refs = [
+                str(value).strip()
+                for value in (item.get("verified_evidence_refs") or [])
+                if str(value).strip()
+            ]
+            if checked_files or verified_refs:
+                covered_recommendation_indices.add(recommendation_index)
+                uncovered_recommendation_indices.discard(recommendation_index)
+            else:
+                uncovered_recommendation_indices.add(recommendation_index)
+
+        uncovered_global_issue_ids: set[str] = set()
+        uncovered_global_topic_ids: set[str] = set()
+        prior_open_issue_map = self._record_recommendation_index_map(
+            prior_open_issue_records,
+            id_field="issue_id",
+        )
+        prior_open_topic_map = self._record_recommendation_index_map(
+            prior_open_topic_records,
+            id_field="topic_id",
+        )
+
+        def require_issue_coverage(issue_id: str, recommendation_index: int | None) -> None:
+            if not issue_id:
+                return
+            if recommendation_index is None:
+                uncovered_global_issue_ids.add(issue_id)
+                return
+            if recommendation_index not in covered_recommendation_indices:
+                uncovered_recommendation_indices.add(recommendation_index)
+
+        def require_topic_coverage(topic_id: str, recommendation_index: int | None) -> None:
+            if not topic_id:
+                return
+            if recommendation_index is None:
+                uncovered_global_topic_ids.add(topic_id)
+                return
+            if recommendation_index not in covered_recommendation_indices:
+                uncovered_recommendation_indices.add(recommendation_index)
+
+        for item in payload.get("issues", []) or []:
+            if not isinstance(item, dict):
+                continue
+            require_issue_coverage(
+                str(item.get("issue_id") or "").strip(),
+                self._normalized_recommendation_index(item.get("recommendation_index")),
+            )
+        for field_name in (
+            "resolved_issue_ids",
+            "carried_forward_issue_ids",
+            "waived_issue_ids",
+        ):
+            for raw_issue_id in payload.get(field_name, []) or []:
+                issue_id = str(raw_issue_id or "").strip()
+                if not issue_id:
+                    continue
+                require_issue_coverage(issue_id, prior_open_issue_map.get(issue_id))
+
+        for item in payload.get("topics", []) or []:
+            if not isinstance(item, dict):
+                continue
+            require_topic_coverage(
+                str(item.get("topic_id") or "").strip(),
+                self._normalized_recommendation_index(item.get("recommendation_index")),
+            )
+        for field_name in (
+            "resolved_topic_ids",
+            "carried_forward_topic_ids",
+            "waived_topic_ids",
+        ):
+            for raw_topic_id in payload.get(field_name, []) or []:
+                topic_id = str(raw_topic_id or "").strip()
+                if not topic_id:
+                    continue
+                require_topic_coverage(topic_id, prior_open_topic_map.get(topic_id))
+
+        return {
+            "covered_recommendation_indices": sorted(covered_recommendation_indices),
+            "uncovered_recommendation_indices": sorted(uncovered_recommendation_indices),
+            "uncovered_global_issue_ids": sorted(uncovered_global_issue_ids),
+            "uncovered_global_topic_ids": sorted(uncovered_global_topic_ids),
+        }
+
+    @staticmethod
+    def _recommendation_review_ref_stats(normalized_refs: dict[str, Any]) -> tuple[int, int]:
+        ref_count = 0
+        field_count = 0
+        for field_name, value in normalized_refs.items():
+            if not field_name.startswith("recommendation_reviews["):
+                continue
+            if not (
+                field_name.endswith(".checked_files")
+                or field_name.endswith(".verified_evidence_refs")
+            ):
+                continue
+            if isinstance(value, list):
+                value_count = len(value)
+            elif value:
+                value_count = 1
+            else:
+                value_count = 0
+            if value_count <= 0:
+                continue
+            field_count += 1
+            ref_count += value_count
+        return (ref_count, field_count)
 
     @staticmethod
     def _review_payload_requires_structured_refs(payload: dict[str, Any]) -> bool:
@@ -2368,9 +2604,11 @@ class HarnessRunner:
         normalized_refs: dict[str, Any] = {}
         warnings: list[str] = []
         canonical_role_name = self._canonical_stage_role_name(role_name)
+        prior_open_issue_records = self._open_issue_records()
+        prior_open_topic_records = self._open_topic_records()
 
         if canonical_role_name in {"critic", "auditor"}:
-            prior_open_topics_exist = bool(self._open_topic_records())
+            prior_open_topics_exist = bool(prior_open_topic_records)
             reserved_topic_ids = {
                 str(item.get("topic_id") or "").strip()
                 for item in normalized.get("topics", []) or []
@@ -2496,16 +2734,17 @@ class HarnessRunner:
             normalized,
             payload_provenance_mode=payload_provenance_mode,
             normalized_refs=normalized_refs,
+            prior_open_issue_records=prior_open_issue_records,
+            prior_open_topic_records=prior_open_topic_records,
         )
         if (
             canonical_role_name in {"critic", "auditor"}
             and payload_provenance_mode == "payload_hash_and_refs"
-            and self._review_payload_requires_structured_refs(normalized)
-            and int(payload_provenance.get("normalized_ref_count", 0) or 0) == 0
+            and not bool(payload_provenance.get("closure_provenance_satisfied"))
         ):
             payload_provenance["status"] = "insufficient"
             payload_provenance["failure_reason"] = (
-                "trust_review_requires_structured_refs_for_issue_or_topic_closure"
+                "trust_review_requires_structured_refs_for_recommendation_and_closure_provenance"
             )
 
         return (normalized, payload_provenance, warnings)

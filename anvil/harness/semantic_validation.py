@@ -47,7 +47,9 @@ def validate_stage_output(
     open_issue_ids: Iterable[str] | None = None,
     expected_open_topic_ids: Iterable[str] | None = None,
     prior_open_issue_ids: Iterable[str] | None = None,
+    prior_open_issue_records: Iterable[dict[str, Any]] | None = None,
     prior_open_topic_ids: Iterable[str] | None = None,
+    prior_open_topic_records: Iterable[dict[str, Any]] | None = None,
     historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
     payload_provenance: dict[str, Any] | None = None,
@@ -82,7 +84,9 @@ def validate_stage_output(
                 contract=contract,
                 workspace_paths=workspace_paths,
                 prior_open_issue_ids=prior_open_issue_ids,
+                prior_open_issue_records=prior_open_issue_records,
                 prior_open_topic_ids=prior_open_topic_ids,
+                prior_open_topic_records=prior_open_topic_records,
                 historical_topic_ids=historical_topic_ids,
                 expected_recommendation_count=expected_recommendation_count,
                 payload_provenance=payload_provenance,
@@ -247,7 +251,9 @@ def validate_analysis_review_payload(
     contract: AnalysisReviewContract,
     workspace_paths: Iterable[str] | None = None,
     prior_open_issue_ids: Iterable[str] | None = None,
+    prior_open_issue_records: Iterable[dict[str, Any]] | None = None,
     prior_open_topic_ids: Iterable[str] | None = None,
+    prior_open_topic_records: Iterable[dict[str, Any]] | None = None,
     historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
     payload_provenance: dict[str, Any] | None = None,
@@ -269,7 +275,15 @@ def validate_analysis_review_payload(
             f"issues exceeds the bounded-review cap of {bounded_review.critic_issue_cap} item(s) for critic."
         )
 
-    prior_open_ids = {str(item).strip() for item in (prior_open_issue_ids or []) if str(item).strip()}
+    prior_open_issue_record_map = _record_recommendation_index_by_id(
+        prior_open_issue_records,
+        id_field="issue_id",
+    )
+    prior_open_ids = set(prior_open_issue_record_map)
+    if not prior_open_ids:
+        prior_open_ids = {
+            str(item).strip() for item in (prior_open_issue_ids or []) if str(item).strip()
+        }
     new_medium_or_higher_issue_ids: list[str] = []
     for index, issue in enumerate(issues, start=1):
         if not isinstance(issue, dict):
@@ -382,6 +396,7 @@ def validate_analysis_review_payload(
             recommendation_index=index,
             files_reviewed=files_reviewed_set,
             workspace_paths=workspace_path_set,
+            contract=contract,
         )
     duplicate_recommendations = sorted(
         {value for value in recommendation_indices if recommendation_indices.count(value) > 1}
@@ -469,9 +484,15 @@ def validate_analysis_review_payload(
     if duplicate_topic_ids:
         result.errors.append("topics contains duplicate topic IDs: " + ", ".join(duplicate_topic_ids))
 
-    prior_open_topic_id_set = {
-        str(item).strip() for item in (prior_open_topic_ids or []) if str(item).strip()
-    }
+    prior_open_topic_record_map = _record_recommendation_index_by_id(
+        prior_open_topic_records,
+        id_field="topic_id",
+    )
+    prior_open_topic_id_set = set(prior_open_topic_record_map)
+    if not prior_open_topic_id_set:
+        prior_open_topic_id_set = {
+            str(item).strip() for item in (prior_open_topic_ids or []) if str(item).strip()
+        }
     historical_topic_id_set = {
         str(item).strip() for item in (historical_topic_ids or []) if str(item).strip()
     }
@@ -738,6 +759,7 @@ def _validate_review_recommendation_metadata(
     recommendation_index: int,
     files_reviewed: set[str],
     workspace_paths: set[str],
+    contract: AnalysisReviewContract,
 ) -> None:
     checked_items = _non_empty_strings(
         (recommendation_review.get("checked_files") or [])
@@ -749,6 +771,12 @@ def _validate_review_recommendation_metadata(
         if isinstance(recommendation_review.get("verified_evidence_refs"), list)
         else []
     )
+    verdict = str(recommendation_review.get("verdict") or "").strip().lower()
+
+    if contract.mode == "trust" and verdict and not checked_items and not verified_items:
+        result.errors.append(
+            f"recommendation_reviews[{recommendation_index}] must include checked_files or verified_evidence_refs for trust-mode verdict provenance."
+        )
 
     missing_checked_files = sorted(set(checked_items) - files_reviewed)
     if missing_checked_files:
@@ -805,15 +833,63 @@ def _validate_review_payload_provenance(
     if contract.trust_review.payload_provenance_mode != "payload_hash_and_refs":
         return
     provenance = payload_provenance if isinstance(payload_provenance, dict) else {}
-    normalized_ref_count = provenance.get("normalized_ref_count", 0)
+    uncovered_recommendation_indices = _validated_provenance_index_list(
+        provenance.get("uncovered_recommendation_indices")
+    )
+    uncovered_global_issue_ids = _non_empty_strings(
+        provenance.get("uncovered_global_issue_ids")
+        if isinstance(provenance.get("uncovered_global_issue_ids"), list)
+        else []
+    )
+    uncovered_global_topic_ids = _non_empty_strings(
+        provenance.get("uncovered_global_topic_ids")
+        if isinstance(provenance.get("uncovered_global_topic_ids"), list)
+        else []
+    )
+    if "closure_provenance_satisfied" in provenance:
+        closure_provenance_satisfied = bool(provenance.get("closure_provenance_satisfied"))
+    else:
+        recommendation_review_ref_count = provenance.get("recommendation_review_ref_count", 0)
+        try:
+            closure_provenance_satisfied = int(recommendation_review_ref_count) > 0
+        except (TypeError, ValueError):
+            closure_provenance_satisfied = False
+    if (
+        uncovered_recommendation_indices
+        or uncovered_global_issue_ids
+        or uncovered_global_topic_ids
+    ):
+        coverage_parts: list[str] = []
+        if uncovered_recommendation_indices:
+            coverage_parts.append(
+                "recommendation indices "
+                + ", ".join(str(item) for item in uncovered_recommendation_indices)
+            )
+        if uncovered_global_issue_ids:
+            coverage_parts.append(
+                "global issue closures " + ", ".join(uncovered_global_issue_ids)
+            )
+        if uncovered_global_topic_ids:
+            coverage_parts.append(
+                "global topic closures " + ", ".join(uncovered_global_topic_ids)
+            )
+        result.errors.append(
+            "trust review payload lacks provenance-complete recommendation-level structured review refs for "
+            + "; ".join(coverage_parts)
+            + ". files_reviewed alone is not sufficient."
+        )
+        return
+    if closure_provenance_satisfied:
+        return
+    recommendation_review_ref_count = provenance.get("recommendation_review_ref_count", 0)
     try:
-        ref_count = int(normalized_ref_count)
+        ref_count = int(recommendation_review_ref_count)
     except (TypeError, ValueError):
         ref_count = 0
     if ref_count > 0:
         return
     result.errors.append(
-        "trust review payload introduced or classified issues/topics without any structured review refs; provide files_reviewed and recommendation_reviews checked_files/verified_evidence_refs."
+        "trust review payload introduced or classified issues/topics without recommendation-level structured review refs; files_reviewed alone is not sufficient, so provide recommendation_reviews checked_files/verified_evidence_refs."
     )
 
 
@@ -832,6 +908,50 @@ def _normalized_id_set(values: Any) -> set[str]:
     if not isinstance(values, list):
         return set()
     return {str(item).strip() for item in values if str(item).strip()}
+
+
+def _normalized_optional_recommendation_index(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    if normalized < 1:
+        return None
+    return normalized
+
+
+def _record_recommendation_index_by_id(
+    records: Iterable[dict[str, Any]] | None,
+    *,
+    id_field: str,
+) -> dict[str, int | None]:
+    result: dict[str, int | None] = {}
+    for item in records or []:
+        if not isinstance(item, dict):
+            continue
+        record_id = str(item.get(id_field) or "").strip()
+        if not record_id:
+            continue
+        result[record_id] = _normalized_optional_recommendation_index(
+            item.get("recommendation_index")
+        )
+    return result
+
+
+def _validated_provenance_index_list(values: Any) -> list[int]:
+    if not isinstance(values, list):
+        return []
+    normalized: set[int] = set()
+    for item in values:
+        try:
+            numeric = int(item)
+        except (TypeError, ValueError):
+            continue
+        if numeric >= 1:
+            normalized.add(numeric)
+    return sorted(normalized)
 
 
 def _validated_id_list(

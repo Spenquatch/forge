@@ -185,7 +185,7 @@ Review-stage critic and auditor payloads also support structured review refs on 
 - `recommendation_reviews[*].checked_files`
 - `recommendation_reviews[*].verified_evidence_refs`
 
-Those refs are the path-based audit surface for review provenance. Human-readable topic or issue `evidence` text remains narrative; provenance binds to these structured path refs.
+Those refs are the path-based audit surface for review provenance. `files_reviewed` records review-stage context, but trust-mode closure provenance comes from the recommendation-level review refs. Each concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`; one recommendation's refs do not prove another recommendation's verdict or closure state. Human-readable topic or issue `evidence` text remains narrative; provenance binds to these structured path refs. Under the current contract, truly global issues/topics still are not provenance-complete unless a future topic/issue-scoped ref surface is added.
 
 ## Trust semantics
 
@@ -227,7 +227,7 @@ Examples of the existing and intended v4 semantic checks:
 - in trust mode, `verified_evidence_refs` should stay a subset of `evidence`
 - in trust mode, non-inferred `affected_files` should be covered by evidence or checked files
 - in trust mode, `blocking_class_override_reason` should explain intentional taxonomy overrides
-- in trust mode, review payloads that introduce or classify issues/topics must bind at least one structured review ref; a payload hash alone is insufficient
+- in trust mode, review payloads that introduce or classify issues/topics must bind at least one recommendation-level structured review ref; `files_reviewed` plus a payload hash alone is insufficient
 
 Semantic validation failures are surfaced as stage errors and written to a per-stage `semantic_validation.json` artifact.
 

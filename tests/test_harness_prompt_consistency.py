@@ -270,16 +270,36 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert issue_line in critic
 
     if mode == "trust":
-        assert "In trust mode, do not leave these review-stage refs empty when you introduce or classify issues/topics." in critic
-        assert "In trust mode, zero structured review refs is a contract failure even if the payload hash is recorded." in critic
-        assert "In trust mode, do not leave these review-stage refs empty when you introduce or classify issues/topics." in auditor
-        assert "In trust mode, zero structured review refs is a contract failure even if the payload hash is recorded." in auditor
         assert (
-            "In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments."
+            "In trust mode, every concrete recommendation_reviews verdict must carry its own checked_files or verified_evidence_refs."
             in critic
         )
         assert (
-            "In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments."
+            "In trust mode, if you introduce or classify issues/topics, those closures must map to a covered recommendation review; unrelated recommendation refs do not count."
+            in critic
+        )
+        assert (
+            "In trust mode, global issues/topics remain provenance-incomplete under this contract without a future issue/topic-scoped ref surface, even if the payload hash is recorded."
+            in critic
+        )
+        assert (
+            "In trust mode, every concrete recommendation_reviews verdict must carry its own checked_files or verified_evidence_refs."
+            in auditor
+        )
+        assert (
+            "In trust mode, if you introduce or classify issues/topics, those closures must map to a covered recommendation review; unrelated recommendation refs do not count."
+            in auditor
+        )
+        assert (
+            "In trust mode, global issues/topics remain provenance-incomplete under this contract without a future issue/topic-scoped ref surface, even if the payload hash is recorded."
+            in auditor
+        )
+        assert (
+            "In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract."
+            in critic
+        )
+        assert (
+            "In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract."
             in auditor
         )
     else:

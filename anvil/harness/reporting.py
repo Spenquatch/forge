@@ -167,6 +167,142 @@ def _recommendation_source_indices(payload: dict[str, Any], recommendation_count
     return list(range(1, recommendation_count + 1))
 
 
+def _filter_records_by_recommendation_indices(
+    records: list[dict[str, Any]] | None,
+    *,
+    included_recommendation_indices: list[int],
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or not records:
+        return []
+    included_index_set = set(included_recommendation_indices)
+    filtered: list[dict[str, Any]] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        try:
+            recommendation_index = int(item.get("recommendation_index"))
+        except (TypeError, ValueError):
+            continue
+        if recommendation_index not in included_index_set:
+            continue
+        filtered.append(copy.deepcopy(item))
+    return filtered
+
+
+def _partial_artifact_downgrade_causes(
+    *,
+    issue_ledger: list[dict[str, Any]],
+    topic_ledger: list[dict[str, Any]],
+    recommendation_reviews: list[dict[str, Any]],
+    inferred_indices: list[int],
+) -> list[str]:
+    causes: list[str] = []
+    if any(
+        str(item.get("severity") or "").strip().lower() == "low"
+        and str(item.get("resolution_status") or "").strip() in {"open", "carried_forward"}
+        for item in issue_ledger
+    ):
+        causes.append("low-severity reviewer issues remain open")
+    unresolved_topic_ids = sorted(
+        {
+            *topic_ids_for_status_name(topic_ledger, status_name="open"),
+            *topic_ids_for_status_name(topic_ledger, status_name="carried_forward"),
+        }
+    )
+    if unresolved_topic_ids:
+        causes.append("review topics remain open: " + ", ".join(unresolved_topic_ids))
+    accepted_caveat_indices = sorted(
+        int(item.get("recommendation_index"))
+        for item in recommendation_reviews
+        if str(item.get("verdict") or "").strip().lower() == "accept_with_caveat"
+    )
+    if accepted_caveat_indices:
+        causes.append(
+            "accepted recommendation reviews include accept_with_caveat: "
+            + ", ".join(str(item) for item in accepted_caveat_indices)
+        )
+    if inferred_indices:
+        causes.append(
+            "accepted recommendations rely on inference-only grounding: "
+            + ", ".join(str(item) for item in inferred_indices)
+        )
+    return causes
+
+
+def _build_partial_artifact_summary(
+    summary: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    included_recommendation_indices = _recommendation_source_indices(
+        payload,
+        len(payload.get("recommendations") or []),
+    )
+    filtered_reviews = _filter_records_by_recommendation_indices(
+        summary.get("recommendation_reviews"),
+        included_recommendation_indices=included_recommendation_indices,
+    )
+    filtered_topic_ledger = _filter_records_by_recommendation_indices(
+        _topic_ledger(summary),
+        included_recommendation_indices=included_recommendation_indices,
+    )
+    filtered_issue_ledger = _filter_records_by_recommendation_indices(
+        summary.get("issue_ledger"),
+        included_recommendation_indices=included_recommendation_indices,
+    )
+    analysis_status = copy.deepcopy(_analysis_review_status(summary))
+    included_index_set = set(included_recommendation_indices)
+    inferred_indices: list[int] = []
+    for item in (analysis_status.get("accepted_recommendations_with_inferred_grounding") or []):
+        try:
+            recommendation_index = int(item)
+        except (TypeError, ValueError):
+            continue
+        if recommendation_index in included_index_set:
+            inferred_indices.append(recommendation_index)
+    accepted_caveat_indices: list[int] = []
+    for item in filtered_reviews:
+        if str(item.get("verdict") or "").strip().lower() != "accept_with_caveat":
+            continue
+        try:
+            accepted_caveat_indices.append(int(item.get("recommendation_index")))
+        except (TypeError, ValueError):
+            continue
+    analysis_status.update(
+        {
+            "review_status_scope": "partial_subset",
+            "accepted_recommendations_with_caveats": sorted(set(accepted_caveat_indices)),
+            "accepted_recommendations_with_inferred_grounding": sorted(set(inferred_indices)),
+            "open_topic_ids": topic_ids_for_status_name(filtered_topic_ledger, status_name="open"),
+            "carried_forward_topic_ids": topic_ids_for_status_name(
+                filtered_topic_ledger,
+                status_name="carried_forward",
+            ),
+            "waived_topic_ids": topic_ids_for_status_name(filtered_topic_ledger, status_name="waived"),
+            "resolved_topic_ids": topic_ids_for_status_name(
+                filtered_topic_ledger,
+                status_name="resolved",
+            ),
+            "disagreed_topic_ids": topic_ids_for_status_name(
+                filtered_topic_ledger,
+                status_name="disagreed",
+            ),
+            "topic_ledger_count": len(filtered_topic_ledger),
+            "downgrade_causes": _partial_artifact_downgrade_causes(
+                issue_ledger=filtered_issue_ledger,
+                topic_ledger=filtered_topic_ledger,
+                recommendation_reviews=filtered_reviews,
+                inferred_indices=sorted(set(inferred_indices)),
+            ),
+        }
+    )
+    scoped_summary = copy.deepcopy(summary)
+    scoped_summary["analysis_review_status"] = analysis_status
+    scoped_summary["recommendation_reviews"] = filtered_reviews
+    scoped_summary["topic_ledger"] = filtered_topic_ledger
+    scoped_summary["issue_ledger"] = filtered_issue_ledger
+    return scoped_summary
+
+
 def _recommendation_caveat_lines(
     *,
     recommendation_index: int,
@@ -320,13 +456,23 @@ def render_deliverable_markdown(
         resolved_topic_ids = _topic_status_ids(summary or {}, status_name="resolved")
         waived_topic_ids = _topic_status_ids(summary or {}, status_name="waived")
         disagreed_topic_ids = _topic_status_ids(summary or {}, status_name="disagreed")
+        review_status_scope = str(analysis_status.get("review_status_scope") or "").strip()
         lines.extend(["## Review Status", ""])
         if verdict:
             lines.append(f"- Verdict: `{verdict}`")
-        lines.append(f"- Mode: `{analysis_status.get('mode', 'unknown')}`")
-        lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
-        lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
-        lines.append(f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`")
+        if review_status_scope == "partial_subset":
+            lines.append("- Review status scope: `included recommendations only`")
+            lines.append(f"- Run-level mode: `{analysis_status.get('mode', 'unknown')}`")
+            lines.append(f"- Run-level provenance status: `{provenance.get('status', 'unknown')}`")
+            lines.append(f"- Run-level provenance policy: `{provenance.get('policy_mode', 'none')}`")
+            lines.append(
+                f"- Run-level semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`"
+            )
+        else:
+            lines.append(f"- Mode: `{analysis_status.get('mode', 'unknown')}`")
+            lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
+            lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
+            lines.append(f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`")
         topic_ledger_count = analysis_status.get("topic_ledger_count")
         effective_count = topic_ledger_count
         if effective_count is None:
@@ -497,6 +643,9 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             summary["best_draft"] = best_draft
 
     if artifact_json_path is not None and artifact_md_path is not None and isinstance(payload, dict) and payload:
+        render_summary = (
+            _build_partial_artifact_summary(summary, payload) if partially_accepted else summary
+        )
         write_json(artifact_json_path, payload)
         write_text(
             artifact_md_path,
@@ -511,7 +660,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
                     else "Best Draft"
                 ),
                 accepted=fully_accepted,
-                summary=summary,
+                summary=render_summary,
             ),
         )
         artifacts["final_artifact"] = str(artifact_md_path)

@@ -319,8 +319,10 @@ def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
     if trust.payload_provenance_mode == "payload_hash_and_refs":
         lines.extend(
             [
-                "- In trust mode, do not leave these review-stage refs empty when you introduce or classify issues/topics.",
-                "- In trust mode, zero structured review refs is a contract failure even if the payload hash is recorded.",
+                "- In trust mode, files_reviewed is necessary review context but not sufficient closure provenance on its own.",
+                "- In trust mode, every concrete recommendation_reviews verdict must carry its own checked_files or verified_evidence_refs.",
+                "- In trust mode, if you introduce or classify issues/topics, those closures must map to a covered recommendation review; unrelated recommendation refs do not count.",
+                "- In trust mode, global issues/topics remain provenance-incomplete under this contract without a future issue/topic-scoped ref surface, even if the payload hash is recorded.",
             ]
         )
     else:
@@ -573,7 +575,7 @@ Your job:
 6. Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`.
 7. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics. Do not put IDs from this stage's new `topics` array into those classification arrays.
 8. Populate `files_reviewed` with the concrete workspace files you inspected during this review stage.
-9. In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments.
+9. In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract.
 10. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
 11. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
@@ -637,7 +639,7 @@ Your job:
 4. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
 5. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only for prior open topics. Do not classify IDs from this stage's new `topics` array there.
 6. Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage.
-7. In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments.
+7. In trust mode, `files_reviewed` is not enough by itself for issue/topic closure provenance; every concrete `recommendation_reviews[*]` verdict must carry its own `checked_files` or `verified_evidence_refs`, and global issue/topic closure is not provenance-complete under the current contract.
 8. Review every recommendation individually and return recommendation-level verdicts.
 9. Stay inside each recommendation's bounded review_surface unless you must leave it.
 10. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.

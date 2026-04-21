@@ -972,6 +972,122 @@ class _TrustZeroRefReviewHarnessAdapter(_TopicLifecycleHarnessAdapter):
         return payload
 
 
+class _TrustTopLevelOnlyRefReviewHarnessAdapter(_TrustZeroRefReviewHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = _TopicLifecycleHarnessAdapter._payload_for_role(self, role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["files_reviewed"] = [
+                ".github/workflows/codex-cli-release-watch.yml",
+                ".github/workflows/claude-code-release-watch.yml",
+            ]
+            for item in payload.get("recommendation_reviews", []):
+                if not isinstance(item, dict):
+                    continue
+                item.pop("checked_files", None)
+                item.pop("verified_evidence_refs", None)
+        return payload
+
+
+class _TrustGlobalTopicClosureHarnessAdapter(_TrustInferenceHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["topics"] = [
+                {
+                    "topic_id": "TOPIC-001",
+                    "severity": "medium",
+                    "title": "A global fallback policy remains unresolved.",
+                    "evidence": "The review still describes a run-level gap rather than a recommendation-local one.",
+                    "repair_hint": "Add a dedicated global ref surface or avoid claiming global closure.",
+                    "recommendation_index": None,
+                }
+            ]
+        return payload
+
+
+class _TrustGlobalIssueClosureHarnessAdapter(_TrustInferenceHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["issues"] = [
+                {
+                    "issue_id": "AR-001",
+                    "severity": "medium",
+                    "kind": "missing_evidence",
+                    "blocking_class": "correctness",
+                    "recommendation_index": None,
+                    "title": "A global evidence gap remains unresolved.",
+                    "evidence": "The review claims a run-wide invariant without a dedicated scoped ref surface.",
+                    "repair_hint": "Add a future issue-scoped ref surface or narrow the claim.",
+                    "why_not_raised_earlier": (
+                        "The run-level claim only became explicit in this trust review."
+                        if role_name == "auditor"
+                        else None
+                    ),
+                }
+            ]
+        return payload
+
+
+class _TrustVerdictWithoutRefsHarnessAdapter(_AcceptingHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["files_reviewed"] = self._review_files_reviewed()
+            payload.update(self._empty_topic_state())
+        return payload
+
+
+class _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    def __init__(self, *, blocking_class: str) -> None:
+        self.blocking_class = blocking_class
+
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name != "auditor":
+            return payload
+        payload["issues"] = [
+            {
+                "issue_id": "AR-001",
+                "severity": "medium",
+                "kind": "insufficient_specificity"
+                if self.blocking_class != "correctness"
+                else "missing_evidence",
+                "blocking_class": self.blocking_class,
+                "recommendation_index": 2,
+                "title": "Recommendation 2 still carries localized review debt.",
+                "evidence": "The accepted recommendation still has one bounded review gap.",
+                "repair_hint": "Close the remaining localized gap before clean acceptance.",
+                "why_not_raised_earlier": None,
+            }
+        ]
+        payload["recommendation_reviews"] = [
+            {
+                "recommendation_index": 1,
+                "verdict": "accept",
+                "open_issue_ids": [],
+                "summary": "Strong recommendation.",
+                "confidence_assessment": "well_calibrated",
+            },
+            {
+                "recommendation_index": 2,
+                "verdict": "accept_with_caveat",
+                "open_issue_ids": ["AR-001"],
+                "summary": "Usable recommendation with one bounded issue still open.",
+                "confidence_assessment": "well_calibrated",
+            },
+            {
+                "recommendation_index": 3,
+                "verdict": "revise",
+                "open_issue_ids": [],
+                "summary": "Still excluded from the accepted subset.",
+                "confidence_assessment": "too_low",
+            },
+        ]
+        payload["carried_forward_issue_ids"] = ["AR-001"]
+        return payload
+
+
 class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
     def run(self, request):
         if request.role_name == "critic":
@@ -1479,6 +1595,13 @@ def test_analysis_review_runner_trust_review_normalization_binds_structured_revi
     assert payload_provenance["status"] == "bound"
     assert payload_provenance["normalized_ref_count"] == 6
     assert payload_provenance["normalized_ref_field_count"] == 5
+    assert payload_provenance["recommendation_review_ref_count"] == 4
+    assert payload_provenance["recommendation_review_ref_field_count"] == 4
+    assert payload_provenance["closure_provenance_satisfied"] is True
+    assert payload_provenance["covered_recommendation_indices"] == [1, 2]
+    assert payload_provenance["uncovered_recommendation_indices"] == []
+    assert payload_provenance["uncovered_global_issue_ids"] == []
+    assert payload_provenance["uncovered_global_topic_ids"] == []
     assert payload_provenance["normalized_refs"] == {
         "files_reviewed": [
             ".github/workflows/codex-cli-release-watch.yml",
@@ -1499,7 +1622,7 @@ def test_analysis_review_runner_trust_review_normalization_binds_structured_revi
     }
 
 
-def test_analysis_review_runner_trust_review_fails_when_topic_closure_has_zero_structured_refs(
+def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insufficient(
     tmp_path,
     monkeypatch,
 ):
@@ -1512,7 +1635,7 @@ def test_analysis_review_runner_trust_review_fails_when_topic_closure_has_zero_s
     monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
     monkeypatch.setattr(
         "anvil.harness.runner.get_provider",
-        lambda name: _TrustZeroRefReviewHarnessAdapter(),
+        lambda name: _TrustTopLevelOnlyRefReviewHarnessAdapter(),
     )
 
     runner = HarnessRunner(
@@ -1527,13 +1650,135 @@ def test_analysis_review_runner_trust_review_fails_when_topic_closure_has_zero_s
     critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
     assert critic_stage["failure_kind"] == "semantic_validation_error"
     assert critic_stage["semantic_validation_payload_provenance"]["status"] == "insufficient"
-    assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] == 0
-    assert "files_reviewed must contain at least 1 non-empty path(s)." in critic_stage[
-        "semantic_validation_errors"
-    ]
+    assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] == 2
+    assert critic_stage["semantic_validation_payload_provenance"][
+        "recommendation_review_ref_count"
+    ] == 0
+    assert critic_stage["semantic_validation_payload_provenance"][
+        "uncovered_recommendation_indices"
+    ] == [1, 2]
     assert (
-        "trust review payload introduced or classified issues/topics without any structured review refs"
+        critic_stage["semantic_validation_payload_provenance"]["closure_provenance_satisfied"]
+        is False
+    )
+    assert (
+        "trust review payload lacks provenance-complete recommendation-level structured review refs for recommendation indices 1, 2."
         in "\n".join(critic_stage["semantic_validation_errors"])
+    )
+
+
+def test_analysis_review_runner_trust_review_marks_global_topic_closure_as_uncovered_debt(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalTopicClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalTopicClosureHarnessAdapter()._payload_for_role("critic")
+    _, payload_provenance, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+
+    assert warnings == []
+    assert payload_provenance["status"] == "insufficient"
+    assert payload_provenance["covered_recommendation_indices"] == [1, 2]
+    assert payload_provenance["uncovered_recommendation_indices"] == []
+    assert payload_provenance["uncovered_global_issue_ids"] == []
+    assert payload_provenance["uncovered_global_topic_ids"] == ["TOPIC-001"]
+    assert payload_provenance["closure_provenance_satisfied"] is False
+
+
+def test_analysis_review_runner_trust_review_marks_global_issue_closure_as_uncovered_debt(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueClosureHarnessAdapter()._payload_for_role("critic")
+    _, payload_provenance, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+
+    assert warnings == []
+    assert payload_provenance["status"] == "insufficient"
+    assert payload_provenance["covered_recommendation_indices"] == [1, 2]
+    assert payload_provenance["uncovered_recommendation_indices"] == []
+    assert payload_provenance["uncovered_global_issue_ids"] == ["AR-001"]
+    assert payload_provenance["uncovered_global_topic_ids"] == []
+    assert payload_provenance["closure_provenance_satisfied"] is False
+
+
+def test_analysis_review_runner_trust_mode_rejects_concrete_verdicts_without_per_verdict_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustVerdictWithoutRefsHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
+    assert critic_stage["failure_kind"] == "semantic_validation_error"
+    assert critic_stage["semantic_validation_payload_provenance"]["status"] == "insufficient"
+    assert critic_stage["semantic_validation_payload_provenance"][
+        "uncovered_recommendation_indices"
+    ] == [1, 2]
+    assert (
+        "recommendation_reviews[1] must include checked_files or verified_evidence_refs for trust-mode verdict provenance."
+        in critic_stage["semantic_validation_errors"]
     )
 
 
@@ -1682,6 +1927,92 @@ def test_analysis_review_runner_blocks_partial_accept_when_unresolved_topic_is_g
     assert summary["artifacts"]["final_artifact_kind"] != "partial_answer"
     assert "partial_answer" not in summary
     assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+
+
+def test_analysis_review_runner_partial_accept_allows_localized_medium_non_correctness_when_enabled(
+    tmp_path,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+        blocking_class="actionability"
+    )._payload_for_role("auditor")
+
+    assert runner._analysis_can_partially_accept(payload) is True
+
+
+def test_analysis_review_runner_partial_accept_rejects_localized_medium_non_correctness_when_disabled(
+    tmp_path,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    runner.analysis_review_contract = replace(
+        runner._analysis_contract(),
+        partial_acceptance=replace(
+            runner._analysis_contract().partial_acceptance,
+            allow_localized_medium_non_correctness_issues=False,
+        ),
+    )
+    payload = _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+        blocking_class="actionability"
+    )._payload_for_role("auditor")
+
+    assert runner._analysis_can_partially_accept(payload) is False
+
+
+def test_analysis_review_runner_partial_accept_rejects_localized_medium_correctness_when_forbidden(
+    tmp_path,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+        blocking_class="correctness"
+    )._payload_for_role("auditor")
+
+    assert runner._analysis_can_partially_accept(payload) is False
+
+
+def test_analysis_review_runner_partial_accept_allows_localized_medium_correctness_when_policy_allows(
+    tmp_path,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    runner.analysis_review_contract = replace(
+        runner._analysis_contract(),
+        partial_acceptance=replace(
+            runner._analysis_contract().partial_acceptance,
+            forbid_correctness_blockers_on_accepted_recommendations=False,
+        ),
+    )
+    payload = _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+        blocking_class="correctness"
+    )._payload_for_role("auditor")
+
+    assert runner._analysis_can_partially_accept(payload) is True
 
 
 def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_deliverable(
