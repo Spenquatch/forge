@@ -296,12 +296,15 @@ def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics
         "topic_ledger": [
             {
                 "topic_id": "TOPIC-001",
-                "source_stage_id": "stage-02-critic",
-                "resolution_status": "resolved",
                 "title": "Recommendation 1 needs a concrete fallback classification.",
+                "severity": "medium",
                 "evidence": "The draft names the operator path but not the fallback state taxonomy.",
-                "repair_hint": "Clarify the fallback label and operator path together.",
+                "recommendation_index": 1,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_status": "addressed",
                 "resolution_note": "addressed | Added the fallback classification note to recommendation 1.",
+                "resolved_in_stage_index": 4,
             }
         ],
     }
@@ -316,7 +319,7 @@ def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics
 
     assert "## Topic Lifecycle" in markdown
     assert (
-        "- `TOPIC-001` `resolved` via `critic`: Recommendation 1 needs a concrete fallback classification. — addressed | Added the fallback classification note to recommendation 1."
+        "- `TOPIC-001` `addressed` via `critic`: Recommendation 1 needs a concrete fallback classification. — addressed | Added the fallback classification note to recommendation 1."
         in markdown
     )
 
@@ -346,7 +349,7 @@ def test_render_deliverable_markdown_renders_carried_forward_topic_resolution_no
                 "policy_mode": "none",
             },
             "topic_ledger_count": 1,
-            "open_topic_ids": ["TOPIC-001"],
+            "open_topic_ids": [],
             "carried_forward_topic_ids": ["TOPIC-001"],
             "resolved_topic_ids": [],
             "waived_topic_ids": [],
@@ -355,12 +358,15 @@ def test_render_deliverable_markdown_renders_carried_forward_topic_resolution_no
         "topic_ledger": [
             {
                 "topic_id": "TOPIC-001",
-                "source_stage_id": "stage-02-critic",
                 "resolution_status": "carried_forward",
                 "title": "Recommendation 1 needs a concrete fallback classification.",
+                "severity": "medium",
                 "evidence": "The draft names the operator path but not the fallback state taxonomy.",
-                "repair_hint": "Clarify the fallback label and operator path together.",
+                "recommendation_index": 1,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
                 "resolution_note": "not_addressed | The recommendation improved, but the fallback label is still implicit. | Operators still need a concrete fallback label.",
+                "resolved_in_stage_index": None,
             }
         ],
     }
@@ -466,16 +472,15 @@ def test_render_report_renders_full_topic_lifecycle_section():
         "topic_ledger": [
             {
                 "topic_id": "TOPIC-001",
-                "source_stage_id": "stage-02-critic",
-                "first_seen_round": 0,
-                "last_seen_round": 1,
-                "severity": "medium",
-                "recommendation_index": 1,
                 "title": "Recommendation 1 needs a concrete fallback classification.",
+                "severity": "medium",
                 "evidence": "The draft names the operator path but not the fallback state taxonomy.",
-                "repair_hint": "Clarify the fallback label and operator path together.",
-                "resolution_status": "resolved",
+                "recommendation_index": 1,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_status": "addressed",
                 "resolution_note": "addressed | Added the fallback classification note to recommendation 1.",
+                "resolved_in_stage_index": 4,
             }
         ],
         "issue_ledger": [],
@@ -492,6 +497,8 @@ def test_render_report_renders_full_topic_lifecycle_section():
     assert "## Topic Lifecycle" in report
     assert "- Topic ledger entries: `1`" in report
     assert "- Resolved topics: `1` (`TOPIC-001`)" in report
-    assert "### TOPIC-001 — medium — resolved" in report
-    assert "- Introduced by: `critic`" in report
-    assert "- Resolution note: addressed | Added the fallback classification note to recommendation 1." in report
+    assert "| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |" in report
+    assert (
+        "| `TOPIC-001` | Recommendation 1 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `1` | addressed \\| Added the fallback classification note to recommendation 1. |"
+        in report
+    )

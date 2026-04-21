@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
+
 
 def _render_policy_list(items: list[str]) -> str:
     values = [str(item) for item in items if str(item).strip()]
@@ -65,28 +67,12 @@ def _render_id_list(items: list[str]) -> str:
 
 def _topic_status_ids(summary: dict[str, Any], *, status_name: str) -> list[str]:
     status = _analysis_review_status(summary)
-    field_by_status = {
-        "open": "open_topic_ids",
-        "carried_forward": "carried_forward_topic_ids",
-        "waived": "waived_topic_ids",
-        "resolved": "resolved_topic_ids",
-    }
-    field_name = field_by_status[status_name]
+    field_name = topic_status_field_name(status_name)
     raw_ids = status.get(field_name)
     if isinstance(raw_ids, list):
         return sorted(str(item).strip() for item in raw_ids if str(item).strip())
 
-    topic_ledger = _topic_ledger(summary)
-    if status_name == "open":
-        allowed_statuses = {"open", "carried_forward"}
-    else:
-        allowed_statuses = {status_name}
-    return sorted(
-        str(item.get("topic_id") or "").strip()
-        for item in topic_ledger
-        if str(item.get("topic_id") or "").strip()
-        and str(item.get("resolution_status") or "").strip() in allowed_statuses
-    )
+    return topic_ids_for_status_name(_topic_ledger(summary), status_name=status_name)
 
 
 def _topic_summary_text(topic: dict[str, Any]) -> str:
@@ -103,10 +89,8 @@ def _topic_summary_text(topic: dict[str, Any]) -> str:
 
 
 def _topic_source_role(topic: dict[str, Any]) -> str:
-    source_stage_id = str(topic.get("source_stage_id") or "").strip()
-    if not source_stage_id:
-        return "unknown"
-    return source_stage_id.rsplit("-", 1)[-1] or "unknown"
+    introduced_by = str(topic.get("introduced_by") or "").strip()
+    return introduced_by or "unknown"
 
 
 def _render_cap_usage(used: Any, cap: Any) -> str:
@@ -114,6 +98,10 @@ def _render_cap_usage(used: Any, cap: Any) -> str:
     if cap is None:
         return f"`{used_value}` / `n/a`"
     return f"`{used_value}` / `{cap}`"
+
+
+def _table_cell(value: Any) -> str:
+    return str(value).replace("|", "\\|")
 
 
 def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> None:
@@ -292,23 +280,30 @@ def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -
     )
     lines.append("")
 
+    lines.append("| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |")
+    lines.append("|---|---|---|---|---|---|---|")
     for topic in topic_ledger:
-        lines.append(
-            f"### {topic.get('topic_id')} — {topic.get('severity')} — {topic.get('resolution_status')}"
+        recommendation = topic.get("recommendation_index")
+        recommendation_text = (
+            f"`{recommendation}`" if recommendation not in (None, "") else "n/a"
         )
-        lines.append("")
-        lines.append(f"- Introduced by: `{_topic_source_role(topic)}`")
-        lines.append(f"- Source stage: `{topic.get('source_stage_id')}`")
-        lines.append(f"- First seen round: `{topic.get('first_seen_round')}`")
-        lines.append(f"- Last seen round: `{topic.get('last_seen_round')}`")
-        if topic.get("recommendation_index") is not None:
-            lines.append(f"- Recommendation index: `{topic.get('recommendation_index')}`")
-        lines.append(f"- Title: {_topic_summary_text(topic)}")
-        lines.append(f"- Evidence: {topic.get('evidence')}")
-        lines.append(f"- Repair hint: {topic.get('repair_hint')}")
-        if str(topic.get("resolution_note") or "").strip():
-            lines.append(f"- Resolution note: {topic.get('resolution_note')}")
-        lines.append("")
+        resolution_note = str(topic.get("resolution_note") or "").strip() or "n/a"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _table_cell(f"`{topic.get('topic_id')}`"),
+                    _table_cell(_topic_summary_text(topic)),
+                    _table_cell(f"`{topic.get('severity')}`"),
+                    _table_cell(f"`{_topic_source_role(topic)}`"),
+                    _table_cell(f"`{topic.get('resolution_status')}`"),
+                    _table_cell(recommendation_text),
+                    _table_cell(resolution_note),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
 
 
 def render_report(summary: dict[str, Any]) -> str:

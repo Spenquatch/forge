@@ -10,6 +10,7 @@ from typing import Any
 from .files import write_json, write_text
 from .report import render_report
 from .selection import select_best_draft
+from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
 
 _FULLY_ACCEPTED_RUN_VERDICTS = {"accepted", "accepted_with_warnings"}
 _PARTIAL_ACCEPTED_RUN_VERDICTS = {"accepted_partial"}
@@ -69,28 +70,12 @@ def _topic_ledger(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _topic_status_ids(summary: dict[str, Any], *, status_name: str) -> list[str]:
     status = _analysis_review_status(summary)
-    field_by_status = {
-        "open": "open_topic_ids",
-        "carried_forward": "carried_forward_topic_ids",
-        "waived": "waived_topic_ids",
-        "resolved": "resolved_topic_ids",
-    }
-    field_name = field_by_status[status_name]
+    field_name = topic_status_field_name(status_name)
     raw_ids = status.get(field_name)
     if isinstance(raw_ids, list):
         return sorted(str(item).strip() for item in raw_ids if str(item).strip())
 
-    topic_ledger = _topic_ledger(summary)
-    if status_name == "open":
-        allowed_statuses = {"open", "carried_forward"}
-    else:
-        allowed_statuses = {status_name}
-    return sorted(
-        str(item.get("topic_id") or "").strip()
-        for item in topic_ledger
-        if str(item.get("topic_id") or "").strip()
-        and str(item.get("resolution_status") or "").strip() in allowed_statuses
-    )
+    return topic_ids_for_status_name(_topic_ledger(summary), status_name=status_name)
 
 
 def _render_id_list(items: list[str]) -> str:
@@ -101,10 +86,8 @@ def _render_id_list(items: list[str]) -> str:
 
 
 def _topic_source_role(topic: dict[str, Any]) -> str:
-    source_stage_id = str(topic.get("source_stage_id") or "").strip()
-    if not source_stage_id:
-        return "unknown"
-    return source_stage_id.rsplit("-", 1)[-1] or "unknown"
+    introduced_by = str(topic.get("introduced_by") or "").strip()
+    return introduced_by or "unknown"
 
 
 def _topic_summary_text(topic: dict[str, Any]) -> str:
@@ -306,6 +289,7 @@ def render_deliverable_markdown(
         provenance = analysis_status.get("provenance") or {}
         topic_ledger = _topic_ledger(summary or {})
         open_topic_ids = _topic_status_ids(summary or {}, status_name="open")
+        carried_forward_topic_ids = _topic_status_ids(summary or {}, status_name="carried_forward")
         lines.extend(["## Review Status", ""])
         if verdict:
             lines.append(f"- Verdict: `{verdict}`")
@@ -321,6 +305,8 @@ def render_deliverable_markdown(
             lines.append(f"- Topic ledger count: `{effective_count}`")
         if open_topic_ids:
             lines.append("- Open topic IDs: " + _render_id_list(open_topic_ids))
+        if carried_forward_topic_ids:
+            lines.append("- Carried-forward topic IDs: " + _render_id_list(carried_forward_topic_ids))
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:
             lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))

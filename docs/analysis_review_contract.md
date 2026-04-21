@@ -59,6 +59,43 @@ The trust policy covers:
 - whether inference-backed acceptance should be downgraded to a caveated acceptance
 - whether late auditor medium-or-higher issues are treated as errors or warnings
 
+## Topic lifecycle artifact contract
+
+Slice A topic lifecycle is exported through the run summary, not inferred ad hoc from stage-local payloads.
+
+`summary.json["topic_ledger"]` is the canonical machine-readable contract and each entry uses this shape:
+
+```json
+{
+  "topic_id": "TOPIC-001",
+  "title": "Recommendation 1 needs a concrete fallback classification.",
+  "severity": "medium",
+  "evidence": "The draft names the operator path but not the fallback state taxonomy.",
+  "recommendation_index": 1,
+  "introduced_by": "critic",
+  "introduced_in_stage_index": 2,
+  "resolution_status": "addressed",
+  "resolution_note": "addressed | Added the fallback classification note to recommendation 1.",
+  "resolved_in_stage_index": 4
+}
+```
+
+Rules:
+
+- `introduced_by` is the role that first raised the topic.
+- `introduced_in_stage_index` is the concrete stage index where the topic entered the ledger.
+- `resolution_status` uses the Slice A vocabulary: `open | addressed | carried_forward | waived | disagree`.
+- `resolved_in_stage_index` is nullable and is only set when the topic reaches a non-open terminal classification such as `addressed`, `waived`, or `disagree`.
+
+`analysis_review_status` keeps the existing ID lists for compatibility, but they derive from the canonical ledger:
+
+- `open_topic_ids` = topics whose ledger status is `open`
+- `carried_forward_topic_ids` = topics whose ledger status is `carried_forward`
+- `resolved_topic_ids` = topics whose ledger status is `addressed`
+- `waived_topic_ids` = topics whose ledger status is `waived`
+
+`REPORT.md` renders the same ledger in a row-shaped `## Topic Lifecycle` table, while `FINAL_ANSWER.md` keeps a compact bullet summary of the same canonical records.
+
 ## Bounded-review policy
 
 The bounded-review policy remains the single source of truth for review caps. Prompts must render these values from the contract, and semantic validation must enforce the same values.

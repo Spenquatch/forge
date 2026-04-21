@@ -49,6 +49,7 @@ from .schemas import (
 )
 from .selection import extract_drafts_from_summary, select_best_draft
 from .semantic_validation import validate_stage_output
+from .topic_lifecycle import topic_ids_for_status_name, unresolved_topic_ids
 from .types import (
     ANALYSIS_REVIEW_BOUNDED_KIND,
     ANALYSIS_REVIEW_LEGACY_KIND,
@@ -1083,7 +1084,7 @@ class HarnessRunner:
         issue_count = len(review_payload.get("issues", []))
         if issue_count:
             parts.append(f"Open reviewer issues: {issue_count}.")
-        open_topic_ids = self._topic_ids_for_status({"open", "carried_forward"})
+        open_topic_ids = self._topic_ids_for_status({"open"})
         carried_forward_topic_ids = self._topic_ids_for_status({"carried_forward"})
         waived_topic_ids = self._topic_ids_for_status({"waived"})
         if open_topic_ids:
@@ -1459,9 +1460,9 @@ class HarnessRunner:
         causes: list[str] = []
         if self._count_review_issues(review_payload, {"low"}):
             causes.append("low-severity reviewer issues remain open")
-        open_topic_ids = self._topic_ids_for_status({"open", "carried_forward"})
-        if open_topic_ids:
-            causes.append("review topics remain open: " + ", ".join(open_topic_ids))
+        unresolved_topic_ids_list = unresolved_topic_ids(self.topic_ledger)
+        if unresolved_topic_ids_list:
+            causes.append("review topics remain open: " + ", ".join(unresolved_topic_ids_list))
         accepted_caveat_indices = self._accepted_caveat_recommendation_indices(review_payload)
         if accepted_caveat_indices:
             causes.append(
@@ -1538,7 +1539,43 @@ class HarnessRunner:
         return [json.loads(json.dumps(record)) for record in self.issue_ledger]
 
     def _serialized_topic_ledger(self) -> list[dict[str, Any]]:
-        return [json.loads(json.dumps(record)) for record in self.topic_ledger]
+        return [self._serialized_topic_record(record) for record in self.topic_ledger]
+
+    @staticmethod
+    def _serialized_topic_record(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "topic_id": str(record.get("topic_id") or ""),
+            "title": str(record.get("title") or ""),
+            "severity": str(record.get("severity") or ""),
+            "evidence": str(record.get("evidence") or ""),
+            "recommendation_index": record.get("recommendation_index"),
+            "introduced_by": str(record.get("introduced_by") or ""),
+            "introduced_in_stage_index": record.get("introduced_in_stage_index"),
+            "resolution_status": str(record.get("resolution_status") or ""),
+            "resolution_note": str(record.get("resolution_note") or ""),
+            "resolved_in_stage_index": record.get("resolved_in_stage_index"),
+        }
+
+    @staticmethod
+    def _topic_resolution_status_from_reviewer_classification(
+        *,
+        topic_id: str,
+        resolved_topic_ids: set[str],
+        waived_topic_ids: set[str],
+        current_topic_ids: set[str],
+        carried_topic_ids: set[str],
+        resolution_entry: dict[str, Any] | None,
+    ) -> str:
+        if topic_id in resolved_topic_ids:
+            return "addressed"
+        if topic_id in waived_topic_ids:
+            resolution_status = str((resolution_entry or {}).get("status") or "").strip().lower()
+            if resolution_status == "disagree":
+                return "disagree"
+            return "waived"
+        if topic_id in current_topic_ids or topic_id in carried_topic_ids:
+            return "carried_forward"
+        return "carried_forward"
 
     def _normalize_review_issue(
         self,
@@ -1661,7 +1698,8 @@ class HarnessRunner:
         if not isinstance(review_payload, dict) or not review_payload:
             return
 
-        stage_id = f"stage-{self.stage_counter:02d}-{slugify(role_name)}"
+        stage_index = self.stage_counter
+        stage_id = f"stage-{stage_index:02d}-{slugify(role_name)}"
         prior_open_ids = {
             str(record.get("issue_id"))
             for record in self.issue_ledger
@@ -1789,20 +1827,27 @@ class HarnessRunner:
             if resolution_recommendation_index is not None:
                 record["recommendation_index"] = resolution_recommendation_index
             if topic_id in resolved_topic_ids:
-                record["resolution_status"] = "resolved"
+                record["resolution_status"] = "addressed"
                 if resolution_note:
                     record["resolution_note"] = resolution_note
-                record["last_seen_round"] = round_index
+                record["resolved_in_stage_index"] = stage_index
             elif topic_id in waived_topic_ids:
-                record["resolution_status"] = "waived"
+                record["resolution_status"] = self._topic_resolution_status_from_reviewer_classification(
+                    topic_id=topic_id,
+                    resolved_topic_ids=resolved_topic_ids,
+                    waived_topic_ids=waived_topic_ids,
+                    current_topic_ids=current_topic_ids,
+                    carried_topic_ids=carried_topic_ids,
+                    resolution_entry=resolution_entry,
+                )
                 if resolution_note:
                     record["resolution_note"] = resolution_note
-                record["last_seen_round"] = round_index
+                record["resolved_in_stage_index"] = stage_index
             elif topic_id in current_topic_ids or topic_id in carried_topic_ids:
                 record["resolution_status"] = "carried_forward"
                 if resolution_note:
                     record["resolution_note"] = resolution_note
-                record["last_seen_round"] = round_index
+                record["resolved_in_stage_index"] = None
             else:
                 self.warnings.append(
                     f"Review stage '{role_name}' did not explicitly classify prior open topic {topic_id}; treating it as carried_forward."
@@ -1810,7 +1855,7 @@ class HarnessRunner:
                 record["resolution_status"] = "carried_forward"
                 if resolution_note:
                     record["resolution_note"] = resolution_note
-                record["last_seen_round"] = round_index
+                record["resolved_in_stage_index"] = None
 
         for topic in normalized_topics:
             topic_id = str(topic.get("topic_id"))
@@ -1822,14 +1867,12 @@ class HarnessRunner:
                 record = self._topic_ledger_by_id[topic_id]
                 record.update(
                     {
-                        "last_seen_round": round_index,
                         "severity": topic.get("severity"),
                         "title": topic.get("title"),
                         "evidence": topic.get("evidence"),
                         "repair_hint": topic.get("repair_hint"),
-                        "resolution_status": (
-                            "carried_forward" if topic_id in prior_open_topic_ids else "open"
-                        ),
+                        "resolution_status": "carried_forward",
+                        "resolved_in_stage_index": None,
                     }
                 )
                 topic_recommendation_index = topic.get("recommendation_index")
@@ -1838,16 +1881,16 @@ class HarnessRunner:
             else:
                 record = {
                     "topic_id": topic_id,
-                    "source_stage_id": stage_id,
-                    "first_seen_round": round_index,
-                    "last_seen_round": round_index,
                     "severity": topic.get("severity"),
                     "recommendation_index": topic.get("recommendation_index"),
                     "title": topic.get("title"),
                     "evidence": topic.get("evidence"),
                     "repair_hint": topic.get("repair_hint"),
+                    "introduced_by": role_name,
+                    "introduced_in_stage_index": stage_index,
                     "resolution_status": "open",
                     "resolution_note": "",
+                    "resolved_in_stage_index": None,
                 }
                 self.topic_ledger.append(record)
                 self._topic_ledger_by_id[topic_id] = record
@@ -2016,10 +2059,13 @@ class HarnessRunner:
             final_analysis_payload=final_analysis_payload,
         )
         provenance_status = self._final_payload_provenance_status()
-        open_topic_ids = self._topic_ids_for_status({"open", "carried_forward"})
-        carried_forward_topic_ids = self._topic_ids_for_status({"carried_forward"})
-        waived_topic_ids = self._topic_ids_for_status({"waived"})
-        resolved_topic_ids = self._topic_ids_for_status({"resolved"})
+        open_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="open")
+        carried_forward_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger,
+            status_name="carried_forward",
+        )
+        waived_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="waived")
+        resolved_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="resolved")
         if contract.trust_review.payload_provenance_mode == "none" and provenance_status == "missing":
             provenance_status = "not_required"
         return {
@@ -2471,12 +2517,12 @@ class HarnessRunner:
         return kwargs
 
     def _topic_ids_for_status(self, statuses: set[str]) -> list[str]:
-        return [
+        return sorted(
             str(record.get("topic_id"))
             for record in self.topic_ledger
-            if str(record.get("resolution_status") or "") in statuses
+            if str(record.get("resolution_status") or "").strip() in statuses
             and str(record.get("topic_id") or "").strip()
-        ]
+        )
 
     def _resolve_bounded_review_analysis_stage(self) -> dict[str, Any] | None:
         reviser_role_names = {

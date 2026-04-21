@@ -1468,16 +1468,15 @@ def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_
     assert summary["topic_ledger"] == [
         {
             "topic_id": "TOPIC-001",
-            "source_stage_id": "stage-02-critic",
-            "first_seen_round": 0,
-            "last_seen_round": 1,
-            "severity": "medium",
-            "recommendation_index": 2,
             "title": "Recommendation 2 needs a concrete fallback classification.",
+            "severity": "medium",
             "evidence": "The workflow recommendation names the operator path but leaves the fallback state implicit.",
-            "repair_hint": "Name the fallback classification directly in recommendation 2.",
-            "resolution_status": "resolved",
+            "recommendation_index": 2,
+            "introduced_by": "critic",
+            "introduced_in_stage_index": 2,
+            "resolution_status": "addressed",
             "resolution_note": "addressed | Added the fallback classification note to recommendation 2.",
+            "resolved_in_stage_index": 4,
         }
     ]
     assert summary["analysis_review_status"]["topic_ledger_count"] == 1
@@ -1529,14 +1528,17 @@ def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_
     assert "## Topic Lifecycle" in report_text
     assert "- Topic ledger entries: `1`" in report_text
     assert "- Resolved topics: `1` (`TOPIC-001`)" in report_text
-    assert "### TOPIC-001 — medium — resolved" in report_text
-    assert "- Resolution note: addressed | Added the fallback classification note to recommendation 2." in report_text
+    assert "| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |" in report_text
+    assert (
+        "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `2` | addressed \\| Added the fallback classification note to recommendation 2. |"
+        in report_text
+    )
     assert "Topic lifecycle: new `1`, resolved `0`, carried forward `0`, waived `0`, open `1`" in report_text
     assert "Topic lifecycle: new `0`, resolved `1`, carried forward `0`, waived `0`, open `0`" in report_text
 
     assert "## Topic Lifecycle" in final_answer_text
     assert (
-        "- `TOPIC-001` `resolved` via `critic`: Recommendation 2 needs a concrete fallback classification. — addressed | Added the fallback classification note to recommendation 2."
+        "- `TOPIC-001` `addressed` via `critic`: Recommendation 2 needs a concrete fallback classification. — addressed | Added the fallback classification note to recommendation 2."
         in final_answer_text
     )
     assert "- Topic ledger count: `1`" in final_answer_text
@@ -1567,29 +1569,31 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
     assert summary["topic_ledger"] == [
         {
             "topic_id": "TOPIC-001",
-            "source_stage_id": "stage-02-critic",
-            "first_seen_round": 0,
-            "last_seen_round": 1,
-            "severity": "medium",
-            "recommendation_index": 2,
             "title": "Recommendation 2 needs a concrete fallback classification.",
+            "severity": "medium",
             "evidence": "The workflow recommendation names the operator path but leaves the fallback state implicit.",
-            "repair_hint": "Name the fallback classification directly in recommendation 2.",
+            "recommendation_index": 2,
+            "introduced_by": "critic",
+            "introduced_in_stage_index": 2,
             "resolution_status": "carried_forward",
             "resolution_note": "not_addressed | The recommendation text improved, but the fallback classification is still too implicit. | Operators still need a concrete fallback label.",
+            "resolved_in_stage_index": None,
         }
     ]
-    assert summary["analysis_review_status"]["open_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["open_topic_ids"] == []
     assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
     final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
-    assert "- Introduced by: `critic`" in report_text
-    assert "- Source stage: `stage-02-critic`" in report_text
+    assert (
+        "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `carried_forward` | `2` | not_addressed \\| The recommendation text improved, but the fallback classification is still too implicit. \\| Operators still need a concrete fallback label. |"
+        in report_text
+    )
     assert (
         "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 2 needs a concrete fallback classification. — not_addressed | The recommendation text improved, but the fallback classification is still too implicit. | Operators still need a concrete fallback label."
         in final_answer_text
     )
+    assert "- Carried-forward topic IDs: `TOPIC-001`" in final_answer_text
 
     runner._ingest_review_payload(
         {
@@ -1611,8 +1615,8 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
         role_name="auditor",
         reviser_output=None,
     )
-    assert runner.topic_ledger[0]["source_stage_id"] == "stage-02-critic"
-    assert runner.topic_ledger[0]["first_seen_round"] == 0
+    assert runner.topic_ledger[0]["introduced_by"] == "critic"
+    assert runner.topic_ledger[0]["introduced_in_stage_index"] == 2
 
 
 def test_analysis_review_runner_rejects_reuse_of_resolved_topic_id(
@@ -1662,8 +1666,8 @@ def test_analysis_review_runner_rejects_reuse_of_resolved_topic_id(
             reviser_output=None,
         )
 
-    assert runner.topic_ledger[0]["resolution_status"] == "resolved"
-    assert runner.topic_ledger[0]["last_seen_round"] == 1
+    assert runner.topic_ledger[0]["resolution_status"] == "addressed"
+    assert runner.topic_ledger[0]["resolved_in_stage_index"] == 4
 
 
 def test_analysis_review_runner_persists_addressed_topic_recommendation_index_from_reviser(
@@ -1687,11 +1691,11 @@ def test_analysis_review_runner_persists_addressed_topic_recommendation_index_fr
     )
     summary = runner.run()
 
-    assert summary["topic_ledger"][0]["source_stage_id"] == "stage-02-critic"
+    assert summary["topic_ledger"][0]["introduced_by"] == "critic"
     assert summary["topic_ledger"][0]["recommendation_index"] == 2
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    assert "- Recommendation index: `2`" in report_text
+    assert "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `2` | addressed \\| Added the fallback classification note to recommendation 2. |" in report_text
 
 
 def test_analysis_review_runner_normalizes_legacy_missing_topics_into_topics(
