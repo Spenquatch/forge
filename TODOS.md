@@ -9,18 +9,21 @@ These are intentionally **not** the first implementation slice for the current b
 - Evaluate reshaping trust mode into an attestation layer over bounded output, where bounded produces `BEST_DRAFT` and trust re-audits that draft instead of running as a separate proposer flow from scratch.
 - Explore whether bounded and trust should diverge earlier in generation strategy, not just in validation/verdict posture, so the two modes feel operationally distinct.
 - Revisit whether the current single unified runner is still the right long-term shape after the topic-ledger and review-evidence work lands.
+- Validate that bounded vs trust is a product distinction users actually feel, not just an internal contract distinction with cleaner caveat language.
 
 ### Prompt and contract cleanup
 
 - Remove trust-only boilerplate from bounded prompts when every trust flag is effectively false, so bounded mode carries less no-op cognitive overhead.
 - Consider a richer trust contract for line-level review refs once path-level refs are stable and low-noise.
 - Review whether high-priority mixed-grounding recommendations should always require explicit caveat language, even when they are not inference-only.
+- Decide whether late medium-or-higher auditor findings in trust mode should produce more hard failures or fewer caveated accepts before tightening the default policy.
 
 ### Auditability and provenance depth
 
 - Investigate authoritative read tracing or sandbox-backed reviewer proof as a later project if payload-hash plus normalized refs still feels too weak.
 - Consider a separate audit artifact for review-surface evidence summaries if `summary.json` and `REPORT.md` become too crowded.
 - Add cross-run comparison tooling for bounded vs trust replay deltas so changes in honesty posture are visible without hand-reading artifacts.
+- Revisit whether scoped closure proof should eventually match recommendation-evidence strength instead of staying review-attested metadata.
 
 ### Reporting and UX polish
 
