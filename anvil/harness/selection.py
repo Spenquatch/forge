@@ -185,9 +185,16 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             review_counts = _count_issue_severities(payload)
             for key, value in review_counts.items():
                 issue_counts[key] = max(int(issue_counts.get(key, 0)), int(value))
+            topic_count = len(payload.get("topics", []) or [])
+            if not topic_count:
+                topic_count = len(payload.get("missing_topics", []) or [])
+            issue_counts["topics"] = max(
+                int(issue_counts.get("topics", 0)),
+                topic_count,
+            )
             issue_counts["missing_topics"] = max(
                 int(issue_counts.get("missing_topics", 0)),
-                len(payload.get("missing_topics", []) or []),
+                topic_count,
             )
             issue_counts["accepted_recommendations"] = max(
                 int(issue_counts.get("accepted_recommendations", 0)),

@@ -131,6 +131,46 @@ def test_reviser_semantic_validation_requires_full_issue_resolution_map_coverage
     assert "issue_resolution_map is missing open issue IDs: AR-002" in result.errors
 
 
+def test_reviser_semantic_validation_requires_full_topic_resolution_map_coverage():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["analysis_output_missing_topic_resolution"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        expected_open_topic_ids=["TOPIC-001", "TOPIC-002"],
+        require_issue_resolution_map=False,
+        require_topic_resolution_map=True,
+    )
+
+    assert result.ok is False
+    assert "topic_resolution_map is missing open topic IDs: TOPIC-002" in result.errors
+
+
+def test_reviser_semantic_validation_rejects_unknown_topic_resolution_ids():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["analysis_output_unknown_topic_resolution"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        expected_open_topic_ids=["TOPIC-001"],
+        require_issue_resolution_map=False,
+        require_topic_resolution_map=True,
+    )
+
+    assert result.ok is False
+    assert "topic_resolution_map references unknown topic IDs: TOPIC-999" in result.errors
+
+
 
 def test_review_semantic_validation_requires_recommendation_and_issue_coverage():
     task = _task(min_recommendations=2)
@@ -152,6 +192,25 @@ def test_review_semantic_validation_requires_recommendation_and_issue_coverage()
         "prior open issue IDs are missing from resolved/carried_forward/waived arrays: AR-001"
         in result.errors
     )
+
+
+def test_review_semantic_validation_accepts_valid_topic_lifecycle():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_valid_topic_lifecycle"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001", "TOPIC-002"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
 
 
 def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
@@ -385,7 +444,7 @@ def test_critic_semantic_validation_rejects_issue_cap_overflow():
 def test_critic_semantic_validation_rejects_new_topic_cap_overflow():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["review_payload_too_many_missing_topics"]
+    payload = _fixture()["review_payload_too_many_topics"]
 
     result = validate_analysis_review_payload(
         payload,
@@ -397,7 +456,51 @@ def test_critic_semantic_validation_rejects_new_topic_cap_overflow():
     )
 
     assert result.ok is False
-    assert "missing_topics exceeds the bounded-review cap of 2 item(s) for critic." in result.errors
+    assert "topics exceeds the bounded-review cap of 2 item(s) for critic." in result.errors
+
+
+def test_review_semantic_validation_requires_topic_classification_for_every_open_topic():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_missing_topic_classification"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert (
+        "prior open topic IDs are missing from resolved_topic_ids/carried_forward_topic_ids/waived_topic_ids: TOPIC-001"
+        in result.errors
+    )
+
+
+def test_review_semantic_validation_rejects_unknown_topic_classification_ids():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _fixture()["review_payload_unknown_topic_id"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        expected_recommendation_count=2,
+    )
+
+    assert result.ok is False
+    assert (
+        "topic classification arrays reference unknown prior open topic IDs: TOPIC-999"
+        in result.errors
+    )
 
 
 def test_auditor_semantic_validation_requires_why_not_raised_earlier_for_new_medium_issue():

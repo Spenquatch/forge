@@ -56,6 +56,89 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _topic_ledger(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    topic_ledger = summary.get("topic_ledger")
+    if isinstance(topic_ledger, list):
+        return [item for item in topic_ledger if isinstance(item, dict)]
+    run_details = summary.get("run_details") or {}
+    topic_ledger = run_details.get("topic_ledger")
+    if isinstance(topic_ledger, list):
+        return [item for item in topic_ledger if isinstance(item, dict)]
+    return []
+
+
+def _topic_status_ids(summary: dict[str, Any], *, status_name: str) -> list[str]:
+    status = _analysis_review_status(summary)
+    field_by_status = {
+        "open": "open_topic_ids",
+        "carried_forward": "carried_forward_topic_ids",
+        "waived": "waived_topic_ids",
+        "resolved": "resolved_topic_ids",
+    }
+    field_name = field_by_status[status_name]
+    raw_ids = status.get(field_name)
+    if isinstance(raw_ids, list):
+        return sorted(str(item).strip() for item in raw_ids if str(item).strip())
+
+    topic_ledger = _topic_ledger(summary)
+    if status_name == "open":
+        allowed_statuses = {"open", "carried_forward"}
+    else:
+        allowed_statuses = {status_name}
+    return sorted(
+        str(item.get("topic_id") or "").strip()
+        for item in topic_ledger
+        if str(item.get("topic_id") or "").strip()
+        and str(item.get("resolution_status") or "").strip() in allowed_statuses
+    )
+
+
+def _render_id_list(items: list[str]) -> str:
+    values = [str(item).strip() for item in items if str(item).strip()]
+    if not values:
+        return "none"
+    return ", ".join(f"`{item}`" for item in values)
+
+
+def _topic_source_role(topic: dict[str, Any]) -> str:
+    source_stage_id = str(topic.get("source_stage_id") or "").strip()
+    if not source_stage_id:
+        return "unknown"
+    return source_stage_id.rsplit("-", 1)[-1] or "unknown"
+
+
+def _topic_summary_text(topic: dict[str, Any]) -> str:
+    title = str(topic.get("title") or "").strip()
+    evidence = str(topic.get("evidence") or "").strip()
+    repair_hint = str(topic.get("repair_hint") or "").strip()
+    if title and title.lower() != "topic":
+        return title
+    if evidence:
+        return evidence
+    if repair_hint:
+        return repair_hint
+    return title or "Topic"
+
+
+def _append_topic_lifecycle(lines: list[str], summary: dict[str, Any]) -> None:
+    topic_ledger = _topic_ledger(summary)
+    if not topic_ledger:
+        return
+
+    lines.extend(["## Topic Lifecycle", ""])
+    for topic in topic_ledger:
+        line = (
+            f"- `{topic.get('topic_id')}` "
+            f"`{topic.get('resolution_status')}` "
+            f"via `{_topic_source_role(topic)}`: {_topic_summary_text(topic)}"
+        )
+        resolution_note = str(topic.get("resolution_note") or "").strip()
+        if resolution_note and str(topic.get("resolution_status") or "") in {"resolved", "waived"}:
+            line += f" — {resolution_note}"
+        lines.append(line)
+    lines.append("")
+
+
 def _recommendation_review_lookup(summary: dict[str, Any]) -> dict[int, dict[str, Any]]:
     reviews = summary.get("recommendation_reviews") or []
     lookup: dict[int, dict[str, Any]] = {}
@@ -221,6 +304,8 @@ def render_deliverable_markdown(
 
     if analysis_status:
         provenance = analysis_status.get("provenance") or {}
+        topic_ledger = _topic_ledger(summary or {})
+        open_topic_ids = _topic_status_ids(summary or {}, status_name="open")
         lines.extend(["## Review Status", ""])
         if verdict:
             lines.append(f"- Verdict: `{verdict}`")
@@ -228,10 +313,20 @@ def render_deliverable_markdown(
         lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
         lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
         lines.append(f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`")
+        topic_ledger_count = analysis_status.get("topic_ledger_count")
+        effective_count = topic_ledger_count
+        if effective_count is None:
+            effective_count = len(topic_ledger)
+        if effective_count:
+            lines.append(f"- Topic ledger count: `{effective_count}`")
+        if open_topic_ids:
+            lines.append("- Open topic IDs: " + _render_id_list(open_topic_ids))
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:
             lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))
         lines.append("")
+
+    _append_topic_lifecycle(lines, summary or {})
 
     summary_text = str(payload.get("summary", "") or "").strip()
     if summary_text:

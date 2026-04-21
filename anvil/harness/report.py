@@ -45,6 +45,70 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _topic_ledger(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    topic_ledger = summary.get("topic_ledger")
+    if isinstance(topic_ledger, list):
+        return [item for item in topic_ledger if isinstance(item, dict)]
+    run_details = summary.get("run_details") or {}
+    topic_ledger = run_details.get("topic_ledger")
+    if isinstance(topic_ledger, list):
+        return [item for item in topic_ledger if isinstance(item, dict)]
+    return []
+
+
+def _render_id_list(items: list[str]) -> str:
+    values = [str(item).strip() for item in items if str(item).strip()]
+    if not values:
+        return "none"
+    return ", ".join(f"`{item}`" for item in values)
+
+
+def _topic_status_ids(summary: dict[str, Any], *, status_name: str) -> list[str]:
+    status = _analysis_review_status(summary)
+    field_by_status = {
+        "open": "open_topic_ids",
+        "carried_forward": "carried_forward_topic_ids",
+        "waived": "waived_topic_ids",
+        "resolved": "resolved_topic_ids",
+    }
+    field_name = field_by_status[status_name]
+    raw_ids = status.get(field_name)
+    if isinstance(raw_ids, list):
+        return sorted(str(item).strip() for item in raw_ids if str(item).strip())
+
+    topic_ledger = _topic_ledger(summary)
+    if status_name == "open":
+        allowed_statuses = {"open", "carried_forward"}
+    else:
+        allowed_statuses = {status_name}
+    return sorted(
+        str(item.get("topic_id") or "").strip()
+        for item in topic_ledger
+        if str(item.get("topic_id") or "").strip()
+        and str(item.get("resolution_status") or "").strip() in allowed_statuses
+    )
+
+
+def _topic_summary_text(topic: dict[str, Any]) -> str:
+    title = str(topic.get("title") or "").strip()
+    evidence = str(topic.get("evidence") or "").strip()
+    repair_hint = str(topic.get("repair_hint") or "").strip()
+    if title and title.lower() != "topic":
+        return title
+    if evidence:
+        return evidence
+    if repair_hint:
+        return repair_hint
+    return title or "Topic"
+
+
+def _topic_source_role(topic: dict[str, Any]) -> str:
+    source_stage_id = str(topic.get("source_stage_id") or "").strip()
+    if not source_stage_id:
+        return "unknown"
+    return source_stage_id.rsplit("-", 1)[-1] or "unknown"
+
+
 def _render_cap_usage(used: Any, cap: Any) -> str:
     used_value = 0 if used is None else used
     if cap is None:
@@ -75,14 +139,24 @@ def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> N
         for stage in review_stages:
             role_name = stage.get("role_name") or "reviewer"
             round_index = stage.get("round_index", 0)
+            new_topic_count = stage.get("new_topic_count", stage.get("missing_topic_count"))
+            new_topic_cap = stage.get("new_topic_cap", stage.get("missing_topic_cap"))
             lines.append(f"- `{role_name}` round `{round_index}`")
             lines.append(
                 "  - Issue cap/usage: "
                 f"{_render_cap_usage(stage.get('issue_count'), stage.get('issue_cap'))}"
             )
             lines.append(
-                "  - Missing-topic cap/usage: "
-                f"{_render_cap_usage(stage.get('missing_topic_count'), stage.get('missing_topic_cap'))}"
+                "  - New-topic cap/usage: "
+                f"{_render_cap_usage(new_topic_count, new_topic_cap)}"
+            )
+            lines.append(
+                "  - Topic lifecycle: "
+                f"new `{new_topic_count or 0}`, "
+                f"resolved `{stage.get('resolved_topic_count', 0)}`, "
+                f"carried forward `{stage.get('carried_forward_topic_count', 0)}`, "
+                f"waived `{stage.get('waived_topic_count', 0)}`, "
+                f"open `{stage.get('open_topic_count', 0)}`"
             )
             lines.append(
                 "  - Auditor new medium+ cap/usage: "
@@ -118,6 +192,28 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
     lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
     lines.append(f"- Provenance required: `{provenance.get('required', False)}`")
     lines.append(f"- Semantic warnings: `{status.get('semantic_warning_count', 0)}`")
+    topic_ledger_count = status.get("topic_ledger_count")
+    open_topic_ids = _topic_status_ids(summary, status_name="open")
+    carried_forward_topic_ids = _topic_status_ids(summary, status_name="carried_forward")
+    waived_topic_ids = _topic_status_ids(summary, status_name="waived")
+    resolved_topic_ids = _topic_status_ids(summary, status_name="resolved")
+    effective_count = topic_ledger_count
+    if effective_count is None:
+        effective_count = len(_topic_ledger(summary))
+    if (
+        effective_count
+        or open_topic_ids
+        or carried_forward_topic_ids
+        or waived_topic_ids
+        or resolved_topic_ids
+    ):
+        lines.append(f"- Topic ledger count: `{effective_count}`")
+        lines.append(f"- Open topic IDs: {_render_id_list(open_topic_ids)}")
+        lines.append(
+            "- Carried-forward topic IDs: " + _render_id_list(carried_forward_topic_ids)
+        )
+        lines.append(f"- Resolved topic IDs: {_render_id_list(resolved_topic_ids)}")
+        lines.append(f"- Waived topic IDs: {_render_id_list(waived_topic_ids)}")
     downgrade_causes = status.get("downgrade_causes") or []
     if downgrade_causes:
         lines.append("- Downgrade causes:")
@@ -159,6 +255,60 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
                 f"`{item.get('status', 'unknown')}` (sha `{digest_text}`, refs `{item.get('normalized_ref_count', 0)}` across `{item.get('normalized_ref_field_count', 0)}` field(s))"
             )
     lines.append("")
+
+
+def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -> None:
+    topic_ledger = _topic_ledger(summary)
+    if not topic_ledger:
+        return
+
+    open_topic_ids = _topic_status_ids(summary, status_name="open")
+    carried_forward_topic_ids = _topic_status_ids(summary, status_name="carried_forward")
+    resolved_topic_ids = _topic_status_ids(summary, status_name="resolved")
+    waived_topic_ids = _topic_status_ids(summary, status_name="waived")
+
+    lines.append("## Topic Lifecycle")
+    lines.append("")
+    lines.append(f"- Topic ledger entries: `{len(topic_ledger)}`")
+    lines.append(
+        f"- Open topics: `{len(open_topic_ids)}`"
+        + (f" ({_render_id_list(open_topic_ids)})" if open_topic_ids else "")
+    )
+    lines.append(
+        f"- Carried-forward topics: `{len(carried_forward_topic_ids)}`"
+        + (
+            f" ({_render_id_list(carried_forward_topic_ids)})"
+            if carried_forward_topic_ids
+            else ""
+        )
+    )
+    lines.append(
+        f"- Resolved topics: `{len(resolved_topic_ids)}`"
+        + (f" ({_render_id_list(resolved_topic_ids)})" if resolved_topic_ids else "")
+    )
+    lines.append(
+        f"- Waived topics: `{len(waived_topic_ids)}`"
+        + (f" ({_render_id_list(waived_topic_ids)})" if waived_topic_ids else "")
+    )
+    lines.append("")
+
+    for topic in topic_ledger:
+        lines.append(
+            f"### {topic.get('topic_id')} — {topic.get('severity')} — {topic.get('resolution_status')}"
+        )
+        lines.append("")
+        lines.append(f"- Introduced by: `{_topic_source_role(topic)}`")
+        lines.append(f"- Source stage: `{topic.get('source_stage_id')}`")
+        lines.append(f"- First seen round: `{topic.get('first_seen_round')}`")
+        lines.append(f"- Last seen round: `{topic.get('last_seen_round')}`")
+        if topic.get("recommendation_index") is not None:
+            lines.append(f"- Recommendation index: `{topic.get('recommendation_index')}`")
+        lines.append(f"- Title: {_topic_summary_text(topic)}")
+        lines.append(f"- Evidence: {topic.get('evidence')}")
+        lines.append(f"- Repair hint: {topic.get('repair_hint')}")
+        if str(topic.get("resolution_note") or "").strip():
+            lines.append(f"- Resolution note: {topic.get('resolution_note')}")
+        lines.append("")
 
 
 def render_report(summary: dict[str, Any]) -> str:
@@ -384,6 +534,8 @@ def render_report(summary: dict[str, Any]) -> str:
             if issue.get("why_not_raised_earlier"):
                 lines.append(f"- Why not raised earlier: {issue.get('why_not_raised_earlier')}")
             lines.append("")
+
+    _append_topic_lifecycle_section(lines, summary)
 
     drafts = summary.get("drafts", [])
     if drafts:

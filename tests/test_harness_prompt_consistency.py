@@ -154,6 +154,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         review_policy=strategy.review_loops,
         contract=contract,
         issue_ledger=[{"issue_id": "AR-001", "title": "Example issue", "resolution_status": "open"}],
+        topic_ledger=[{"topic_id": "TOPIC-001", "title": "Example topic", "resolution_status": "open"}],
         round_index=1,
     )
     reviser = build_analysis_reviser_prompt(
@@ -166,6 +167,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         revision_round=1,
         contract=contract,
         open_issues=[{"issue_id": "AR-001", "severity": "medium", "title": "Example issue"}],
+        open_topics=[{"topic_id": "TOPIC-001", "severity": "medium", "title": "Example topic"}],
     )
 
     common_bounded_lines = [
@@ -201,6 +203,15 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "Validate each recommendation's cited evidence first" in critic
     assert "Record `scope_escapes` whenever you inspect files outside the declared review_surface" in critic
     assert "Recommendation review coverage:" in critic
+    assert "Use `topics` only for genuinely new bounded-review topics introduced by this review stage" in critic
+    assert (
+        "Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`."
+        in critic
+    )
+    assert (
+        "Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics."
+        in critic
+    )
     assert "The prior analysis contains 3 recommendation(s)." in critic
     assert "Do not omit acceptable recommendations." in critic
     assert "1. Add concurrency controls" in critic
@@ -208,12 +219,17 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "3. Document operator rollback" in critic
     assert "You are not starting from scratch" in auditor
     assert "Open issue ledger entering this audit" in auditor
+    assert "Open topic ledger entering this audit" in auditor
+    assert "For every previously open topic, you must explicitly classify it as resolved, carried_forward, or waived" in auditor
+    assert "Preserve topic IDs for carried-forward or waived prior topics" in auditor
     assert "If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`." in auditor
     assert "Recommendation review coverage:" in auditor
     assert "The prior analysis contains 3 recommendation(s)." in auditor
     assert "3. Document operator rollback" in auditor
     assert "close all open medium-or-higher blockers" in reviser
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
+    assert "return a `topic_resolution_map` entry for every open topic ID" in reviser
+    assert "Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage." in reviser
     assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer
     assert (
         "Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
@@ -229,7 +245,10 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     )
     assert "keep evidence within the bounded-review cap." in proposer
     assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
-    assert "Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them." in reviser
+    assert (
+        "Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
+        in reviser
+    )
     assert (
         "Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in reviser

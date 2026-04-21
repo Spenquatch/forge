@@ -38,6 +38,15 @@ def _failed_provider_run(request, *, message: str, failure_kind: str = "provider
 
 class _AcceptingHarnessAdapter:
     @staticmethod
+    def _empty_topic_state() -> dict:
+        return {
+            "topics": [],
+            "resolved_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "waived_topic_ids": [],
+        }
+
+    @staticmethod
     def _review_surface(*, must_check_files: list[str], optional_check_files: list[str], scope_note: str) -> dict:
         return {
             "must_check_files": must_check_files,
@@ -130,7 +139,7 @@ class _AcceptingHarnessAdapter:
         if role_name == "reviser_round_1":
             return self._base_analysis(revised=True)
         if role_name in {"critic", "auditor"}:
-            return {
+            payload = {
                 "verdict": "accept",
                 "summary": "Grounded and actionable analysis.",
                 "workspace_write_intent": "none",
@@ -154,13 +163,14 @@ class _AcceptingHarnessAdapter:
                         "confidence_assessment": "well_calibrated",
                     },
                 ],
-                "missing_topics": [],
                 "grounding_score": 0.93,
                 "actionability_score": 0.89,
                 "scope_compliance_score": 0.95,
                 "confidence": 0.88,
                 "scope_escapes": [],
             }
+            payload.update(self._empty_topic_state())
+            return payload
         raise AssertionError(f"Unexpected role: {role_name}")
 
 
@@ -189,7 +199,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
         if role_name == "proposer":
             return self._base_analysis(revised=False)
         if role_name == "critic":
-            return {
+            payload = {
                 "verdict": "revise",
                 "summary": "Two recommendations are good, but recommendation 3 needs more specificity.",
                 "workspace_write_intent": "none",
@@ -232,13 +242,14 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                         "confidence_assessment": "not_assessed",
                     },
                 ],
-                "missing_topics": [],
                 "grounding_score": 0.90,
                 "actionability_score": 0.71,
                 "scope_compliance_score": 0.94,
                 "confidence": 0.82,
                 "scope_escapes": [],
             }
+            payload.update(self._empty_topic_state())
+            return payload
         if role_name == "reviser_round_1":
             payload = self._base_analysis(revised=True)
             payload["issue_resolution_map"] = [
@@ -251,7 +262,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
             ]
             return payload
         if role_name == "auditor":
-            return {
+            payload = {
                 "verdict": "accept_partial",
                 "summary": "Recommendations 1 and 2 are usable. Recommendation 3 still needs more specificity.",
                 "workspace_write_intent": "none",
@@ -294,13 +305,14 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                         "confidence_assessment": "too_low",
                     },
                 ],
-                "missing_topics": [],
                 "grounding_score": 0.88,
                 "actionability_score": 0.73,
                 "scope_compliance_score": 0.95,
                 "confidence": 0.84,
                 "scope_escapes": [],
             }
+            payload.update(self._empty_topic_state())
+            return payload
         return super()._payload_for_role(role_name)
 
 
@@ -317,7 +329,6 @@ class _InvalidSemanticHarnessAdapter(_AcceptingHarnessAdapter):
             payload = self._base_analysis(revised=False)
             payload["strengths"] = {"items": [], "none_reason": ""}
             payload["uncertainties"] = {"items": [], "none_reason": ""}
-            payload["files_reviewed"] = []
             return payload
         return super()._payload_for_role(role_name)
 
@@ -329,7 +340,7 @@ class _InvalidSemanticWithProviderNoiseHarnessAdapter(_AcceptingHarnessAdapter):
             return run
         payload = dict(run.structured_output or {})
         payload["strengths"] = {"items": [], "none_reason": ""}
-        payload["files_reviewed"] = []
+        payload["uncertainties"] = {"items": [], "none_reason": ""}
         return ProviderRun(
             role_name=run.role_name,
             provider=run.provider,
@@ -373,7 +384,7 @@ class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
             output_path=run.output_path,
             structured_output=run.structured_output,
             raw_meta=run.raw_meta,
-            error="WARN codex_core::plugins::manifest: noisy provider warning",
+            error="Schema validation failed.",
             schema_validation_errors=["$.recommendations[0].affected_files: expected array"],
         )
 
@@ -394,7 +405,7 @@ class _ScopeEscapeHarnessAdapter(_AcceptingHarnessAdapter):
 class _LateAuditorIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
     def _payload_for_role(self, role_name: str):
         if role_name == "auditor":
-            return {
+            payload = {
                 "verdict": "revise",
                 "summary": "The auditor found a new medium-severity issue after the revision rewrote recommendation 2.",
                 "workspace_write_intent": "none",
@@ -448,11 +459,154 @@ class _LateAuditorIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
                         "confidence_assessment": "too_low",
                     },
                 ],
-                "missing_topics": [],
                 "grounding_score": 0.80,
                 "actionability_score": 0.69,
                 "scope_compliance_score": 0.95,
                 "confidence": 0.79,
+                "scope_escapes": [],
+            }
+            payload.update(self._empty_topic_state())
+            return payload
+        return super()._payload_for_role(role_name)
+
+
+class _TopicLifecycleHarnessAdapter(_AcceptingHarnessAdapter):
+    _TOPIC_ID = "TOPIC-001"
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "proposer":
+            return self._base_analysis(revised=False)
+        if role_name == "critic":
+            return {
+                "verdict": "revise",
+                "summary": "Recommendation 2 still needs an explicit operator fallback classification.",
+                "workspace_write_intent": "none",
+                "issues": [],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": [],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": 1,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 1 is acceptable.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 2,
+                        "verdict": "revise",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 2 needs an explicit fallback classification before acceptance.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                ],
+                "topics": [
+                    {
+                        "topic_id": self._TOPIC_ID,
+                        "severity": "medium",
+                        "title": "Recommendation 2 needs a concrete fallback classification.",
+                        "evidence": "The workflow recommendation names the operator path but leaves the fallback state implicit.",
+                        "repair_hint": "Name the fallback classification directly in recommendation 2.",
+                        "recommendation_index": 2,
+                    }
+                ],
+                "resolved_topic_ids": [],
+                "carried_forward_topic_ids": [],
+                "waived_topic_ids": [],
+                "grounding_score": 0.91,
+                "actionability_score": 0.76,
+                "scope_compliance_score": 0.95,
+                "confidence": 0.85,
+                "scope_escapes": [],
+            }
+        if role_name == "reviser_round_1":
+            payload = self._base_analysis(revised=True)
+            payload["recommendations"][1]["proposed_change"] = (
+                "Use explicit timeout-minutes consistently across both release paths and name the operator fallback classification."
+            )
+            payload["topic_resolution_map"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "status": "addressed",
+                    "recommendation_index": 2,
+                    "change_summary": "Added the fallback classification note to recommendation 2.",
+                    "residual_risk": "",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            return {
+                "verdict": "accept",
+                "summary": "The revision resolved the open topic without introducing new issues.",
+                "workspace_write_intent": "none",
+                "issues": [],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": [],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": 1,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 1 remains acceptable.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 2,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 2 now includes the fallback classification.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                ],
+                "topics": [],
+                "resolved_topic_ids": [self._TOPIC_ID],
+                "carried_forward_topic_ids": [],
+                "waived_topic_ids": [],
+                "grounding_score": 0.94,
+                "actionability_score": 0.89,
+                "scope_compliance_score": 0.96,
+                "confidence": 0.9,
+                "scope_escapes": [],
+            }
+        return super()._payload_for_role(role_name)
+
+
+class _LegacyMissingTopicsHarnessAdapter(_AcceptingHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            return {
+                "verdict": "revise",
+                "summary": "Legacy critic payload still emits missing_topics for recommendation 2.",
+                "workspace_write_intent": "none",
+                "issues": [],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": [],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": 1,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 1 is acceptable.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 2,
+                        "verdict": "revise",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 2 still needs a concrete fallback classification.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                ],
+                "missing_topics": [
+                    "Recommendation 2 still needs a concrete fallback classification."
+                ],
+                "grounding_score": 0.9,
+                "actionability_score": 0.75,
+                "scope_compliance_score": 0.94,
+                "confidence": 0.82,
                 "scope_escapes": [],
             }
         return super()._payload_for_role(role_name)
@@ -698,6 +852,12 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert summary["final_answer"]["strengths"]["items"] == ["Grounded in workflow files"]
     assert summary["recommendation_reviews"][0]["verdict"] == "accept"
     assert summary["issue_ledger"] == []
+    assert summary["topic_ledger"] == []
+    assert summary["analysis_review_status"]["topic_ledger_count"] == 0
+    assert summary["analysis_review_status"]["open_topic_ids"] == []
+    assert summary["analysis_review_status"]["resolved_topic_ids"] == []
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == []
+    assert summary["analysis_review_status"]["waived_topic_ids"] == []
     assert summary["analysis_review_coverage"]["review_loop_exercised"] is True
     bounded_review_summary = summary["bounded_review_summary"]
     assert bounded_review_summary == summary["run_details"]["bounded_review_summary"]
@@ -714,8 +874,15 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
             "issue_cap": 5,
             "missing_topic_count": 0,
             "missing_topic_cap": 2,
+            "new_topic_count": 0,
+            "new_topic_cap": 2,
+            "resolved_topic_count": 0,
+            "carried_forward_topic_count": 0,
+            "waived_topic_count": 0,
+            "open_topic_count": 0,
             "new_medium_or_higher_issue_count": 0,
             "new_medium_or_higher_issue_cap": None,
+            "topic_ledger_count": 0,
             "scope_escape_count": 0,
         },
         {
@@ -725,8 +892,15 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
             "issue_cap": None,
             "missing_topic_count": 0,
             "missing_topic_cap": None,
+            "new_topic_count": 0,
+            "new_topic_cap": None,
+            "resolved_topic_count": 0,
+            "carried_forward_topic_count": 0,
+            "waived_topic_count": 0,
+            "open_topic_count": 0,
             "new_medium_or_higher_issue_count": 0,
             "new_medium_or_higher_issue_cap": 1,
+            "topic_ledger_count": 0,
             "scope_escape_count": 0,
         },
     ]
@@ -1012,6 +1186,144 @@ def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
 
 
 
+def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_deliverable(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TopicLifecycleHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    assert summary["issue_ledger"] == []
+    assert summary["topic_ledger"] == [
+        {
+            "topic_id": "TOPIC-001",
+            "source_stage_id": "stage-02-critic",
+            "first_seen_round": 0,
+            "last_seen_round": 1,
+            "severity": "medium",
+            "recommendation_index": 2,
+            "title": "Recommendation 2 needs a concrete fallback classification.",
+            "evidence": "The workflow recommendation names the operator path but leaves the fallback state implicit.",
+            "repair_hint": "Name the fallback classification directly in recommendation 2.",
+            "resolution_status": "resolved",
+            "resolution_note": "addressed | Added the fallback classification note to recommendation 2.",
+        }
+    ]
+    assert summary["analysis_review_status"]["topic_ledger_count"] == 1
+    assert summary["analysis_review_status"]["open_topic_ids"] == []
+    assert summary["analysis_review_status"]["resolved_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == []
+    assert summary["analysis_review_status"]["waived_topic_ids"] == []
+    assert summary["bounded_review_summary"]["review_stages"] == [
+        {
+            "role_name": "critic",
+            "round_index": 0,
+            "issue_count": 0,
+            "issue_cap": 5,
+            "missing_topic_count": 1,
+            "missing_topic_cap": 2,
+            "new_topic_count": 1,
+            "new_topic_cap": 2,
+            "resolved_topic_count": 0,
+            "carried_forward_topic_count": 0,
+            "waived_topic_count": 0,
+            "open_topic_count": 1,
+            "new_medium_or_higher_issue_count": 0,
+            "new_medium_or_higher_issue_cap": None,
+            "topic_ledger_count": 1,
+            "scope_escape_count": 0,
+        },
+        {
+            "role_name": "auditor",
+            "round_index": 1,
+            "issue_count": 0,
+            "issue_cap": None,
+            "missing_topic_count": 0,
+            "missing_topic_cap": None,
+            "new_topic_count": 0,
+            "new_topic_cap": None,
+            "resolved_topic_count": 1,
+            "carried_forward_topic_count": 0,
+            "waived_topic_count": 0,
+            "open_topic_count": 0,
+            "new_medium_or_higher_issue_count": 0,
+            "new_medium_or_higher_issue_cap": 1,
+            "topic_ledger_count": 1,
+            "scope_escape_count": 0,
+        },
+    ]
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    assert "## Topic Lifecycle" in report_text
+    assert "- Topic ledger entries: `1`" in report_text
+    assert "- Resolved topics: `1` (`TOPIC-001`)" in report_text
+    assert "### TOPIC-001 — medium — resolved" in report_text
+    assert "- Resolution note: addressed | Added the fallback classification note to recommendation 2." in report_text
+    assert "Topic lifecycle: new `1`, resolved `0`, carried forward `0`, waived `0`, open `1`" in report_text
+    assert "Topic lifecycle: new `0`, resolved `1`, carried forward `0`, waived `0`, open `0`" in report_text
+
+    assert "## Topic Lifecycle" in final_answer_text
+    assert (
+        "- `TOPIC-001` `resolved` via `critic`: Recommendation 2 needs a concrete fallback classification. — addressed | Added the fallback classification note to recommendation 2."
+        in final_answer_text
+    )
+    assert "- Topic ledger count: `1`" in final_answer_text
+    assert "missing_topics" not in final_answer_text
+
+
+def test_analysis_review_runner_normalizes_legacy_missing_topics_into_topics(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _LegacyMissingTopicsHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _LegacyMissingTopicsHarnessAdapter()._payload_for_role("critic")
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="none",
+        contract=runner._analysis_contract(),
+    )
+
+    assert "Normalized legacy missing_topics into topics with stable topic IDs." in warnings
+    assert "missing_topics" not in normalized
+    assert normalized["resolved_topic_ids"] == []
+    assert normalized["carried_forward_topic_ids"] == []
+    assert normalized["waived_topic_ids"] == []
+    assert len(normalized["topics"]) == 1
+    assert normalized["topics"][0]["topic_id"].startswith("AT-")
+    assert normalized["topics"][0]["title"] == "Recommendation 2 still needs a concrete fallback classification."
+
+
 def test_analysis_review_runner_reports_non_zero_scope_escapes(
     tmp_path,
     monkeypatch,
@@ -1085,11 +1397,11 @@ def test_analysis_review_runner_surfaces_semantic_validation_failures(
     proposer_stage = summary["agent_stages"][0]
     assert proposer_stage["ok"] is False
     assert any(
-        "strengths must contain at least one concrete item or a non-empty none_reason" in error
-        for error in proposer_stage["semantic_validation_errors"]
-    )
+            "strengths must contain at least one concrete item or a non-empty none_reason" in error
+            for error in proposer_stage["semantic_validation_errors"]
+        )
     assert any(
-        "files_reviewed must contain at least 1 non-empty path" in error
+        "uncertainties must contain at least one concrete item or a non-empty none_reason" in error
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert Path(proposer_stage["semantic_validation_path"]).exists()

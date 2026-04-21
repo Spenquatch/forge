@@ -547,9 +547,11 @@ Your job:
 2. Validate each recommendation's cited evidence first, then stay inside its review_surface unless you must leave it.
 3. For every issue you raise, classify both `kind` and `blocking_class`, and follow the contract rule for blocking_class_override_reason when you override the default taxonomy mapping.
 4. Review every recommendation individually and return recommendation-level verdicts.
-5. Use `missing_topics` only for genuinely new bounded-review topics, not for open-ended repo exploration.
-6. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
-7. Use the shared confidence rubric below when judging whether confidence is too high or too low.
+5. Use `topics` only for genuinely new bounded-review topics introduced by this review stage, not for open-ended repo exploration.
+6. Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`.
+7. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics. Do not put IDs from this stage's new `topics` array into those classification arrays.
+8. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
+9. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
 Decision guidance:
 - Return verdict=revise when the overall draft still needs more work.
@@ -588,6 +590,7 @@ def build_analysis_auditor_prompt(
     review_policy: ReviewLoopPolicy,
     contract: AnalysisReviewContract,
     issue_ledger: list[dict[str, Any]],
+    topic_ledger: list[dict[str, Any]],
     round_index: int,
 ) -> str:
     return f"""
@@ -597,18 +600,22 @@ Critical rules:
 - Do NOT edit files in this stage.
 - You are not starting from scratch. Your first job is to verify closure of the existing issue ledger.
 - For every previously open issue, you must explicitly classify it as resolved, carried_forward, or waived via the required issue-ID arrays.
+- For every previously open topic, you must explicitly classify it as resolved, carried_forward, or waived via the required topic-ID arrays.
+- Use `topics` only for genuinely new bounded-review topics introduced by this audit stage.
 - If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`.
 - Return ONLY the JSON object required by the schema.
 
 Your job:
 1. Verify whether the reviser closed the existing blocker set.
 2. Preserve issue IDs for carried-forward issues.
-3. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
-4. Review every recommendation individually and return recommendation-level verdicts.
-5. Stay inside each recommendation's bounded review_surface unless you must leave it.
-6. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
-7. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
-8. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+3. Preserve topic IDs for carried-forward or waived prior topics, and emit new topic records only in `topics`.
+4. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
+5. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only for prior open topics. Do not classify IDs from this stage's new `topics` array there.
+6. Review every recommendation individually and return recommendation-level verdicts.
+7. Stay inside each recommendation's bounded review_surface unless you must leave it.
+8. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
+9. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
+10. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
 
 Decision guidance:
 - Return verdict=accept when the entire draft is acceptable.
@@ -634,6 +641,8 @@ Audit round: {round_index}
 
 {_json_block('Open issue ledger entering this audit', issue_ledger)}
 
+{_json_block('Open topic ledger entering this audit', topic_ledger)}
+
 Validator and advisory results:
 {_validator_block(validation_runs)}
 
@@ -652,6 +661,7 @@ def build_analysis_reviser_prompt(
     revision_round: int,
     contract: AnalysisReviewContract,
     open_issues: list[dict[str, Any]],
+    open_topics: list[dict[str, Any]],
 ) -> str:
     return f"""
 You are the REVISER stage in an analysis-review harness.
@@ -666,15 +676,17 @@ Your job:
 1. Inspect the current workspace directly.
 2. Revise the prior analysis to address every open issue in the issue ledger below.
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
-4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
-5. Preserve each recommendation's bounded evidence list and review_surface unless an open issue requires changing them.
-6. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
-7. Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
-8. Do not cite evidence as `path:line-range`; if line detail matters, keep the evidence ref at file granularity and move the excerpt detail into rationale or scope_note.
-9. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more.
-10. Use the shared confidence rubric below when revising confidence values.
-11. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-12. Use workspace_write_intent=`none` unless you truly changed the repo.
+4. If prior open topics exist in the review context, return a `topic_resolution_map` entry for every open topic ID, even if you disagree with it.
+5. Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage.
+6. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
+7. Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them.
+8. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
+9. Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+10. Do not cite evidence as `path:line-range`; if line detail matters, keep the evidence ref at file granularity and move the excerpt detail into rationale or scope_note.
+11. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more.
+12. Use the shared confidence rubric below when revising confidence values.
+13. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+14. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
@@ -691,6 +703,8 @@ Revision round: {revision_round}
 {_json_block('Latest review structured output', critic_output)}
 
 {_json_block('Open issue ledger', open_issues)}
+
+{_json_block('Open topic ledger', open_topics)}
 
 Validator and advisory results:
 {_validator_block(validation_runs)}

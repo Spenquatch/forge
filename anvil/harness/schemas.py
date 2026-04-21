@@ -84,6 +84,36 @@ ANALYSIS_ISSUE_SCHEMA: dict[str, Any] = {
 }
 
 
+ANALYSIS_TOPIC_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "topic_id": {"type": "string"},
+        "severity": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "critical"],
+        },
+        "title": {"type": "string"},
+        "evidence": {"type": "string"},
+        "repair_hint": {"type": "string"},
+        "recommendation_index": {
+            "anyOf": [
+                {"type": "integer", "minimum": 1},
+                {"type": "null"},
+            ]
+        },
+    },
+    "required": [
+        "topic_id",
+        "severity",
+        "title",
+        "evidence",
+        "repair_hint",
+        "recommendation_index",
+    ],
+    "additionalProperties": False,
+}
+
+
 RECOMMENDATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -176,6 +206,34 @@ ISSUE_RESOLUTION_SCHEMA: dict[str, Any] = {
         "residual_risk": {"type": "string"},
     },
     "required": ["issue_id", "status", "change_summary", "residual_risk"],
+    "additionalProperties": False,
+}
+
+
+TOPIC_RESOLUTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "topic_id": {"type": "string"},
+        "status": {
+            "type": "string",
+            "enum": ["addressed", "not_addressed", "disagree"],
+        },
+        "change_summary": {"type": "string"},
+        "residual_risk": {"type": "string"},
+        "recommendation_index": {
+            "anyOf": [
+                {"type": "integer", "minimum": 1},
+                {"type": "null"},
+            ]
+        },
+    },
+    "required": [
+        "topic_id",
+        "status",
+        "change_summary",
+        "residual_risk",
+        "recommendation_index",
+    ],
     "additionalProperties": False,
 }
 
@@ -301,7 +359,11 @@ def falsifier_schema() -> dict[str, Any]:
     }
 
 
-def analysis_output_schema(*, require_issue_resolution_map: bool = False) -> dict[str, Any]:
+def analysis_output_schema(
+    *,
+    require_issue_resolution_map: bool = False,
+    require_topic_resolution_map: bool = False,
+) -> dict[str, Any]:
     recommendation_schema = {
         "type": "object",
         "properties": {
@@ -346,6 +408,12 @@ def analysis_output_schema(*, require_issue_resolution_map: bool = False) -> dic
             "items": ISSUE_RESOLUTION_SCHEMA,
         }
         required.append("issue_resolution_map")
+    if require_topic_resolution_map:
+        properties["topic_resolution_map"] = {
+            "type": "array",
+            "items": TOPIC_RESOLUTION_SCHEMA,
+        }
+        required.append("topic_resolution_map")
     return {
         "type": "object",
         "properties": properties,
@@ -364,12 +432,15 @@ def analysis_review_schema() -> dict[str, Any]:
             "resolved_issue_ids": {"type": "array", "items": {"type": "string"}},
             "carried_forward_issue_ids": {"type": "array", "items": {"type": "string"}},
             "waived_issue_ids": {"type": "array", "items": {"type": "string"}},
+            "topics": {"type": "array", "items": ANALYSIS_TOPIC_SCHEMA},
+            "resolved_topic_ids": {"type": "array", "items": {"type": "string"}},
+            "carried_forward_topic_ids": {"type": "array", "items": {"type": "string"}},
+            "waived_topic_ids": {"type": "array", "items": {"type": "string"}},
             "recommendation_reviews": {
                 "type": "array",
                 "items": RECOMMENDATION_REVIEW_SCHEMA,
                 "minItems": 1,
             },
-            "missing_topics": {"type": "array", "items": {"type": "string"}},
             "scope_escapes": {"type": "array", "items": SCOPE_ESCAPE_SCHEMA},
             "grounding_score": {"type": "number", "minimum": 0, "maximum": 1},
             "actionability_score": {"type": "number", "minimum": 0, "maximum": 1},
@@ -383,8 +454,11 @@ def analysis_review_schema() -> dict[str, Any]:
             "resolved_issue_ids",
             "carried_forward_issue_ids",
             "waived_issue_ids",
+            "topics",
+            "resolved_topic_ids",
+            "carried_forward_topic_ids",
+            "waived_topic_ids",
             "recommendation_reviews",
-            "missing_topics",
             "scope_escapes",
             "grounding_score",
             "actionability_score",

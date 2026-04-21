@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from anvil.harness.report import render_report
 from anvil.harness.reporting import render_deliverable_markdown
 
 
@@ -170,3 +171,180 @@ def test_render_deliverable_markdown_uses_original_indices_for_partial_answers()
         "This recommendation relies on inference-only grounding rather than direct verified evidence."
         in recommendation_two
     )
+
+
+def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics_exist():
+    payload = {
+        "summary": "Accepted recommendations with a resolved review topic.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Clarify operator fallback path",
+                "rationale": "Operators need an explicit fallback classification.",
+                "evidence": ["docs/runbook.md"],
+                "proposed_change": "Document the fallback handling path.",
+                "confidence": 0.74,
+            }
+        ],
+    }
+    summary = {
+        "verdict": "accepted",
+        "analysis_review_status": {
+            "mode": "bounded",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "not_required",
+                "policy_mode": "none",
+            },
+            "topic_ledger_count": 1,
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": ["TOPIC-001"],
+            "waived_topic_ids": [],
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "source_stage_id": "stage-02-critic",
+                "resolution_status": "resolved",
+                "title": "Recommendation 1 needs a concrete fallback classification.",
+                "evidence": "The draft names the operator path but not the fallback state taxonomy.",
+                "repair_hint": "Clarify the fallback label and operator path together.",
+                "resolution_note": "addressed | Added the fallback classification note to recommendation 1.",
+            }
+        ],
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-789",
+        payload,
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary=summary,
+    )
+
+    assert "## Topic Lifecycle" in markdown
+    assert (
+        "- `TOPIC-001` `resolved` via `critic`: Recommendation 1 needs a concrete fallback classification. — addressed | Added the fallback classification note to recommendation 1."
+        in markdown
+    )
+
+
+def test_render_report_renders_full_topic_lifecycle_section():
+    summary = {
+        "verdict": "accepted_partial",
+        "task": {"id": "task-789"},
+        "verdicts": {
+            "content_verdict": "accepted_partial",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {
+            "bounded_review_summary": {
+                "mode": "recommendation_review_surface",
+                "recommendation_count": 1,
+                "recommendations_with_review_surface": 1,
+                "scope_escape_count": 0,
+                "scope_escapes": [],
+                "review_stages": [
+                    {
+                        "role_name": "critic",
+                        "round_index": 0,
+                        "issue_count": 0,
+                        "issue_cap": 5,
+                        "missing_topic_count": 1,
+                        "missing_topic_cap": 2,
+                        "new_topic_count": 1,
+                        "new_topic_cap": 2,
+                        "resolved_topic_count": 0,
+                        "carried_forward_topic_count": 0,
+                        "waived_topic_count": 0,
+                        "open_topic_count": 1,
+                        "new_medium_or_higher_issue_count": 0,
+                        "new_medium_or_higher_issue_cap": None,
+                        "topic_ledger_count": 1,
+                        "scope_escape_count": 0,
+                    },
+                    {
+                        "role_name": "auditor",
+                        "round_index": 1,
+                        "issue_count": 0,
+                        "issue_cap": None,
+                        "missing_topic_count": 0,
+                        "missing_topic_cap": None,
+                        "new_topic_count": 0,
+                        "new_topic_cap": None,
+                        "resolved_topic_count": 1,
+                        "carried_forward_topic_count": 0,
+                        "waived_topic_count": 0,
+                        "open_topic_count": 0,
+                        "new_medium_or_higher_issue_count": 0,
+                        "new_medium_or_higher_issue_cap": 1,
+                        "topic_ledger_count": 1,
+                        "scope_escape_count": 0,
+                    },
+                ],
+            }
+        },
+        "analysis_review_contract": {
+            "mode": "bounded",
+            "bounded_review": {
+                "critic_issue_cap": 5,
+                "critic_new_topic_cap": 2,
+                "auditor_new_medium_or_higher_issue_cap_after_round0": 1,
+            },
+        },
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "bounded",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "not_required",
+                "policy_mode": "none",
+                "required": False,
+                "stages": [],
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": ["TOPIC-001"],
+            "waived_topic_ids": [],
+            "topic_ledger_count": 1,
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "source_stage_id": "stage-02-critic",
+                "first_seen_round": 0,
+                "last_seen_round": 1,
+                "severity": "medium",
+                "recommendation_index": 1,
+                "title": "Recommendation 1 needs a concrete fallback classification.",
+                "evidence": "The draft names the operator path but not the fallback state taxonomy.",
+                "repair_hint": "Clarify the fallback label and operator path together.",
+                "resolution_status": "resolved",
+                "resolution_note": "addressed | Added the fallback classification note to recommendation 1.",
+            }
+        ],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert "## Topic Lifecycle" in report
+    assert "- Topic ledger entries: `1`" in report
+    assert "- Resolved topics: `1` (`TOPIC-001`)" in report
+    assert "### TOPIC-001 — medium — resolved" in report
+    assert "- Introduced by: `critic`" in report
+    assert "- Resolution note: addressed | Added the fallback classification note to recommendation 1." in report

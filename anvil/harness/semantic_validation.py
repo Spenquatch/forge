@@ -45,7 +45,9 @@ def validate_stage_output(
     contract: AnalysisReviewContract | None,
     workspace_paths: Iterable[str] | None = None,
     open_issue_ids: Iterable[str] | None = None,
+    expected_open_topic_ids: Iterable[str] | None = None,
     prior_open_issue_ids: Iterable[str] | None = None,
+    prior_open_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
@@ -64,7 +66,9 @@ def validate_stage_output(
                 contract=contract,
                 workspace_paths=workspace_paths,
                 expected_open_issue_ids=open_issue_ids,
+                expected_open_topic_ids=expected_open_topic_ids,
                 require_issue_resolution_map=(role == "reviser"),
+                require_topic_resolution_map=(role == "reviser"),
             )
         )
     elif role in {"critic", "auditor"}:
@@ -75,6 +79,7 @@ def validate_stage_output(
                 task=task,
                 contract=contract,
                 prior_open_issue_ids=prior_open_issue_ids,
+                prior_open_topic_ids=prior_open_topic_ids,
                 expected_recommendation_count=expected_recommendation_count,
             )
         )
@@ -88,7 +93,9 @@ def validate_analysis_output_payload(
     contract: AnalysisReviewContract,
     workspace_paths: Iterable[str] | None,
     expected_open_issue_ids: Iterable[str] | None,
-    require_issue_resolution_map: bool,
+    expected_open_topic_ids: Iterable[str] | None = None,
+    require_issue_resolution_map: bool = False,
+    require_topic_resolution_map: bool = False,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     review_requirements = task.review_requirements
@@ -216,6 +223,14 @@ def validate_analysis_output_payload(
                 "issue_resolution_map references unknown issue IDs: " + ", ".join(unexpected_ids)
             )
 
+    if require_topic_resolution_map:
+        _validate_topic_resolution_map(
+            result,
+            topic_resolution_map=payload.get("topic_resolution_map"),
+            expected_open_topic_ids=expected_open_topic_ids,
+            expected_recommendation_count=len(recommendations),
+        )
+
     return result
 
 
@@ -226,7 +241,8 @@ def validate_analysis_review_payload(
     task: TaskSpec,
     contract: AnalysisReviewContract,
     prior_open_issue_ids: Iterable[str] | None,
-    expected_recommendation_count: int | None,
+    prior_open_topic_ids: Iterable[str] | None = None,
+    expected_recommendation_count: int | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     del task  # reserved for future task-specific review checks
@@ -381,15 +397,97 @@ def validate_analysis_review_payload(
             + ", ".join(missing_classifications)
         )
 
-    missing_topics = payload.get("missing_topics") or []
-    if not isinstance(missing_topics, list):
-        result.errors.append("missing_topics must be a list.")
-        missing_topics = []
-    missing_topic_items = _non_empty_strings(missing_topics if isinstance(missing_topics, list) else [])
-    if role_name == "critic" and len(missing_topic_items) > bounded_review.critic_new_topic_cap:
+    topics = payload.get("topics") or []
+    topic_id_order: list[str] = []
+    if not isinstance(topics, list):
+        result.errors.append("topics must be a list.")
+        topics = []
+    if role_name == "critic" and len(topics) > bounded_review.critic_new_topic_cap:
         result.errors.append(
-            "missing_topics exceeds the bounded-review cap of "
+            "topics exceeds the bounded-review cap of "
             f"{bounded_review.critic_new_topic_cap} item(s) for critic."
+        )
+    for index, topic in enumerate(topics, start=1):
+        if not isinstance(topic, dict):
+            result.errors.append(f"topics[{index}] must be an object.")
+            continue
+        topic_id = str(topic.get("topic_id") or "").strip()
+        if not topic_id:
+            result.errors.append(f"topics[{index}] must include a non-empty topic_id.")
+            continue
+        topic_id_order.append(topic_id)
+        recommendation_index = topic.get("recommendation_index")
+        if recommendation_index not in (None, ""):
+            try:
+                recommendation_number = int(recommendation_index)
+            except (TypeError, ValueError):
+                result.errors.append(
+                    f"topics[{index}].recommendation_index must be an integer or null."
+                )
+            else:
+                if recommendation_number < 1:
+                    result.errors.append(
+                        f"topics[{index}].recommendation_index must be >= 1 when provided."
+                    )
+                if expected_recommendation_count is not None and recommendation_number > expected_recommendation_count:
+                    result.errors.append(
+                        f"topics[{index}].recommendation_index={recommendation_number} exceeds the recommendation count ({expected_recommendation_count})."
+                    )
+    duplicate_topic_ids = sorted({topic_id for topic_id in topic_id_order if topic_id_order.count(topic_id) > 1})
+    if duplicate_topic_ids:
+        result.errors.append("topics contains duplicate topic IDs: " + ", ".join(duplicate_topic_ids))
+
+    prior_open_topic_id_set = {
+        str(item).strip() for item in (prior_open_topic_ids or []) if str(item).strip()
+    }
+    resolved_topic_ids = _validated_id_list(
+        result,
+        field_name="resolved_topic_ids",
+        values=payload.get("resolved_topic_ids"),
+        id_label="topic ID",
+    )
+    carried_forward_topic_ids = _validated_id_list(
+        result,
+        field_name="carried_forward_topic_ids",
+        values=payload.get("carried_forward_topic_ids"),
+        id_label="topic ID",
+    )
+    waived_topic_ids = _validated_id_list(
+        result,
+        field_name="waived_topic_ids",
+        values=payload.get("waived_topic_ids"),
+        id_label="topic ID",
+    )
+    resolved_topic_set = set(resolved_topic_ids)
+    carried_forward_topic_set = set(carried_forward_topic_ids)
+    waived_topic_set = set(waived_topic_ids)
+    if overlap := sorted(
+        (resolved_topic_set & carried_forward_topic_set)
+        | (resolved_topic_set & waived_topic_set)
+        | (carried_forward_topic_set & waived_topic_set)
+    ):
+        result.errors.append(
+            "resolved_topic_ids, carried_forward_topic_ids, and waived_topic_ids overlap: "
+            + ", ".join(overlap)
+        )
+    classified_topic_ids = resolved_topic_set | carried_forward_topic_set | waived_topic_set
+    unexpected_topic_classifications = sorted(classified_topic_ids - prior_open_topic_id_set)
+    if unexpected_topic_classifications:
+        result.errors.append(
+            "topic classification arrays reference unknown prior open topic IDs: "
+            + ", ".join(unexpected_topic_classifications)
+        )
+    missing_topic_classifications = sorted(prior_open_topic_id_set - classified_topic_ids)
+    if missing_topic_classifications:
+        result.errors.append(
+            "prior open topic IDs are missing from resolved_topic_ids/carried_forward_topic_ids/waived_topic_ids: "
+            + ", ".join(missing_topic_classifications)
+        )
+    introduced_and_classified_topic_ids = sorted(set(topic_id_order) & classified_topic_ids)
+    if introduced_and_classified_topic_ids:
+        result.errors.append(
+            "topics contains newly introduced topic IDs that also appear in resolved_topic_ids/carried_forward_topic_ids/waived_topic_ids: "
+            + ", ".join(introduced_and_classified_topic_ids)
         )
 
     scope_escapes = payload.get("scope_escapes") or []
@@ -598,3 +696,116 @@ def _normalized_id_set(values: Any) -> set[str]:
     if not isinstance(values, list):
         return set()
     return {str(item).strip() for item in values if str(item).strip()}
+
+
+def _validated_id_list(
+    result: SemanticValidationResult,
+    *,
+    field_name: str,
+    values: Any,
+    id_label: str,
+) -> list[str]:
+    if values is None:
+        values = []
+    if not isinstance(values, list):
+        result.errors.append(f"{field_name} must be a list.")
+        return []
+    normalized_ids: list[str] = []
+    for index, item in enumerate(values, start=1):
+        text = str(item).strip()
+        if not text:
+            result.errors.append(f"{field_name}[{index}] must be a non-empty {id_label}.")
+            continue
+        normalized_ids.append(text)
+    duplicates = sorted({item for item in normalized_ids if normalized_ids.count(item) > 1})
+    if duplicates:
+        result.errors.append(f"{field_name} contains duplicate {id_label}s: " + ", ".join(duplicates))
+    return normalized_ids
+
+
+def _validate_topic_resolution_map(
+    result: SemanticValidationResult,
+    *,
+    topic_resolution_map: Any,
+    expected_open_topic_ids: Iterable[str] | None,
+    expected_recommendation_count: int,
+) -> None:
+    expected_topic_ids = {
+        str(item).strip() for item in (expected_open_topic_ids or []) if str(item).strip()
+    }
+    if topic_resolution_map is None:
+        topic_resolution_map = []
+    if not isinstance(topic_resolution_map, list):
+        result.errors.append("topic_resolution_map must be a list.")
+        return
+
+    seen_topic_ids: list[str] = []
+    for index, item in enumerate(topic_resolution_map, start=1):
+        if not isinstance(item, dict):
+            result.errors.append(f"topic_resolution_map[{index}] must be an object.")
+            continue
+        topic_id = str(item.get("topic_id") or "").strip()
+        if not topic_id:
+            result.errors.append(f"topic_resolution_map[{index}] must include a non-empty topic_id.")
+            continue
+        seen_topic_ids.append(topic_id)
+
+        recommendation_index = item.get("recommendation_index")
+        has_valid_recommendation_index = False
+        if recommendation_index not in (None, ""):
+            try:
+                recommendation_number = int(recommendation_index)
+            except (TypeError, ValueError):
+                result.errors.append(
+                    f"topic_resolution_map[{index}].recommendation_index must be an integer or null."
+                )
+            else:
+                if recommendation_number < 1:
+                    result.errors.append(
+                        f"topic_resolution_map[{index}].recommendation_index must be >= 1 when provided."
+                    )
+                elif recommendation_number > expected_recommendation_count:
+                    result.errors.append(
+                        f"topic_resolution_map[{index}].recommendation_index={recommendation_number} exceeds the recommendation count ({expected_recommendation_count})."
+                    )
+                else:
+                    has_valid_recommendation_index = True
+        change_summary = str(item.get("change_summary") or "").strip()
+        status = str(item.get("status") or "").strip().lower()
+        if (
+            status == "addressed"
+            and not has_valid_recommendation_index
+            and not _has_substantive_change_summary(change_summary)
+        ):
+            result.errors.append(
+                f"topic_resolution_map[{index}] with status=addressed must include a valid recommendation_index or a substantive change_summary."
+            )
+
+    duplicates = sorted({item for item in seen_topic_ids if seen_topic_ids.count(item) > 1})
+    if duplicates:
+        result.errors.append(
+            "topic_resolution_map contains duplicate topic IDs: " + ", ".join(duplicates)
+        )
+
+    seen_topic_id_set = set(seen_topic_ids)
+    missing_topic_ids = sorted(expected_topic_ids - seen_topic_id_set)
+    if missing_topic_ids:
+        result.errors.append(
+            "topic_resolution_map is missing open topic IDs: " + ", ".join(missing_topic_ids)
+        )
+    unexpected_topic_ids = sorted(seen_topic_id_set - expected_topic_ids)
+    if unexpected_topic_ids:
+        result.errors.append(
+            "topic_resolution_map references unknown topic IDs: " + ", ".join(unexpected_topic_ids)
+        )
+
+
+def _has_substantive_change_summary(change_summary: str) -> bool:
+    if not change_summary:
+        return False
+    normalized = " ".join(change_summary.split()).strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"n/a", "na", "none", "no change", "unchanged", "same"}:
+        return False
+    return True
