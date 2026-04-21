@@ -135,6 +135,14 @@ Critic and auditor issue payloads stay on the same shared family and add `blocki
 }
 ```
 
+Review-stage critic and auditor payloads also support structured review refs on the shared family:
+
+- top-level `files_reviewed`
+- `recommendation_reviews[*].checked_files`
+- `recommendation_reviews[*].verified_evidence_refs`
+
+Those refs are the path-based audit surface for review provenance. Human-readable topic or issue `evidence` text remains narrative; provenance binds to these structured path refs.
+
 ## Trust semantics
 
 Trust mode is stricter, but it is still the same harness path.
@@ -175,6 +183,7 @@ Examples of the existing and intended v4 semantic checks:
 - in trust mode, `verified_evidence_refs` should stay a subset of `evidence`
 - in trust mode, non-inferred `affected_files` should be covered by evidence or checked files
 - in trust mode, `blocking_class_override_reason` should explain intentional taxonomy overrides
+- in trust mode, review payloads that introduce or classify issues/topics must bind at least one structured review ref; a payload hash alone is insufficient
 
 Semantic validation failures are surfaced as stage errors and written to a per-stage `semantic_validation.json` artifact.
 

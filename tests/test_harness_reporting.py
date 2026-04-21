@@ -232,6 +232,64 @@ def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics
     )
 
 
+def test_render_deliverable_markdown_renders_carried_forward_topic_resolution_note():
+    payload = {
+        "summary": "Accepted recommendations with a carried-forward review topic.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Clarify operator fallback path",
+                "rationale": "Operators need an explicit fallback classification.",
+                "evidence": ["docs/runbook.md"],
+                "proposed_change": "Document the fallback handling path.",
+                "confidence": 0.74,
+            }
+        ],
+    }
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "analysis_review_status": {
+            "mode": "bounded",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "not_required",
+                "policy_mode": "none",
+            },
+            "topic_ledger_count": 1,
+            "open_topic_ids": ["TOPIC-001"],
+            "carried_forward_topic_ids": ["TOPIC-001"],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "downgrade_causes": ["review topics remain open: TOPIC-001"],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "source_stage_id": "stage-02-critic",
+                "resolution_status": "carried_forward",
+                "title": "Recommendation 1 needs a concrete fallback classification.",
+                "evidence": "The draft names the operator path but not the fallback state taxonomy.",
+                "repair_hint": "Clarify the fallback label and operator path together.",
+                "resolution_note": "not_addressed | The recommendation improved, but the fallback label is still implicit. | Operators still need a concrete fallback label.",
+            }
+        ],
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-790",
+        payload,
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary=summary,
+    )
+
+    assert (
+        "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 1 needs a concrete fallback classification. — not_addressed | The recommendation improved, but the fallback label is still implicit. | Operators still need a concrete fallback label."
+        in markdown
+    )
+
+
 def test_render_report_renders_full_topic_lifecycle_section():
     summary = {
         "verdict": "accepted_partial",

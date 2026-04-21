@@ -248,6 +248,8 @@ RECOMMENDATION_REVIEW_SCHEMA: dict[str, Any] = {
         },
         "open_issue_ids": {"type": "array", "items": {"type": "string"}},
         "summary": {"type": "string"},
+        "checked_files": {"type": "array", "items": {"type": "string"}},
+        "verified_evidence_refs": {"type": "array", "items": {"type": "string"}},
         "confidence_assessment": {
             "type": "string",
             "enum": ["too_low", "well_calibrated", "too_high", "not_assessed"],
@@ -428,6 +430,7 @@ def analysis_review_schema() -> dict[str, Any]:
         "properties": {
             "verdict": {"type": "string", "enum": ["accept", "accept_partial", "revise", "reject"]},
             **COMMON_PROPS,
+            "files_reviewed": {"type": "array", "items": {"type": "string"}},
             "issues": {"type": "array", "items": ANALYSIS_ISSUE_SCHEMA},
             "resolved_issue_ids": {"type": "array", "items": {"type": "string"}},
             "carried_forward_issue_ids": {"type": "array", "items": {"type": "string"}},

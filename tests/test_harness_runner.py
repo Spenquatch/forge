@@ -721,11 +721,52 @@ class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
         payload["recommendations"][1]["grounding_mode"] = "inferred"
         return payload
 
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["files_reviewed"] = [
+                ".github/workflows/codex-cli-release-watch.yml",
+                ".github/workflows/claude-code-release-watch.yml",
+            ]
+            payload["recommendation_reviews"][0]["checked_files"] = [
+                ".github/workflows/codex-cli-release-watch.yml"
+            ]
+            payload["recommendation_reviews"][0]["verified_evidence_refs"] = [
+                ".github/workflows/codex-cli-release-watch.yml"
+            ]
+            payload["recommendation_reviews"][1]["checked_files"] = [
+                ".github/workflows/claude-code-release-watch.yml"
+            ]
+            payload["recommendation_reviews"][1]["verified_evidence_refs"] = [
+                ".github/workflows/claude-code-release-watch.yml"
+            ]
+        return payload
+
 
 class _TrustSemanticWarningHarnessAdapter(_TrustInferenceHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
         payload["strengths"]["none_reason"] = "The summary section still includes a redundant none_reason."
+        return payload
+
+
+class _TrustZeroRefReviewHarnessAdapter(_TopicLifecycleHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"][0]["verified_evidence_refs"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["checked_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["grounding_mode"] = "direct"
+        payload["recommendations"][1]["verified_evidence_refs"] = [
+            ".github/workflows/claude-code-release-watch.yml"
+        ]
+        payload["recommendations"][1]["checked_files"] = [
+            ".github/workflows/claude-code-release-watch.yml"
+        ]
+        payload["recommendations"][1]["grounding_mode"] = "direct"
         return payload
 
 
@@ -1171,9 +1212,13 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     )
 
     proposer_stage = summary["agent_stages"][0]
+    critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
+    auditor_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "auditor")
     semantic_payload = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
     assert semantic_payload["payload_provenance"]["status"] == "bound"
     assert semantic_payload["payload_provenance"]["policy_mode"] == "payload_hash_and_refs"
+    assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] > 0
+    assert auditor_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] > 0
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
     final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
     recommendation_two_section = final_answer_text.split("### 2. Align timeout handling", 1)[1]
@@ -1192,6 +1237,99 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
         in recommendation_two_section
     )
     assert "This recommendation carries review caveats:" not in recommendation_one_section
+
+
+def test_analysis_review_runner_trust_review_normalization_binds_structured_review_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustInferenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustInferenceHarnessAdapter()._payload_for_role("critic")
+    normalized, payload_provenance, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+
+    assert warnings == []
+    assert normalized["files_reviewed"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+    ]
+    assert payload_provenance["status"] == "bound"
+    assert payload_provenance["normalized_ref_count"] == 6
+    assert payload_provenance["normalized_ref_field_count"] == 5
+    assert payload_provenance["normalized_refs"] == {
+        "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+        ],
+        "recommendation_reviews[1].checked_files": [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "recommendation_reviews[1].verified_evidence_refs": [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "recommendation_reviews[2].checked_files": [
+            ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "recommendation_reviews[2].verified_evidence_refs": [
+            ".github/workflows/claude-code-release-watch.yml"
+        ],
+    }
+
+
+def test_analysis_review_runner_trust_review_fails_when_topic_closure_has_zero_structured_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustZeroRefReviewHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
+    assert critic_stage["failure_kind"] == "semantic_validation_error"
+    assert critic_stage["semantic_validation_payload_provenance"]["status"] == "insufficient"
+    assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] == 0
+    assert (
+        "trust review payload introduced or classified issues/topics without any structured review refs"
+        in critic_stage["semantic_validation_errors"][0]
+    )
 
 
 def test_analysis_review_runner_trust_mode_downgrades_when_semantic_warnings_remain(
@@ -1419,7 +1557,7 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
     assert "- Introduced by: `critic`" in report_text
     assert "- Source stage: `stage-02-critic`" in report_text
     assert (
-        "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 2 needs a concrete fallback classification."
+        "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 2 needs a concrete fallback classification. — not_addressed | The recommendation text improved, but the fallback classification is still too implicit. | Operators still need a concrete fallback label."
         in final_answer_text
     )
 

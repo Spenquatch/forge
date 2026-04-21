@@ -133,7 +133,7 @@ def _append_topic_lifecycle(lines: list[str], summary: dict[str, Any]) -> None:
             f"via `{_topic_source_role(topic)}`: {_topic_summary_text(topic)}"
         )
         resolution_note = str(topic.get("resolution_note") or "").strip()
-        if resolution_note and str(topic.get("resolution_status") or "") in {"resolved", "waived"}:
+        if resolution_note:
             line += f" — {resolution_note}"
         lines.append(line)
     lines.append("")

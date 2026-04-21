@@ -49,6 +49,7 @@ def validate_stage_output(
     prior_open_issue_ids: Iterable[str] | None = None,
     prior_open_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
+    payload_provenance: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     if task.task_kind != "analysis_review" or contract is None:
@@ -78,9 +79,11 @@ def validate_stage_output(
                 role_name=role,
                 task=task,
                 contract=contract,
+                workspace_paths=workspace_paths,
                 prior_open_issue_ids=prior_open_issue_ids,
                 prior_open_topic_ids=prior_open_topic_ids,
                 expected_recommendation_count=expected_recommendation_count,
+                payload_provenance=payload_provenance,
             )
         )
     return result
@@ -240,13 +243,18 @@ def validate_analysis_review_payload(
     role_name: str,
     task: TaskSpec,
     contract: AnalysisReviewContract,
-    prior_open_issue_ids: Iterable[str] | None,
+    workspace_paths: Iterable[str] | None = None,
+    prior_open_issue_ids: Iterable[str] | None = None,
     prior_open_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
+    payload_provenance: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     del task  # reserved for future task-specific review checks
     bounded_review = contract.bounded_review
+    workspace_path_set = {
+        str(item).strip() for item in (workspace_paths or []) if str(item).strip()
+    }
 
     issues = payload.get("issues") or []
     issue_id_order: list[str] = []
@@ -322,6 +330,16 @@ def validate_analysis_review_payload(
         else:
             result.errors.append(overflow_message)
 
+    files_reviewed = payload.get("files_reviewed") or []
+    review_file_items = _non_empty_strings(files_reviewed if isinstance(files_reviewed, list) else [])
+    files_reviewed_set = set(review_file_items)
+    unknown_files_reviewed = sorted(files_reviewed_set - workspace_path_set)
+    if unknown_files_reviewed:
+        result.errors.append(
+            "files_reviewed contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_files_reviewed)
+        )
+
     recommendation_reviews = payload.get("recommendation_reviews") or []
     if not isinstance(recommendation_reviews, list):
         result.errors.append("recommendation_reviews must be a list.")
@@ -351,6 +369,13 @@ def validate_analysis_review_payload(
                 f"recommendation_reviews[{index}] references issue IDs not present in issues: "
                 + ", ".join(unknown_issue_ids)
             )
+        _validate_review_recommendation_metadata(
+            result,
+            recommendation_review=item,
+            recommendation_index=index,
+            files_reviewed=files_reviewed_set,
+            workspace_paths=workspace_path_set,
+        )
     duplicate_recommendations = sorted(
         {value for value in recommendation_indices if recommendation_indices.count(value) > 1}
     )
@@ -503,6 +528,13 @@ def validate_analysis_review_payload(
                 result.errors.append(
                     f"scope_escapes[{index}].reason must be non-empty when scope escapes are recorded."
                 )
+
+    if _review_payload_requires_structured_refs(payload):
+        _validate_review_payload_provenance(
+            result,
+            contract=contract,
+            payload_provenance=payload_provenance,
+        )
 
     return result
 
@@ -679,6 +711,92 @@ def _validate_trust_recommendation_metadata(
                 f"recommendations[{recommendation_index}].affected_files must be covered by evidence or checked_files when grounding_mode is not inferred: "
                 + ", ".join(uncovered_affected_files)
             )
+
+
+def _validate_review_recommendation_metadata(
+    result: SemanticValidationResult,
+    *,
+    recommendation_review: dict[str, Any],
+    recommendation_index: int,
+    files_reviewed: set[str],
+    workspace_paths: set[str],
+) -> None:
+    checked_items = _non_empty_strings(
+        (recommendation_review.get("checked_files") or [])
+        if isinstance(recommendation_review.get("checked_files"), list)
+        else []
+    )
+    verified_items = _non_empty_strings(
+        (recommendation_review.get("verified_evidence_refs") or [])
+        if isinstance(recommendation_review.get("verified_evidence_refs"), list)
+        else []
+    )
+
+    missing_checked_files = sorted(set(checked_items) - files_reviewed)
+    if missing_checked_files:
+        result.errors.append(
+            f"recommendation_reviews[{recommendation_index}].checked_files must be a subset of files_reviewed: "
+            + ", ".join(missing_checked_files)
+        )
+    unknown_checked_files = sorted(set(checked_items) - workspace_paths)
+    if unknown_checked_files:
+        result.errors.append(
+            f"recommendation_reviews[{recommendation_index}].checked_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_checked_files)
+        )
+    missing_verified_refs = sorted(set(verified_items) - files_reviewed)
+    if missing_verified_refs:
+        result.errors.append(
+            f"recommendation_reviews[{recommendation_index}].verified_evidence_refs must be a subset of files_reviewed: "
+            + ", ".join(missing_verified_refs)
+        )
+    unknown_verified_refs = sorted(set(verified_items) - workspace_paths)
+    if unknown_verified_refs:
+        result.errors.append(
+            f"recommendation_reviews[{recommendation_index}].verified_evidence_refs contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_verified_refs)
+        )
+
+
+def _review_payload_requires_structured_refs(payload: dict[str, Any]) -> bool:
+    closure_fields = (
+        "issues",
+        "topics",
+        "resolved_issue_ids",
+        "carried_forward_issue_ids",
+        "waived_issue_ids",
+        "resolved_topic_ids",
+        "carried_forward_topic_ids",
+        "waived_topic_ids",
+    )
+    for field_name in closure_fields:
+        values = payload.get(field_name)
+        if isinstance(values, list) and values:
+            return True
+    return False
+
+
+def _validate_review_payload_provenance(
+    result: SemanticValidationResult,
+    *,
+    contract: AnalysisReviewContract,
+    payload_provenance: dict[str, Any] | None,
+) -> None:
+    if contract.mode != "trust":
+        return
+    if contract.trust_review.payload_provenance_mode != "payload_hash_and_refs":
+        return
+    provenance = payload_provenance if isinstance(payload_provenance, dict) else {}
+    normalized_ref_count = provenance.get("normalized_ref_count", 0)
+    try:
+        ref_count = int(normalized_ref_count)
+    except (TypeError, ValueError):
+        ref_count = 0
+    if ref_count > 0:
+        return
+    result.errors.append(
+        "trust review payload introduced or classified issues/topics without any structured review refs; provide files_reviewed and recommendation_reviews checked_files/verified_evidence_refs."
+    )
 
 
 def _non_empty_strings(values: Iterable[Any]) -> list[str]:

@@ -1501,5 +1501,93 @@
     "actionability_score": 0.78,
     "scope_compliance_score": 0.95,
     "confidence": 0.83
+  },
+  "review_payload_trust_structured_refs_valid": {
+    "verdict": "accept_partial",
+    "summary": "The trust-mode review classified an open topic and included structured review refs.",
+    "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
+    "issues": [],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [],
+        "summary": "Recommendation 2 improved but still carries one open topic.",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "topics": [],
+    "resolved_topic_ids": [],
+    "carried_forward_topic_ids": [
+      "TOPIC-001"
+    ],
+    "waived_topic_ids": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.8,
+    "scope_compliance_score": 0.95,
+    "confidence": 0.84
+  },
+  "review_payload_trust_topic_closure_zero_refs": {
+    "verdict": "accept_partial",
+    "summary": "The trust-mode review classified an open topic without any structured review refs.",
+    "workspace_write_intent": "none",
+    "issues": [],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [],
+    "waived_issue_ids": [],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [],
+        "summary": "Recommendation 2 improved but still carries one open topic.",
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "topics": [],
+    "resolved_topic_ids": [],
+    "carried_forward_topic_ids": [
+      "TOPIC-001"
+    ],
+    "waived_topic_ids": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.8,
+    "scope_compliance_score": 0.95,
+    "confidence": 0.84
   }
 }

@@ -651,8 +651,14 @@ def test_trust_review_semantic_validation_requires_blocking_class_override_reaso
         role_name="critic",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=[],
         expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 2,
+        },
     )
 
     assert result.ok is False
@@ -701,12 +707,70 @@ def test_trust_review_semantic_validation_accepts_override_reason_and_warns_on_l
         role_name="auditor",
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
         prior_open_issue_ids=["AR-001"],
         expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 2,
+        },
     )
 
     assert result.ok is True
     assert result.errors == []
     assert result.warnings == [
         "new medium-or-higher auditor issues exceed the bounded-review cap of 1 after round 0."
+    ]
+
+
+def test_trust_review_semantic_validation_accepts_structured_review_refs_for_topic_classification():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["review_payload_trust_structured_refs_valid"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 6,
+        },
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["review_payload_trust_topic_closure_zero_refs"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 0,
+        },
+    )
+
+    assert result.ok is False
+    assert result.errors == [
+        "trust review payload introduced or classified issues/topics without any structured review refs; provide files_reviewed and recommendation_reviews checked_files/verified_evidence_refs."
     ]

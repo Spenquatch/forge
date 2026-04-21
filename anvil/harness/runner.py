@@ -887,7 +887,8 @@ class HarnessRunner:
                         task=self.task,
                         contract=contract,
                         context=context,
-                    )
+                    ),
+                    payload_provenance=payload_provenance,
                 )
                 semantic_errors = list(semantic_result.errors)
                 semantic_warnings = list(normalization_warnings) + list(semantic_result.warnings)
@@ -1949,11 +1950,19 @@ class HarnessRunner:
             provenance = stage.get("semantic_validation_payload_provenance")
             if not isinstance(provenance, dict):
                 provenance = {"status": "missing"}
+            status = provenance.get("status") or "missing"
+            if (
+                surface == "review"
+                and status == "bound"
+                and provenance.get("policy_mode") == "payload_hash_and_refs"
+                and int(provenance.get("normalized_ref_count", 0) or 0) == 0
+            ):
+                status = "insufficient"
             record = {
                 "surface": surface,
                 "stage_index": stage.get("stage_index"),
                 "role_name": stage.get("role_name"),
-                "status": provenance.get("status") or "missing",
+                "status": status,
                 "policy_mode": provenance.get("policy_mode") or "none",
                 "payload_sha256": provenance.get("payload_sha256"),
                 "normalized_ref_field_count": provenance.get("normalized_ref_field_count", 0),
@@ -1967,6 +1976,8 @@ class HarnessRunner:
         if not records:
             return "missing"
         statuses = {str(item.get("status") or "missing") for item in records}
+        if "insufficient" in statuses:
+            return "insufficient"
         if statuses == {"bound"}:
             return "bound"
         if "bound" in statuses:
@@ -2241,6 +2252,24 @@ class HarnessRunner:
             "normalized_refs": normalized_refs,
         }
 
+    @staticmethod
+    def _review_payload_requires_structured_refs(payload: dict[str, Any]) -> bool:
+        closure_fields = (
+            "issues",
+            "topics",
+            "resolved_issue_ids",
+            "carried_forward_issue_ids",
+            "waived_issue_ids",
+            "resolved_topic_ids",
+            "carried_forward_topic_ids",
+            "waived_topic_ids",
+        )
+        for field_name in closure_fields:
+            values = payload.get(field_name)
+            if isinstance(values, list) and values:
+                return True
+        return False
+
     def _normalize_analysis_review_payload(
         self,
         payload: dict[str, Any],
@@ -2313,6 +2342,18 @@ class HarnessRunner:
             normalized["files_reviewed"] = files_reviewed
             normalized_refs["files_reviewed"] = files_reviewed
 
+        recommendation_reviews = normalized.get("recommendation_reviews")
+        if isinstance(recommendation_reviews, list):
+            for index, item in enumerate(recommendation_reviews, start=1):
+                if not isinstance(item, dict):
+                    continue
+                for field_name in ("checked_files", "verified_evidence_refs"):
+                    values = self._normalize_workspace_ref_list(item.get(field_name))
+                    if values:
+                        values = self._dedupe_preserving_order(values)
+                        item[field_name] = values
+                        normalized_refs[f"recommendation_reviews[{index}].{field_name}"] = values
+
         recommendations = normalized.get("recommendations")
         if isinstance(recommendations, list):
             for index, item in enumerate(recommendations, start=1):
@@ -2365,15 +2406,23 @@ class HarnessRunner:
                 item["path"] = normalized_path or path
                 normalized_refs[f"scope_escapes[{index}].path"] = item["path"]
 
-        return (
+        payload_provenance = self._bind_normalized_payload(
             normalized,
-            self._bind_normalized_payload(
-                normalized,
-                payload_provenance_mode=payload_provenance_mode,
-                normalized_refs=normalized_refs,
-            ),
-            warnings,
+            payload_provenance_mode=payload_provenance_mode,
+            normalized_refs=normalized_refs,
         )
+        if (
+            canonical_role_name in {"critic", "auditor"}
+            and payload_provenance_mode == "payload_hash_and_refs"
+            and self._review_payload_requires_structured_refs(normalized)
+            and int(payload_provenance.get("normalized_ref_count", 0) or 0) == 0
+        ):
+            payload_provenance["status"] = "insufficient"
+            payload_provenance["failure_reason"] = (
+                "trust_review_requires_structured_refs_for_issue_or_topic_closure"
+            )
+
+        return (normalized, payload_provenance, warnings)
 
     @staticmethod
     def _canonical_stage_role_name(role_name: str) -> str:

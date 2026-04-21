@@ -308,6 +308,28 @@ def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
     return "\n".join(lines)
 
 
+def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    lines = [
+        "Review payload evidence refs:",
+        "- files_reviewed should list the concrete workspace files you inspected during this review stage.",
+        "- recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict.",
+        "- recommendation_reviews[*].verified_evidence_refs should name the concrete evidence refs you directly re-checked for that recommendation verdict.",
+    ]
+    if trust.payload_provenance_mode == "payload_hash_and_refs":
+        lines.extend(
+            [
+                "- In trust mode, do not leave these review-stage refs empty when you introduce or classify issues/topics.",
+                "- In trust mode, zero structured review refs is a contract failure even if the payload hash is recorded.",
+            ]
+        )
+    else:
+        lines.append(
+            "- In bounded mode, these review-stage refs are optional advisory metadata, but populate them when it is cheap and concrete."
+        )
+    return "\n".join(lines)
+
+
 def _issue_taxonomy_block(contract: AnalysisReviewContract) -> str:
     trust = contract.trust_review
     defaults = ", ".join(
@@ -550,8 +572,10 @@ Your job:
 5. Use `topics` only for genuinely new bounded-review topics introduced by this review stage, not for open-ended repo exploration.
 6. Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`.
 7. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics. Do not put IDs from this stage's new `topics` array into those classification arrays.
-8. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
-9. Use the shared confidence rubric below when judging whether confidence is too high or too low.
+8. Populate `files_reviewed` with the concrete workspace files you inspected during this review stage.
+9. In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments.
+10. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
+11. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
 Decision guidance:
 - Return verdict=revise when the overall draft still needs more work.
@@ -562,6 +586,7 @@ Decision guidance:
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
 {_trust_review_policy_block(contract)}
+{_review_payload_ref_block(contract)}
 {_issue_taxonomy_block(contract)}
 {_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
@@ -611,11 +636,13 @@ Your job:
 3. Preserve topic IDs for carried-forward or waived prior topics, and emit new topic records only in `topics`.
 4. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
 5. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only for prior open topics. Do not classify IDs from this stage's new `topics` array there.
-6. Review every recommendation individually and return recommendation-level verdicts.
-7. Stay inside each recommendation's bounded review_surface unless you must leave it.
-8. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
-9. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
-10. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+6. Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage.
+7. In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments.
+8. Review every recommendation individually and return recommendation-level verdicts.
+9. Stay inside each recommendation's bounded review_surface unless you must leave it.
+10. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
+11. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
+12. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
 
 Decision guidance:
 - Return verdict=accept when the entire draft is acceptable.
@@ -627,6 +654,7 @@ Audit round: {round_index}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
 {_trust_review_policy_block(contract)}
+{_review_payload_ref_block(contract)}
 {_issue_taxonomy_block(contract)}
 {_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}

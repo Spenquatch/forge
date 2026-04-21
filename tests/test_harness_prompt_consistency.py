@@ -212,6 +212,15 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         "Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics."
         in critic
     )
+    assert "Populate `files_reviewed` with the concrete workspace files you inspected during this review stage." in critic
+    assert (
+        "recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict."
+        in critic
+    )
+    assert (
+        "recommendation_reviews[*].verified_evidence_refs should name the concrete evidence refs you directly re-checked for that recommendation verdict."
+        in critic
+    )
     assert "The prior analysis contains 3 recommendation(s)." in critic
     assert "Do not omit acceptable recommendations." in critic
     assert "1. Add concurrency controls" in critic
@@ -222,6 +231,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "Open topic ledger entering this audit" in auditor
     assert "For every previously open topic, you must explicitly classify it as resolved, carried_forward, or waived" in auditor
     assert "Preserve topic IDs for carried-forward or waived prior topics" in auditor
+    assert "Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage." in auditor
     assert "If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`." in auditor
     assert "Recommendation review coverage:" in auditor
     assert "The prior analysis contains 3 recommendation(s)." in auditor
@@ -258,6 +268,23 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert payload_line in proposer
     assert payload_line in reviser
     assert issue_line in critic
+
+    if mode == "trust":
+        assert "In trust mode, do not leave these review-stage refs empty when you introduce or classify issues/topics." in critic
+        assert "In trust mode, zero structured review refs is a contract failure even if the payload hash is recorded." in critic
+        assert "In trust mode, do not leave these review-stage refs empty when you introduce or classify issues/topics." in auditor
+        assert "In trust mode, zero structured review refs is a contract failure even if the payload hash is recorded." in auditor
+        assert (
+            "In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments."
+            in critic
+        )
+        assert (
+            "In trust mode, populate `recommendation_reviews[*].checked_files` and `recommendation_reviews[*].verified_evidence_refs` whenever you are making concrete recommendation-level review judgments."
+            in auditor
+        )
+    else:
+        assert "In bounded mode, these review-stage refs are optional advisory metadata, but populate them when it is cheap and concrete." in critic
+        assert "In bounded mode, these review-stage refs are optional advisory metadata, but populate them when it is cheap and concrete." in auditor
     assert issue_line in auditor
     for line in acceptance_lines:
         assert line in critic
