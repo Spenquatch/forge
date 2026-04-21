@@ -68,6 +68,8 @@ from .types import (
 )
 from .validation import preflight_validators, run_validators
 
+_PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+
 
 class HarnessError(RuntimeError):
     pass
@@ -1542,23 +1544,42 @@ class HarnessRunner:
 
     def _open_issue_records(self) -> list[dict[str, Any]]:
         return [
-            json.loads(json.dumps(record))
+            self._validation_issue_record(record)
             for record in self.issue_ledger
             if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
         ]
 
     def _open_topic_records(self) -> list[dict[str, Any]]:
         return [
-            json.loads(json.dumps(record))
+            self._validation_topic_record(record)
             for record in self.topic_ledger
             if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
         ]
 
     def _serialized_issue_ledger(self) -> list[dict[str, Any]]:
-        return [json.loads(json.dumps(record)) for record in self.issue_ledger]
+        return [self._serialized_issue_record(record) for record in self.issue_ledger]
 
     def _serialized_topic_ledger(self) -> list[dict[str, Any]]:
         return [self._serialized_topic_record(record) for record in self.topic_ledger]
+
+    @staticmethod
+    def _serialized_issue_record(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "issue_id": str(record.get("issue_id") or ""),
+            "source_stage_id": str(record.get("source_stage_id") or ""),
+            "first_seen_round": record.get("first_seen_round"),
+            "last_seen_round": record.get("last_seen_round"),
+            "severity": str(record.get("severity") or ""),
+            "kind": str(record.get("kind") or ""),
+            "blocking_class": str(record.get("blocking_class") or ""),
+            "recommendation_index": record.get("recommendation_index"),
+            "title": str(record.get("title") or ""),
+            "evidence": str(record.get("evidence") or ""),
+            "repair_hint": str(record.get("repair_hint") or ""),
+            "why_not_raised_earlier": record.get("why_not_raised_earlier"),
+            "resolution_status": str(record.get("resolution_status") or ""),
+            "resolution_note": str(record.get("resolution_note") or ""),
+        }
 
     @staticmethod
     def _serialized_topic_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -1574,6 +1595,30 @@ class HarnessRunner:
             "resolution_note": str(record.get("resolution_note") or ""),
             "resolved_in_stage_index": record.get("resolved_in_stage_index"),
         }
+
+    @classmethod
+    def _validation_issue_record(cls, record: dict[str, Any]) -> dict[str, Any]:
+        serialized = cls._serialized_issue_record(record)
+        serialized[_PRIOR_SURFACED_REFS_FIELD] = cls._normalized_internal_ref_list(
+            record.get(_PRIOR_SURFACED_REFS_FIELD)
+        )
+        return serialized
+
+    @classmethod
+    def _validation_topic_record(cls, record: dict[str, Any]) -> dict[str, Any]:
+        serialized = cls._serialized_topic_record(record)
+        serialized[_PRIOR_SURFACED_REFS_FIELD] = cls._normalized_internal_ref_list(
+            record.get(_PRIOR_SURFACED_REFS_FIELD)
+        )
+        return serialized
+
+    @staticmethod
+    def _normalized_internal_ref_list(values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        return HarnessRunner._dedupe_preserving_order(
+            [str(value).strip() for value in values if str(value).strip()]
+        )
 
     @staticmethod
     def _topic_resolution_status_from_reviewer_classification(
@@ -1766,6 +1811,17 @@ class HarnessRunner:
         waived_topic_ids = {
             str(item) for item in review_payload.get("waived_topic_ids", []) if str(item).strip()
         }
+        recommendation_review_proof_by_index = self._recommendation_review_proof_by_index(
+            review_payload
+        )
+        issue_closure_review_map = self._scoped_closure_review_map(
+            review_payload.get("issue_closure_reviews"),
+            id_field="issue_id",
+        )
+        topic_closure_review_map = self._scoped_closure_review_map(
+            review_payload.get("topic_closure_reviews"),
+            id_field="topic_id",
+        )
 
         for issue_id in prior_open_ids:
             record = self._issue_ledger_by_id.get(issue_id)
@@ -1828,6 +1884,10 @@ class HarnessRunner:
                 }
                 self.issue_ledger.append(record)
                 self._issue_ledger_by_id[issue_id] = record
+            self._refresh_issue_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+            )
 
         for topic_id in prior_open_topic_ids:
             record = self._topic_ledger_by_id.get(topic_id)
@@ -1913,6 +1973,30 @@ class HarnessRunner:
                 }
                 self.topic_ledger.append(record)
                 self._topic_ledger_by_id[topic_id] = record
+            self._refresh_topic_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+            )
+
+        for issue_id in resolved_ids | carried_ids | waived_ids:
+            record = self._issue_ledger_by_id.get(issue_id)
+            if record is None:
+                continue
+            self._refresh_issue_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+                issue_closure_review_map=issue_closure_review_map,
+            )
+
+        for topic_id in resolved_topic_ids | carried_topic_ids | waived_topic_ids:
+            record = self._topic_ledger_by_id.get(topic_id)
+            if record is None:
+                continue
+            self._refresh_topic_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+                topic_closure_review_map=topic_closure_review_map,
+            )
 
     @staticmethod
     def _recommendation_reviews(review_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2505,24 +2589,15 @@ class HarnessRunner:
             )
         return mapping
 
-    def _review_payload_ref_coverage(
-        self,
+    @staticmethod
+    def _recommendation_review_proof_by_index(
         payload: dict[str, Any],
-        *,
-        prior_open_issue_records: list[dict[str, Any]] | None,
-        prior_open_topic_records: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        covered_recommendation_indices: set[int] = set()
-        uncovered_recommendation_indices: set[int] = set()
-        recommendation_review_proof_by_index: dict[int, dict[str, Any]] = {}
-
+    ) -> dict[int, dict[str, Any]]:
+        mapping: dict[int, dict[str, Any]] = {}
         for item in payload.get("recommendation_reviews", []) or []:
             if not isinstance(item, dict):
                 continue
-            verdict = str(item.get("verdict") or "").strip().lower()
-            if not verdict:
-                continue
-            recommendation_index = self._normalized_recommendation_index(
+            recommendation_index = HarnessRunner._normalized_recommendation_index(
                 item.get("recommendation_index")
             )
             if recommendation_index is None:
@@ -2537,10 +2612,94 @@ class HarnessRunner:
                 for value in (item.get("verified_evidence_refs") or [])
                 if str(value).strip()
             ]
-            recommendation_review_proof_by_index[recommendation_index] = {
-                "checked_files": list(checked_files),
-                "verified_evidence_refs": list(verified_refs),
+            mapping[recommendation_index] = {
+                "checked_files": checked_files,
+                "verified_evidence_refs": verified_refs,
+                "has_structured_refs": bool(checked_files or verified_refs),
             }
+        return mapping
+
+    @staticmethod
+    def _structured_ref_union(proof: dict[str, Any] | None) -> list[str]:
+        if not isinstance(proof, dict):
+            return []
+        refs: list[str] = []
+        for field_name in ("verified_evidence_refs", "checked_files"):
+            for value in proof.get(field_name) or []:
+                text = str(value).strip()
+                if text:
+                    refs.append(text)
+        return HarnessRunner._dedupe_preserving_order(refs)
+
+    def _refresh_issue_prior_surfaced_refs(
+        self,
+        record: dict[str, Any],
+        *,
+        recommendation_review_proof_by_index: dict[int, dict[str, Any]],
+        issue_closure_review_map: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        recommendation_index = self._normalized_recommendation_index(
+            record.get("recommendation_index")
+        )
+        surfaced_refs: list[str] = []
+        if recommendation_index is not None:
+            surfaced_refs = self._structured_ref_union(
+                recommendation_review_proof_by_index.get(recommendation_index)
+            )
+        elif issue_closure_review_map is not None:
+            surfaced_refs = self._structured_ref_union(
+                issue_closure_review_map.get(str(record.get("issue_id") or "").strip())
+            )
+        if surfaced_refs:
+            record[_PRIOR_SURFACED_REFS_FIELD] = surfaced_refs
+
+    def _refresh_topic_prior_surfaced_refs(
+        self,
+        record: dict[str, Any],
+        *,
+        recommendation_review_proof_by_index: dict[int, dict[str, Any]],
+        topic_closure_review_map: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        recommendation_index = self._normalized_recommendation_index(
+            record.get("recommendation_index")
+        )
+        surfaced_refs: list[str] = []
+        if recommendation_index is not None:
+            surfaced_refs = self._structured_ref_union(
+                recommendation_review_proof_by_index.get(recommendation_index)
+            )
+        elif topic_closure_review_map is not None:
+            surfaced_refs = self._structured_ref_union(
+                topic_closure_review_map.get(str(record.get("topic_id") or "").strip())
+            )
+        if surfaced_refs:
+            record[_PRIOR_SURFACED_REFS_FIELD] = surfaced_refs
+
+    def _review_payload_ref_coverage(
+        self,
+        payload: dict[str, Any],
+        *,
+        prior_open_issue_records: list[dict[str, Any]] | None,
+        prior_open_topic_records: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        covered_recommendation_indices: set[int] = set()
+        uncovered_recommendation_indices: set[int] = set()
+        recommendation_review_proof_by_index = self._recommendation_review_proof_by_index(payload)
+
+        for item in payload.get("recommendation_reviews", []) or []:
+            if not isinstance(item, dict):
+                continue
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if not verdict:
+                continue
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is None:
+                continue
+            proof = recommendation_review_proof_by_index.get(recommendation_index) or {}
+            checked_files = list(proof.get("checked_files") or [])
+            verified_refs = list(proof.get("verified_evidence_refs") or [])
             if checked_files or verified_refs:
                 covered_recommendation_indices.add(recommendation_index)
                 uncovered_recommendation_indices.discard(recommendation_index)

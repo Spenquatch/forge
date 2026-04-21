@@ -13,6 +13,8 @@ from typing import Any, Iterable
 from .contracts import AnalysisReviewContract, default_blocking_class_for_kind
 from .types import TaskSpec
 
+_PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+
 
 @dataclass
 class SemanticValidationResult:
@@ -275,6 +277,10 @@ def validate_analysis_review_payload(
             f"issues exceeds the bounded-review cap of {bounded_review.critic_issue_cap} item(s) for critic."
         )
 
+    prior_open_issue_records_by_id = _record_map_by_id(
+        prior_open_issue_records,
+        id_field="issue_id",
+    )
     prior_open_issue_record_map = _record_recommendation_index_by_id(
         prior_open_issue_records,
         id_field="issue_id",
@@ -283,6 +289,9 @@ def validate_analysis_review_payload(
     if not prior_open_ids:
         prior_open_ids = {
             str(item).strip() for item in (prior_open_issue_ids or []) if str(item).strip()
+        }
+        prior_open_issue_records_by_id = {
+            issue_id: {"issue_id": issue_id} for issue_id in prior_open_ids
         }
     new_medium_or_higher_issue_ids: list[str] = []
     for index, issue in enumerate(issues, start=1):
@@ -451,7 +460,7 @@ def validate_analysis_review_payload(
         field_name="issue_closure_reviews",
         values=payload.get("issue_closure_reviews"),
         id_field="issue_id",
-        known_ids=prior_open_ids,
+        prior_record_map=prior_open_issue_records_by_id,
         required_ids=required_global_issue_closure_ids if contract.mode == "trust" else [],
         files_reviewed=files_reviewed_set,
         workspace_paths=workspace_path_set,
@@ -497,6 +506,10 @@ def validate_analysis_review_payload(
     if duplicate_topic_ids:
         result.errors.append("topics contains duplicate topic IDs: " + ", ".join(duplicate_topic_ids))
 
+    prior_open_topic_records_by_id = _record_map_by_id(
+        prior_open_topic_records,
+        id_field="topic_id",
+    )
     prior_open_topic_record_map = _record_recommendation_index_by_id(
         prior_open_topic_records,
         id_field="topic_id",
@@ -505,6 +518,9 @@ def validate_analysis_review_payload(
     if not prior_open_topic_id_set:
         prior_open_topic_id_set = {
             str(item).strip() for item in (prior_open_topic_ids or []) if str(item).strip()
+        }
+        prior_open_topic_records_by_id = {
+            topic_id: {"topic_id": topic_id} for topic_id in prior_open_topic_id_set
         }
     historical_topic_id_set = {
         str(item).strip() for item in (historical_topic_ids or []) if str(item).strip()
@@ -576,7 +592,7 @@ def validate_analysis_review_payload(
         field_name="topic_closure_reviews",
         values=payload.get("topic_closure_reviews"),
         id_field="topic_id",
-        known_ids=prior_open_topic_id_set,
+        prior_record_map=prior_open_topic_records_by_id,
         required_ids=required_global_topic_closure_ids if contract.mode == "trust" else [],
         files_reviewed=files_reviewed_set,
         workspace_paths=workspace_path_set,
@@ -978,6 +994,31 @@ def _record_recommendation_index_by_id(
     return result
 
 
+def _record_map_by_id(
+    records: Iterable[dict[str, Any]] | None,
+    *,
+    id_field: str,
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for item in records or []:
+        if not isinstance(item, dict):
+            continue
+        record_id = str(item.get(id_field) or "").strip()
+        if not record_id:
+            continue
+        result[record_id] = dict(item)
+    return result
+
+
+def _prior_surfaced_ref_set(record: dict[str, Any] | None) -> set[str]:
+    if not isinstance(record, dict):
+        return set()
+    values = record.get(_PRIOR_SURFACED_REFS_FIELD)
+    if not isinstance(values, list):
+        return set()
+    return {str(item).strip() for item in values if str(item).strip()}
+
+
 def _validated_provenance_index_list(values: Any) -> list[int]:
     if not isinstance(values, list):
         return []
@@ -1023,7 +1064,7 @@ def _validate_scoped_closure_reviews(
     field_name: str,
     values: Any,
     id_field: str,
-    known_ids: set[str],
+    prior_record_map: dict[str, dict[str, Any]],
     required_ids: list[str],
     files_reviewed: set[str],
     workspace_paths: set[str],
@@ -1043,7 +1084,7 @@ def _validate_scoped_closure_reviews(
             result.errors.append(f"{field_name}[{index}].{id_field} must be a non-empty ID.")
             continue
         seen_ids.append(record_id)
-        if record_id not in known_ids:
+        if record_id not in prior_record_map:
             result.errors.append(
                 f"{field_name}[{index}].{id_field} references an unknown prior open ID: {record_id}"
             )
@@ -1078,6 +1119,13 @@ def _validate_scoped_closure_reviews(
             result.errors.append(
                 f"{field_name}[{index}].verified_evidence_refs contains path(s) not present in the workspace snapshot: "
                 + ", ".join(unknown_verified_refs)
+            )
+        prior_surfaced_refs = _prior_surfaced_ref_set(prior_record_map.get(record_id))
+        overclaimed_prior_refs = sorted(set(verified_items) - prior_surfaced_refs)
+        if prior_surfaced_refs and overclaimed_prior_refs:
+            result.errors.append(
+                f"{field_name}[{index}].verified_evidence_refs must be a subset of the prior surfaced refs for {id_field} {record_id}: "
+                + ", ".join(overclaimed_prior_refs)
             )
     duplicates = sorted({item for item in seen_ids if seen_ids.count(item) > 1})
     if duplicates:

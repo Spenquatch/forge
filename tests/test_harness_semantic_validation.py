@@ -805,6 +805,46 @@ def test_trust_review_semantic_validation_accepts_structured_review_refs_for_top
     assert result.errors == []
 
 
+def test_trust_review_semantic_validation_accepts_structured_review_refs_for_global_issue_classification():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["review_payload_trust_issue_closure_valid"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=["AR-001"],
+        prior_open_issue_records=[
+            {
+                "issue_id": "AR-001",
+                "recommendation_index": None,
+                "_prior_surfaced_refs": [".github/workflows/codex-cli-release-watch.yml"],
+            }
+        ],
+        prior_open_topic_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 8,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "issue_closure_review_ref_count": 2,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
 def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
@@ -837,6 +877,49 @@ def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification(
     assert result.ok is False
     assert (
         "trust review payload lacks provenance-complete structured review refs for global topic closures TOPIC-001. files_reviewed alone is not sufficient."
+        in result.errors
+    )
+
+
+def test_trust_review_semantic_validation_rejects_issue_closure_verified_refs_that_overclaim_prior_surfaced_refs():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = _fixture()["review_payload_trust_issue_closure_overclaim"]
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=["AR-001"],
+        prior_open_issue_records=[
+            {
+                "issue_id": "AR-001",
+                "recommendation_index": None,
+                "_prior_surfaced_refs": [".github/workflows/codex-cli-release-watch.yml"],
+            }
+        ],
+        prior_open_topic_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 9,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "issue_closure_review_ref_count": 3,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "issue_closure_reviews[1].verified_evidence_refs must be a subset of the prior surfaced refs for issue_id AR-001: .github/workflows/claude-code-release-watch.yml"
         in result.errors
     )
 

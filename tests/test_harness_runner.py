@@ -8,6 +8,7 @@ import pytest
 
 from anvil.harness.files import load_structured_file
 from anvil.harness.runner import HarnessRunner
+from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.types import ProviderRun
 
 
@@ -1013,6 +1014,64 @@ class _TrustGlobalIssueClosureHarnessAdapter(_TrustInferenceHarnessAdapter):
         return payload
 
 
+class _TrustGlobalIssueLifecycleHarnessAdapter(_TrustInferenceHarnessAdapter):
+    _ISSUE_ID = "AR-001"
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            payload["verdict"] = "revise"
+            payload["summary"] = "A global issue remains open and needs explicit tracking."
+            payload["issues"] = [
+                {
+                    "issue_id": self._ISSUE_ID,
+                    "severity": "medium",
+                    "kind": "missing_evidence",
+                    "blocking_class": "correctness",
+                    "recommendation_index": None,
+                    "title": "A global evidence invariant remains unresolved.",
+                    "evidence": "The review still depends on a repo-wide workflow invariant that is not fully closed.",
+                    "repair_hint": "Keep the global issue tracked until the invariant is proven or explicitly narrowed.",
+                    "blocking_class_override_reason": None,
+                    "why_not_raised_earlier": None,
+                }
+            ]
+            payload["resolved_issue_ids"] = []
+            payload["carried_forward_issue_ids"] = []
+            payload["waived_issue_ids"] = []
+            payload["issue_closure_reviews"] = []
+            return payload
+        if role_name == "reviser_round_1":
+            payload = self._base_analysis(revised=True)
+            payload["issue_resolution_map"] = [
+                {
+                    "issue_id": self._ISSUE_ID,
+                    "status": "not_addressed",
+                    "change_summary": "The revision improved the recommendations but did not close the global invariant.",
+                    "residual_risk": "The run still depends on a global workflow claim.",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            payload = super()._payload_for_role(role_name)
+            payload["verdict"] = "accept_partial"
+            payload["summary"] = "The recommendations are usable, and the remaining global issue is explicitly carried forward with scoped proof."
+            payload["issues"] = []
+            payload["resolved_issue_ids"] = []
+            payload["carried_forward_issue_ids"] = [self._ISSUE_ID]
+            payload["waived_issue_ids"] = []
+            payload["issue_closure_reviews"] = [
+                {
+                    "issue_id": self._ISSUE_ID,
+                    "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+                    "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                    "summary": "The carried-forward global issue was re-checked directly.",
+                }
+            ]
+            return payload
+        return super()._payload_for_role(role_name)
+
+
 class _TrustVerdictWithoutRefsHarnessAdapter(_AcceptingHarnessAdapter):
     def _payload_for_role(self, role_name: str):
         payload = super()._payload_for_role(role_name)
@@ -1780,6 +1839,113 @@ def test_analysis_review_runner_trust_review_marks_scoped_global_topic_closure_a
         "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
         "proof_strength": "review_attested",
     }
+
+
+def test_analysis_review_runner_trust_review_marks_scoped_global_issue_closure_as_complete(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueClosureHarnessAdapter()._payload_for_role("critic")
+    payload["issue_closure_reviews"] = [
+        {
+            "issue_id": "AR-001",
+            "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+            "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+            "summary": "The carried-forward global issue was re-checked directly.",
+        }
+    ]
+    _, payload_provenance, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+
+    assert warnings == []
+    assert payload_provenance["status"] == "bound"
+    assert payload_provenance["closure_provenance_satisfied"] is True
+    assert payload_provenance["closure_complete_issue_ids"] == ["AR-001"]
+    assert payload_provenance["uncovered_global_issue_ids"] == []
+    assert payload_provenance["issue_closure_review_ref_count"] == 2
+    assert payload_provenance["closure_proof_by_id"]["AR-001"] == {
+        "proof_path": "scoped",
+        "classification_status": "carried_forward",
+        "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+        "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+        "proof_strength": "review_attested",
+    }
+
+
+def test_analysis_review_runner_trust_review_keeps_proven_global_issue_bound_end_to_end(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueLifecycleHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    provenance = summary["analysis_review_status"]["provenance"]
+    assert provenance["status"] == "bound"
+    assert provenance["closure_complete_issue_ids"] == ["AR-001"]
+    assert provenance["uncovered_global_issue_ids"] == []
+    assert provenance["issue_closure_review_ref_count"] == 2
+    assert provenance["closure_proof_by_id"]["AR-001"] == {
+        "proof_path": "scoped",
+        "classification_status": "carried_forward",
+        "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+        "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+        "proof_strength": "review_attested",
+    }
+
+    issue_ledger_by_id = {item["issue_id"]: item for item in summary["issue_ledger"]}
+    assert issue_ledger_by_id["AR-001"]["resolution_status"] == "carried_forward"
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "## Review Provenance" in report_text
+    assert "- Issue closure review refs: `2`" in report_text
+    assert "`AR-001`" in report_text
+    assert "- Closure proof incomplete:" not in report_text
+
+    drafts = extract_drafts_from_summary(summary)
+    auditor_draft = next(
+        draft for draft in drafts if draft["metadata"].get("reviewer_role") == "auditor"
+    )
+    assert auditor_draft["issue_counts"]["provenance_incomplete"] == 0
+    assert auditor_draft["issue_counts"]["uncovered_closure_count"] == 0
 
 
 def test_analysis_review_runner_trust_mode_rejects_concrete_verdicts_without_per_verdict_refs(

@@ -1762,6 +1762,137 @@
     "scope_compliance_score": 0.95,
     "confidence": 0.84
   },
+  "review_payload_trust_issue_closure_valid": {
+    "verdict": "accept_partial",
+    "summary": "The trust-mode review classified a global issue and included scoped structured refs.",
+    "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
+    "issues": [],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [
+      "AR-001"
+    ],
+    "waived_issue_ids": [],
+    "issue_closure_reviews": [
+      {
+        "issue_id": "AR-001",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "summary": "The carried-forward global issue was re-checked directly."
+      }
+    ],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [],
+        "summary": "Recommendation 2 improved but still carries one caveat.",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "topics": [],
+    "resolved_topic_ids": [],
+    "carried_forward_topic_ids": [],
+    "waived_topic_ids": [],
+    "topic_closure_reviews": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.8,
+    "scope_compliance_score": 0.95,
+    "confidence": 0.84
+  },
+  "review_payload_trust_issue_closure_overclaim": {
+    "verdict": "accept_partial",
+    "summary": "The trust-mode review overclaims global issue evidence beyond the prior surfaced set.",
+    "workspace_write_intent": "none",
+    "files_reviewed": [
+      ".github/workflows/codex-cli-release-watch.yml",
+      ".github/workflows/claude-code-release-watch.yml"
+    ],
+    "issues": [],
+    "resolved_issue_ids": [],
+    "carried_forward_issue_ids": [
+      "AR-001"
+    ],
+    "waived_issue_ids": [],
+    "issue_closure_reviews": [
+      {
+        "issue_id": "AR-001",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml",
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "summary": "The carried-forward global issue claims an extra evidence ref."
+      }
+    ],
+    "recommendation_reviews": [
+      {
+        "recommendation_index": 1,
+        "verdict": "accept",
+        "open_issue_ids": [],
+        "summary": "Recommendation 1 is acceptable.",
+        "checked_files": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/codex-cli-release-watch.yml"
+        ],
+        "confidence_assessment": "well_calibrated"
+      },
+      {
+        "recommendation_index": 2,
+        "verdict": "accept_with_caveat",
+        "open_issue_ids": [],
+        "summary": "Recommendation 2 improved but still carries one caveat.",
+        "checked_files": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "verified_evidence_refs": [
+          ".github/workflows/claude-code-release-watch.yml"
+        ],
+        "confidence_assessment": "well_calibrated"
+      }
+    ],
+    "topics": [],
+    "resolved_topic_ids": [],
+    "carried_forward_topic_ids": [],
+    "waived_topic_ids": [],
+    "topic_closure_reviews": [],
+    "scope_escapes": [],
+    "grounding_score": 0.9,
+    "actionability_score": 0.8,
+    "scope_compliance_score": 0.95,
+    "confidence": 0.84
+  },
   "review_payload_trust_topic_closure_zero_refs": {
     "verdict": "accept_partial",
     "summary": "The trust-mode review classified an open topic without any structured review refs.",
