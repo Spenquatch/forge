@@ -93,6 +93,13 @@ Rules:
 - `carried_forward_topic_ids` = topics whose ledger status is `carried_forward`
 - `resolved_topic_ids` = topics whose ledger status is `addressed`
 - `waived_topic_ids` = topics whose ledger status is `waived`
+- `disagreed_topic_ids` = topics whose ledger status is `disagree`
+
+For `accepted_partial`, the shipped subset must also be topic-clean:
+
+- a recommendation can only remain in the partial artifact when its linked topics are terminal (`addressed`, `waived`, or `disagree`)
+- a topic left `open` or `carried_forward` removes its `recommendation_index` from the partial subset
+- an unresolved topic without a usable `recommendation_index` blocks partial acceptance entirely, because no clean subset can be proven
 
 `REPORT.md` renders the same ledger in a row-shaped `## Topic Lifecycle` table, while `FINAL_ANSWER.md` keeps a compact bullet summary of the same canonical records.
 

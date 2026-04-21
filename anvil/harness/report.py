@@ -185,6 +185,7 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
     carried_forward_topic_ids = _topic_status_ids(summary, status_name="carried_forward")
     waived_topic_ids = _topic_status_ids(summary, status_name="waived")
     resolved_topic_ids = _topic_status_ids(summary, status_name="resolved")
+    disagreed_topic_ids = _topic_status_ids(summary, status_name="disagreed")
     effective_count = topic_ledger_count
     if effective_count is None:
         effective_count = len(_topic_ledger(summary))
@@ -194,6 +195,7 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
         or carried_forward_topic_ids
         or waived_topic_ids
         or resolved_topic_ids
+        or disagreed_topic_ids
     ):
         lines.append(f"- Topic ledger count: `{effective_count}`")
         lines.append(f"- Open topic IDs: {_render_id_list(open_topic_ids)}")
@@ -202,6 +204,7 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
         )
         lines.append(f"- Resolved topic IDs: {_render_id_list(resolved_topic_ids)}")
         lines.append(f"- Waived topic IDs: {_render_id_list(waived_topic_ids)}")
+        lines.append(f"- Disagreed topic IDs: {_render_id_list(disagreed_topic_ids)}")
     downgrade_causes = status.get("downgrade_causes") or []
     if downgrade_causes:
         lines.append("- Downgrade causes:")
@@ -254,6 +257,7 @@ def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -
     carried_forward_topic_ids = _topic_status_ids(summary, status_name="carried_forward")
     resolved_topic_ids = _topic_status_ids(summary, status_name="resolved")
     waived_topic_ids = _topic_status_ids(summary, status_name="waived")
+    disagreed_topic_ids = _topic_status_ids(summary, status_name="disagreed")
 
     lines.append("## Topic Lifecycle")
     lines.append("")
@@ -277,6 +281,10 @@ def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -
     lines.append(
         f"- Waived topics: `{len(waived_topic_ids)}`"
         + (f" ({_render_id_list(waived_topic_ids)})" if waived_topic_ids else "")
+    )
+    lines.append(
+        f"- Disagreed topics: `{len(disagreed_topic_ids)}`"
+        + (f" ({_render_id_list(disagreed_topic_ids)})" if disagreed_topic_ids else "")
     )
     lines.append("")
 

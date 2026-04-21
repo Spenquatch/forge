@@ -10,7 +10,11 @@ from typing import Any
 from .files import write_json, write_text
 from .report import render_report
 from .selection import select_best_draft
-from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
+from .topic_lifecycle import (
+    partial_accept_topic_eligibility,
+    topic_ids_for_status_name,
+    topic_status_field_name,
+)
 
 _FULLY_ACCEPTED_RUN_VERDICTS = {"accepted", "accepted_with_warnings"}
 _PARTIAL_ACCEPTED_RUN_VERDICTS = {"accepted_partial"}
@@ -44,6 +48,19 @@ def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
         except (TypeError, ValueError):
             continue
     return sorted(set(indices))
+
+
+def _eligible_partial_answer_indices(summary: dict[str, Any]) -> list[int]:
+    accepted_indices = _accepted_recommendation_indices(summary)
+    if not accepted_indices:
+        return []
+    topic_eligibility = partial_accept_topic_eligibility(
+        _topic_ledger(summary),
+        accepted_recommendation_indices=accepted_indices,
+    )
+    if topic_eligibility["global_blocking_topic_ids"]:
+        return []
+    return list(topic_eligibility["eligible_recommendation_indices"])
 
 
 def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
@@ -206,7 +223,7 @@ def _render_analysis_section(lines: list[str], title: str, section: Any) -> None
 def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or not payload:
         return None
-    recommendation_indices = _accepted_recommendation_indices(summary)
+    recommendation_indices = _eligible_partial_answer_indices(summary)
     recommendations = payload.get("recommendations")
     if not isinstance(recommendations, list) or not recommendations or not recommendation_indices:
         return None
@@ -231,7 +248,17 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
     partial_payload["recommendations"] = selected_recommendations
     partial_payload["included_recommendation_indices"] = recommendation_indices
     partial_payload["excluded_recommendation_indices"] = excluded_indices
-    partial_payload["recommendation_reviews"] = copy.deepcopy(summary.get("recommendation_reviews") or [])
+    filtered_reviews: list[dict[str, Any]] = []
+    for item in summary.get("recommendation_reviews") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            recommendation_index = int(item.get("recommendation_index"))
+        except (TypeError, ValueError):
+            continue
+        if recommendation_index in recommendation_indices:
+            filtered_reviews.append(copy.deepcopy(item))
+    partial_payload["recommendation_reviews"] = filtered_reviews
     partial_payload["caveats"] = [
         f"This is a partial answer. Excluded recommendations: {', '.join(str(i) for i in excluded_indices) or 'none'}."
     ]
@@ -290,6 +317,9 @@ def render_deliverable_markdown(
         topic_ledger = _topic_ledger(summary or {})
         open_topic_ids = _topic_status_ids(summary or {}, status_name="open")
         carried_forward_topic_ids = _topic_status_ids(summary or {}, status_name="carried_forward")
+        resolved_topic_ids = _topic_status_ids(summary or {}, status_name="resolved")
+        waived_topic_ids = _topic_status_ids(summary or {}, status_name="waived")
+        disagreed_topic_ids = _topic_status_ids(summary or {}, status_name="disagreed")
         lines.extend(["## Review Status", ""])
         if verdict:
             lines.append(f"- Verdict: `{verdict}`")
@@ -307,6 +337,12 @@ def render_deliverable_markdown(
             lines.append("- Open topic IDs: " + _render_id_list(open_topic_ids))
         if carried_forward_topic_ids:
             lines.append("- Carried-forward topic IDs: " + _render_id_list(carried_forward_topic_ids))
+        if resolved_topic_ids:
+            lines.append("- Resolved topic IDs: " + _render_id_list(resolved_topic_ids))
+        if waived_topic_ids:
+            lines.append("- Waived topic IDs: " + _render_id_list(waived_topic_ids))
+        if disagreed_topic_ids:
+            lines.append("- Disagreed topic IDs: " + _render_id_list(disagreed_topic_ids))
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:
             lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))

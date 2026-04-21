@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from anvil.harness.report import render_report
-from anvil.harness.reporting import apply_final_artifacts, render_deliverable_markdown
+from anvil.harness.reporting import (
+    apply_final_artifacts,
+    build_partial_answer_payload,
+    render_deliverable_markdown,
+)
 
 
 def _rendered_section(markdown: str, heading_prefix: str) -> str:
@@ -171,6 +175,41 @@ def test_render_deliverable_markdown_uses_original_indices_for_partial_answers()
         "This recommendation relies on inference-only grounding rather than direct verified evidence."
         in recommendation_two
     )
+
+
+def test_build_partial_answer_payload_filters_topic_blocked_accepted_recommendations():
+    payload = {
+        "summary": "Partial acceptance output.",
+        "recommendations": [
+            {"title": "First", "classification": "recommendation", "priority": "medium"},
+            {"title": "Second", "classification": "recommendation", "priority": "medium"},
+            {"title": "Third", "classification": "recommendation", "priority": "medium"},
+        ],
+    }
+    summary = {
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 2, "verdict": "accept_with_caveat", "summary": "Carries topic debt."},
+            {"recommendation_index": 3, "verdict": "accept", "summary": "Clean."},
+        ],
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "resolution_status": "carried_forward",
+                "recommendation_index": 2,
+            }
+        ],
+    }
+
+    partial_payload = build_partial_answer_payload(summary, payload)
+
+    assert partial_payload is not None
+    assert partial_payload["included_recommendation_indices"] == [1, 3]
+    assert partial_payload["excluded_recommendation_indices"] == [2]
+    assert [item["title"] for item in partial_payload["recommendations"]] == ["First", "Third"]
+    assert [
+        item["recommendation_index"] for item in partial_payload["recommendation_reviews"]
+    ] == [1, 3]
 
 
 def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accepted_draft(
@@ -385,6 +424,69 @@ def test_render_deliverable_markdown_renders_carried_forward_topic_resolution_no
     )
 
 
+def test_render_deliverable_markdown_renders_disagreed_topic_rollups():
+    payload = {
+        "summary": "Accepted recommendations with a disagreed review topic.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Clarify operator fallback path",
+                "rationale": "Operators need an explicit fallback classification.",
+                "evidence": ["docs/runbook.md"],
+                "proposed_change": "Document the fallback handling path.",
+                "confidence": 0.74,
+            }
+        ],
+    }
+    summary = {
+        "verdict": "accepted",
+        "analysis_review_status": {
+            "mode": "bounded",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "not_required",
+                "policy_mode": "none",
+            },
+            "topic_ledger_count": 1,
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": ["TOPIC-001"],
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "resolution_status": "disagree",
+                "title": "Recommendation 1 needs a concrete fallback classification.",
+                "severity": "medium",
+                "evidence": "The draft names the operator path but not the fallback state taxonomy.",
+                "recommendation_index": 1,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_note": "disagree | The requested fallback classification is not directly supported by the inspected workflow evidence. | Operators may still want an explicit fallback label.",
+                "resolved_in_stage_index": 4,
+            }
+        ],
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-791",
+        payload,
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary=summary,
+    )
+
+    assert "- Disagreed topic IDs: `TOPIC-001`" in markdown
+    assert (
+        "- `TOPIC-001` `disagree` via `critic`: Recommendation 1 needs a concrete fallback classification. — disagree | The requested fallback classification is not directly supported by the inspected workflow evidence. | Operators may still want an explicit fallback label."
+        in markdown
+    )
+
+
 def test_render_report_renders_full_topic_lifecycle_section():
     summary = {
         "verdict": "accepted_partial",
@@ -502,3 +604,64 @@ def test_render_report_renders_full_topic_lifecycle_section():
         "| `TOPIC-001` | Recommendation 1 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `1` | addressed \\| Added the fallback classification note to recommendation 1. |"
         in report
     )
+
+
+def test_render_report_renders_disagreed_topic_status_section():
+    summary = {
+        "verdict": "accepted",
+        "task": {"id": "task-790"},
+        "verdicts": {
+            "content_verdict": "accepted",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "bounded", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "bounded",
+            "content_verdict": "accepted",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "not_required",
+                "policy_mode": "none",
+                "required": False,
+                "stages": [],
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": ["TOPIC-001"],
+            "topic_ledger_count": 1,
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "title": "Recommendation 1 needs a concrete fallback classification.",
+                "severity": "medium",
+                "evidence": "The draft names the operator path but not the fallback state taxonomy.",
+                "recommendation_index": 1,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_status": "disagree",
+                "resolution_note": "disagree | The requested fallback classification is not directly supported by the inspected workflow evidence. | Operators may still want an explicit fallback label.",
+                "resolved_in_stage_index": 4,
+            }
+        ],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert "- Disagreed topic IDs: `TOPIC-001`" in report
+    assert "- Disagreed topics: `1` (`TOPIC-001`)" in report

@@ -712,6 +712,181 @@ class _TopicCarryForwardHarnessAdapter(_TopicLifecycleHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _TopicDisagreeHarnessAdapter(_TopicLifecycleHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        if role_name == "reviser_round_1":
+            payload = self._base_analysis(revised=True)
+            payload["topic_resolution_map"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "status": "disagree",
+                    "recommendation_index": 2,
+                    "change_summary": "Kept the original recommendation because the requested fallback classification is not directly supported by the inspected workflow evidence.",
+                    "residual_risk": "Operators may still want an explicit fallback label, but the evidence does not justify inventing one.",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            return {
+                "verdict": "accept",
+                "summary": "The recommendation remains usable and the open topic is being recorded as a disagreement rather than a waiver.",
+                "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
+                "issues": [],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": [],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": 1,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 1 remains acceptable.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                    {
+                        "recommendation_index": 2,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": "Recommendation 2 is acceptable, but the fallback classification request is recorded as a disagreement.",
+                        "confidence_assessment": "well_calibrated",
+                    },
+                ],
+                "topics": [],
+                "resolved_topic_ids": [],
+                "carried_forward_topic_ids": [],
+                "waived_topic_ids": [self._TOPIC_ID],
+                "grounding_score": 0.93,
+                "actionability_score": 0.86,
+                "scope_compliance_score": 0.96,
+                "confidence": 0.89,
+                "scope_escapes": [],
+            }
+        return super()._payload_for_role(role_name)
+
+
+class _PartialAcceptanceWithTopicDebtHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    _TOPIC_ID = "TOPIC-001"
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"].append(
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Document alert routing ownership",
+                "rationale": "Operators need a clear escalation target when release automation fails.",
+                "evidence": [".github/workflows/codex-cli-release-watch.yml"],
+                "proposed_change": "Add the alert-routing owner and escalation path to the release-watch documentation.",
+                "confidence": 0.72 if not revised else 0.76,
+                "review_surface": self._review_surface(
+                    must_check_files=[".github/workflows/codex-cli-release-watch.yml"],
+                    optional_check_files=[],
+                    scope_note="Keep the review bounded to the existing release-watch escalation path.",
+                ),
+            }
+        )
+        return payload
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            payload["summary"] = (
+                "Recommendations 1 and 4 are good, recommendation 2 still has a topic, and recommendation 3 needs more specificity."
+            )
+            payload["recommendation_reviews"].append(
+                {
+                    "recommendation_index": 4,
+                    "verdict": "accept",
+                    "open_issue_ids": [],
+                    "summary": "Recommendation 4 is acceptable.",
+                    "confidence_assessment": "well_calibrated",
+                }
+            )
+            payload["topics"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "severity": "medium",
+                    "title": "Recommendation 2 still needs an explicit operator fallback classification.",
+                    "evidence": "The timeout recommendation still leaves the operator fallback label implicit.",
+                    "repair_hint": "Name the fallback classification directly in recommendation 2.",
+                    "recommendation_index": 2,
+                }
+            ]
+            return payload
+        if role_name == "reviser_round_1":
+            payload = super()._payload_for_role(role_name)
+            payload["topic_resolution_map"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "status": "not_addressed",
+                    "recommendation_index": 2,
+                    "change_summary": "The revision kept recommendation 2 high level and did not add a concrete fallback classification.",
+                    "residual_risk": "Operators still do not have an explicit fallback label to follow.",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            payload = super()._payload_for_role(role_name)
+            payload["summary"] = (
+                "Recommendations 1 and 4 are usable. Recommendation 2 still carries topic debt and recommendation 3 still needs more specificity."
+            )
+            payload["recommendation_reviews"].append(
+                {
+                    "recommendation_index": 4,
+                    "verdict": "accept",
+                    "open_issue_ids": [],
+                    "summary": "Recommendation 4 remains acceptable.",
+                    "confidence_assessment": "well_calibrated",
+                }
+            )
+            payload["carried_forward_topic_ids"] = [self._TOPIC_ID]
+            return payload
+        return super()._payload_for_role(role_name)
+
+
+class _PartialAcceptanceWithGlobalTopicDebtHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    _TOPIC_ID = "TOPIC-001"
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            payload["summary"] = (
+                "Recommendations 1 and 2 are usable, recommendation 3 needs more specificity, and one global topic remains unresolved."
+            )
+            payload["topics"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "severity": "medium",
+                    "title": "The final answer still needs a concrete fallback classification policy.",
+                    "evidence": "The analysis never states the fallback classification policy, so no clean subset can be proven yet.",
+                    "repair_hint": "State the fallback classification policy or explicitly justify why none should be named.",
+                    "recommendation_index": None,
+                }
+            ]
+            return payload
+        if role_name == "reviser_round_1":
+            payload = super()._payload_for_role(role_name)
+            payload["topic_resolution_map"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "status": "not_addressed",
+                    "recommendation_index": None,
+                    "change_summary": "The revision improved individual recommendations but did not establish a shared fallback classification policy.",
+                    "residual_risk": "A global ambiguity still spans the accepted subset.",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            payload = super()._payload_for_role(role_name)
+            payload["summary"] = (
+                "Recommendations 1 and 2 would otherwise be usable, but the unresolved global topic blocks a clean partial subset."
+            )
+            payload["carried_forward_topic_ids"] = [self._TOPIC_ID]
+            return payload
+        return super()._payload_for_role(role_name)
+
+
 class _TopicResolutionRecommendationHarnessAdapter(_TopicLifecycleHarnessAdapter):
     def _payload_for_role(self, role_name: str):
         if role_name == "critic":
@@ -1441,6 +1616,73 @@ def test_analysis_review_runner_can_emit_partial_answer_and_issue_ledger(
     assert issue_ledger[0]["recommendation_index"] == 3
 
 
+def test_analysis_review_runner_excludes_topic_blocked_recommendations_from_partial_answer(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _PartialAcceptanceWithTopicDebtHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_partial"
+    assert summary["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+    partial_answer = summary["partial_answer"]
+    assert partial_answer["included_recommendation_indices"] == [1, 4]
+    assert partial_answer["excluded_recommendation_indices"] == [2, 3]
+    assert [item["title"] for item in partial_answer["recommendations"]] == [
+        "Add concurrency controls",
+        "Document alert routing ownership",
+    ]
+    assert [
+        item["recommendation_index"] for item in partial_answer["recommendation_reviews"]
+    ] == [1, 4]
+
+
+def test_analysis_review_runner_blocks_partial_accept_when_unresolved_topic_is_global(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        min_recommendations=2,
+        review_max_loops=1,
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _PartialAcceptanceWithGlobalTopicDebtHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "best_effort_exhausted"
+    assert summary["verdicts"]["content_verdict"] == "best_effort_exhausted"
+    assert summary["artifacts"]["final_artifact_kind"] != "partial_answer"
+    assert "partial_answer" not in summary
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+
 
 def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_deliverable(
     tmp_path,
@@ -1543,6 +1785,47 @@ def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_
     )
     assert "- Topic ledger count: `1`" in final_answer_text
     assert "missing_topics" not in final_answer_text
+
+
+def test_analysis_review_runner_preserves_disagreed_topic_lifecycle_in_rollups(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TopicDisagreeHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    assert summary["topic_ledger"][0]["resolution_status"] == "disagree"
+    assert summary["analysis_review_status"]["disagreed_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["waived_topic_ids"] == []
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    assert "- Disagreed topic IDs: `TOPIC-001`" in report_text
+    assert "- Disagreed topics: `1` (`TOPIC-001`)" in report_text
+    assert (
+        "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `disagree` | `2` | disagree \\| Kept the original recommendation because the requested fallback classification is not directly supported by the inspected workflow evidence. \\| Operators may still want an explicit fallback label, but the evidence does not justify inventing one. |"
+        in report_text
+    )
+    assert "- Disagreed topic IDs: `TOPIC-001`" in final_answer_text
+    assert (
+        "- `TOPIC-001` `disagree` via `critic`: Recommendation 2 needs a concrete fallback classification. — disagree | Kept the original recommendation because the requested fallback classification is not directly supported by the inspected workflow evidence. | Operators may still want an explicit fallback label, but the evidence does not justify inventing one."
+        in final_answer_text
+    )
 
 
 def test_analysis_review_runner_preserves_topic_introduction_source_when_carried_forward(

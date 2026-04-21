@@ -49,7 +49,11 @@ from .schemas import (
 )
 from .selection import extract_drafts_from_summary, select_best_draft
 from .semantic_validation import validate_stage_output
-from .topic_lifecycle import topic_ids_for_status_name, unresolved_topic_ids
+from .topic_lifecycle import (
+    partial_accept_topic_eligibility,
+    topic_ids_for_status_name,
+    unresolved_topic_ids,
+)
 from .types import (
     ANALYSIS_REVIEW_BOUNDED_KIND,
     ANALYSIS_REVIEW_LEGACY_KIND,
@@ -1087,12 +1091,15 @@ class HarnessRunner:
         open_topic_ids = self._topic_ids_for_status({"open"})
         carried_forward_topic_ids = self._topic_ids_for_status({"carried_forward"})
         waived_topic_ids = self._topic_ids_for_status({"waived"})
+        disagreed_topic_ids = self._topic_ids_for_status({"disagree"})
         if open_topic_ids:
             parts.append("Open reviewer topics: " + ", ".join(open_topic_ids) + ".")
         if carried_forward_topic_ids:
             parts.append("Carried-forward topic IDs: " + ", ".join(carried_forward_topic_ids) + ".")
         if waived_topic_ids:
             parts.append("Waived topic IDs: " + ", ".join(waived_topic_ids) + ".")
+        if disagreed_topic_ids:
+            parts.append("Disagreed topic IDs: " + ", ".join(disagreed_topic_ids) + ".")
         accepted_recommendation_count = len(self._accepted_recommendation_reviews(review_payload))
         if accepted_recommendation_count:
             parts.append(f"Accepted recommendations: {accepted_recommendation_count}.")
@@ -2066,6 +2073,7 @@ class HarnessRunner:
         )
         waived_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="waived")
         resolved_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="resolved")
+        disagreed_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="disagreed")
         if contract.trust_review.payload_provenance_mode == "none" and provenance_status == "missing":
             provenance_status = "not_required"
         return {
@@ -2085,6 +2093,7 @@ class HarnessRunner:
             "carried_forward_topic_ids": carried_forward_topic_ids,
             "waived_topic_ids": waived_topic_ids,
             "resolved_topic_ids": resolved_topic_ids,
+            "disagreed_topic_ids": disagreed_topic_ids,
             "topic_ledger_count": len(self.topic_ledger),
             "downgrade_causes": downgrade_causes,
         }
@@ -2189,6 +2198,27 @@ class HarnessRunner:
                     "completeness",
                 }:
                     return False
+
+        accepted_recommendation_indices: list[int] = []
+        for review in accepted_reviews:
+            raw_index = review.get("recommendation_index")
+            if raw_index in (None, ""):
+                continue
+            try:
+                accepted_recommendation_indices.append(int(raw_index))
+            except (TypeError, ValueError):
+                continue
+        topic_eligibility = partial_accept_topic_eligibility(
+            self.topic_ledger,
+            accepted_recommendation_indices=accepted_recommendation_indices,
+        )
+        if topic_eligibility["global_blocking_topic_ids"]:
+            return False
+        if (
+            len(topic_eligibility["eligible_recommendation_indices"])
+            < policy.min_accepted_recommendations
+        ):
+            return False
 
         return True
 
