@@ -1,4 +1,4 @@
-<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260421-102518.md -->
+<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260421-110108.md -->
 
 # Next Iteration Plan: Trust Auditability and Topic Accounting
 
@@ -1036,16 +1036,11 @@ That is the bar for "fully implementable." Not just "we added a new array to the
 
 #### Slice B objective
 
-Make trust-mode review provenance closure-complete.
+Make trust-mode review provenance closure-complete for global issue and topic classifications.
 
-This slice exists to close the exact gap still visible in current code:
+This slice does exactly one thing: it closes the current trust hole where a payload can be hash-bound and still lack proof for global closure outcomes. It does **not** reopen Slice A topic accounting, redesign trust as a second engine, or bundle unrelated renderer or policy cleanups into the same diff.
 
-- `anvil/harness/prompts.py` explicitly says recommendation-level review refs are necessary but not sufficient for global issue/topic closure in trust mode
-- `anvil/harness/runner.py` already computes `uncovered_global_issue_ids` and `uncovered_global_topic_ids`
-- `anvil/harness/semantic_validation.py` already knows how to fail trust-mode payloads whose closure proof is incomplete
-- the current plan wording only asked for non-zero structured refs, which is weaker than the runtime's actual truth
-
-That is the bug in the plan. Slice B must target closure-complete provenance, not prettier ref counts.
+If two separate agents implement Slice B from this plan, they should touch the same files, add the same contract fields, enforce the same validation rules, and land the same test matrix.
 
 #### Step 0: Scope challenge
 
@@ -1059,28 +1054,41 @@ Reuse the current trust-proof seam instead of inventing a second audit engine:
 | ref normalization and payload binding | `_normalize_analysis_review_payload()` and `_bind_normalized_payload()` in `anvil/harness/runner.py` | the runner already canonicalizes and hashes structured refs |
 | closure coverage accounting | `_review_payload_ref_coverage()` in `anvil/harness/runner.py` | the runner already distinguishes covered recommendation closures from uncovered global closures |
 | trust-mode failure semantics | `_validate_review_payload_provenance()` in `anvil/harness/semantic_validation.py` | semantic validation already rejects incomplete trust closure proof |
-| trust reporting | `_final_payload_provenance_records()` in `anvil/harness/runner.py` plus `anvil/harness/report.py` | artifacts already render provenance status and can expose finer-grained closure proof |
+| selection and partial artifacts | `anvil/harness/selection.py` plus existing partial-artifact gating in `anvil/harness/runner.py` | globally proven versus unproven closures already influence which payloads can be treated as clean |
+| trust reporting | `_final_payload_provenance_records()` in `anvil/harness/runner.py` plus `anvil/harness/report.py` and `anvil/harness/reporting.py` | artifacts already render provenance status and can expose finer-grained closure proof |
 
 ##### Minimum change set
 
 Do the smallest complete version:
 
 1. keep recommendation-level proof exactly as the base case
-2. add a narrow issue/topic-scoped proof surface for global closures
-3. teach runner coverage to accept either proof path
-4. render closure-complete vs incomplete provenance explicitly in artifacts
-5. lock the whole thing with trust-mode regression tests
+2. add one issue-scoped proof surface and one topic-scoped proof surface for global closures
+3. teach runner coverage and selection logic to accept either proof path
+4. render closure-complete versus incomplete provenance explicitly in artifacts
+5. lock the behavior with runner, validation, reporting, selection, prompt, and contract tests
 
-Do not add a new attestation runner, a second review pass, or a generic "proof framework." That is ocean behavior.
+Do not add a new attestation runner, a second review pass, or a generic proof framework.
+
+##### Scope lock
+
+Slice B is intentionally **not** the place to decide:
+
+- trust display-vs-audit evidence cap splitting
+- renderer cleanup outside trust provenance surfaces
+- late-auditor severity policy changes
+- proposer-strategy divergence between bounded and trust
+- line-level provenance or hard read tracing
+
+Those items stay in the surrounding plan and `TODOS.md`. Slice B is only the closure-proof slice.
 
 ##### Complexity check
 
-Slice B is another legitimate multi-file change, but it still stays in one seam:
+Slice B is a legitimate multi-file change, but it still stays inside one seam:
 
 - primary code modules: `anvil/harness/schemas.py`, `anvil/harness/prompts.py`, `anvil/harness/runner.py`, `anvil/harness/semantic_validation.py`, `anvil/harness/report.py`, `anvil/harness/reporting.py`, `anvil/harness/selection.py`
 - primary docs/tests: `docs/analysis_review_contract.md`, `tests/test_harness_analysis_contract.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_runner.py`, `tests/test_harness_semantic_validation.py`, `tests/test_harness_reporting.py`, `tests/test_harness_selection.py`, `tests/fixtures/harness/analysis_review_semantic_cases.json`
 
-That is acceptable because the work stays inside trust provenance semantics and avoids a new subsystem.
+That breadth is acceptable because the work remains one explicit semantic change, global closure proof completeness.
 
 ##### Search check
 
@@ -1101,6 +1109,7 @@ Slice B should boil the lake now:
 
 - trust-mode recommendation closures stay recommendation-scoped
 - trust-mode global issue/topic closures get explicit scoped proof
+- selection and partial artifacts respect that proof state
 - artifacts distinguish closure-complete from merely hash-bound
 - zero uncovered closures becomes the success bar
 
@@ -1112,14 +1121,14 @@ No new artifact family is introduced. Slice B only enriches the existing run sum
 
 ##### Decision
 
-Keep one runner, one payload family, and two proof paths:
+Keep one runner, one payload family, and exactly two proof paths:
 
 1. recommendation-scoped proof for recommendation-owned closures
 2. issue/topic-scoped proof for global closures
 
-This is the smallest explicit fix for the real trust hole.
+No third proof path is allowed. No fallback proof shape is allowed. The classification arrays remain status truth. The new scoped-review arrays carry proof only.
 
-##### Proposed contract shape
+##### Canonical implementation contract
 
 Add these structures to the shared analysis-review contract:
 
@@ -1146,8 +1155,11 @@ Add these structures to the shared analysis-review contract:
    - `topic_closure_review_ref_count`
    - `closure_complete_issue_ids`
    - `closure_complete_topic_ids`
+   - `uncovered_global_issue_ids`
+   - `uncovered_global_topic_ids`
 
-The classification arrays remain the status truth. The new closure-review arrays carry proof, not status.
+5. `summary.json` addition
+   - `closure_proof_by_id`
 
 ##### Normative semantics, no guesswork allowed
 
@@ -1165,58 +1177,37 @@ These rules are the source of truth for Slice B implementation. If code, prompts
 
 6. Unknown IDs are invalid. Duplicate IDs are invalid. Missing required scoped proof for a global trust closure is invalid.
 
-7. Trust-mode closure is provenance-complete only when:
-   - every accepted or classified recommendation closure is recommendation-covered, and
-   - every global issue/topic closure has explicit scoped proof, and
+7. Trust-mode closure is provenance-complete only when all of these are true:
+   - every accepted or classified recommendation closure is recommendation-covered
+   - every global issue closure has explicit scoped proof
+   - every global topic closure has explicit scoped proof
    - `uncovered_recommendation_indices`, `uncovered_global_issue_ids`, and `uncovered_global_topic_ids` are all empty
 
-8. `bound` is not enough. A trust payload with a hash and some refs but remaining uncovered closures is `insufficient`.
+8. `bound` is not enough. A trust payload with a hash and some refs but any remaining uncovered closures is `insufficient`.
 
-9. Scoped closure proof is still review-attested metadata. Unless the closure-review `verified_evidence_refs` can be tied back to surfaced evidence, it is weaker than recommendation evidence and the report must say so plainly.
+9. Scoped closure proof is still review-attested metadata. If a closure-review `verified_evidence_refs` cannot be tied back to surfaced evidence for that issue or topic, the proof is valid for closure accounting but must be labeled weaker than recommendation evidence in reporting.
 
-##### Exact schema requirements
+10. Slice B does not change bounded-mode requirements. The new arrays may remain empty in bounded mode.
 
-`REVIEW_ISSUE_CLOSURE_SCHEMA` must require:
+##### File-by-file implementation contract
 
-- `issue_id: string`
-- `checked_files: string[]`
-- `verified_evidence_refs: string[]`
-- `summary: string`
-
-`REVIEW_TOPIC_CLOSURE_SCHEMA` must require:
-
-- `topic_id: string`
-- `checked_files: string[]`
-- `verified_evidence_refs: string[]`
-- `summary: string`
-
-Schema-level note:
-
-- the arrays may be empty in bounded mode if the payload family stays shared
-- trust-mode semantic validation is what makes the proof required when closure scope demands it
-- closure-review `verified_evidence_refs` should be validated as a subset of the available surfaced evidence for that issue/topic when such evidence exists; otherwise the report must label the proof as review-attested rather than evidence-equivalent
-
-##### Backward-compat rule
-
-Do not introduce a second compatibility bridge for Slice B.
-
-The current branch already has trust recommendation review refs. Slice B should extend that surface, not support a second stale shape indefinitely.
-
-##### Runner-owned coverage semantics
-
-Update `_review_payload_ref_coverage()` in `anvil/harness/runner.py` so that:
-
-- recommendation-level proof still covers any issue/topic linked to a covered recommendation index
-- global issue closure can become covered via `issue_closure_reviews[]`
-- global topic closure can become covered via `topic_closure_reviews[]`
-- final uncovered sets only contain IDs that truly lack both proof paths
-
-The runner should also emit these proof counts in the final provenance record:
-
-- recommendation-level ref counts
-- issue-closure ref counts
-- topic-closure ref counts
-- total closure-complete issue/topic IDs
+| File | Required change | Notes |
+|---|---|---|
+| `anvil/harness/schemas.py` | add `REVIEW_ISSUE_CLOSURE_SCHEMA`, `REVIEW_TOPIC_CLOSURE_SCHEMA`, wire `issue_closure_reviews` and `topic_closure_reviews` into `analysis_review_schema()` | no generic proof union |
+| `anvil/harness/prompts.py` | update critic and auditor instructions to require scoped proof for trust-mode global closures and to state that `files_reviewed` is context, not proof | wording must mirror the normative rules above |
+| `anvil/harness/runner.py` | normalize both new arrays, count their refs, compute coverage through `_review_payload_ref_coverage()`, and emit per-ID closure proof records | this remains the canonical provenance calculator |
+| `anvil/harness/semantic_validation.py` | reject duplicate IDs, unknown IDs, missing scoped proof for classified global closures, refs outside `checked_files`, and overclaimed evidence refs when surfaced evidence exists | bounded mode stays lightweight |
+| `anvil/harness/selection.py` | make clean trust selection and partial-artifact eligibility depend on closure completeness, not raw ref counts | proven global closures can pass, unproven ones cannot |
+| `anvil/harness/report.py` | expose proof counts, uncovered IDs, and user-facing consequence text for `insufficient` trust provenance | no raw provenance blob dump in final answer |
+| `anvil/harness/reporting.py` | render per-ID proof-path rows for globally classified issues and topics | `recommendation` versus `scoped` must stay visible |
+| `docs/analysis_review_contract.md` | update contract docs to describe scoped proof as the rule for global trust closures | remove stale “global closures remain provenance-incomplete” wording |
+| `tests/test_harness_analysis_contract.py` | assert contract shape and docs match the new closure-proof model | contract drift guard |
+| `tests/test_harness_prompt_consistency.py` | assert both proof paths are explained consistently in prompts | prompt drift guard |
+| `tests/test_harness_runner.py` | cover normalization, coverage accounting, and provenance record emission | main behavior guard |
+| `tests/test_harness_semantic_validation.py` | cover invalid ID, duplicate ID, missing proof, and subset validation failures | trust failure guard |
+| `tests/test_harness_reporting.py` | cover separated proof counts, uncovered IDs, and per-ID proof-path rendering | user-visible audit guard |
+| `tests/test_harness_selection.py` | cover clean selection and partial-artifact behavior for proven versus unproven global closures | downstream behavior guard |
+| `tests/fixtures/harness/analysis_review_semantic_cases.json` | add valid and invalid closure-proof fixtures | shared fixture source |
 
 ##### Data flow
 
@@ -1232,7 +1223,8 @@ critic / auditor structured output
 _normalize_analysis_review_payload()
     │
     ├── canonicalize recommendation-level refs
-    ├── canonicalize issue/topic closure-review refs
+    ├── canonicalize issue closure-review refs
+    ├── canonicalize topic closure-review refs
     └── bind all normalized refs into one provenance record
     │
     ▼
@@ -1250,11 +1242,17 @@ validate_analysis_review_payload()
     └── keep bounded mode lightweight
     │
     ▼
+selection / partial-artifact gating
+    │
+    ├── allow clean trust selection only when closure proof is complete
+    └── block clean partial artifacts when uncovered global closures remain
+    │
+    ▼
 summary.json / REPORT.md / FINAL_ANSWER.md
     │
-    ├── expose closure-complete vs insufficient provenance
+    ├── expose closure-complete versus insufficient provenance
     ├── show uncovered closure IDs when trust proof is incomplete
-    └── show scoped-proof counts so ref inflation cannot fake success
+    └── show proof path by ID so ref inflation cannot fake success
 ```
 
 ##### Architecture-specific failure scenario
@@ -1263,18 +1261,19 @@ Real production failure: the auditor waives a global topic with `topic_id = TOPI
 
 ##### Final artifact contract
 
-The reporting shape should be fixed, not left to taste.
+The reporting shape is fixed, not left to taste.
 
 `summary.json`
 
 - extend `analysis_review_status.provenance` with closure-review ref counts and uncovered closure IDs
-- add `closure_proof_by_id` keyed by `issue_id` / `topic_id`, with:
-  - proof path: `recommendation` or `scoped`
-  - classification status
-  - checked files
-  - verified evidence refs
-- expose whether the trust closure proof is `bound` or `insufficient`
-- keep the final uncovered sets machine-readable
+- add `closure_proof_by_id`, keyed by `issue_id` or `topic_id`, with:
+  - `proof_path`: `recommendation` or `scoped`
+  - `classification_status`
+  - `checked_files`
+  - `verified_evidence_refs`
+  - `proof_strength`: `recommendation_evidence` or `review_attested`
+- expose whether trust closure proof is `bound` or `insufficient`
+- keep uncovered sets machine-readable
 
 `REPORT.md`
 
@@ -1283,12 +1282,12 @@ The reporting shape should be fixed, not left to taste.
   - issue closure review refs
   - topic closure review refs
   - uncovered closures, if any
-- add a per-ID table mapping each classified global issue/topic to its proof path and refs
+- add a per-ID table mapping each classified global issue or topic to its proof path, proof strength, checked files, and refs
 
 `FINAL_ANSWER.md`
 
 - do not dump raw provenance records
-- when trust mode is not clean, add a compact note that names uncovered issue/topic IDs and the reason the closure proof is incomplete
+- when trust mode is not clean, add a compact note that names uncovered issue or topic IDs and the reason closure proof is incomplete
 
 This split is intentional:
 
@@ -1304,48 +1303,36 @@ This split is intentional:
 - Add targeted closure-review schemas instead of a generic proof abstraction.
 - Reuse the current uncovered-closure accounting instead of branching the provenance engine.
 - Prefer explicit `issue_closure_reviews` and `topic_closure_reviews` arrays over a polymorphic mixed-type proof list.
+- Do not reopen Slice A topic-ledger work inside Slice B.
 
-##### Concrete implementation guidance
+##### Determinism rules
 
-1. `anvil/harness/schemas.py`
-   Add the two closure-review schemas next to the other review-stage schemas and wire them into `analysis_review_schema()`.
+These choices are already decided. Implementers should not invent alternatives during execution:
 
-2. `anvil/harness/prompts.py`
-   Update critic and auditor prompts so they explicitly say:
-   - recommendation-level refs are the default proof path
-   - global issue/topic closures require explicit scoped proof in trust mode
-   - `files_reviewed` alone is context, not closure proof
-   - scoped closure proof may still be weaker than recommendation evidence unless `verified_evidence_refs` ties back to surfaced evidence
+1. `issue_closure_reviews[]` and `topic_closure_reviews[]` are the only new proof arrays.
+2. `selection.py` participates in the change. This is not reporting-only work.
+3. Proof completeness is determined by uncovered closure sets, not by raw ref counts.
+4. Scoped proof can satisfy closure accounting while still being labeled weaker than recommendation evidence.
+5. Slice B does not change evidence-budget policy, bounded-mode UX, or late-auditor defaults.
 
-3. `anvil/harness/runner.py`
-   Normalize `issue_closure_reviews` and `topic_closure_reviews` exactly the same way recommendation review refs are normalized today.
+##### Concrete implementation checklist
 
-4. `anvil/harness/semantic_validation.py`
-   Add coverage checks for:
-   - duplicate closure-review IDs
-   - unknown issue/topic IDs in closure-review arrays
-   - missing scoped proof for global trust closures
-   - closure-review refs that are not subsets of `files_reviewed`
-   - closure-review `verified_evidence_refs` that overclaim beyond surfaced evidence when surfaced evidence exists
-
-5. `anvil/harness/selection.py`
-   Explicitly define how global closure proof interacts with best-draft ranking and partial-answer eligibility so unowned but proven closures do not silently skew accepted subsets.
-
-6. `anvil/harness/report.py` and `anvil/harness/reporting.py`
-   Render trust provenance in a way that makes `insufficient` unmistakable, names the uncovered closures directly, and shows proof-path-by-ID for classified global issues/topics.
-
-6. `docs/analysis_review_contract.md`
-   Replace the current “global issues/topics remain provenance-incomplete” language with the post-Slice-B rule:
-   - global closures are allowed only when scoped proof is present
-   - otherwise the payload is closure-incomplete and trust mode cannot claim a clean closure
+1. Freeze contract and prompt wording first.
+2. Update runner normalization and coverage accounting second.
+3. Update semantic validation and selection semantics against the frozen coverage model.
+4. Update reporting only after the provenance model is settled.
+5. Add and run the full targeted test matrix before calling the slice done.
 
 ##### NOT in scope for Slice B
 
 - attestation-layer redesign
+- display-vs-audit evidence-cap split
 - line-level or excerpt-level provenance
 - hard read tracing
 - bounded-mode UI work or workflow changes
 - changing proposer search strategy
+- tightening late-auditor severity policy defaults
+- renderer cleanup unrelated to provenance output
 
 #### Test review
 
@@ -1356,33 +1343,33 @@ CODE PATH COVERAGE
 ===========================
 [+] Recommendation-owned closure proof
     │
-    ├── [GAP] recommendation-linked issue closure stays covered by recommendation_reviews refs
-    ├── [GAP] recommendation-linked topic closure stays covered by recommendation_reviews refs
-    └── [GAP] bounded mode still accepts lightweight review payloads
+    ├── [REQUIRED] recommendation-linked issue closure stays covered by recommendation_reviews refs
+    ├── [REQUIRED] recommendation-linked topic closure stays covered by recommendation_reviews refs
+    └── [REQUIRED] bounded mode still accepts lightweight review payloads
 
 [+] Global closure proof
     │
-    ├── [GAP] global issue closure becomes covered by issue_closure_reviews
-    ├── [GAP] global topic closure becomes covered by topic_closure_reviews
-    └── [GAP] missing scoped proof leaves trust provenance insufficient
+    ├── [REQUIRED] global issue closure becomes covered by issue_closure_reviews
+    ├── [REQUIRED] global topic closure becomes covered by topic_closure_reviews
+    └── [REQUIRED] missing scoped proof leaves trust provenance insufficient
 
 [+] Ref normalization and binding
     │
-    ├── [GAP] issue/topic closure-review refs normalize to workspace paths
-    ├── [GAP] closure-review refs are counted in final provenance records
-    └── [GAP] files_reviewed-only payload cannot fake closure completeness
+    ├── [REQUIRED] issue/topic closure-review refs normalize to workspace paths
+    ├── [REQUIRED] closure-review refs are counted in final provenance records
+    └── [REQUIRED] files_reviewed-only payload cannot fake closure completeness
 
 [+] Reporting
     │
-    ├── [GAP] report shows recommendation vs issue/topic scoped proof counts separately
-    ├── [GAP] final answer only surfaces user-facing provenance consequences
-    └── [GAP] uncovered closure IDs are rendered when trust proof is incomplete
+    ├── [REQUIRED] report shows recommendation versus issue/topic scoped proof counts separately
+    ├── [REQUIRED] report shows proof path and proof strength by ID
+    └── [REQUIRED] uncovered closure IDs are rendered when trust proof is incomplete
 
 [+] Selection and partial artifacts
     │
-    ├── [GAP] globally proven closures do not accidentally block partial acceptance when they are truly closure-complete
-    ├── [GAP] globally unproven closures still block clean partial artifacts
-    └── [GAP] best-draft selection does not prefer a payload that only inflated scoped proof counts
+    ├── [REQUIRED] globally proven closures do not block clean partial acceptance when closure proof is complete
+    ├── [REQUIRED] globally unproven closures still block clean partial artifacts
+    └── [REQUIRED] best-draft selection does not prefer a payload that only inflated scoped proof counts
 ```
 
 ##### Required tests by file
@@ -1398,20 +1385,21 @@ CODE PATH COVERAGE
    Add validation coverage for:
    - duplicate closure-review IDs
    - unknown IDs
-   - closure-review refs outside `files_reviewed`
+   - closure-review refs outside `checked_files`
    - trust payloads that classify global closures without scoped proof
+   - closure-review `verified_evidence_refs` that overclaim beyond surfaced evidence when surfaced evidence exists
 
 3. `tests/test_harness_prompt_consistency.py`
-   Assert critic and auditor prompts explain both proof paths clearly and keep `files_reviewed` framed as context rather than proof.
+   Assert critic and auditor prompts explain both proof paths clearly and keep `checked_files` framed as context rather than proof.
 
 4. `tests/test_harness_reporting.py`
-   Assert the report distinguishes recommendation proof from issue/topic closure proof and that `insufficient` provenance names uncovered IDs.
+   Assert the report distinguishes recommendation proof from issue/topic closure proof, emits per-ID proof-path rows, and names uncovered IDs when provenance is `insufficient`.
 
 5. `tests/test_harness_analysis_contract.py`
-   Assert the contract docs/defaults describe closure-complete provenance correctly.
+   Assert the contract docs and schema defaults describe closure-complete provenance correctly.
 
 6. `tests/test_harness_selection.py`
-   Add selection and partial-answer coverage for globally proven vs globally unproven closures.
+   Add selection and partial-answer coverage for globally proven versus globally unproven closures.
 
 7. `tests/fixtures/harness/analysis_review_semantic_cases.json`
    Add:
@@ -1440,6 +1428,7 @@ Keep the proof path cheap:
 - no second model pass
 - no recomputation of historical artifacts
 - normalize only the current stage's closure-review refs
+- derive coverage from already-normalized state instead of walking the payload twice
 
 If Slice B starts paying latency by doing more reading rather than carrying better proof metadata, the design is wrong.
 
@@ -1447,12 +1436,12 @@ If Slice B starts paying latency by doing more reading rather than carrying bett
 
 | Failure mode | Where it would show up | Required guard |
 |---|---|---|
-| a global trust closure still looks successful with only `files_reviewed` | semantic validation + reporting | fail trust validation and surface `insufficient` provenance |
+| a global trust closure still looks successful with only `checked_files` | semantic validation + reporting | fail trust validation and surface `insufficient` provenance |
 | recommendation-linked closures incorrectly require scoped proof too | runner coverage logic | accept recommendation-level coverage as sufficient when `recommendation_index` is present |
-| duplicate closure-review objects silently override each other | semantic validation | reject duplicate `issue_id` / `topic_id` inside closure-review arrays |
-| closure-review refs drift outside `files_reviewed` | semantic validation | require closure-review refs to stay subsets of `files_reviewed` |
-| report collapses recommendation proof and global proof into one opaque count | reporting | render separate counts and uncovered IDs |
-| globally proven closures accidentally skew partial-answer or best-draft behavior | selection + partial artifact logic | add explicit selection tests for proven vs unproven global closures |
+| duplicate closure-review objects silently override each other | semantic validation | reject duplicate `issue_id` or `topic_id` inside closure-review arrays |
+| closure-review refs drift outside `checked_files` | semantic validation | require closure-review refs to stay subsets of `checked_files` |
+| report collapses recommendation proof and global proof into one opaque count | reporting | render separate counts, proof paths, proof strength, and uncovered IDs |
+| globally proven closures accidentally skew partial-answer or best-draft behavior | selection + partial artifact logic | add explicit selection tests for proven versus unproven global closures |
 
 If any one of these ends with silent user-facing ambiguity, Slice B is incomplete.
 
@@ -1464,7 +1453,7 @@ If any one of these ends with silent user-facing ambiguity, Slice B is incomplet
 |---|---|---|
 | B1. Contract and prompt shape | `anvil/harness/schemas.py`, `anvil/harness/prompts.py`, `docs/analysis_review_contract.md` | — |
 | B2. Runner closure-proof coverage | `anvil/harness/runner.py` | B1 |
-| B3. Semantic validation | `anvil/harness/semantic_validation.py` | B1 |
+| B3. Semantic validation and selection semantics | `anvil/harness/semantic_validation.py`, `anvil/harness/selection.py` | B1, B2 |
 | B4. Reporting | `anvil/harness/report.py`, `anvil/harness/reporting.py` | B2, B3 |
 | B5. Fixtures and tests | `tests/`, `tests/fixtures/harness/` | B1, B2, B3, B4 |
 
@@ -1477,75 +1466,54 @@ If any one of these ends with silent user-facing ambiguity, Slice B is incomplet
   Runner coverage and provenance counts, starts after B1.
 
 - Lane C: `B3`
-  Validation logic, starts after B1 and can run in parallel with B2.
+  Validation and selection work, starts after B2 because both need the final uncovered-set semantics from `runner.py`.
 
 - Lane D: `B4`
-  Reporting, starts after B2 and B3 so the rendered semantics match the real proof semantics.
+  Reporting, starts after B2 and B3 so rendered semantics match real proof semantics and clean-selection behavior.
 
 - Lane E: `B5`
   Tests and fixtures, last, because they touch every shape that is still moving upstream.
 
+##### Execution order
+
+Launch `Lane A` first and merge it before opening any downstream worktree.
+
+Then launch `Lane B`.
+
+After `Lane B` lands, launch `Lane C` in a separate worktree. Do **not** start `Lane C` from the pre-B2 state because `selection.py` and semantic validation both depend on the final runner coverage contract.
+
+When `Lane C` merges, run `Lane D`.
+
+Finish with `Lane E` as the stabilizing pass that locks contract, behavior, and rendered output together.
+
 ##### Conflict flags
 
 - Do not split `anvil/harness/runner.py` across multiple worktrees for Slice B.
-- Freeze the closure-review field names before validation and tests branch off.
-- Keep docs in B1, not B5, or the repo will temporarily describe stale provenance semantics.
+- Freeze the closure-review field names before validation, selection, or tests branch off.
+- Keep `anvil/harness/selection.py` in the same downstream lane as semantic validation. They share the same clean-versus-insufficient decision boundary.
+- Keep docs in `B1`, not `B5`, or the repo will temporarily describe stale provenance semantics.
 
 #### Slice B exit criteria
 
 Slice B is done only when all of these are true:
 
-- trust-mode global issue/topic closures can no longer fake success with `files_reviewed` alone
+- trust-mode global issue and topic closures can no longer fake success with `checked_files` alone
 - recommendation-linked closures still work with recommendation-level proof only
 - trust provenance is judged by zero uncovered closures, not non-zero ref counts
-- `summary.json` and `REPORT.md` expose scoped-proof counts and uncovered closure IDs explicitly
+- clean selection and partial artifacts respect closure completeness
+- `summary.json` and `REPORT.md` expose scoped-proof counts, proof paths, proof strength, and uncovered closure IDs explicitly
 - the targeted pytest suite above passes
 
 That is the bar for "closure-complete provenance." Not just "we added more refs."
 
-### CLAUDE SUBAGENT (eng, independent review)
+### Slice B planning resolution
 
-- **Critical:** The first Slice B draft accidentally defined two proof shapes for global items. Keep one canonical proof surface, `issue_closure_reviews[]` / `topic_closure_reviews[]`, and require it only for closure/classification transitions.
-- **High:** Scoped closure proof is still self-attested unless the plan either ties `verified_evidence_refs` back to surfaced evidence or labels the proof as weaker than recommendation evidence.
-- **Medium:** Reporting needs a per-ID proof map, not just counts, or humans will still reconstruct closure proof by hand.
+The engineering review is resolved for implementation purposes:
 
-### CODEX SAYS (eng, architecture challenge)
-
-- **High:** The plan was still phrased like topic accounting needed to be added, even though most of that work already landed. The actual delta is cleanup plus closure-proof semantics.
-- **High:** Global closure proof affects selection and partial artifacts, not just provenance reporting. The plan must say so explicitly.
-- **High:** Any display-vs-audit split needs one canonical truth source or the contract will fork itself.
-- **Medium:** Tightening late-auditor policy changes the product from caveated acceptance to failure; that choice needs an explicit user-facing outcome.
-
-### ENG DUAL VOICES — CONSENSUS TABLE
-
-```text
-ENG DUAL VOICES — CONSENSUS TABLE:
-═══════════════════════════════════════════════════════════════
-  Dimension                           Claude  Codex  Consensus
-  ──────────────────────────────────── ─────── ─────── ─────────
-  1. Architecture sound?               mixed    mixed   CONFIRMED
-  2. Test coverage sufficient?         no       no      CONFIRMED
-  3. Performance risks addressed?      mixed    mixed   DISAGREE
-  4. Security/trust boundary covered?  no       no      CONFIRMED
-  5. Error paths handled?              no       no      CONFIRMED
-  6. Deployment risk manageable?       mixed    mixed   DISAGREE
-═══════════════════════════════════════════════════════════════
-```
-
-Read plainly:
-
-- both engineering voices agree the one-runner direction is still right
-- both agree the contract needed one more pass to avoid a second proof surface for global closures
-- both agree selection, partial artifacts, and reporting need to participate in the Slice B truth model
-- they differ on how much performance and ship-risk this adds, but neither thinks it justifies a new subsystem
-
-### Eng completion summary
-
-The engineering review lands on one clear implementation stance:
-
-- stabilize the already-landed Slice A seam instead of reopening it
+- keep the already-landed Slice A seam intact
 - make Slice B about one canonical global-closure proof model
 - thread that model through provenance, selection, partial artifacts, validation, and reporting
+- defer unrelated evidence-budget, renderer, and late-auditor policy work out of this slice
 - judge success by zero uncovered closures plus explicit proof-path rendering, not by raw ref counts
 
 ## Cross-Phase Themes
@@ -1583,7 +1551,7 @@ Items intentionally deferred out of this iteration:
 | 5 | CEO | Add a user-facing proxy outcome for trust-mode dependability | taste | P6 bias toward action | Internal counters are not enough to judge whether trust mode became more usable | purely internal success metrics |
 | 6 | Eng | Use one canonical global-closure proof surface, `issue_closure_reviews[]` / `topic_closure_reviews[]` | mechanical | P5 explicit over clever | Two competing proof paths for global closures would recreate the ambiguity this slice is supposed to remove | mixed per-record and per-array proof shapes |
 | 7 | Eng | Thread Slice B semantics into selection and partial artifacts | mechanical | P1 completeness | Proven global closures and unproven global closures already affect accepted subsets and best-draft behavior | provenance-only implementation |
-| 8 | Eng | Keep display-vs-audit evidence split tentative until a single canonical truth source is named | taste | P3 pragmatic | The repo already has multiple evidence-related invariants; a sloppy split would fork the contract | blind cap increase or dual truth sources |
+| 8 | Eng | Defer display-vs-audit evidence splitting out of Slice B and keep one canonical closure-proof truth source inside this slice | mechanical | P3 pragmatic | Slice B needs one deterministic closure-proof implementation, not a second evidence-policy decision bundled into the same diff | blind cap increase or dual truth sources |
 | 9 | Eng | Defer attestation-layer redesign to backlog | mechanical | P2 boil lakes | It is still a valid next move, but it is larger than this branch needs right now | doing the architecture rewrite in this iteration |
 | 10 | Eng | Skip design review | mechanical | P3 pragmatic | This plan has no UI scope and the affected files are harness/runtime/docs/test surfaces only | forcing a design pass with no UI changes |
 
@@ -1593,7 +1561,7 @@ Items intentionally deferred out of this iteration:
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_open | Slice B had to be reframed from “more refs” to closure-complete provenance, with a user-facing trust outcome instead of raw internal counters |
 | Codex Review | `codex review` | Independent 2nd opinion | 2 | issues_open | Codex flagged stale Slice A framing, internal-only success metrics, and missing selection/partial-artifact implications for global closure proof |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | The canonical global-closure proof model is now specified, but evidence-split and late-auditor behavior still need final implementation choices |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | Slice B is now locked to one canonical global-closure proof model with selection/reporting participation; evidence-split and late-auditor policy changes are explicitly deferred |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped | No UI scope detected in `PLAN.md`, `anvil/harness/*`, or the run artifacts |
 
 **VERDICT:** PLAN UPDATED FOR NEXT ITERATION. Highest-priority work is closure-complete trust provenance on top of the landed topic ledger. Optional longer-horizon ideas are captured in `TODOS.md`.
