@@ -333,23 +333,19 @@ run_verdict:
 
 ## Final artifact contract
 
-### Accepted / accepted_with_warnings runs
 Write:
-- `FINAL_ANSWER.md`
-- `FINAL_ANSWER.json`
 - `REPORT.md`
 - `summary.json`
-
-### Non-accepted runs
-Write:
-- `BEST_DRAFT.md`
-- `BEST_DRAFT.json`
-- `REPORT.md`
-- `summary.json`
+- `FINAL_ANSWER.md` / `FINAL_ANSWER.json` only when the selected primary deliverable is a publishable final answer
+- `PARTIAL_ANSWER.md` / `PARTIAL_ANSWER.json` when the run has a publishable accepted subset
+- `BEST_DRAFT.md` / `BEST_DRAFT.json` when neither a final nor partial deliverable may ship
 
 Rules:
-- Non-accepted runs must **not** present `FINAL_ANSWER.*` as the primary deliverable.
-- The artifact writer must put a prominent banner in markdown deliverables when the run is not accepted.
+- `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` are the source of truth for what actually shipped.
+- In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
+- `analysis_review_status.publishability.final_answer_publishable` and `blocking_causes` decide whether `FINAL_ANSWER.*` may ship for trust-mode runs.
+- When trust final publication is blocked, artifact selection falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`.
+- Markdown deliverables that are not the publishable final answer must carry a prominent banner explaining the artifact status.
 
 ## Best-draft selection contract
 Before writing the final deliverable, the harness must run a dedicated best-draft selector.
@@ -400,7 +396,7 @@ For analysis tasks, validators that do not apply must produce `not_applicable`, 
 - unit tests for reducers / serialization / draft selection
 - policy violation tests
 - validator applicability tests
-- artifact naming tests for accepted vs non-accepted runs
+- artifact naming tests for publishable final vs partial vs best-draft outcomes
 - issue-closure table tests in analysis-review loops
 
 ## Acceptance criteria

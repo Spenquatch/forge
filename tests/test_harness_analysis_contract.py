@@ -258,3 +258,34 @@ def test_surface_update_notes_document_primary_deliverable_artifacts():
     assert "FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer" in notes
     assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for eligible accepted-partial outputs" in notes
     assert "BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed" in notes
+
+
+def test_draft_adr_0024_documents_slice_c_artifact_contract_without_old_two_state_wording():
+    adr = Path(
+        "docs/project_management/adrs/draft/ADR-0024-harness-state-and-artifact-contract.md"
+    ).read_text(encoding="utf-8")
+
+    assert "PARTIAL_ANSWER.md" in adr
+    assert "PARTIAL_ANSWER.json" in adr
+    assert "publishability" in adr
+    assert "accepted_with_warnings" in adr
+    assert "does not guarantee `FINAL_ANSWER.*`" in adr
+    assert "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`" in adr
+    assert 'summary.json["artifacts"]["final_artifact"]' in adr
+    assert "Accepted / accepted_with_warnings runs" not in adr
+    assert "### Non-accepted runs" not in adr
+
+
+def test_draft_adr_0025_documents_slice_c_artifact_fallback_without_old_two_state_wording():
+    adr = Path(
+        "docs/project_management/adrs/draft/ADR-0025-harness-strategy-subgraphs-and-migration-plan.md"
+    ).read_text(encoding="utf-8")
+
+    assert "PARTIAL_ANSWER.*" in adr
+    assert "publishable final answer" in adr
+    assert "trust final publication is blocked" in adr
+    assert "fall through partial-answer eligibility before writing `BEST_DRAFT.*`" in adr
+    assert "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`" in adr
+    assert "write `FINAL_ANSWER.*` only for accepted runs" not in adr
+    assert "otherwise write `BEST_DRAFT.*`" not in adr
+    assert "Non-accepted runs produce `BEST_DRAFT.*` artifacts" not in adr
