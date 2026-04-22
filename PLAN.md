@@ -1,51 +1,49 @@
-<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260421-110108.md -->
+<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260422-132014.md -->
 
-# Next Iteration Plan: Trust Auditability and Topic Accounting
+# Next Iteration Plan: Trust Publishability and Display Projection
 
 ## Purpose
 
-The bounded/trust split landed. That part is real.
+Slice B landed. That part is real.
 
-The next iteration should make the trust tier feel dependable instead of merely stricter in reporting. The current repo already has explicit strategy kinds, a unified contract, issue-ledger carry-forward, provenance binding, and `accepted_with_warnings`. The remaining gap is that some reviewer concerns still disappear too easily, and some trust evidence is bound as payload shape instead of as auditable review proof.
+`analysis_review_trust_v1` now has uncapped recommendation evidence, closure-complete global proof, cleaned deliverable markdown, and explicit artifact pointers. The old slice map in this file is therefore partly historical. It still preserves the Slice A / Slice B review work, but it is no longer the active next-slice recommendation.
 
-This plan turns the outside notes into one tight follow-up iteration:
+The active next slice is narrower and more user-facing:
 
-1. keep the landed topic ledger as the source of truth and remove the remaining legacy `missing_topics` fallback where it still muddies the seam
-2. make trust review provenance closure-complete, not just hash-bound or non-zero-ref
-3. stop trust-mode evidence caps and renderer residue from undermining otherwise honest output
-4. tighten trust acceptance semantics where the current defaults are too soft
+1. stop treating unresolved trust audit debt as shippable `FINAL_ANSWER.*`
+2. derive display-safe markdown projections from one canonical audit truth instead of dumping raw lists everywhere
+3. keep the contract boring: no new model-authored display/audit fields, no second runner, no second proof system
 
 ## Current Repo Truth
 
 ### What already exists
 
-The current branch already shipped the hard part of the first tranche:
+The current branch already shipped the hard part:
 
 | Surface | Evidence | What it now does |
 |---|---|---|
-| `anvil/harness/contracts.py` | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, contract v5 | explicit bounded vs trust mode, one shared contract |
-| `anvil/harness/runner.py` | payload normalization, issue ledger, downgrade causes, provenance binding | one unified execution path with trust-aware verdicting |
-| `anvil/harness/semantic_validation.py` | trust-only checks for verified evidence subset, affected-file coverage, override reason | stricter trust validation |
-| `anvil/harness/prompts.py` | contract-derived bounded/trust guidance | same payload family, mode-specific instructions |
-| `anvil/harness/report.py` / `anvil/harness/reporting.py` | mode + provenance + downgrade cause rendering | trust mode explains caveats instead of hiding them |
-| `tests/test_harness_*` | contract, prompt, runner, semantic validation coverage | regression rails for the split |
+| `anvil/harness/contracts.py` | `analysis_review_v1_contract_v6` | explicit bounded vs trust mode, trust recommendation evidence uncapped |
+| `anvil/harness/runner.py` | topic ledger, closure proof, downgrade causes, artifact-state assembly | one execution path with trust-aware provenance and partial gating |
+| `anvil/harness/semantic_validation.py` | scoped closure proof rules, trust-only subset checks, affected-file coverage | Slice B proof semantics enforced |
+| `anvil/harness/report.py` / `anvil/harness/reporting.py` | review provenance sections, artifact pointers, cleaned section rendering | trust mode explains caveats and no longer leaks `none_reason:` noise |
+| `tests/test_harness_*` | runner, reporting, semantic validation, contract coverage | Slice B and trust evidence behavior guarded |
 
-### What the last two successful runs still show
+### What changed since the last autoplan pass
 
-Two run artifacts on disk are the best evidence for what is still off:
+- trust recommendation evidence is now uncapped in `contracts.py`, preserved in `runner.py`, and covered in `tests/test_harness_runner.py`
+- closure proof is now counted through `closure_proof_by_id` plus uncovered recommendation / issue / topic sets
+- markdown section rendering already suppresses stale `none_reason` residue in `FINAL_ANSWER.md` and `BEST_DRAFT.md`
+- the old note that Slice C should be a raw "display-vs-audit evidence split" is stale as written
 
-- `.forge-harness-runs/20260419T015403Z-recommend_automation_improvements-16467fbd`
-- `.forge-harness-runs/20260419T030446Z-recommend_automation_improvements-24d6b22b`
+### Active planning question
 
-Observed repo truth from those artifacts:
+The remaining gap is not "more refs." It is whether trust artifacts are honest to publish, and how much raw audit detail should flow into user-facing markdown without creating a second truth surface.
 
-- bounded run finished `accepted` with `semantic_warning_count = 2`
-- bounded `FINAL_ANSWER.md` still leaked `none_reason:` bullets inside populated `Strengths` and `Uncertainties`
-- trust run finished `accepted_with_warnings`, which is better and more honest
-- trust provenance is `bound`, but the review-stage provenance record still shows `normalized_ref_count = 0` and `normalized_ref_field_count = 0`
-- trust review surfaced `missing_topics` during the critic stage, but there is still no typed lifecycle proving how a missing topic was incorporated, waived, or intentionally left open
+Historical Slice A / Slice B review material remains below for provenance. The active Slice C blueprint is appended after the Slice B resolution section.
 
-That is the whole game. The split shipped. The audit trail still needs one more pass.
+## Historical Slice B Review Context
+
+The next sections preserve the prior Slice B `autoplan` output so the rationale for the landed closure-proof work stays in one file. They are still useful context, but they are not the active next-slice recommendation anymore.
 
 ## Step 0: Scope Challenge
 
@@ -1516,6 +1514,315 @@ The engineering review is resolved for implementation purposes:
 - defer unrelated evidence-budget, renderer, and late-auditor policy work out of this slice
 - judge success by zero uncovered closures plus explicit proof-path rendering, not by raw ref counts
 
+### Implementation Slice C, fully implementable blueprint
+
+#### Slice C objective
+
+Make trust-mode artifact publication honest and concise without introducing a second truth surface.
+
+This slice does two things together because they live in the same output-policy seam:
+
+1. block `FINAL_ANSWER.*` when trust-mode audit debt is still materially unresolved
+2. render concise markdown previews from canonical audit truth instead of dumping raw evidence/proof lists everywhere
+
+It does **not** reopen closure-proof semantics, add a second payload family, or turn trust into a second runner.
+
+#### What changed since the last Slice B plan
+
+- trust recommendation evidence is already uncapped in `anvil/harness/contracts.py`
+- `anvil/harness/runner.py` only trims recommendation evidence in bounded mode
+- `anvil/harness/reporting.py` already suppresses stale `none_reason` residue
+- partial-answer publication is already stricter than full-answer publication for trust mode
+
+That is why the old "Slice C = display-vs-audit evidence split" note is stale. The branch already fixed the cap problem. The remaining bug is output-policy honesty.
+
+#### Outside voice status
+
+`[codex-only]` shell reviews ran for strategy and engineering. Claude subagent review was not available in this environment, so this replan uses primary analysis plus codex shell review rather than a true two-model consensus table.
+
+The two codex passes agreed on two facts:
+
+- the old Slice C framing is stale
+- the remaining work lives in `anvil/harness/runner.py`, `anvil/harness/report.py`, and `anvil/harness/reporting.py`
+
+Their emphasis differed:
+
+- the strategy pass prioritized trust publishability semantics
+- the engineering pass prioritized a derived display projection from canonical audit truth
+
+The recommendation here is to combine both into one output-policy slice. Gating without projection still over-shares raw audit detail. Projection without gating still ships the wrong artifact.
+
+#### Step 0: Scope challenge
+
+##### Recommended review mode
+
+Use **HOLD SCOPE** for Slice C.
+
+Reason:
+
+- Slice B already changed the contract, prompts, validation, and provenance rules
+- the remaining work is downstream output policy, not another semantic migration
+- mixing late-auditor policy changes or new schema fields into this slice would blur the acceptance bar immediately
+
+##### What already exists
+
+| Sub-problem | Existing code to extend | Why this is enough |
+|---|---|---|
+| trust warning causes | `_analysis_warning_causes()` in `anvil/harness/runner.py` | the runner already knows which conditions downgraded trust verdicts |
+| full-accept gate | `_analysis_can_fully_accept()` and `_analysis_content_verdict()` in `anvil/harness/runner.py` | publishability can be aligned here without a second runner |
+| artifact publication | `apply_final_artifacts()` in `anvil/harness/reporting.py` | artifact kind is already decoupled from raw verdict strings |
+| partial publish precedent | `_partial_answer_eligibility()` in `anvil/harness/reporting.py` | trust partial publish is already stricter than final publish, which gives the right reference behavior |
+| user-facing markdown rendering | `render_deliverable_markdown()` in `anvil/harness/reporting.py` | recommendation evidence previews already flow through one render path |
+| report provenance rendering | `_append_review_provenance_section()` in `anvil/harness/report.py` | proof tables already have one rendering seam that can be made display-safe |
+
+##### Implementation alternatives
+
+| Approach | Effort | Pros | Cons | Decision |
+|---|---|---|---|---|
+| Tighten trust publishability only | medium | fixes the most misleading artifact behavior fast | still dumps raw audit lists into markdown | reject |
+| Add display projection only | medium | cleaner markdown and reports | still publishes `FINAL_ANSWER.*` while trust debt remains unresolved | reject |
+| One output-policy slice: trust publish blockers plus derived display previews from canonical raw refs | medium | one seam, one truth source, direct user-facing improvement | needs careful blocker taxonomy and artifact tests | recommended |
+| Add model-authored `display_*` and `audit_*` fields | high | superficially explicit | dual truth, prompt/schema churn, pointless contract growth | reject |
+
+##### Dream state
+
+```text
+CURRENT
+  trust can end as accepted_with_warnings
+  FINAL_ANSWER.* can still publish
+  markdown reuses raw audit lists directly
+
+SLICE C
+  trust publish blockers are explicit
+  FINAL_ANSWER.* only ships when trust debt is advisory, not blocking
+  markdown uses concise derived previews from canonical JSON/provenance truth
+
+12-MONTH IDEAL
+  trust has one canonical audit truth, one honest artifact policy,
+  and the user can tell immediately whether a result is publishable,
+  caveated, or blocked without reading the raw summary JSON
+```
+
+#### Architecture review
+
+##### Decision
+
+Keep one canonical audit truth and derive publishability plus display projection downstream.
+
+Do **not** add new model-authored fields.
+
+Do **not** add a second evidence store.
+
+Do **not** change closure-proof semantics again.
+
+##### Canonical implementation contract
+
+These rules are the source of truth for Slice C. If code, docs, or tests disagree, this section wins.
+
+1. `summary.json`, the selected structured payload JSON artifact, and provenance records remain the canonical full-fidelity audit truth.
+
+2. Trust-mode `FINAL_ANSWER.*` is publishable only when all of these are true:
+   - final provenance status is `bound`
+   - final topic ledger has no `open` or `carried_forward` topics
+   - final semantic warning count is `0`
+
+3. The following remain advisory causes, not publish blockers:
+   - low-severity reviewer issues
+   - `accept_with_caveat` recommendation reviews
+   - inference-only accepted recommendations
+
+4. If trust mode is content-accepted but not publishable, artifact selection must skip `FINAL_ANSWER.*` and fall through to the existing partial-answer or best-draft path.
+
+5. Markdown deliverables and `REPORT.md` must render concise previews from canonical raw evidence/proof lists:
+   - recommendation evidence preview: first `3` refs, then `(+N more)` when elided
+   - provenance checked-files / verified-refs preview: first `2` refs per column, then `(+N more)` when elided
+
+6. The concise preview is renderer-owned. No prompt, schema, or provider payload may introduce `display_evidence_refs`, `audit_evidence_refs`, or similar dual-truth fields.
+
+##### ASCII dependency graph
+
+```text
+review payload + topic ledger + provenance
+                │
+                ▼
+      anvil/harness/runner.py
+        ├── classify advisory causes
+        └── classify publish blockers
+                │
+                ▼
+     anvil/harness/reporting.py
+        ├── choose FINAL / PARTIAL / BEST_DRAFT
+        └── render deliverable markdown previews
+                │
+                ▼
+       anvil/harness/report.py
+        └── render report-side provenance previews
+
+Canonical raw refs stay in summary.json and JSON artifacts the whole time.
+```
+
+##### File-by-file implementation contract
+
+| File | Required change | Notes |
+|---|---|---|
+| `anvil/harness/runner.py` | add explicit trust publish-blocker classification and surface it in final analysis status | blocker logic must reuse existing provenance, topic-ledger, and semantic-warning state |
+| `anvil/harness/reporting.py` | gate `FINAL_ANSWER.*` on publishability and derive concise recommendation-evidence previews | artifact selection stays verdict-aware but no longer trusts `accepted_with_warnings` blindly |
+| `anvil/harness/report.py` | render display-safe closure-proof previews instead of dumping raw full lists in the report table | raw values stay in JSON |
+| `README.md` | document the difference between content verdict and publishable artifact kind for trust mode | readers must stop assuming `accepted_with_warnings` implies `FINAL_ANSWER.*` |
+| `docs/analysis_review_contract.md` | clarify that display projection is renderer-owned and full raw refs remain canonical in JSON/provenance | no new model contract fields |
+| `tests/test_harness_runner.py` | cover trust publish blockers and artifact fallback behavior | main behavior guard |
+| `tests/test_harness_reporting.py` | cover recommendation-evidence preview, provenance preview, and artifact rendering paths | user-visible output guard |
+| `tests/test_harness_analysis_contract.py` | assert docs/contract language stays aligned if internal publishability fields or docs are added | doc drift guard |
+
+#### Code quality review
+
+##### Minimal-diff rules
+
+- Reuse existing topic-ledger and provenance state. Do not recompute them from raw payload text.
+- Keep preview generation in renderer helpers, not provider payloads.
+- Keep publish-blocker logic close to `_analysis_warning_causes()` so the advisory-versus-blocking split stays obvious.
+- Do not thread new display fields through `anvil/harness/schemas.py` or `anvil/harness/prompts.py`.
+
+##### Determinism rules
+
+These choices are already decided:
+
+1. Trust publish blockers are `provenance != bound`, unresolved topics, and final semantic warnings.
+2. Low reviewer issues, `accept_with_caveat`, and inference-only grounding remain advisory.
+3. `FINAL_ANSWER.*` is an artifact-selection decision, not a new content-verdict string.
+4. Display preview budgets are fixed in the renderer for this slice: `3` recommendation evidence refs, `2` provenance refs per report column.
+5. JSON artifacts remain full fidelity.
+
+##### NOT in scope for Slice C
+
+- changing closure-proof semantics
+- changing prompt or schema payload shape
+- new `display_*` versus `audit_*` model fields
+- removing every remaining `missing_topics` fallback path as a standalone cleanup slice
+- changing selection ranking or partial-answer eligibility rules
+- tightening `late_auditor_medium_or_higher_policy` defaults
+- trust as a separate attestation runner or post-pass
+
+#### Test review
+
+##### Code path coverage
+
+```text
+CODE PATH COVERAGE
+===========================
+[+] Trust publish blockers
+    │
+    ├── [REQUIRED] trust accepted_with_warnings + unbound provenance skips FINAL_ANSWER.*
+    ├── [REQUIRED] trust accepted_with_warnings + open/carried topics skips FINAL_ANSWER.*
+    ├── [REQUIRED] trust accepted_with_warnings + semantic warnings skips FINAL_ANSWER.*
+    └── [REQUIRED] advisory-only trust warnings can still publish FINAL_ANSWER.*
+
+[+] Artifact fallback
+    │
+    ├── [REQUIRED] publish-blocked trust run falls through to PARTIAL_ANSWER.* when subset is eligible
+    └── [REQUIRED] publish-blocked trust run falls through to BEST_DRAFT.* when no subset is publishable
+
+[+] Display projection
+    │
+    ├── [REQUIRED] FINAL_ANSWER.md shows preview refs plus omitted-count marker
+    ├── [REQUIRED] REPORT.md shows preview checked-files / verified-refs plus omitted-count marker
+    └── [REQUIRED] JSON artifacts keep the full raw lists
+
+[+] Bounded parity
+    │
+    └── [REQUIRED] bounded-mode artifacts remain unchanged because canonical evidence is already capped
+```
+
+##### Required tests by file
+
+1. `tests/test_harness_runner.py`
+   Add end-to-end coverage for:
+   - trust accepted-with-warnings plus unbound provenance
+   - trust accepted-with-warnings plus open topic debt
+   - trust accepted-with-warnings plus semantic warnings
+   - trust advisory-only warnings still producing `FINAL_ANSWER.*`
+   - partial / best-draft fallback from blocked trust publication
+
+2. `tests/test_harness_reporting.py`
+   Add rendering coverage for:
+   - recommendation evidence preview with `(+N more)`
+   - review-provenance preview with `(+N more)`
+   - `FINAL_ANSWER.md` remaining concise while JSON artifacts keep full lists
+
+3. `tests/test_harness_analysis_contract.py`
+   Add or update assertions that docs describe renderer-owned display projection and artifact-kind semantics correctly.
+
+##### Test plan artifact
+
+The concrete test plan for this slice is written to:
+
+`/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-test-plan-20260422-132105.md`
+
+##### Verification commands for Slice C
+
+```bash
+poetry run pytest -q \
+  tests/test_harness_runner.py \
+  tests/test_harness_reporting.py \
+  tests/test_harness_analysis_contract.py
+```
+
+#### Performance review
+
+Keep Slice C cheap:
+
+- no new model pass
+- no replay requirement for basic correctness
+- no second evidence store
+- render previews from already-normalized lists instead of recomputing provenance
+
+If Slice C starts reading more files or mutating payload schema just to shorten markdown, the design is wrong.
+
+#### Failure modes for Slice C
+
+| Failure mode | Where it would show up | Required guard |
+|---|---|---|
+| trust still writes `FINAL_ANSWER.*` with unresolved publish blockers | artifact selection | runner/reporting tests must assert artifact fallback |
+| markdown preview hides the only meaningful ref | renderer | preview keeps first refs stable and records omitted counts |
+| markdown preview becomes a second truth surface | renderer + docs | JSON stays full fidelity and docs name markdown as preview-only |
+| advisory caveats accidentally become blocking | runner | tests must distinguish blocker taxonomy from advisory causes |
+| report preview and deliverable preview drift | report + reporting | shared helper or mirrored tests on both surfaces |
+
+#### Worktree parallelization strategy for Slice C
+
+##### Dependency table
+
+| Step | Modules touched | Depends on |
+|---|---|---|
+| C1. Publish-blocker classification | `anvil/harness/runner.py` | — |
+| C2. Artifact selection fallback | `anvil/harness/reporting.py` | C1 |
+| C3. Display projection helpers | `anvil/harness/report.py`, `anvil/harness/reporting.py` | C1 |
+| C4. Docs and tests | `README.md`, `docs/analysis_review_contract.md`, `tests/` | C1, C2, C3 |
+
+##### Execution order
+
+Start with `C1`.
+
+Then do `C2`.
+
+Then land `C3`.
+
+Finish with `C4`.
+
+Do **not** parallelize `reporting.py` work. Artifact selection and markdown rendering share the same file and will fight immediately.
+
+#### Slice C exit criteria
+
+Slice C is done only when all of these are true:
+
+- trust publish blockers can prevent `FINAL_ANSWER.*` even when content verdict stays `accepted_with_warnings`
+- advisory-only trust warnings can still publish
+- markdown artifacts show concise previews instead of raw full evidence/proof lists
+- JSON artifacts and provenance records remain full fidelity
+- the targeted pytest suite above passes
+
+That is the bar for "honest trust publication." Not just "the markdown looks shorter."
+
 ## Cross-Phase Themes
 
 Three themes showed up everywhere:
@@ -1554,6 +1861,12 @@ Items intentionally deferred out of this iteration:
 | 8 | Eng | Defer display-vs-audit evidence splitting out of Slice B and keep one canonical closure-proof truth source inside this slice | mechanical | P3 pragmatic | Slice B needs one deterministic closure-proof implementation, not a second evidence-policy decision bundled into the same diff | blind cap increase or dual truth sources |
 | 9 | Eng | Defer attestation-layer redesign to backlog | mechanical | P2 boil lakes | It is still a valid next move, but it is larger than this branch needs right now | doing the architecture rewrite in this iteration |
 | 10 | Eng | Skip design review | mechanical | P3 pragmatic | This plan has no UI scope and the affected files are harness/runtime/docs/test surfaces only | forcing a design pass with no UI changes |
+| 11 | CEO | Reframe the active next slice from stale evidence-cap work to trust artifact publishability | mechanical | P1 completeness | The cap and markdown-residue work already landed, but trust can still ship `FINAL_ANSWER.*` while audit debt only appears as a warning | continuing to treat old Slice C notes as current |
+| 12 | Eng | Combine publish-blocker gating and display projection into one output-policy slice | taste | P3 pragmatic | Both concerns touch the same downstream files, and splitting them would create two small but overlapping follow-up slices | publishability-only slice, projection-only slice |
+| 13 | Eng | Keep display projection renderer-owned instead of adding model-authored `display_*` fields | mechanical | P5 explicit over clever | JSON/provenance already hold the canonical truth, so dual fields would only create drift risk | prompt/schema migration for display refs |
+| 14 | Eng | Treat unbound provenance, unresolved topics, and semantic warnings as trust publish blockers | mechanical | P1 completeness | Those are audit-debt states, not cosmetic caveats, and partial publication is already stricter on the same seam | letting FINAL_ANSWER publish with unresolved audit debt |
+| 15 | Eng | Keep low reviewer issues, `accept_with_caveat`, and inference-only acceptance as advisory-only causes | taste | P3 pragmatic | These still matter and should stay visible, but they are weaker than provenance/topic incompleteness and should not automatically block shipment | making every trust warning publish-blocking |
+| 16 | Eng | Skip design review again for Slice C | mechanical | P3 pragmatic | The active slice only touches harness/runtime/reporting/docs/tests and has no UI implementation surface | forcing a design pass with no UI changes |
 
 ## GSTACK REVIEW REPORT
 
