@@ -78,6 +78,7 @@ def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
             "analysis_review_bounded_v1",
             "bounded",
             [
+                "Recommendation evidence refs in trust-mode analysis outputs: n/a (bounded mode)",
                 "Taxonomy override reason required: False",
                 "verified_evidence_refs must be a subset of evidence refs: False",
                 "Non-inferred affected_files require evidence or checked-file coverage: False",
@@ -97,6 +98,7 @@ def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
             "analysis_review_trust_v1",
             "trust",
             [
+                "Recommendation evidence refs in trust-mode analysis outputs: uncapped",
                 "Taxonomy override reason required: True",
                 "verified_evidence_refs must be a subset of evidence refs: True",
                 "Non-inferred affected_files require evidence or checked-file coverage: True",
@@ -171,11 +173,11 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     )
 
     common_bounded_lines = [
-        "Analysis-review contract: analysis_review_v1_contract_v5",
+        "Analysis-review contract: analysis_review_v1_contract_v6",
         f"Effective strategy kind: {strategy_kind}",
         f"Mode: {mode}",
         "Bounded review policy:",
-        "Recommendation evidence refs: 1..3 per recommendation",
+        "Bounded-mode recommendation evidence refs: 1..3 per recommendation",
         "review_surface.must_check_files: 1..3 per recommendation",
         "review_surface.optional_check_files: 0..2 per recommendation",
         "Evidence cap policy: trim_to_cap",
@@ -249,22 +251,45 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "If multiple excerpts come from one file, cite the file once and put line-specific detail in rationale or scope_note." in proposer
     assert "Every recommendation uses the same payload family in both modes." in proposer
     assert "Every recommendation uses the same payload family in both modes." in reviser
-    assert (
-        "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note, and keep evidence within the bounded-review cap."
-        in proposer
-    )
-    assert "keep evidence within the bounded-review cap." in proposer
+    if mode == "trust":
+        assert (
+            "Keep each recommendation scoped: include review_surface.must_check_files, optional_check_files, and a scope_note, and retain every concrete evidence ref needed for audit completeness."
+            in proposer
+        )
+        assert (
+            "recommendation evidence is uncapped; include every concrete workspace ref needed to preserve audit completeness."
+            in proposer
+        )
+    else:
+        assert (
+            "Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note, and keep evidence within the bounded-review cap."
+            in proposer
+        )
+        assert "keep recommendation evidence within the bounded-review cap." in proposer
     assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
-    assert (
-        "Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
-        in reviser
-    )
+    if mode == "trust":
+        assert (
+            "Preserve each recommendation's evidence list and review_surface unless an open issue or open topic requires changing them; do not drop concrete evidence refs just to match a bounded cap."
+            in reviser
+        )
+    else:
+        assert (
+            "Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
+            in reviser
+        )
     assert (
         "Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in reviser
     )
     assert "Do not cite evidence as `path:line-range`" in reviser
-    assert "Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more." in reviser
+    if mode == "trust":
+        assert (
+            "Keep each recommendation's evidence list complete for trust-mode auditability; do not trim concrete evidence refs to the bounded-review cap."
+            in reviser
+        )
+        assert "within the bounded-review cap unless the contract explicitly allows more" not in reviser
+    else:
+        assert "Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more." in reviser
     assert payload_line in proposer
     assert payload_line in reviser
     assert issue_line in critic

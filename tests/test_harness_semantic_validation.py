@@ -233,6 +233,46 @@ def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
     assert "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)." in result.errors
 
 
+def test_trust_analysis_output_semantic_validation_allows_more_than_three_evidence_refs():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["analysis_output_trust_surface_valid"])
+    payload["recommendations"][0]["evidence"] = [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/nightly.yml",
+    ]
+    payload["files_reviewed"] = [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/nightly.yml",
+    ]
+    payload["recommendations"][0]["verified_evidence_refs"] = [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    payload["recommendations"][0]["checked_files"] = [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    payload["recommendations"][0]["affected_files"] = [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    payload["recommendations"][0]["grounding_mode"] = "direct"
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
 def test_analysis_output_semantic_validation_rejects_evidence_outside_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
@@ -1017,6 +1057,43 @@ def test_trust_review_semantic_validation_rejects_global_topic_when_recommendati
         "trust review payload lacks provenance-complete structured review refs for global topic closures TOPIC-002. files_reviewed alone is not sufficient."
         in result.errors
     )
+
+
+def test_trust_review_semantic_validation_allows_relinked_topic_to_close_on_recommendation_proof():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
+    payload["resolved_topic_ids"] = ["TOPIC-001"]
+    payload["carried_forward_topic_ids"] = []
+    payload["waived_topic_ids"] = []
+    payload["topic_closure_reviews"] = []
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="critic",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=["TOPIC-001"],
+        prior_open_topic_records=[{"topic_id": "TOPIC-001", "recommendation_index": 2}],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 6,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is True
+    assert result.errors == []
 
 
 def test_trust_review_semantic_validation_rejects_global_issue_when_recommendations_are_covered():

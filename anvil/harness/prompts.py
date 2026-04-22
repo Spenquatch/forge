@@ -214,9 +214,22 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
 
 def _trust_review_policy_block(contract: AnalysisReviewContract) -> str:
     trust = contract.trust_review
+    trust_evidence_limit = (
+        (
+            str(trust.max_evidence_refs_per_recommendation)
+            if trust.max_evidence_refs_per_recommendation is not None
+            else "uncapped"
+        )
+        if contract.mode == "trust"
+        else "n/a (bounded mode)"
+    )
     return "\n".join(
         [
             "Trust review policy:",
+            (
+                "- Recommendation evidence refs in trust-mode analysis outputs: "
+                f"{trust_evidence_limit}"
+            ),
             f"- Taxonomy override reason required: {trust.require_taxonomy_override_reason}",
             (
                 "- verified_evidence_refs must be a subset of evidence refs: "
@@ -249,7 +262,7 @@ def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
         [
             "Bounded review policy:",
             (
-                "- Recommendation evidence refs: "
+                "- Bounded-mode recommendation evidence refs: "
                 f"1..{bounded.max_evidence_refs_per_recommendation} per recommendation"
             ),
             (
@@ -305,7 +318,48 @@ def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
         lines.append(
             "- In this mode, affected_files and checked_files are optional scoping metadata rather than strict trust requirements."
         )
+    if contract.mode == "trust":
+        lines.append(
+            "- In this mode, recommendation evidence is uncapped; include every concrete workspace ref needed to preserve audit completeness."
+        )
+    else:
+        lines.append(
+            "- In this mode, keep recommendation evidence within the bounded-review cap."
+        )
     return "\n".join(lines)
+
+
+def _analysis_recommendation_scope_line(contract: AnalysisReviewContract) -> str:
+    if contract.mode == "trust":
+        return (
+            "11. Keep each recommendation scoped: include review_surface.must_check_files, "
+            "optional_check_files, and a scope_note, and retain every concrete evidence ref needed for audit completeness."
+        )
+    return (
+        "11. Keep each recommendation bounded: include review_surface.must_check_files, "
+        "optional_check_files, and a scope_note, and keep evidence within the bounded-review cap."
+    )
+
+
+def _reviser_preservation_line(contract: AnalysisReviewContract) -> str:
+    if contract.mode == "trust":
+        return (
+            "7. Preserve each recommendation's evidence list and review_surface unless an open issue or open topic requires changing them; "
+            "do not drop concrete evidence refs just to match a bounded cap."
+        )
+    return (
+        "7. Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
+    )
+
+
+def _reviser_evidence_guidance_line(contract: AnalysisReviewContract) -> str:
+    if contract.mode == "trust":
+        return (
+            "11. Keep each recommendation's evidence list complete for trust-mode auditability; do not trim concrete evidence refs to the bounded-review cap."
+        )
+    return (
+        "11. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more."
+    )
 
 
 def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
@@ -537,7 +591,7 @@ Your job:
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
 9. Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
 10. Do not cite evidence as `path:line-range`; if line detail matters, put it in rationale or scope_note while citing the file path once.
-11. Keep each recommendation bounded: include review_surface.must_check_files, optional_check_files, and a scope_note, and keep evidence within the bounded-review cap.
+{_analysis_recommendation_scope_line(contract)}
 12. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
 13. Use workspace_write_intent=`none` unless you truly changed the repo.
 
@@ -715,11 +769,11 @@ Your job:
 4. If prior open topics exist in the review context, return a `topic_resolution_map` entry for every open topic ID, even if you disagree with it.
 5. Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage.
 6. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
-7. Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them.
+{_reviser_preservation_line(contract)}
 8. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
 9. Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
 10. Do not cite evidence as `path:line-range`; if line detail matters, keep the evidence ref at file granularity and move the excerpt detail into rationale or scope_note.
-11. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more.
+{_reviser_evidence_guidance_line(contract)}
 12. Use the shared confidence rubric below when revising confidence values.
 13. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
 14. Use workspace_write_intent=`none` unless you truly changed the repo.

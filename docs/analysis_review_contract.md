@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v5` keeps the bounded-review rules from v4, makes evidence-cap handling explicit, and keeps one unified trust policy instead of inventing a second payload family.
+`analysis_review_v1_contract_v6` keeps the bounded-review rules from v5, makes trust-mode recommendation evidence explicitly uncapped, and keeps one unified trust policy instead of inventing a second payload family.
 
 ## What the contract governs
 
@@ -27,7 +27,7 @@ The contract now serializes:
 
 ```json
 {
-  "contract_version": "analysis_review_v1_contract_v5",
+  "contract_version": "analysis_review_v1_contract_v6",
   "strategy_kind": "analysis_review_v1",
   "mode": "bounded",
   "effective_strategy": {
@@ -109,7 +109,7 @@ The bounded-review policy remains the single source of truth for review caps. Pr
 
 Current defaults:
 
-- recommendation evidence refs: `1..3`
+- bounded-mode recommendation evidence refs: `1..3`
 - `review_surface.must_check_files`: `1..3`
 - `review_surface.optional_check_files`: `0..2`
 - evidence cap policy: `trim_to_cap` by default, with task-level `strict` override support
@@ -117,6 +117,8 @@ Current defaults:
 - critic new-topic cap: `2`
 - auditor new medium-or-higher issue cap after round 0: `1`
 - scope escapes require non-empty reasons
+
+Trust-mode recommendation evidence is intentionally uncapped. Trust runs should preserve every concrete workspace ref needed to support auditability; they do not trim or reject a recommendation solely for carrying more than three evidence refs.
 
 ## Shared payload family
 
@@ -225,7 +227,8 @@ JSON schema validation is necessary but not sufficient. The harness runs semanti
 Examples of the existing and intended v4 semantic checks:
 
 - proposer/reviser outputs must satisfy the task minimum recommendation count
-- recommendation evidence counts must stay within the bounded-review cap
+- in bounded mode, recommendation evidence counts must stay within the bounded-review cap
+- in trust mode, recommendation evidence counts are uncapped, but every evidence ref must still remain concrete, normalized, in-workspace, and included in `files_reviewed`
 - recommendation evidence refs must exist in the workspace snapshot
 - recommendation evidence refs must remain a subset of `files_reviewed`
 - line-qualified refs such as `path:12-18` should canonicalize to workspace paths before semantic validation

@@ -153,7 +153,10 @@ def validate_analysis_output_payload(
                 result.errors.append(
                     f"recommendations[{index}] must include at least one non-empty evidence item."
                 )
-            if len(evidence_items) > bounded_review.max_evidence_refs_per_recommendation:
+            if (
+                contract.mode == "bounded"
+                and len(evidence_items) > bounded_review.max_evidence_refs_per_recommendation
+            ):
                 result.errors.append(
                     f"recommendations[{index}].evidence exceeds the bounded-review cap of "
                     f"{bounded_review.max_evidence_refs_per_recommendation} item(s)."

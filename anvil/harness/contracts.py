@@ -93,6 +93,7 @@ class BoundedReviewPolicy:
 
 @dataclass
 class TrustReviewPolicy:
+    max_evidence_refs_per_recommendation: int | None = None
     require_taxonomy_override_reason: bool = True
     require_verified_evidence_refs_subset: bool = True
     require_affected_file_coverage: bool = True
@@ -152,7 +153,7 @@ def build_analysis_review_contract(
     mode = derive_analysis_review_mode(strategy.kind)
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v5",
+        contract_version="analysis_review_v1_contract_v6",
         strategy_kind=str(strategy.kind),
         mode=mode,
         stop_policy=strategy.review_loops,
@@ -173,6 +174,9 @@ def build_analysis_review_contract(
             evidence_cap_policy=task.review_requirements.evidence_cap_policy,
         ),
         trust_review=TrustReviewPolicy(
+            max_evidence_refs_per_recommendation=(
+                None if mode == "trust" else BoundedReviewPolicy().max_evidence_refs_per_recommendation
+            ),
             require_taxonomy_override_reason=(mode == "trust"),
             require_verified_evidence_refs_subset=(mode == "trust"),
             require_affected_file_coverage=(mode == "trust"),

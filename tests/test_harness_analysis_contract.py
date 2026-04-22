@@ -69,7 +69,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v5"
+    assert contract.contract_version == "analysis_review_v1_contract_v6"
     assert contract.mode == "bounded"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
@@ -92,6 +92,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0 == 1
     assert contract.bounded_review.require_scope_escape_justification is True
     assert contract.trust_review.require_taxonomy_override_reason is False
+    assert contract.trust_review.max_evidence_refs_per_recommendation == 3
     assert contract.trust_review.require_verified_evidence_refs_subset is False
     assert contract.trust_review.require_affected_file_coverage is False
     assert contract.trust_review.payload_provenance_mode == "none"
@@ -113,6 +114,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
         "require_scope_escape_justification": True,
     }
     assert serialized["trust_review"] == {
+        "max_evidence_refs_per_recommendation": 3,
         "require_taxonomy_override_reason": False,
         "require_verified_evidence_refs_subset": False,
         "require_affected_file_coverage": False,
@@ -145,12 +147,14 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
     assert trust.mode == "trust"
     assert trust.strategy_kind == "analysis_review_trust_v1"
     assert trust.trust_review.require_taxonomy_override_reason is True
+    assert trust.trust_review.max_evidence_refs_per_recommendation is None
     assert trust.trust_review.require_verified_evidence_refs_subset is True
     assert trust.trust_review.require_affected_file_coverage is True
     assert trust.trust_review.payload_provenance_mode == "payload_hash_and_refs"
     assert trust.trust_review.downgrade_on_semantic_warnings is True
     assert trust.trust_review.downgrade_on_inferred_acceptance is True
     assert trust.trust_review.late_auditor_medium_or_higher_policy == "warn"
+    assert trust.to_dict()["trust_review"]["max_evidence_refs_per_recommendation"] is None
     assert trust.to_dict()["effective_strategy"] == {
         "kind": "analysis_review_trust_v1",
         "mode": "trust",

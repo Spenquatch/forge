@@ -40,6 +40,31 @@ def _best_draft_record(payload: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _section_payload_with_redundant_none_reason() -> dict[str, object]:
+    return {
+        "summary": "Payload with populated and empty analysis sections.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Document fallback handling",
+                "rationale": "Operators need an explicit fallback path.",
+                "evidence": ["docs/runbook.md"],
+                "proposed_change": "Document the fallback handling path.",
+                "confidence": 0.74,
+            }
+        ],
+        "strengths": {
+            "items": ["Grounded in workflow files"],
+            "none_reason": "This stale schema text should not leak.",
+        },
+        "uncertainties": {
+            "items": [],
+            "none_reason": "No material uncertainties remained after comparing the relevant files.",
+        },
+    }
+
+
 def test_render_deliverable_markdown_attaches_caveats_to_affected_recommendations():
     payload = {
         "summary": "Prioritized recommendations.",
@@ -202,6 +227,24 @@ def test_render_deliverable_markdown_uses_original_indices_for_partial_answers()
     )
 
 
+def test_render_deliverable_markdown_omits_none_reason_label_in_analysis_sections():
+    markdown = render_deliverable_markdown(
+        "task-sections",
+        _section_payload_with_redundant_none_reason(),
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary={"analysis_review_status": {"mode": "bounded"}},
+    )
+
+    strengths = _rendered_section(markdown, "## Strengths")
+    uncertainties = _rendered_section(markdown, "## Uncertainties")
+
+    assert "- Grounded in workflow files" in strengths
+    assert "This stale schema text should not leak." not in strengths
+    assert "No material uncertainties remained after comparing the relevant files." in uncertainties
+    assert "none_reason:" not in markdown
+
+
 def test_build_partial_answer_payload_filters_topic_blocked_accepted_recommendations():
     payload = {
         "summary": "Partial acceptance output.",
@@ -326,6 +369,10 @@ def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_r
         "verdict": "accepted_partial",
         "artifacts": {"run_dir": str(tmp_path)},
         "final_answer": {
+            "strengths": {
+                "items": ["Grounded in workflow files"],
+                "none_reason": "This stale schema text should not leak.",
+            },
             "summary": "Partial acceptance output.",
             "recommendations": [
                 {
@@ -415,6 +462,7 @@ def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_r
     assert "TOPIC-001" not in markdown
     assert "accept_with_caveat: 2" not in markdown
     assert "## Topic Lifecycle" not in markdown
+    assert "none_reason:" not in markdown
 
 
 def test_apply_final_artifacts_blocks_partial_answer_when_trust_provenance_is_incomplete(
@@ -633,6 +681,10 @@ def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accept
     tmp_path,
 ):
     clean_payload = {
+        "strengths": {
+            "items": ["Grounded in workflow files"],
+            "none_reason": "This stale schema text should not leak.",
+        },
         "summary": "Clean accepted draft.",
         "recommendations": [
             {
@@ -716,6 +768,24 @@ def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accept
     assert updated["best_draft_id"] == "draft-clean"
     assert updated["selected_draft_id"] == "draft-clean"
     assert updated["final_answer"]["summary"] == "Clean accepted draft."
+    assert "none_reason:" not in (tmp_path / "FINAL_ANSWER.md").read_text(encoding="utf-8")
+
+
+def test_apply_final_artifacts_best_draft_markdown_omits_none_reason_label(tmp_path):
+    summary = {
+        "task": {"id": "task-best-draft-sections"},
+        "verdict": "revise",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "drafts": [_best_draft_record(_section_payload_with_redundant_none_reason())],
+        "analysis_review_status": {"mode": "bounded"},
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["artifacts"]["final_artifact"].endswith("BEST_DRAFT.md")
+    assert "none_reason:" not in (tmp_path / "BEST_DRAFT.md").read_text(encoding="utf-8")
 
 
 def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics_exist():

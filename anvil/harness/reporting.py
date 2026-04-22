@@ -372,8 +372,8 @@ def _render_analysis_section(lines: list[str], title: str, section: Any) -> None
     if items:
         for item in items:
             lines.append(f"- {item}")
-    if none_reason:
-        lines.append(f"- none_reason: {none_reason}")
+    elif none_reason:
+        lines.append(none_reason)
     lines.append("")
 
 

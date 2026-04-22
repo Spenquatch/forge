@@ -904,6 +904,49 @@ class _TopicResolutionRecommendationHarnessAdapter(_TopicLifecycleHarnessAdapter
         return super()._payload_for_role(role_name)
 
 
+class _TrustTopicResolutionRecommendationHarnessAdapter(_TopicResolutionRecommendationHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"][0]["verified_evidence_refs"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["checked_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["affected_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][0]["grounding_mode"] = "direct"
+        payload["recommendations"][1]["verified_evidence_refs"] = []
+        payload["recommendations"][1]["checked_files"] = []
+        payload["recommendations"][1]["affected_files"] = [
+            ".github/workflows/claude-code-release-watch.yml"
+        ]
+        payload["recommendations"][1]["grounding_mode"] = "inferred"
+        return payload
+
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["files_reviewed"] = [
+                ".github/workflows/codex-cli-release-watch.yml",
+                ".github/workflows/claude-code-release-watch.yml",
+            ]
+            payload["recommendation_reviews"][0]["checked_files"] = [
+                ".github/workflows/codex-cli-release-watch.yml"
+            ]
+            payload["recommendation_reviews"][0]["verified_evidence_refs"] = [
+                ".github/workflows/codex-cli-release-watch.yml"
+            ]
+            payload["recommendation_reviews"][1]["checked_files"] = [
+                ".github/workflows/claude-code-release-watch.yml"
+            ]
+            payload["recommendation_reviews"][1]["verified_evidence_refs"] = [
+                ".github/workflows/claude-code-release-watch.yml"
+            ]
+        return payload
+
+
 class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
@@ -1217,6 +1260,32 @@ class _LineQualifiedEvidenceHarnessAdapter(_AcceptingHarnessAdapter):
         return payload
 
 
+class _TrustLineQualifiedEvidenceHarnessAdapter(_TrustInferenceHarnessAdapter):
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["recommendations"][0]["evidence"] = [
+            ".github/workflows/claude-code-release-watch.yml:10-18",
+            ".github/workflows/codex-cli-release-watch.yml:20-28",
+            ".github/workflows/claude-code-update-snapshot.yml:30-44",
+            ".github/workflows/codex-cli-update-snapshot.yml:50-68",
+        ]
+        payload["files_reviewed"] = [
+            ".github/workflows/claude-code-release-watch.yml:10-18",
+            ".github/workflows/codex-cli-release-watch.yml:20-28",
+            ".github/workflows/claude-code-update-snapshot.yml:30-44",
+            ".github/workflows/codex-cli-update-snapshot.yml:50-68",
+        ]
+        payload["recommendations"][0]["review_surface"]["must_check_files"] = [
+            ".github/workflows/claude-code-release-watch.yml:10-18",
+            ".github/workflows/codex-cli-release-watch.yml:20-28",
+            ".github/workflows/claude-code-update-snapshot.yml:30-44",
+        ]
+        payload["recommendations"][0]["review_surface"]["optional_check_files"] = [
+            ".github/workflows/codex-cli-update-snapshot.yml:50-68"
+        ]
+        return payload
+
+
 
 def _write_task_and_strategy(
     tmp_path: Path,
@@ -1333,7 +1402,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
-    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v5"
+    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v6"
     assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
     assert summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
@@ -1538,6 +1607,43 @@ def test_analysis_review_runner_strict_evidence_cap_still_fails_fast(
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert proposer_stage.get("semantic_validation_warnings") in (None, [])
+
+
+def test_analysis_review_runner_trust_mode_preserves_uncapped_evidence_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustLineQualifiedEvidenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    proposer_stage = summary["agent_stages"][0]
+    proposer_payload = proposer_stage["structured_output"]
+    assert proposer_payload["recommendations"][0]["evidence"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+    ]
+    assert proposer_stage.get("semantic_validation_warnings") in (None, [])
+    assert not any("trimmed dropped refs" in warning for warning in summary["warnings"])
 
 
 def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_and_reports_provenance(
@@ -2616,6 +2722,44 @@ def test_analysis_review_runner_persists_addressed_topic_recommendation_index_fr
     assert "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `2` | addressed \\| Added the fallback classification note to recommendation 2. |" in report_text
 
 
+def test_analysis_review_runner_trust_relinked_topic_closes_on_recommendation_proof(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustTopicResolutionRecommendationHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    provenance = summary["analysis_review_status"]["provenance"]
+    assert provenance["status"] == "bound"
+    assert provenance["uncovered_global_topic_ids"] == []
+    assert provenance["closure_proof_by_id"]["TOPIC-001"] == {
+        "proof_path": "recommendation",
+        "classification_status": "resolved",
+        "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+        "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+        "proof_strength": "recommendation_evidence",
+    }
+
+    assert summary["topic_ledger"][0]["recommendation_index"] == 2
+
+
 def test_analysis_review_runner_normalizes_legacy_missing_topics_into_topics(
     tmp_path,
     monkeypatch,
@@ -2952,7 +3096,7 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
         "Add release failure categorization"
     )
     assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
-        "analysis_review_v1_contract_v5"
+        "analysis_review_v1_contract_v6"
     )
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3

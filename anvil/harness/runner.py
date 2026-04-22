@@ -762,6 +762,12 @@ class HarnessRunner:
             if isinstance(recommendations, list):
                 expected_recommendation_count = len(recommendations)
         if role_name == "auditor":
+            prior_open_topic_records = self._auditor_prior_open_topic_records(reviser_output)
+            prior_open_topic_ids = [
+                str(item.get("topic_id"))
+                for item in prior_open_topic_records
+                if str(item.get("topic_id") or "").strip()
+            ]
             prompt = build_analysis_auditor_prompt(
                 self.task,
                 self.strategy.prompt_preamble,
@@ -840,12 +846,16 @@ class HarnessRunner:
         payload_provenance: dict[str, Any] | None = None
         normalization_warnings: list[str] = []
         if isinstance(contract, AnalysisReviewContract):
+            normalization_prior_open_issue_records = context.get("prior_open_issue_records")
+            normalization_prior_open_topic_records = context.get("prior_open_topic_records")
             if isinstance(run.structured_output, dict):
                 normalized_payload, payload_provenance, normalization_warnings = self._normalize_analysis_review_payload(
                     run.structured_output,
                     role_name=role_name,
                     payload_provenance_mode=contract.trust_review.payload_provenance_mode,
                     contract=contract,
+                    prior_open_issue_records=normalization_prior_open_issue_records,
+                    prior_open_topic_records=normalization_prior_open_topic_records,
                 )
                 schema_validation_errors = _soft_validate_schema(normalized_payload, schema)
                 raw_meta = dict(run.raw_meta or {})
@@ -1555,6 +1565,34 @@ class HarnessRunner:
             for record in self.topic_ledger
             if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
         ]
+
+    def _auditor_prior_open_topic_records(
+        self,
+        reviser_output: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        records = [dict(item) for item in self._open_topic_records()]
+        if not isinstance(reviser_output, dict) or not records:
+            return records
+        records_by_id = {
+            str(item.get("topic_id") or "").strip(): item
+            for item in records
+            if str(item.get("topic_id") or "").strip()
+        }
+        for item in reviser_output.get("topic_resolution_map", []) or []:
+            if not isinstance(item, dict):
+                continue
+            topic_id = str(item.get("topic_id") or "").strip()
+            if not topic_id:
+                continue
+            record = records_by_id.get(topic_id)
+            if record is None:
+                continue
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is not None:
+                record["recommendation_index"] = recommendation_index
+        return records
 
     def _serialized_issue_ledger(self) -> list[dict[str, Any]]:
         return [self._serialized_issue_record(record) for record in self.issue_ledger]
@@ -3003,13 +3041,21 @@ class HarnessRunner:
         role_name: str,
         payload_provenance_mode: str,
         contract: AnalysisReviewContract,
+        prior_open_issue_records: list[dict[str, Any]] | None = None,
+        prior_open_topic_records: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         normalized = json.loads(json.dumps(payload))
         normalized_refs: dict[str, Any] = {}
         warnings: list[str] = []
         canonical_role_name = self._canonical_stage_role_name(role_name)
-        prior_open_issue_records = self._open_issue_records()
-        prior_open_topic_records = self._open_topic_records()
+        if prior_open_issue_records is None:
+            prior_open_issue_records = self._open_issue_records()
+        else:
+            prior_open_issue_records = [dict(item) for item in prior_open_issue_records]
+        if prior_open_topic_records is None:
+            prior_open_topic_records = self._open_topic_records()
+        else:
+            prior_open_topic_records = [dict(item) for item in prior_open_topic_records]
 
         if canonical_role_name in {"critic", "auditor"}:
             prior_open_topics_exist = bool(prior_open_topic_records)
