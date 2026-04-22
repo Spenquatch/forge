@@ -212,13 +212,17 @@ For analysis-review tasks, `review_requirements.evidence_cap_policy` defaults to
 The harness writes a run directory containing:
 - `summary.json`
 - `REPORT.md`
-- `FINAL_ANSWER.json` / `FINAL_ANSWER.md` for `accepted` and `accepted_with_warnings` runs
+- `FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer
 - `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for `accepted_partial` runs when the shipped subset is eligible to publish
 - `BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed, including trust-mode fallback from blocked partial acceptance
 - per-stage prompt/schema/output artifacts
 - validator logs and workspace policy checkpoints
 
 Use `summary.json` artifact pointers (`final_artifact`, `final_artifact_json`, `final_artifact_kind`) as the source of truth for the primary deliverable instead of inferring artifact type from the run verdict alone.
+
+In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`. The harness also records `analysis_review_status.publishability` with `final_answer_publishable` and ordered `blocking_causes`; when final publication is blocked, artifact selection falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`.
+
+Markdown compaction is preview-only and renderer-owned. Deliverable markdown may compact recommendation evidence to a three-ref preview, but the selected JSON artifact and `summary.json` remain full fidelity.
 
 ### What you get with LangGraph
 

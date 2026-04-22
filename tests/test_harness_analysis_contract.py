@@ -222,3 +222,28 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
     assert trust_example["kind"] == "analysis_review_trust_v1"
     assert trust_example["roles"]["auditor"]["provider"] == "claude_code_sonnet"
     assert trust_example["review_loops"]["max_loops"] == 3
+
+
+def test_readme_documents_publishability_and_preview_only_markdown():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "analysis_review_status.publishability" in readme
+    assert "final_answer_publishable" in readme
+    assert "blocking_causes" in readme
+    assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in readme
+    assert "final_artifact`, `final_artifact_json`, `final_artifact_kind`" in readme
+    assert "Markdown compaction is preview-only and renderer-owned." in readme
+
+
+def test_analysis_review_contract_docs_freeze_publishability_ordering_and_preview_budgets():
+    contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
+
+    assert "final_answer_publishable" in contract_doc
+    assert "blocking_causes" in contract_doc
+    assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in contract_doc
+    assert "1. provenance blocker first, when present" in contract_doc
+    assert "2. open topic IDs in sorted order" in contract_doc
+    assert "3. carried-forward topic IDs in sorted order" in contract_doc
+    assert "4. one semantic-warning blocker" in contract_doc
+    assert "deliverable markdown previews at most the first `3` recommendation evidence refs" in contract_doc
+    assert "`REPORT.md` previews at most the first `2` `checked_files` values" in contract_doc

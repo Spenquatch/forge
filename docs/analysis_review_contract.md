@@ -103,6 +103,45 @@ For `accepted_partial`, the shipped subset must also be topic-clean:
 
 `REPORT.md` renders the same ledger in a row-shaped `## Topic Lifecycle` table, while `FINAL_ANSWER.md` keeps a compact bullet summary of the same canonical records.
 
+## Publishability and artifact selection
+
+Slice C adds an explicit publishability layer under `analysis_review_status`:
+
+```json
+{
+  "analysis_review_status": {
+    "content_verdict": "accepted_with_warnings",
+    "publishability": {
+      "final_answer_publishable": false,
+      "blocking_causes": [
+        "final payload provenance is not fully bound",
+        "open review topics remain: TOPIC-001",
+        "review topics are carried forward: TOPIC-004",
+        "semantic validation warnings remain: warning A; warning B"
+      ]
+    }
+  }
+}
+```
+
+Rules:
+
+- `final_answer_publishable` and `blocking_causes` are the frozen field names.
+- In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
+- Trust-mode final publication is allowed only when the content verdict is `accepted` or `accepted_with_warnings`, provenance is fully bound, no topic IDs remain `open`, no topic IDs remain `carried_forward`, and no final semantic warnings remain.
+- Low-severity reviewer issues, `accept_with_caveat` recommendation reviews, and inference-only accepted recommendations remain downgrade or advisory causes. They stay visible, but they do not block final publication by themselves.
+- `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` remain the source of truth for what actually shipped.
+- If trust mode is content-accepted but not final-publishable, artifact selection skips `FINAL_ANSWER.*` and falls through to the existing partial-answer path when eligible, otherwise `BEST_DRAFT.*`.
+
+`blocking_causes` is deterministic. The list is emitted in this order:
+
+1. provenance blocker first, when present
+2. open topic IDs in sorted order
+3. carried-forward topic IDs in sorted order
+4. one semantic-warning blocker whose summaries preserve `_final_semantic_warning_records()` order and are joined with `; `
+
+This separation is intentional: `content_verdict` classifies the review outcome, while `publishability` decides whether `FINAL_ANSWER.*` may ship for trust-mode runs.
+
 ## Bounded-review policy
 
 The bounded-review policy remains the single source of truth for review caps. Prompts must render these values from the contract, and semantic validation must enforce the same values.
@@ -119,6 +158,13 @@ Current defaults:
 - scope escapes require non-empty reasons
 
 Trust-mode recommendation evidence is intentionally uncapped. Trust runs should preserve every concrete workspace ref needed to support auditability; they do not trim or reject a recommendation solely for carrying more than three evidence refs.
+
+Markdown compaction is renderer-owned and preview-only:
+
+- deliverable markdown previews at most the first `3` recommendation evidence refs
+- `REPORT.md` previews at most the first `2` `checked_files` values and the first `2` `verified_evidence_refs` values in review-provenance cells
+- omitted items render as deterministic `(+N more)` previews
+- JSON artifacts, including the selected deliverable JSON and `summary.json`, remain full fidelity and must not gain parallel `display_*` or `audit_*` field families
 
 ## Shared payload family
 

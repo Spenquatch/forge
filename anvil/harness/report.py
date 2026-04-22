@@ -104,6 +104,18 @@ def _table_cell(value: Any) -> str:
     return str(value).replace("|", "\\|")
 
 
+def _render_provenance_preview(items: Any) -> str:
+    values = [str(item).strip() for item in (items or []) if str(item).strip()]
+    if not values:
+        return "n/a"
+    preview = values[:2]
+    rendered = ", ".join(preview)
+    remaining = len(values) - len(preview)
+    if remaining > 0:
+        rendered += f" (+{remaining} more)"
+    return rendered
+
+
 def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> None:
     bounded_review = _bounded_review_summary(summary)
     if not bounded_review:
@@ -172,10 +184,36 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
         return
 
     provenance = status.get("provenance") or {}
+    publishability = status.get("publishability") or {}
     lines.append("## Analysis Review Status")
     lines.append("")
     lines.append(f"- Mode: `{status.get('mode', 'unknown')}`")
     lines.append(f"- Content verdict: `{status.get('content_verdict', 'unknown')}`")
+    if publishability:
+        lines.append(
+            "- Final publication: "
+            + (
+                "`publishable`"
+                if publishability.get("final_answer_publishable")
+                else "`blocked`"
+            )
+        )
+        blocking_causes = [
+            str(item).strip()
+            for item in (publishability.get("blocking_causes") or [])
+            if str(item).strip()
+        ]
+        if publishability.get("final_answer_publishable"):
+            lines.append("- Publication blockers: none")
+        else:
+            lines.append(
+                "- Publication blockers: "
+                + (
+                    "; ".join(blocking_causes)
+                    if blocking_causes
+                    else "none recorded in `publishability.blocking_causes`"
+                )
+            )
     lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
     lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
     lines.append(f"- Provenance required: `{provenance.get('required', False)}`")
@@ -338,10 +376,8 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
         lines.append("|---|---|---|---|---|---|")
         for record_id in sorted(closure_proof_by_id):
             item = closure_proof_by_id.get(record_id) or {}
-            checked_files = ", ".join(str(value) for value in (item.get("checked_files") or [])) or "n/a"
-            verified_refs = ", ".join(
-                str(value) for value in (item.get("verified_evidence_refs") or [])
-            ) or "n/a"
+            checked_files = _render_provenance_preview(item.get("checked_files"))
+            verified_refs = _render_provenance_preview(item.get("verified_evidence_refs"))
             lines.append(
                 "| "
                 + " | ".join(
@@ -436,6 +472,7 @@ def render_report(summary: dict[str, Any]) -> str:
     review_coverage = summary.get("analysis_review_coverage") or {}
     analysis_status = _analysis_review_status(summary)
     provenance = analysis_status.get("provenance") or {}
+    publishability = analysis_status.get("publishability") or {}
 
     lines.append("## Overview")
     lines.append("")
@@ -450,6 +487,15 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append(f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})")
     if analysis_status:
         lines.append(f"- Review mode: `{analysis_status.get('mode', 'unknown')}`")
+        if publishability:
+            lines.append(
+                "- Final publication: "
+                + (
+                    "`publishable`"
+                    if publishability.get("final_answer_publishable")
+                    else "`blocked`"
+                )
+            )
         lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:

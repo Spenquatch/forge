@@ -1376,6 +1376,49 @@ def _prepare_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+def _make_analysis_status_runner(
+    tmp_path: Path,
+    *,
+    strategy_kind: str = "analysis_review_trust_v1",
+) -> HarnessRunner:
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind=strategy_kind,
+    )
+    return HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+
+def _stage_with_provenance(
+    *,
+    stage_index: int,
+    role_name: str,
+    payload: dict[str, object],
+    provenance_status: str = "bound",
+    closure_provenance_satisfied: bool = True,
+    semantic_validation_warnings: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "stage_index": stage_index,
+        "role_name": role_name,
+        "ok": True,
+        "structured_output": payload,
+        "semantic_validation_warnings": list(semantic_validation_warnings or []),
+        "semantic_validation_payload_provenance": {
+            "status": provenance_status,
+            "policy_mode": "payload_hash_and_refs",
+            "closure_provenance_satisfied": closure_provenance_satisfied,
+            "normalized_ref_field_count": 1,
+            "normalized_ref_count": 1,
+        },
+    }
+
+
 
 def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     tmp_path,
@@ -1914,6 +1957,145 @@ def test_analysis_review_runner_status_surfaces_uncovered_recommendation_indices
     assert status["provenance"]["uncovered_global_issue_ids"] == []
     assert status["provenance"]["uncovered_global_topic_ids"] == []
     assert "final payload provenance is not fully bound" in status["downgrade_causes"]
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": ["final payload provenance is not fully bound"],
+    }
+
+
+def test_analysis_review_status_publishability_blocks_open_topics_in_sorted_order(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    runner.topic_ledger = [
+        {"topic_id": "TOPIC-010", "resolution_status": "open"},
+        {"topic_id": "TOPIC-002", "resolution_status": "open"},
+    ]
+    runner.agent_stages = [
+        _stage_with_provenance(
+            stage_index=1,
+            role_name="reviser_round_1",
+            payload=final_analysis_payload,
+        ),
+        _stage_with_provenance(
+            stage_index=2,
+            role_name="auditor",
+            payload=final_review_payload,
+        ),
+    ]
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": ["open review topics remain: TOPIC-002, TOPIC-010"],
+    }
+
+
+def test_analysis_review_status_publishability_blocks_carried_forward_topics_in_sorted_order(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    runner.topic_ledger = [
+        {"topic_id": "TOPIC-020", "resolution_status": "carried_forward"},
+        {"topic_id": "TOPIC-003", "resolution_status": "carried_forward"},
+    ]
+    runner.agent_stages = [
+        _stage_with_provenance(
+            stage_index=1,
+            role_name="reviser_round_1",
+            payload=final_analysis_payload,
+        ),
+        _stage_with_provenance(
+            stage_index=2,
+            role_name="auditor",
+            payload=final_review_payload,
+        ),
+    ]
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": ["review topics are carried forward: TOPIC-003, TOPIC-020"],
+    }
+
+
+def test_analysis_review_status_publishability_blocks_semantic_warnings_in_record_order(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    runner.agent_stages = [
+        _stage_with_provenance(
+            stage_index=1,
+            role_name="reviser_round_1",
+            payload=final_analysis_payload,
+            semantic_validation_warnings=["analysis warning"],
+        ),
+        _stage_with_provenance(
+            stage_index=2,
+            role_name="auditor",
+            payload=final_review_payload,
+            semantic_validation_warnings=["review warning one", "review warning two"],
+        ),
+    ]
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": [
+            "semantic validation warnings remain: analysis warning; review warning one; review warning two"
+        ],
+    }
+
+
+def test_analysis_review_status_publishability_allows_advisory_only_trust_warnings(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustInferenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    assert summary["analysis_review_status"]["publishability"] == {
+        "final_answer_publishable": True,
+        "blocking_causes": [],
+    }
 
 
 def test_analysis_review_runner_trust_review_marks_global_topic_closure_as_uncovered_debt(

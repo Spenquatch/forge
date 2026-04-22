@@ -139,6 +139,7 @@ def test_render_deliverable_markdown_attaches_caveats_to_affected_recommendation
     markdown = render_deliverable_markdown(
         "task-123",
         payload,
+        artifact_kind="final_answer",
         artifact_label="FINAL_ANSWER",
         accepted=True,
         summary=summary,
@@ -217,6 +218,7 @@ def test_render_deliverable_markdown_uses_original_indices_for_partial_answers()
     markdown = render_deliverable_markdown(
         "task-456",
         payload,
+        artifact_kind="partial_answer",
         artifact_label="PARTIAL_ANSWER",
         accepted=False,
         summary=summary,
@@ -236,6 +238,7 @@ def test_render_deliverable_markdown_omits_none_reason_label_in_analysis_section
     markdown = render_deliverable_markdown(
         "task-sections",
         _section_payload_with_redundant_none_reason(),
+        artifact_kind="final_answer",
         artifact_label="FINAL_ANSWER",
         accepted=True,
         summary={"analysis_review_status": {"mode": "bounded"}},
@@ -248,6 +251,40 @@ def test_render_deliverable_markdown_omits_none_reason_label_in_analysis_section
     assert "This stale schema text should not leak." not in strengths
     assert "No material uncertainties remained after comparing the relevant files." in uncertainties
     assert "none_reason:" not in markdown
+
+
+def test_render_deliverable_markdown_compacts_recommendation_evidence_preview():
+    payload = {
+        "summary": "Accepted recommendations with long evidence lists.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Clarify fallback handling",
+                "rationale": "Operators need a direct fallback rule.",
+                "evidence": ["a.py", "b.py", "c.py", "d.py"],
+                "proposed_change": "Document the fallback rule explicitly.",
+                "confidence": 0.74,
+            }
+        ],
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-evidence-preview",
+        payload,
+        artifact_kind="final_answer",
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary={"analysis_review_status": {"mode": "bounded"}},
+    )
+
+    recommendation = _rendered_section(markdown, "### 1. Clarify fallback handling")
+
+    assert "- a.py" in recommendation
+    assert "- b.py" in recommendation
+    assert "- c.py" in recommendation
+    assert "- (+1 more)" in recommendation
+    assert "- d.py" not in recommendation
 
 
 def test_build_partial_answer_payload_filters_topic_blocked_accepted_recommendations():
@@ -355,6 +392,7 @@ def test_render_deliverable_markdown_names_uncovered_recommendation_indices_in_t
     markdown = render_deliverable_markdown(
         "task-trust-incomplete",
         payload,
+        artifact_kind="final_answer",
         artifact_label="FINAL_ANSWER",
         accepted=True,
         summary=summary,
@@ -531,6 +569,110 @@ def test_apply_final_artifacts_blocks_partial_answer_when_trust_provenance_is_in
     assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
 
 
+def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_partial_answer(
+    tmp_path,
+):
+    summary = {
+        "task": {"id": "task-final-blocked-partial"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "final_answer": {
+            "summary": "Accepted content that is not publishable as a final answer.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "First",
+                    "rationale": "Clean recommendation.",
+                    "evidence": ["a.py"],
+                    "proposed_change": "Ship it.",
+                    "confidence": 0.71,
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Second",
+                    "rationale": "Carries topic debt.",
+                    "evidence": ["b.py"],
+                    "proposed_change": "Do not ship this one.",
+                    "confidence": 0.62,
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Third",
+                    "rationale": "Still acceptable.",
+                    "evidence": ["c.py", "d.py", "e.py", "f.py"],
+                    "proposed_change": "Ship with a narrower claim.",
+                    "confidence": 0.58,
+                },
+            ],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {
+                "recommendation_index": 2,
+                "verdict": "accept_with_caveat",
+                "summary": "Carries topic debt.",
+            },
+            {"recommendation_index": 3, "verdict": "accept", "summary": "Usable."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_with_warnings",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": ["review topics are carried forward: TOPIC-001"],
+            },
+            "accepted_recommendations_with_inferred_grounding": [],
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": ["TOPIC-001"],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": [],
+            "topic_ledger_count": 1,
+            "downgrade_causes": [
+                "review topics remain open: TOPIC-001",
+                "accepted recommendation reviews include accept_with_caveat: 2",
+            ],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "title": "Recommendation 2 still needs a concrete fallback classification.",
+                "severity": "medium",
+                "evidence": "The second recommendation still leaves fallback handling implicit.",
+                "recommendation_index": 2,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_status": "carried_forward",
+                "resolution_note": "not_addressed | Still unresolved.",
+                "resolved_in_stage_index": None,
+            }
+        ],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact"].endswith("PARTIAL_ANSWER.md")
+    assert updated["artifacts"]["final_artifact_json"].endswith("PARTIAL_ANSWER.json")
+    assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert "final_answer_md" not in updated["artifacts"]
+    assert "final_answer_json" not in updated["artifacts"]
+    assert updated["partial_answer"]["included_recommendation_indices"] == [1, 3]
+    assert markdown.index("> Blocking causes:") < markdown.index("## Review Status")
+    assert "> - review topics are carried forward: TOPIC-001" in markdown
+    assert "- (+1 more)" in markdown
+    assert "- f.py" not in markdown
+
+
 def test_apply_final_artifacts_clears_stale_partial_metadata_and_falls_back_to_best_draft(
     tmp_path,
 ):
@@ -603,6 +745,106 @@ def test_apply_final_artifacts_clears_stale_partial_metadata_and_falls_back_to_b
     assert _first_line(tmp_path / "BEST_DRAFT.md") == "# Best Draft: task-stale-partial"
     assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
     assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
+
+
+def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_best_draft(
+    tmp_path,
+):
+    best_payload = {
+        "summary": "Fallback best draft.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Best draft recommendation",
+                "rationale": "Safe fallback.",
+                "evidence": ["draft.py"],
+                "proposed_change": "Publish the fallback draft.",
+                "confidence": 0.75,
+            }
+        ],
+    }
+    summary = {
+        "task": {"id": "task-final-blocked-best-draft"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "final_answer": {
+            "summary": "Accepted content that is not publishable as a final answer.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "First",
+                    "rationale": "Supported recommendation.",
+                    "evidence": ["a.py"],
+                    "proposed_change": "Ship it.",
+                    "confidence": 0.71,
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Second",
+                    "rationale": "Also supported.",
+                    "evidence": ["b.py"],
+                    "proposed_change": "Ship that too.",
+                    "confidence": 0.69,
+                },
+            ],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 2, "verdict": "accept", "summary": "Clean."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_with_warnings",
+            "semantic_warning_count": 0,
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": ["review topics are carried forward: TOPIC-001"],
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": ["TOPIC-001"],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": [],
+            "topic_ledger_count": 1,
+            "downgrade_causes": ["review topics remain open: TOPIC-001"],
+        },
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-001",
+                "title": "The final answer still needs a concrete fallback classification policy.",
+                "severity": "medium",
+                "evidence": "The analysis never states the fallback classification policy.",
+                "recommendation_index": None,
+                "introduced_by": "critic",
+                "introduced_in_stage_index": 2,
+                "resolution_status": "carried_forward",
+                "resolution_note": "not_addressed | Still unresolved.",
+                "resolved_in_stage_index": None,
+            }
+        ],
+        "drafts": [_best_draft_record(best_payload)],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    markdown = (tmp_path / "BEST_DRAFT.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact"].endswith("BEST_DRAFT.md")
+    assert updated["artifacts"]["final_artifact_json"].endswith("BEST_DRAFT.json")
+    assert updated["artifacts"]["final_artifact_kind"] == "best_draft"
+    assert "partial_answer_json" not in updated["artifacts"]
+    assert "partial_answer_md" not in updated["artifacts"]
+    assert "final_answer_json" not in updated["artifacts"]
+    assert "final_answer_md" not in updated["artifacts"]
+    assert markdown.index("> Blocking causes:") < markdown.index("## Review Status")
+    assert "> - review topics are carried forward: TOPIC-001" in markdown
 
 
 def test_write_artifacts_node_clears_ineligible_partial_artifacts_and_falls_back_to_best_draft(
@@ -856,6 +1098,7 @@ def test_render_deliverable_markdown_renders_compact_topic_lifecycle_when_topics
     markdown = render_deliverable_markdown(
         "task-789",
         payload,
+        artifact_kind="final_answer",
         artifact_label="FINAL_ANSWER",
         accepted=True,
         summary=summary,
@@ -918,6 +1161,7 @@ def test_render_deliverable_markdown_renders_carried_forward_topic_resolution_no
     markdown = render_deliverable_markdown(
         "task-790",
         payload,
+        artifact_kind="final_answer",
         artifact_label="FINAL_ANSWER",
         accepted=True,
         summary=summary,
@@ -980,6 +1224,7 @@ def test_render_deliverable_markdown_renders_disagreed_topic_rollups():
     markdown = render_deliverable_markdown(
         "task-791",
         payload,
+        artifact_kind="final_answer",
         artifact_label="FINAL_ANSWER",
         accepted=True,
         summary=summary,
@@ -1345,3 +1590,95 @@ def test_render_report_renders_review_provenance_section_for_scoped_global_issue
     assert "- Closure-complete issue IDs: `AR-001`" in report
     assert "- Uncovered global topic IDs: `TOPIC-002`" in report
     assert "| `AR-001` | `scoped` | `review_attested` | `carried_forward` | .github/workflows/codex-cli-release-watch.yml | .github/workflows/codex-cli-release-watch.yml |" in report
+
+
+def test_render_report_renders_publishability_and_compact_provenance_previews():
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "task": {"id": "task-publishability"},
+        "verdicts": {
+            "content_verdict": "accepted_with_warnings",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_with_warnings",
+            "semantic_warning_count": 0,
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": ["review topics are carried forward: TOPIC-001"],
+            },
+            "provenance": {
+                "status": "insufficient",
+                "policy_mode": "payload_hash_and_refs",
+                "required": True,
+                "issue_closure_review_ref_count": 0,
+                "topic_closure_review_ref_count": 3,
+                "closure_complete_issue_ids": [],
+                "closure_complete_topic_ids": ["TOPIC-001"],
+                "uncovered_recommendation_indices": [],
+                "uncovered_global_issue_ids": [],
+                "uncovered_global_topic_ids": [],
+                "closure_proof_by_id": {
+                    "TOPIC-001": {
+                        "proof_path": "scoped",
+                        "classification_status": "carried_forward",
+                        "checked_files": ["a.py", "b.py", "c.py"],
+                        "verified_evidence_refs": ["r1", "r2", "r3"],
+                        "proof_strength": "review_attested",
+                    }
+                },
+                "stages": [
+                    {
+                        "surface": "review",
+                        "status": "insufficient",
+                        "policy_mode": "payload_hash_and_refs",
+                        "recommendation_review_ref_count": 4,
+                        "issue_closure_review_ref_count": 0,
+                        "topic_closure_review_ref_count": 3,
+                        "closure_complete_issue_ids": [],
+                        "closure_complete_topic_ids": ["TOPIC-001"],
+                        "uncovered_recommendation_indices": [],
+                        "uncovered_global_issue_ids": [],
+                        "uncovered_global_topic_ids": [],
+                        "closure_proof_by_id": {
+                            "TOPIC-001": {
+                                "proof_path": "scoped",
+                                "classification_status": "carried_forward",
+                                "checked_files": ["a.py", "b.py", "c.py"],
+                                "verified_evidence_refs": ["r1", "r2", "r3"],
+                                "proof_strength": "review_attested",
+                            }
+                        },
+                    }
+                ],
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": ["TOPIC-001"],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "downgrade_causes": ["review topics remain open: TOPIC-001"],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert "- Final publication: `blocked`" in report
+    assert "- Publication blockers: review topics are carried forward: TOPIC-001" in report
+    assert "| `TOPIC-001` | `scoped` | `review_attested` | `carried_forward` | a.py, b.py (+1 more) | r1, r2 (+1 more) |" in report
+    assert "a.py, b.py, c.py" not in report
+    assert "r1, r2, r3" not in report

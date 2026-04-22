@@ -53,7 +53,6 @@ from .semantic_validation import validate_stage_output
 from .topic_lifecycle import (
     partial_accept_topic_eligibility,
     topic_ids_for_status_name,
-    unresolved_topic_ids,
 )
 from .types import (
     ANALYSIS_REVIEW_BOUNDED_KIND,
@@ -69,6 +68,7 @@ from .types import (
 from .validation import preflight_validators, run_validators
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+_FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
 
 
 class HarnessError(RuntimeError):
@@ -1491,7 +1491,10 @@ class HarnessRunner:
         causes: list[str] = []
         if self._count_review_issues(review_payload, {"low"}):
             causes.append("low-severity reviewer issues remain open")
-        unresolved_topic_ids_list = unresolved_topic_ids(self.topic_ledger)
+        unresolved_topic_ids_list = topic_ids_for_status_name(self.topic_ledger, status_name="open")
+        unresolved_topic_ids_list.extend(
+            topic_ids_for_status_name(self.topic_ledger, status_name="carried_forward")
+        )
         if unresolved_topic_ids_list:
             causes.append("review topics remain open: " + ", ".join(unresolved_topic_ids_list))
         accepted_caveat_indices = self._accepted_caveat_recommendation_indices(review_payload)
@@ -1524,6 +1527,53 @@ class HarnessRunner:
             ):
                 causes.append("final payload provenance is not fully bound")
         return causes
+
+    def _analysis_publishability(
+        self,
+        *,
+        content_verdict: str,
+    ) -> dict[str, Any]:
+        contract = self._analysis_contract()
+        if contract.mode != "trust":
+            return {
+                "final_answer_publishable": content_verdict in _FULLY_ACCEPTED_CONTENT_VERDICTS,
+                "blocking_causes": [],
+            }
+
+        if content_verdict not in _FULLY_ACCEPTED_CONTENT_VERDICTS:
+            return {
+                "final_answer_publishable": False,
+                "blocking_causes": [],
+            }
+
+        blocking_causes: list[str] = []
+        if self._final_payload_provenance_status() != "bound":
+            blocking_causes.append("final payload provenance is not fully bound")
+
+        open_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="open")
+        if open_topic_ids:
+            blocking_causes.append("open review topics remain: " + ", ".join(open_topic_ids))
+
+        carried_forward_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger,
+            status_name="carried_forward",
+        )
+        if carried_forward_topic_ids:
+            blocking_causes.append(
+                "review topics are carried forward: " + ", ".join(carried_forward_topic_ids)
+            )
+
+        semantic_warning_records = self._final_semantic_warning_records()
+        if semantic_warning_records:
+            blocking_causes.append(
+                "semantic validation warnings remain: "
+                + "; ".join(str(record.get("warning") or "") for record in semantic_warning_records)
+            )
+
+        return {
+            "final_answer_publishable": not blocking_causes,
+            "blocking_causes": blocking_causes,
+        }
 
     def _analysis_contract(self) -> AnalysisReviewContract:
         if self.analysis_review_contract is None:
@@ -2252,6 +2302,7 @@ class HarnessRunner:
         )
         if contract.trust_review.payload_provenance_mode == "none" and provenance_status == "missing":
             provenance_status = "not_required"
+        publishability = self._analysis_publishability(content_verdict=content_verdict)
         return {
             "mode": contract.mode,
             "content_verdict": content_verdict,
@@ -2296,6 +2347,7 @@ class HarnessRunner:
             "disagreed_topic_ids": disagreed_topic_ids,
             "topic_ledger_count": len(self.topic_ledger),
             "downgrade_causes": downgrade_causes,
+            "publishability": publishability,
         }
 
     def _blocking_issues(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:

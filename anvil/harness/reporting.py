@@ -95,6 +95,30 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _analysis_publishability(summary: dict[str, Any]) -> dict[str, Any]:
+    publishability = _analysis_review_status(summary).get("publishability")
+    if isinstance(publishability, dict):
+        return publishability
+    return {}
+
+
+def _final_answer_publication_state(summary: dict[str, Any]) -> tuple[bool, list[str]]:
+    verdict = str(summary.get("verdict") or "").strip()
+    if verdict not in _FULLY_ACCEPTED_RUN_VERDICTS:
+        return (False, [])
+
+    publishability = _analysis_publishability(summary)
+    if not publishability:
+        return (True, [])
+
+    blocking_causes = [
+        str(item)
+        for item in (publishability.get("blocking_causes") or [])
+        if str(item).strip()
+    ]
+    return (bool(publishability.get("final_answer_publishable")), blocking_causes)
+
+
 def _topic_ledger(summary: dict[str, Any]) -> list[dict[str, Any]]:
     topic_ledger = summary.get("topic_ledger")
     if isinstance(topic_ledger, list):
@@ -457,6 +481,21 @@ def _clear_partial_artifact_state(summary: dict[str, Any], artifacts: dict[str, 
         artifacts.pop("final_artifact_json", None)
 
 
+def _clear_deliverable_artifact_pointers(artifacts: dict[str, Any]) -> None:
+    for key in (
+        "final_artifact",
+        "final_artifact_json",
+        "final_artifact_kind",
+        "final_answer_json",
+        "final_answer_md",
+        "partial_answer_json",
+        "partial_answer_md",
+        "best_draft_json",
+        "best_draft_md",
+    ):
+        artifacts.pop(key, None)
+
+
 def _artifact_label_for_kind(artifact_kind: str) -> str:
     labels = {
         "final_answer": "Final Answer",
@@ -471,10 +510,52 @@ def _artifact_label_for_kind(artifact_kind: str) -> str:
         ) from exc
 
 
+def _append_blocked_publication_note(
+    lines: list[str],
+    *,
+    artifact_kind: str,
+    blocking_causes: list[str],
+) -> None:
+    if artifact_kind not in {"partial_answer", "best_draft"} or not blocking_causes:
+        return
+    lines.extend(
+        [
+            "> [!NOTE]",
+            "> Final answer publication was blocked, so this deliverable is emitted as a fallback artifact.",
+            "> Blocking causes:",
+        ]
+    )
+    for cause in blocking_causes:
+        lines.append(f"> - {cause}")
+    lines.append("")
+
+
+def _render_recommendation_evidence_item(evidence_item: Any) -> str:
+    if isinstance(evidence_item, dict):
+        path = evidence_item.get("path") or evidence_item.get("file") or "workspace"
+        note = evidence_item.get("note")
+        return f"{path}" + (f" — {note}" if note else "")
+    return str(evidence_item)
+
+
+def _append_recommendation_evidence_preview(lines: list[str], evidence: list[Any]) -> None:
+    if not evidence:
+        return
+    lines.append("**Evidence:**")
+    preview = evidence[:3]
+    for evidence_item in preview:
+        lines.append(f"- {_render_recommendation_evidence_item(evidence_item)}")
+    remaining = len(evidence) - len(preview)
+    if remaining > 0:
+        lines.append(f"- (+{remaining} more)")
+    lines.append("")
+
+
 def render_deliverable_markdown(
     task_id: str,
     payload: dict[str, Any],
     *,
+    artifact_kind: str,
     artifact_label: str,
     accepted: bool,
     summary: dict[str, Any] | None = None,
@@ -482,6 +563,7 @@ def render_deliverable_markdown(
     lines: list[str] = [f"# {artifact_label}: {task_id}", ""]
     verdict = str((summary or {}).get("verdict") or "").strip()
     analysis_status = _analysis_review_status(summary or {})
+    publishability = _analysis_publishability(summary or {})
     review_lookup = _recommendation_review_lookup(summary or {})
     if not accepted:
         lines.extend(
@@ -499,6 +581,15 @@ def render_deliverable_markdown(
                 "",
             ]
         )
+    _append_blocked_publication_note(
+        lines,
+        artifact_kind=artifact_kind,
+        blocking_causes=[
+            str(item)
+            for item in (publishability.get("blocking_causes") or [])
+            if str(item).strip()
+        ],
+    )
 
     if analysis_status:
         provenance = analysis_status.get("provenance") or {}
@@ -632,15 +723,7 @@ def render_deliverable_markdown(
                     lines.extend([f"**{label}:** {value}", ""])
             evidence = item.get("evidence")
             if isinstance(evidence, list) and evidence:
-                lines.append("**Evidence:**")
-                for evidence_item in evidence:
-                    if isinstance(evidence_item, dict):
-                        path = evidence_item.get("path") or evidence_item.get("file") or "workspace"
-                        note = evidence_item.get("note")
-                        lines.append(f"- {path}" + (f" — {note}" if note else ""))
-                    else:
-                        lines.append(f"- {evidence_item}")
-                lines.append("")
+                _append_recommendation_evidence_preview(lines, evidence)
             confidence = item.get("confidence")
             if confidence is not None:
                 lines.extend([f"**Confidence:** {confidence}", ""])
@@ -663,6 +746,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     artifacts = dict(summary.get("artifacts") or {})
     task = summary.get("task") or {}
     task_id = str(task.get("id") or "task")
+    _clear_deliverable_artifact_pointers(artifacts)
     bounded_review_summary = summary.get("bounded_review_summary")
     if not isinstance(bounded_review_summary, dict) or not bounded_review_summary:
         run_details = summary.get("run_details") or {}
@@ -684,12 +768,14 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     verdict = str(summary.get("verdict") or "")
     fully_accepted = verdict in _FULLY_ACCEPTED_RUN_VERDICTS
     partially_accepted = verdict in _PARTIAL_ACCEPTED_RUN_VERDICTS
+    final_answer_publishable, _ = _final_answer_publication_state(summary)
+    final_answer_blocked = fully_accepted and not final_answer_publishable
     payload: dict[str, Any] | None = None
     artifact_kind = None
     artifact_json_path: Path | None = None
     artifact_md_path: Path | None = None
 
-    if fully_accepted:
+    if fully_accepted and final_answer_publishable:
         payload = summary.get("final_answer")
         if not isinstance(payload, dict) or not payload:
             if best_draft is not None:
@@ -698,7 +784,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             artifact_kind = "final_answer"
             artifact_json_path = run_dir / "FINAL_ANSWER.json"
             artifact_md_path = run_dir / "FINAL_ANSWER.md"
-    elif partially_accepted:
+    elif partially_accepted or final_answer_blocked:
         partial_allowed, _ = _partial_answer_eligibility(summary)
         if partial_allowed:
             payload = summary.get("partial_answer")
@@ -715,7 +801,10 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
         else:
             _clear_partial_artifact_state(summary, artifacts)
 
-    if artifact_kind is None and not fully_accepted:
+    if artifact_kind is None and final_answer_blocked:
+        _clear_partial_artifact_state(summary, artifacts)
+
+    if artifact_kind is None and (not fully_accepted or final_answer_blocked):
         if best_draft is not None:
             payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
             if isinstance(payload, dict) and payload:
@@ -737,6 +826,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             render_deliverable_markdown(
                 task_id,
                 payload,
+                artifact_kind=artifact_kind,
                 artifact_label=_artifact_label_for_kind(artifact_kind),
                 accepted=fully_accepted,
                 summary=render_summary,
