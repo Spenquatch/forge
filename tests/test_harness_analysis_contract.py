@@ -241,9 +241,20 @@ def test_analysis_review_contract_docs_freeze_publishability_ordering_and_previe
     assert "final_answer_publishable" in contract_doc
     assert "blocking_causes" in contract_doc
     assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in contract_doc
+    assert "content verdict is not fully accepted: <verdict>" in contract_doc
+    assert "For fully accepted trust runs, `blocking_causes` is deterministic." in contract_doc
     assert "1. provenance blocker first, when present" in contract_doc
     assert "2. open topic IDs in sorted order" in contract_doc
     assert "3. carried-forward topic IDs in sorted order" in contract_doc
     assert "4. one semantic-warning blocker" in contract_doc
     assert "deliverable markdown previews at most the first `3` recommendation evidence refs" in contract_doc
     assert "`REPORT.md` previews at most the first `2` `checked_files` values" in contract_doc
+
+
+def test_surface_update_notes_document_primary_deliverable_artifacts():
+    notes = Path("FORGE_HARNESS_SURFACE_UPDATE_NOTES.md").read_text(encoding="utf-8")
+
+    assert "Primary deliverable artifacts for harness runs" in notes
+    assert "FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer" in notes
+    assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for eligible accepted-partial outputs" in notes
+    assert "BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed" in notes

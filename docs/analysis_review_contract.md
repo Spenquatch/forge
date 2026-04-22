@@ -110,14 +110,11 @@ Slice C adds an explicit publishability layer under `analysis_review_status`:
 ```json
 {
   "analysis_review_status": {
-    "content_verdict": "accepted_with_warnings",
+    "content_verdict": "accepted_partial",
     "publishability": {
       "final_answer_publishable": false,
       "blocking_causes": [
-        "final payload provenance is not fully bound",
-        "open review topics remain: TOPIC-001",
-        "review topics are carried forward: TOPIC-004",
-        "semantic validation warnings remain: warning A; warning B"
+        "content verdict is not fully accepted: accepted_partial"
       ]
     }
   }
@@ -129,11 +126,12 @@ Rules:
 - `final_answer_publishable` and `blocking_causes` are the frozen field names.
 - In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
 - Trust-mode final publication is allowed only when the content verdict is `accepted` or `accepted_with_warnings`, provenance is fully bound, no topic IDs remain `open`, no topic IDs remain `carried_forward`, and no final semantic warnings remain.
+- If the content verdict is not fully accepted, `blocking_causes` must contain exactly one verdict blocker: `content verdict is not fully accepted: <verdict>`.
 - Low-severity reviewer issues, `accept_with_caveat` recommendation reviews, and inference-only accepted recommendations remain downgrade or advisory causes. They stay visible, but they do not block final publication by themselves.
 - `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` remain the source of truth for what actually shipped.
 - If trust mode is content-accepted but not final-publishable, artifact selection skips `FINAL_ANSWER.*` and falls through to the existing partial-answer path when eligible, otherwise `BEST_DRAFT.*`.
 
-`blocking_causes` is deterministic. The list is emitted in this order:
+For fully accepted trust runs, `blocking_causes` is deterministic. The list is emitted in this order:
 
 1. provenance blocker first, when present
 2. open topic IDs in sorted order

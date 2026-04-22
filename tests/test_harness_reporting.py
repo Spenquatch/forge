@@ -747,6 +747,123 @@ def test_apply_final_artifacts_clears_stale_partial_metadata_and_falls_back_to_b
     assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
 
 
+def test_apply_final_artifacts_non_accepted_partial_does_not_render_blocked_publication_note(
+    tmp_path,
+):
+    summary = {
+        "task": {"id": "task-partial-no-blocked-note"},
+        "verdict": "accepted_partial",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "partial_answer": {
+            "summary": "Partial answer remains the right artifact.",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Included recommendation",
+                    "rationale": "Safe subset.",
+                    "evidence": ["a.py"],
+                    "proposed_change": "Ship the clean subset.",
+                    "confidence": 0.66,
+                }
+            ],
+            "included_recommendation_indices": [1],
+            "excluded_recommendation_indices": [2],
+        },
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 2, "verdict": "reject", "summary": "Excluded."},
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 0,
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": ["content verdict is not fully accepted: accepted_partial"],
+            },
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": [],
+            "topic_ledger_count": 0,
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact"].endswith("PARTIAL_ANSWER.md")
+    assert "> This run did not reach a fully accepted verdict." in markdown
+    assert "> Blocking causes:" not in markdown
+    assert "content verdict is not fully accepted: accepted_partial" not in markdown
+
+
+def test_apply_final_artifacts_non_accepted_best_draft_does_not_render_blocked_publication_note(
+    tmp_path,
+):
+    best_payload = {
+        "summary": "Best draft remains the fallback artifact.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Best draft recommendation",
+                "rationale": "No clean partial subset exists.",
+                "evidence": ["draft.py"],
+                "proposed_change": "Keep as best-effort draft.",
+                "confidence": 0.61,
+            }
+        ],
+    }
+    summary = {
+        "task": {"id": "task-best-draft-no-blocked-note"},
+        "verdict": "best_effort_exhausted",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "best_effort_exhausted",
+            "semantic_warning_count": 0,
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": [
+                    "content verdict is not fully accepted: best_effort_exhausted"
+                ],
+            },
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "disagreed_topic_ids": [],
+            "topic_ledger_count": 0,
+            "downgrade_causes": [],
+        },
+        "drafts": [_best_draft_record(best_payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    markdown = (tmp_path / "BEST_DRAFT.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact"].endswith("BEST_DRAFT.md")
+    assert "> This run did not reach a fully accepted verdict." in markdown
+    assert "> Blocking causes:" not in markdown
+    assert "content verdict is not fully accepted: best_effort_exhausted" not in markdown
+
+
 def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_best_draft(
     tmp_path,
 ):
@@ -1682,3 +1799,153 @@ def test_render_report_renders_publishability_and_compact_provenance_previews():
     assert "| `TOPIC-001` | `scoped` | `review_attested` | `carried_forward` | a.py, b.py (+1 more) | r1, r2 (+1 more) |" in report
     assert "a.py, b.py, c.py" not in report
     assert "r1, r2, r3" not in report
+
+
+def test_render_report_renders_non_accepted_verdict_blocker():
+    summary = {
+        "verdict": "accepted_partial",
+        "task": {"id": "task-publishability-non-accepted"},
+        "verdicts": {
+            "content_verdict": "accepted_partial",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 0,
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": ["content verdict is not fully accepted: accepted_partial"],
+            },
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+                "required": True,
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert "- Final publication: `blocked`" in report
+    assert (
+        "- Publication blockers: content verdict is not fully accepted: accepted_partial" in report
+    )
+
+
+def test_render_report_uses_defensive_publishability_fallback_when_blockers_missing():
+    summary = {
+        "verdict": "accepted_partial",
+        "task": {"id": "task-publishability-fallback"},
+        "verdicts": {
+            "content_verdict": "accepted_partial",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_partial",
+            "semantic_warning_count": 0,
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": [],
+            },
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+                "required": True,
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert (
+        "- Publication blockers: not applicable because content verdict is `accepted_partial`"
+        in report
+    )
+
+
+def test_render_report_uses_generic_publishability_fallback_for_fully_accepted_runs():
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "task": {"id": "task-publishability-generic-fallback"},
+        "verdicts": {
+            "content_verdict": "accepted_with_warnings",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": {
+            "mode": "trust",
+            "content_verdict": "accepted_with_warnings",
+            "semantic_warning_count": 0,
+            "publishability": {
+                "final_answer_publishable": False,
+                "blocking_causes": [],
+            },
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+                "required": True,
+            },
+            "open_topic_ids": [],
+            "carried_forward_topic_ids": [],
+            "resolved_topic_ids": [],
+            "waived_topic_ids": [],
+            "downgrade_causes": [],
+        },
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+
+    assert "- Publication blockers: withheld due to non-publishable run state" in report

@@ -5,6 +5,8 @@ from typing import Any
 
 from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
 
+_FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
+
 
 def _render_policy_list(items: list[str]) -> str:
     values = [str(item) for item in items if str(item).strip()]
@@ -116,6 +118,14 @@ def _render_provenance_preview(items: Any) -> str:
     return rendered
 
 
+def _render_publishability_fallback(status: dict[str, Any]) -> str:
+    # Defensive report rendering for legacy fixtures or malformed summaries.
+    content_verdict = str(status.get("content_verdict") or "").strip()
+    if content_verdict and content_verdict not in _FULLY_ACCEPTED_CONTENT_VERDICTS:
+        return f"not applicable because content verdict is `{content_verdict}`"
+    return "withheld due to non-publishable run state"
+
+
 def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> None:
     bounded_review = _bounded_review_summary(summary)
     if not bounded_review:
@@ -211,7 +221,7 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
                 + (
                     "; ".join(blocking_causes)
                     if blocking_causes
-                    else "none recorded in `publishability.blocking_causes`"
+                    else _render_publishability_fallback(status)
                 )
             )
     lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")

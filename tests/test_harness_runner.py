@@ -2067,6 +2067,42 @@ def test_analysis_review_status_publishability_blocks_semantic_warnings_in_recor
     }
 
 
+def test_analysis_review_status_publishability_blocks_non_accepted_partial_verdicts(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": ["content verdict is not fully accepted: accepted_partial"],
+    }
+
+
+def test_analysis_review_status_publishability_blocks_best_effort_verdicts(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="best_effort_exhausted",
+    )
+
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": ["content verdict is not fully accepted: best_effort_exhausted"],
+    }
+
+
 def test_analysis_review_status_publishability_allows_advisory_only_trust_warnings(
     tmp_path,
     monkeypatch,

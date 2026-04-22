@@ -584,11 +584,15 @@ def render_deliverable_markdown(
     _append_blocked_publication_note(
         lines,
         artifact_kind=artifact_kind,
-        blocking_causes=[
-            str(item)
-            for item in (publishability.get("blocking_causes") or [])
-            if str(item).strip()
-        ],
+        blocking_causes=(
+            [
+                str(item)
+                for item in (publishability.get("blocking_causes") or [])
+                if str(item).strip()
+            ]
+            if accepted and not publishability.get("final_answer_publishable", True)
+            else []
+        ),
     )
 
     if analysis_status:

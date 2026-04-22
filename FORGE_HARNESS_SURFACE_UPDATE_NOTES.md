@@ -21,9 +21,10 @@ This update adds a new task/strategy execution surface to Forge without removing
 - CLI provider tracking improvement:
   - `CliProviderBase` now stores the last CLI run result so the harness can capture command/output metadata cleanly.
 - Example task/strategy files under `examples/harness/`
-- Final-answer artifacts for harness runs:
-  - `FINAL_ANSWER.json`
-  - `FINAL_ANSWER.md`
+- Primary deliverable artifacts for harness runs:
+  - `FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer
+  - `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for eligible accepted-partial outputs
+  - `BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed
 - New targeted tests for:
   - harness runner flow
   - provider adapter JSON parsing

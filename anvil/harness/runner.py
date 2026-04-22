@@ -1543,7 +1543,7 @@ class HarnessRunner:
         if content_verdict not in _FULLY_ACCEPTED_CONTENT_VERDICTS:
             return {
                 "final_answer_publishable": False,
-                "blocking_causes": [],
+                "blocking_causes": [f"content verdict is not fully accepted: {content_verdict}"],
             }
 
         blocking_causes: list[str] = []
