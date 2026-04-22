@@ -212,9 +212,13 @@ For analysis-review tasks, `review_requirements.evidence_cap_policy` defaults to
 The harness writes a run directory containing:
 - `summary.json`
 - `REPORT.md`
-- `FINAL_ANSWER.json` / `FINAL_ANSWER.md` when a final structured answer is available
+- `FINAL_ANSWER.json` / `FINAL_ANSWER.md` for `accepted` and `accepted_with_warnings` runs
+- `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for `accepted_partial` runs when the shipped subset is eligible to publish
+- `BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed, including trust-mode fallback from blocked partial acceptance
 - per-stage prompt/schema/output artifacts
 - validator logs and workspace policy checkpoints
+
+Use `summary.json` artifact pointers (`final_artifact`, `final_artifact_json`, `final_artifact_kind`) as the source of truth for the primary deliverable instead of inferring artifact type from the run verdict alone.
 
 ### What you get with LangGraph
 

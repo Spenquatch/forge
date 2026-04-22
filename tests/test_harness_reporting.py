@@ -3,6 +3,7 @@ from __future__ import annotations
 from anvil.harness.nodes.write_artifacts import write_artifacts_node
 from anvil.harness.report import render_report
 from anvil.harness.reporting import (
+    _artifact_label_for_kind,
     apply_final_artifacts,
     build_partial_answer_payload,
     render_deliverable_markdown,
@@ -63,6 +64,10 @@ def _section_payload_with_redundant_none_reason() -> dict[str, object]:
             "none_reason": "No material uncertainties remained after comparing the relevant files.",
         },
     }
+
+
+def _first_line(path) -> str:
+    return path.read_text(encoding="utf-8").splitlines()[0]
 
 
 def test_render_deliverable_markdown_attaches_caveats_to_affected_recommendations():
@@ -455,6 +460,7 @@ def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_r
     markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
 
     assert updated["partial_answer"]["included_recommendation_indices"] == [1, 3]
+    assert _first_line(tmp_path / "PARTIAL_ANSWER.md") == "# Partial Answer: task-partial-scope"
     assert "- Review status scope: `included recommendations only`" in markdown
     assert "- Run-level provenance status: `bound`" in markdown
     assert "- Run-level semantic warnings: `1`" in markdown
@@ -594,6 +600,7 @@ def test_apply_final_artifacts_clears_stale_partial_metadata_and_falls_back_to_b
     assert updated["best_draft"]["summary"] == "Fallback best draft."
     assert (tmp_path / "BEST_DRAFT.json").exists()
     assert (tmp_path / "BEST_DRAFT.md").exists()
+    assert _first_line(tmp_path / "BEST_DRAFT.md") == "# Best Draft: task-stale-partial"
     assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
     assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
 
@@ -674,6 +681,7 @@ def test_write_artifacts_node_clears_ineligible_partial_artifacts_and_falls_back
     assert updated_state["artifact_index"]["best_draft_md"]["path"].endswith("BEST_DRAFT.md")
     assert "partial_answer_md" not in updated_state["artifact_index"]
     assert (tmp_path / "BEST_DRAFT.md").exists()
+    assert _first_line(tmp_path / "BEST_DRAFT.md") == "# Best Draft: task-write-node"
     assert not (tmp_path / "PARTIAL_ANSWER.md").exists()
 
 
@@ -768,7 +776,17 @@ def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accept
     assert updated["best_draft_id"] == "draft-clean"
     assert updated["selected_draft_id"] == "draft-clean"
     assert updated["final_answer"]["summary"] == "Clean accepted draft."
+    assert _first_line(tmp_path / "FINAL_ANSWER.md") == "# Final Answer: task-selection"
     assert "none_reason:" not in (tmp_path / "FINAL_ANSWER.md").read_text(encoding="utf-8")
+
+
+def test_artifact_label_for_kind_rejects_unknown_values():
+    try:
+        _artifact_label_for_kind("mystery_artifact")
+    except ValueError as exc:
+        assert "Unsupported artifact kind" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for unknown artifact kind")
 
 
 def test_apply_final_artifacts_best_draft_markdown_omits_none_reason_label(tmp_path):

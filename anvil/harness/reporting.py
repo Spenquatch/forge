@@ -457,6 +457,20 @@ def _clear_partial_artifact_state(summary: dict[str, Any], artifacts: dict[str, 
         artifacts.pop("final_artifact_json", None)
 
 
+def _artifact_label_for_kind(artifact_kind: str) -> str:
+    labels = {
+        "final_answer": "Final Answer",
+        "partial_answer": "Partial Answer",
+        "best_draft": "Best Draft",
+    }
+    try:
+        return labels[artifact_kind]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported artifact kind for deliverable markdown: {artifact_kind!r}"
+        ) from exc
+
+
 def render_deliverable_markdown(
     task_id: str,
     payload: dict[str, Any],
@@ -723,13 +737,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             render_deliverable_markdown(
                 task_id,
                 payload,
-                artifact_label=(
-                    "Final Answer"
-                    if fully_accepted
-                    else "Partial Answer"
-                    if partially_accepted
-                    else "Best Draft"
-                ),
+                artifact_label=_artifact_label_for_kind(artifact_kind),
                 accepted=fully_accepted,
                 summary=render_summary,
             ),
