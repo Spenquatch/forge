@@ -1985,38 +1985,24 @@ Slice C is done only when all of these are true:
 
 That is the bar for "honest trust publication." Not just "the markdown looks shorter."
 
-## Slice D Review Refresh
+## Slice D, Recommendation Admissibility and Artifact Promotion
 
-### CODEX SAYS (CEO, codex-only)
+Slice C fixed run-level trust publication honesty. Slice D fixes recommendation-level honesty.
 
-- **Critical:** the next slice is not generic "verdict tightening." The real product seam is trust recommendation admissibility and artifact promotion.
-- **Critical:** after Slice C, the trust-mode failure users will still feel is seeing `FINAL_ANSWER.*` ship recommendations the system itself marks as caveated or inference-backed.
-- **High:** the foolishly large version of this slice would bundle late-auditor policy rewrites, caveat taxonomy growth, new verdict strings, schema changes, and `BEST_DRAFT` redesign into one pass.
-- **Recommendation:** freeze one artifact-promotion matrix first. Make shipping behavior honest before you reopen trust architecture.
+After this slice, trust mode can no longer label caveated or inference-backed accepted recommendations as `FINAL_ANSWER.*` content. The harness must either ship the whole accepted set as truly final-admissible, demote explicitly to `PARTIAL_ANSWER.*`, or fall through to `BEST_DRAFT.*`.
 
-### CODEX SAYS (eng, codex-only)
+#### Why this slice now
 
-- **High:** `FINAL_ANSWER.*` cannot become a silently pruned subset. Under the current artifact contract, that demotion must route through `PARTIAL_ANSWER.*` or `BEST_DRAFT.*`.
-- **High:** accepted-recommendation semantics are duplicated today across `runner.py`, `reporting.py`, and `selection.py`, so the next slice must centralize runner-owned admissibility instead of patching artifact selection alone.
-- **Medium:** raw `accept_with_caveat` is too coarse to become a permanent schema-level policy language. Use it as a strict trust-promotion signal in runtime policy only, not as a reason to expand model payload shape.
-- **Medium:** late-auditor overflow is real, but it is a separate validator-policy seam. Keep it out of the first admissibility pass unless the implementation can close the partial-publication loophole without broadening scope.
+This is the next real user-facing gap, not another generic warning pass:
 
-### Slice D consensus
-
-Subagent voice was unavailable in this environment, so this refresh is codex-only.
-
-The outside review still converged on a clear direction:
-
-1. the active next slice should be recommendation admissibility and artifact promotion, not another generic warning pass
-2. `FINAL_ANSWER.*` must remain all-or-nothing, never an implicitly filtered subset
+1. artifact honesty now means recommendation honesty, not just run-level publishability
+2. `FINAL_ANSWER.*` must stay all-or-nothing, never a silently pruned subset
 3. the strict version of this work should stay runner-owned and payload-neutral
-4. late-auditor overflow is important, but it should not hijack the main slice framing
-
-## Implementation Slice D, fully implementable blueprint
+4. late-auditor policy, caveat taxonomy growth, and `BEST_DRAFT` ranking are real follow-ups, but they should not hijack this slice
 
 #### Slice D objective
 
-Freeze trust recommendation admissibility and artifact promotion using existing structured signals.
+Freeze trust recommendation admissibility and artifact promotion using the structured signals the harness already exports.
 
 This slice does exactly one thing: it decides which accepted recommendations may appear in `FINAL_ANSWER.*`, which may only appear in `PARTIAL_ANSWER.*`, and when the harness must fall back to `BEST_DRAFT.*`.
 
@@ -2024,10 +2010,10 @@ It must:
 
 1. add one runner-owned admissibility surface for accepted recommendations
 2. keep `FINAL_ANSWER.*` all-or-nothing
-3. make `PARTIAL_ANSWER.*` the honest home for trust recommendations that are usable but not final-admissible
+3. make `PARTIAL_ANSWER.*` the explicit home for trust recommendations that are usable but not final-admissible
 4. keep `BEST_DRAFT.*` as the unchanged last-resort fallback when no admissible partial answer remains
 
-It does **not** reopen prompt/schema payload shape, invent a second artifact family, or redesign trust as a second runner.
+It does **not** reopen prompt or schema payload shape, invent a second artifact family, or redesign trust as a second runner.
 
 #### Step 0: Scope challenge
 
@@ -2037,9 +2023,9 @@ Use **HOLD SCOPE** for Slice D.
 
 Reason:
 
-- Slice C already changed run-level publishability semantics and downstream artifact honesty
-- the next user-facing gap is recommendation-level shipping policy, not a broader trust rewrite
-- mixing admissibility, late-auditor validator policy, and `BEST_DRAFT` ranking changes would blur the acceptance bar immediately
+- Slice C already changed run-level publishability semantics and downstream artifact honesty.
+- The next user-facing gap is recommendation-level shipping policy, not a broader trust rewrite.
+- Mixing admissibility, late-auditor validator policy, and `BEST_DRAFT` ranking changes would blur the acceptance bar immediately.
 
 ##### Premises
 
@@ -2052,16 +2038,16 @@ These are the premises this plan accepts:
 
 ##### What already exists
 
-Reuse the existing trust/output seam instead of inventing a new one:
+Reuse the existing trust/output seam instead of inventing a parallel one:
 
 | Sub-problem | Existing code to extend | Why this is enough |
 |---|---|---|
 | accepted recommendation rollups | `_accepted_recommendation_reviews()`, `_accepted_caveat_recommendation_indices()`, and `_accepted_inferred_recommendation_indices()` in `anvil/harness/runner.py` | the runner already knows which recommendations are accepted, caveated, and inference-backed |
-| run-level publishability | `_analysis_publishability()` plus `analysis_review_status.publishability` in `anvil/harness/runner.py` | the repo already distinguishes run-level final blockers from advisory downgrade causes |
-| partial artifact shaping | `_partial_answer_eligibility()`, `_eligible_partial_answer_indices()`, and partial-summary helpers in `anvil/harness/reporting.py` | `PARTIAL_ANSWER.*` already carries explicit included/excluded indices and is the honest subset artifact |
+| run-level publishability | `_analysis_publishability()` plus `analysis_review_status.publishability` in `anvil/harness/runner.py` | the repo already distinguishes hard final blockers from advisory downgrade causes |
+| partial artifact shaping | `_partial_answer_eligibility()`, `_eligible_partial_answer_indices()`, and partial-summary helpers in `anvil/harness/reporting.py` | `PARTIAL_ANSWER.*` already carries explicit included and excluded indices and is the honest subset artifact |
 | recommendation review rendering | `## Recommendation Reviews` and analysis-review status sections in `anvil/harness/report.py` | the report already has the right seam for explaining scoped demotions without inventing new markdown surfaces |
 | trust-mode guidance | `_trust_review_policy_block()` and `_mode_acceptance_guidance_block()` in `anvil/harness/prompts.py` | trust prompts already render policy from the contract and can stay payload-neutral |
-| contract/docs/tests | `anvil/harness/contracts.py`, `docs/analysis_review_contract.md`, `README.md`, and `tests/test_harness_*` | the repo already freezes trust-mode policy in code and documentation, so Slice D can stay explicit and testable |
+| contract, docs, and tests | `anvil/harness/contracts.py`, `docs/analysis_review_contract.md`, `README.md`, and the harness test suite | the repo already freezes trust-mode policy in code and documentation, so Slice D can stay explicit and testable |
 
 ##### Minimum change set
 
@@ -2088,10 +2074,10 @@ Those stay deferred in `TODOS.md`. Slice D is only the recommendation-admissibil
 
 ##### Complexity check
 
-Slice D should stay inside nine files with zero new services:
+Slice D should stay inside ten touched files with zero new services:
 
 - primary code modules: `anvil/harness/contracts.py`, `anvil/harness/runner.py`, `anvil/harness/report.py`, `anvil/harness/reporting.py`, `anvil/harness/prompts.py`
-- primary docs/tests: `README.md`, `docs/analysis_review_contract.md`, `tests/test_harness_runner.py`, `tests/test_harness_reporting.py`, `tests/test_harness_prompt_consistency.py`
+- primary docs and tests: `README.md`, `docs/analysis_review_contract.md`, `tests/test_harness_runner.py`, `tests/test_harness_reporting.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_analysis_contract.py`
 
 That breadth is acceptable because the work stays inside one seam, trust artifact promotion. If the implementation spills into schemas, subgraphs, providers, or new helper modules just to encode recommendation admissibility, it is overbuilt.
 
@@ -2112,6 +2098,7 @@ No external search was needed here. The seam is repo-local and the current code 
 - `BEST_DRAFT` strategy changes
 - stronger late-auditor policy changes
 - richer line-level review refs
+- hard reviewer read tracing or sandbox-backed proof
 
 Slice D should boil the lake now:
 
@@ -2206,7 +2193,8 @@ These rules are the source of truth for Slice D. If code, docs, or tests disagre
 | `docs/analysis_review_contract.md` | document the admissibility surface and artifact-promotion rules | keep payload shape unchanged |
 | `tests/test_harness_runner.py` | cover recommendation admissibility classification and min-threshold fallout | main behavior guard |
 | `tests/test_harness_reporting.py` | cover final-versus-partial promotion and excluded-index rendering | user-visible output guard |
-| `tests/test_harness_prompt_consistency.py` | lock prompt text to the new contract rules | doc/prompt drift guard |
+| `tests/test_harness_prompt_consistency.py` | lock prompt text to the new contract rules | doc and prompt drift guard |
+| `tests/test_harness_analysis_contract.py` | lock README and contract docs to the new semantics | documentation regression guard |
 
 ##### Data flow
 
@@ -2222,13 +2210,13 @@ review verdicts + recommendation grounding + topic ledger + partial-acceptance r
                 ▼
      anvil/harness/reporting.py
         ├── FINAL_ANSWER when all accepted recommendations are final-admissible
-        ├── PARTIAL_ANSWER when final publication is not allowed but an admissible subset remains
+        ├── PARTIAL_ANSWER when a final answer is not honest but an admissible subset remains
         └── BEST_DRAFT when no admissible subset remains
                 │
                 ▼
        anvil/harness/report.py
         ├── explain why FINAL_ANSWER was withheld
-        ├── list final / partial-only / excluded recommendation indices
+        ├── list final / partial_only / excluded recommendation indices
         └── show per-index reasons for exclusions
 ```
 
@@ -2298,7 +2286,7 @@ These choices are already decided. Implementers should not reopen them during ex
 
 1. Freeze the contract-level trust promotion rules first.
 2. Classify recommendation admissibility in `runner.py` second.
-3. Wire `apply_final_artifacts()` to runner-owned admissibility third.
+3. Wire `apply_final_artifacts()` to the runner-owned admissibility surface third.
 4. Update report rendering and top-of-file markdown notes fourth.
 5. Update prompts and docs once field names and artifact semantics are fixed.
 6. Add and run the targeted tests before calling the slice done.
@@ -2410,8 +2398,8 @@ If Slice D starts paying latency by recomputing admissibility in multiple files,
 |---|---|---|
 | `FINAL_ANSWER.*` still ships a caveated or inference-backed trust recommendation | runner + reporting | end-to-end tests must assert demotion to `PARTIAL_ANSWER.*` |
 | `FINAL_ANSWER.*` silently drops accepted recommendations | reporting | tests must assert final artifacts include all accepted indices or do not exist |
-| `PARTIAL_ANSWER.*` loses original recommendation indices | reporting | tests must pin included/excluded indices exactly |
-| recommendation admissibility is re-derived differently in runner and reporting | runner + reporting | summary/report assertions must compare the same per-index truth |
+| `PARTIAL_ANSWER.*` loses original recommendation indices | reporting | tests must pin included and excluded indices exactly |
+| recommendation admissibility is re-derived differently in runner and reporting | runner + reporting | summary and report assertions must compare the same per-index truth |
 | the admissible subset falls below the partial minimum but the harness still emits `PARTIAL_ANSWER.*` | runner + reporting | runner tests must assert fallback to `BEST_DRAFT.*` |
 | bounded-mode artifacts change as collateral damage | runner + reporting | bounded-mode regression tests must stay green |
 
@@ -2423,28 +2411,33 @@ If any one of these ends with silent user-facing ambiguity, Slice D is incomplet
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| D1. Contract freeze | `contracts.py`, `prompts.py` | — |
-| D2. Runner admissibility | `runner.py` | D1 |
-| D3. Artifact promotion + report rendering | `reporting.py`, `report.py` | D2 |
-| D4. Docs | `README.md`, `docs/analysis_review_contract.md` | D2 |
-| D5. Tests | `tests/` | D2, D3, D4 |
+| D1. Contract freeze | `anvil/harness/contracts.py`, `anvil/harness/prompts.py` | — |
+| D2. Runner admissibility | `anvil/harness/runner.py` | D1 |
+| D3. Artifact promotion and report rendering | `anvil/harness/reporting.py`, `anvil/harness/report.py` | D2 |
+| D4. Docs and contract notes | `README.md`, `docs/analysis_review_contract.md` | D2 |
+| D5. Test lock | `tests/` | D2, D3, D4 |
 
 ##### Parallel lanes
 
-- Lane A: `D1`
-  Freeze the trust-promotion policy first.
+- Lane A: `D1 -> D2`
+  Freeze policy and field names first, then build the runner-owned admissibility surface. Keep this lane sequential because `runner.py` is defining the source of truth.
 
-- Lane B: `D2`
-  Build the runner-owned admissibility surface immediately after `D1`.
+- Lane B: `D3`
+  Artifact promotion and report rendering can start once `D2` lands or is rebased in. This lane stays together because `reporting.py` and `report.py` are tightly coupled.
 
-- Lane C: `D3`
-  Artifact promotion and report rendering, starts after `D2`.
+- Lane C: `D4`
+  Docs and contract wording can run in parallel with Lane B after `D2`, because they depend on the finalized field names and semantics but do not need to touch runtime code.
 
-- Lane D: `D4`
-  Docs and contract wording, starts after `D2`.
+- Lane D: `D5`
+  Tests close the slice after B and C. They need the final runtime behavior and the final doc wording.
 
-- Lane E: `D5`
-  Tests, last, because they need the final runner, reporting, and docs semantics.
+##### Execution order
+
+Launch Lane A first.
+
+When Lane A is merged, launch Lane B and Lane C in parallel worktrees.
+
+Merge Lane B and Lane C, then run Lane D as the final lock before shipping the slice.
 
 ##### Conflict flags
 
@@ -2452,6 +2445,7 @@ If any one of these ends with silent user-facing ambiguity, Slice D is incomplet
 - Freeze the `recommendation_admissibility` field names before docs or tests branch off.
 - Do not let `report.py` invent a second admissibility calculation.
 - Keep `selection.py` out of the first pass unless scope explicitly expands.
+- If Lane B changes user-visible wording in markdown headers or notes, Lane C must rebase before merge so the docs mirror the shipped artifact text exactly.
 
 #### Completion summary
 
@@ -2464,8 +2458,7 @@ If any one of these ends with silent user-facing ambiguity, Slice D is incomplet
 - What already exists: written
 - TODOS.md updates: existing deferred items remain valid, no new TODO required for this slice
 - Failure modes: 6 critical ambiguity risks pinned with guards
-- Outside voice: codex-only strategy and eng challenge incorporated into the slice framing
-- Parallelization: 5 steps, 1 contract freeze, 2 downstream lanes, 1 final test lock
+- Parallelization: 4 lanes, 2 middle lanes run in parallel, test lock runs last
 - Lake Score: complete option chosen throughout, no shortcut variant accepted
 
 #### Slice D exit criteria
@@ -2484,7 +2477,7 @@ That is the bar for "honest trust promotion." Not just "more warnings showed up.
 
 ## Cross-Phase Themes
 
-Three themes showed up everywhere:
+Three themes kept surviving every review pass:
 
 1. **Artifact honesty now means recommendation honesty.**
    Slice C fixed run-level publication honesty. Slice D has to fix what individual accepted recommendations are actually allowed to ship under a "Final Answer" label.
@@ -2504,7 +2497,7 @@ Items intentionally deferred out of this iteration:
 - broader late-auditor validator-policy rewrites
 - `BEST_DRAFT` ranking changes tied to admissibility semantics
 - richer line-level review refs instead of path-level refs only
-- hard reviewer read tracing / sandbox-backed proof
+- hard reviewer read tracing or sandbox-backed proof
 
 <!-- AUTONOMOUS DECISION LOG -->
 ## Decision Audit Trail
