@@ -2543,8 +2543,13 @@ Reuse the existing publication seam instead of inventing a new one:
 
 Do the smallest complete version:
 
-1. define one canonical section rule, when `items` is populated, `none_reason` is empty or advisory-only and never a publication blocker
-2. freeze a warning taxonomy for trust publication so section-hygiene redundancy warnings are advisory while artifact-significant warnings remain blocking
+1. define one canonical section rule:
+   - persisted payload target: when `items` is populated, prompts should emit `none_reason: ""`
+   - renderer behavior: if `items` is populated, ignore `none_reason` completely in markdown output
+   - validator compatibility: if a payload still arrives with populated `items` plus non-empty `none_reason`, keep accepting it but emit the existing warning string instead of erroring
+2. freeze a warning taxonomy for trust publication so only the exact section-hygiene redundancy warnings below are advisory, while every other final-stage semantic warning remains blocking:
+   - `strengths contains both concrete items and none_reason; prefer one or the other.`
+   - `uncertainties contains both concrete items and none_reason; prefer one or the other.`
 3. update reviewer/prompt wording so model-authored summaries can judge content quality but do not claim final-artifact eligibility
 4. align `REPORT.md` and deliverable notes so run-level blocking causes and per-index withheld reasons are distinct and ordered consistently
 5. add one production-shaped replay test that proves the April 23 trust scenario stays partial for recommendation reasons, not for section-hygiene noise
@@ -2564,7 +2569,7 @@ Those stay deferred. Slice E is only the publication-hygiene and authority-clean
 
 ##### Complexity check
 
-Slice E should stay inside eight touched files with zero new subsystems:
+Slice E should stay inside the existing harness seam with zero new subsystems. Expect roughly 10 to 11 touched files if the full docs and test lock land:
 
 - primary runtime modules: `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py`, `anvil/harness/runner.py`, `anvil/harness/report.py`, `anvil/harness/reporting.py`
 - primary docs and tests: `README.md`, `docs/analysis_review_contract.md`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_semantic_validation.py`, `tests/test_harness_runner.py`, `tests/test_harness_reporting.py`
@@ -2672,12 +2677,20 @@ Do **not** let presentational warning residue decide trust artifact kind when th
 Freeze these rules for Slice E:
 
 1. Reviewer-authored text may judge the analysis, recommendation quality, grounding, and caveats. It may **not** claim that a draft is a `FINAL_ANSWER.*`, a final artifact, or otherwise publication-ready.
+   - banned phrases in reviewer-authored `summary` text: `FINAL_ANSWER`, `final artifact`, `publication-ready`, `ready to publish`
+   - allowed phrasing: `analysis is acceptable`, `recommendation N is acceptable`, `accepted with caveats`, `content is usable`
 
 2. `strengths` and `uncertainties` keep the existing object shape, but their canonical semantics are:
-   - when `items` is populated, `none_reason` is empty or ignored
+   - when `items` is populated, prompts should emit `none_reason: ""`
+   - if legacy or stale payloads still include non-empty `none_reason` with populated `items`, semantic validation emits a warning and renderers ignore the text
    - when `items` is empty, `none_reason` explains the absence
 
-3. Trust final publication blocks only on blocker-grade semantic warnings. Section-hygiene redundancy warnings about `items` plus `none_reason` are advisory once the repo can already render clean user-facing markdown from the same payload.
+3. Trust final publication blocks on every final-stage semantic warning **except** these two exact advisory strings:
+   - `strengths contains both concrete items and none_reason; prefer one or the other.`
+   - `uncertainties contains both concrete items and none_reason; prefer one or the other.`
+   All other final-stage semantic warnings remain blocker-grade in Slice E, including:
+   - `new medium-or-higher auditor issues exceed the bounded-review cap of 1 after round 0.`
+   - normalization warnings or future semantic warnings that do not match one of the two exact advisory strings above
 
 4. `analysis_review_status.publishability` remains runner-owned. Slice E does not move that decision to prompts, reviewer verdicts, or renderers.
 
@@ -2690,15 +2703,44 @@ Freeze these rules for Slice E:
 | File | Required change | Notes |
 |---|---|---|
 | `anvil/harness/prompts.py` | stop instructing proposer/reviser stages to fill `items` and `none_reason` simultaneously when concrete items exist | this removes the self-inflicted contract mismatch at the source |
-| `anvil/harness/semantic_validation.py` | keep section-shape validation, but classify the `items` plus `none_reason` redundancy as advisory for publication purposes | trust still records the warning, but it no longer hijacks artifact kind |
-| `anvil/harness/runner.py` | distinguish blocker-grade vs advisory semantic warnings inside trust publishability | one runner-owned classification seam only |
+| `anvil/harness/semantic_validation.py` | keep section-shape validation, but preserve the exact existing redundancy warning strings for `strengths` and `uncertainties` so runner classification can match them deterministically | trust still records the warning, but only these two exact strings become advisory for publication |
+| `anvil/harness/runner.py` | distinguish blocker-grade vs advisory semantic warnings inside trust publishability using exact string matching on the two section-redundancy warnings above | one runner-owned classification seam only |
 | `anvil/harness/reporting.py` | keep `PARTIAL_ANSWER.*` selection logic intact while making blocked-publication notes clearly separate run-level blockers from recommendation-level withholding | this is wording cleanup, not semantics churn |
-| `anvil/harness/report.py` | mirror the same blocker/admissibility distinction in `REPORT.md` without duplicating classification logic | report must explain the same truth the runner used |
+| `anvil/harness/report.py` | mirror the same blocker/admissibility distinction in `REPORT.md` without duplicating classification logic | report must explain the same truth the runner used and use the runner-derived `Final publication: publishable|blocked` wording |
 | `README.md` + `docs/analysis_review_contract.md` | document the warning taxonomy and authority boundary | users should stop inferring publication state from reviewer prose |
 | `tests/test_harness_prompt_consistency.py` | lock the new section-shape instructions | prompt drift guard |
 | `tests/test_harness_semantic_validation.py` | lock canonical section semantics and warning classification | contract guard |
 | `tests/test_harness_runner.py` | add end-to-end trust publishability coverage for advisory section warnings | behavior guard |
 | `tests/test_harness_reporting.py` | lock note ordering and wording parity for run-level blockers versus per-index withheld reasons | user-visible output guard |
+
+##### Implementation sequence
+
+Execute Slice E in four concrete steps. Keep each step narrow and leave the structured publication seam intact:
+
+1. **E1. Prompt and contract freeze**
+   - touch `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py`, `tests/test_harness_prompt_consistency.py`, and `tests/test_harness_semantic_validation.py`
+   - stop asking models to emit `items` plus `none_reason` simultaneously when concrete items exist
+   - freeze the canonical section rule so empty-section cases still fail hard, and the only non-error redundancy warnings remain the two exact section warning strings already emitted today
+
+2. **E2. Runner publication classification**
+   - touch `anvil/harness/runner.py` and `tests/test_harness_runner.py`
+   - keep `analysis_review_status.publishability` runner-owned
+   - classify only the two exact section-redundancy warnings as advisory for publishability, while every other final-stage semantic warning remains blocking, without changing Slice D admissibility semantics
+
+3. **E3. Surface wording parity**
+   - touch `anvil/harness/report.py`, `anvil/harness/reporting.py`, `README.md`, `docs/analysis_review_contract.md`, and `tests/test_harness_reporting.py`
+   - make every user-visible surface say the same thing about run-level publication blockers, per-index withholding, and reviewer-vs-runner authority
+   - freeze the surface vocabulary to:
+     - `Final publication: publishable` or `Final publication: blocked` for run-level state
+     - `Publication blockers:` for run-level blocker causes
+     - `Recommendation indices withheld from FINAL_ANSWER.*:` for per-index admissibility withholding
+   - preserve `PARTIAL_ANSWER.*` as the explicit subset artifact and avoid any new artifact family or vocabulary branch
+
+4. **E4. Regression lock**
+   - use the targeted replay matrix to prove the April 23 trust scenario stays partial only for recommendation reasons, not for section-hygiene noise
+   - rerun the targeted pytest suite as the final gate after E1 through E3 land
+
+The sequencing rule is simple: define the contract first, classify publication from that contract second, then make every report surface mirror the same truth, then lock it with regression coverage.
 
 ##### Architecture-specific failure scenario
 
@@ -2751,24 +2793,30 @@ CODE PATH COVERAGE
    - populate concrete `items` when present
    - use `none_reason` only when the section has no concrete items
    - reviewer language stays about analysis quality, not artifact eligibility
+   - prompt text does not instruct models to say `final artifact`, `publication-ready`, or `FINAL_ANSWER`
 
 2. `tests/test_harness_semantic_validation.py`
    Add or update coverage for:
-   - populated `items` plus redundant `none_reason` staying advisory
+   - populated `items` plus redundant `none_reason` preserving these exact warnings:
+     - `strengths contains both concrete items and none_reason; prefer one or the other.`
+     - `uncertainties contains both concrete items and none_reason; prefer one or the other.`
    - empty `items` with empty `none_reason` still erroring
    - canonical section semantics staying stable for both `strengths` and `uncertainties`
 
 3. `tests/test_harness_runner.py`
    Add end-to-end coverage for:
-   - bound trust run with all-final recommendations plus advisory section warnings still publishing `FINAL_ANSWER.*`
+   - bound trust run with all-final recommendations plus one or both exact advisory section warnings still publishing `FINAL_ANSWER.*`
    - bound trust run with one `partial_only` recommendation plus advisory section warnings publishing `PARTIAL_ANSWER.*` only for recommendation reasons
-   - blocker-grade semantic warnings still blocking final publication
+   - late-auditor overflow and every non-section semantic warning still blocking final publication
+   - publishability classification matches exact warning strings rather than vague category names
 
 4. `tests/test_harness_reporting.py`
    Add rendering and artifact-note coverage for:
    - run-level blocking causes appearing only when final publication is genuinely blocked
    - withheld recommendation indices and reasons still rendering for mixed-admissibility partial outputs
    - note ordering and wording parity between `REPORT.md` and deliverable markdown
+   - redundant `none_reason` text never rendering when `items` is populated
+   - report vocabulary staying exactly `Final publication`, `Publication blockers`, and `Recommendation indices withheld from FINAL_ANSWER.*`
 
 ##### Test plan artifact
 
@@ -2788,14 +2836,14 @@ poetry run pytest -q \
 
 #### Failure modes for Slice E
 
-| Failure mode | Where it would show up | Required guard |
-|---|---|---|
-| advisory section warnings still block trust final publication | runner + reporting | end-to-end tests must pin artifact kind for advisory-only warning cases |
-| prompts keep telling models to emit the exact payload shape that triggers warnings | prompts + semantic validation | prompt-consistency and semantic-validation tests must freeze the canonical section rule |
-| reviewer prose keeps claiming final-artifact eligibility | prompts + report artifacts | prompt wording tests plus replay fixtures must ban that vocabulary drift |
-| `PARTIAL_ANSWER.*` notes conflate run-level blockers with withheld recommendation indices | reporting | note-order tests must lock the two buckets separately |
-| Slice D admissibility semantics regress while fixing warning taxonomy | runner + reporting | mixed-admissibility regression coverage must stay green |
-| bounded mode changes as collateral damage | runner + reporting | bounded-mode regression tests must stay green |
+| Failure mode | Where it would show up | Test and guard | User-visible consequence if missed | Critical gap? |
+|---|---|---|---|---|
+| advisory section warnings still block trust final publication | runner + reporting | end-to-end runner and reporting tests must pin `FINAL_ANSWER.*` for advisory-only warning cases | users see a partial artifact for the wrong reason and infer audit debt that is not real | yes |
+| prompts keep telling models to emit the exact payload shape that triggers warnings | prompts + semantic validation | prompt-consistency and semantic-validation tests must freeze the canonical section rule | trust continues producing noisy warnings and reintroduces self-inflicted classification churn | no, but high-signal |
+| reviewer prose keeps claiming final-artifact eligibility | prompts + report artifacts | prompt wording tests plus replay fixtures must ban model-authored final-artifact claims | users see two authorities disagreeing about whether the run was publication-ready | yes |
+| `PARTIAL_ANSWER.*` notes conflate run-level blockers with withheld recommendation indices | reporting | reporting tests must lock note ordering and the split between run-level blockers and per-index withholding | users cannot tell whether the run was blocked globally or only narrowed at the recommendation level | yes |
+| Slice D admissibility semantics regress while fixing warning taxonomy | runner + reporting | mixed-admissibility regression coverage must stay green and keep `FINAL_ANSWER.*` all-or-nothing | accepted recommendations disappear silently or final artifacts become dishonest again | yes |
+| bounded mode changes as collateral damage | runner + reporting | bounded-mode regression tests must stay green | a trust-only cleanup unexpectedly changes bounded behavior and expands blast radius | yes |
 
 #### Worktree parallelization strategy for Slice E
 
@@ -2805,22 +2853,29 @@ poetry run pytest -q \
 |---|---|---|
 | E1. Prompt + section contract freeze | `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py` | — |
 | E2. Runner warning classification | `anvil/harness/runner.py` | E1 |
-| E3. Report and deliverable wording parity | `anvil/harness/report.py`, `anvil/harness/reporting.py`, docs | E2 |
-| E4. Test lock | `tests/` | E1, E2, E3 |
+| E3. Report and deliverable wording parity | `anvil/harness/report.py`, `anvil/harness/reporting.py`, docs | E1 |
+| E4. Test lock | `tests/` | E2, E3 |
+
+##### Parallel lanes
+
+- **Lane A:** E1. Prompt + section contract freeze
+- **Lane B:** E2. Runner warning classification
+- **Lane C:** E3. Report and deliverable wording parity
+- **Lane D:** E4. Test lock
+
+Only Lane A is a true prerequisite. Once the section contract is frozen, Lane B and Lane C can run in parallel in separate worktrees because they touch different primary modules and consume the same pre-decided taxonomy. Lane D stays last because it is the regression lock across both middle lanes.
 
 ##### Execution order
 
-Launch E1 first.
-
-When E1 is settled, land E2.
-
-Run E3 after E2 because report wording must follow the final blocker taxonomy.
-
-Run E4 last as the slice lock.
+1. Launch **Lane A** first and settle the canonical section semantics.
+2. Launch **Lane B** and **Lane C** in parallel worktrees after Lane A lands.
+3. Merge Lane B first if it changes any structured blocker labels consumed by reporting. If it does not rename anything, Lane C can merge independently.
+4. Run **Lane D** last on top of the merged branch and treat it as the ship gate for Slice E.
 
 ##### Conflict flags
 
-- Do not split warning classification across runner and report code.
+- Lanes B and C must share one vocabulary for blocker-grade versus advisory warnings. If either lane tries to invent new wording or field names, stop and realign before merge.
+- Do not split warning classification across runner and report code. Runner owns classification, report surfaces project it.
 - Do not change `recommendation_admissibility` field names in this slice.
 - Do not let docs describe reviewer prose as if it owns artifact publication.
 - Keep `BEST_DRAFT.*` out of scope unless a failing regression proves otherwise.
@@ -2833,8 +2888,8 @@ Run E4 last as the slice lock.
 - Test Review: code path coverage produced, 12 required behaviors pinned
 - NOT in scope: written
 - What already exists: written
-- Failure modes: 6 user-facing confusion risks pinned with guards
-- Parallelization: 4 lanes, test lock runs last
+- Failure modes: 4 critical gaps and 2 high-signal confusion risks pinned with guards
+- Parallelization: 4 lanes, launch B + C in parallel after A, test lock last
 - Lake Score: complete option chosen, no shortcut redesign accepted
 
 #### Slice E exit criteria
