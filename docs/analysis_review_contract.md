@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v6` keeps the bounded-review rules from v5, makes trust-mode recommendation evidence explicitly uncapped, and keeps one unified trust policy instead of inventing a second payload family.
+`analysis_review_v1_contract_v7` keeps the bounded-review rules from v6, keeps trust-mode recommendation evidence explicitly uncapped, and adds runner-owned recommendation admissibility for trust-mode final vs partial artifact selection without changing the model-authored payload shape.
 
 ## What the contract governs
 
@@ -27,7 +27,7 @@ The contract now serializes:
 
 ```json
 {
-  "contract_version": "analysis_review_v1_contract_v6",
+  "contract_version": "analysis_review_v1_contract_v7",
   "strategy_kind": "analysis_review_v1",
   "mode": "bounded",
   "effective_strategy": {
@@ -41,7 +41,7 @@ Today the legacy `analysis_review_v1` surface still resolves to bounded behavior
 
 ## Unified policy model
 
-The v4 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
+The v7 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
 
 Why this is preferable to mode-specific contract classes:
 
@@ -103,9 +103,39 @@ For `accepted_partial`, the shipped subset must also be topic-clean:
 
 `REPORT.md` renders the same ledger in a row-shaped `## Topic Lifecycle` table, while `FINAL_ANSWER.md` keeps a compact bullet summary of the same canonical records.
 
-## Publishability and artifact selection
+## Recommendation admissibility and artifact selection
 
-Slice C adds an explicit publishability layer under `analysis_review_status`:
+Slice D adds a runner-owned recommendation admissibility layer under `analysis_review_status`:
+
+```json
+{
+  "analysis_review_status": {
+    "recommendation_admissibility": {
+      "final_answer_recommendation_indices": [1],
+      "partial_only_recommendation_indices": [2],
+      "excluded_recommendation_indices": [3],
+      "reasons_by_recommendation_index": {
+        "2": ["accepted_with_caveat"],
+        "3": ["not_accepted"]
+      }
+    }
+  }
+}
+```
+
+Rules:
+
+- `final_answer_recommendation_indices`, `partial_only_recommendation_indices`, `excluded_recommendation_indices`, and `reasons_by_recommendation_index` are the frozen field names.
+- `recommendation_admissibility` is runner-owned status, not a model-authored payload field. The payload shape remains unchanged.
+- In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Only recommendations in `final_answer_recommendation_indices` are clean final-answer candidates.
+- A recommendation is final-admissible only when its review verdict is `accept`, its grounding is not `inferred`, and no runner-known per-index topic blocker applies.
+- `accept_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`; they are not final-admissible in trust mode.
+- Non-accepted recommendations and per-index topic-blocked recommendations move to `excluded_recommendation_indices`.
+- `reasons_by_recommendation_index` uses only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`.
+- The candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`, but publishing `PARTIAL_ANSWER.*` still reuses the existing partial gates.
+- Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules. Recommendation admissibility does not replace them.
+
+Slice C also keeps an explicit publishability layer under `analysis_review_status`:
 
 ```json
 {
@@ -127,7 +157,6 @@ Rules:
 - In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
 - Trust-mode final publication is allowed only when the content verdict is `accepted` or `accepted_with_warnings`, provenance is fully bound, no topic IDs remain `open`, no topic IDs remain `carried_forward`, and no final semantic warnings remain.
 - If the content verdict is not fully accepted, `blocking_causes` must contain exactly one verdict blocker: `content verdict is not fully accepted: <verdict>`.
-- Low-severity reviewer issues, `accept_with_caveat` recommendation reviews, and inference-only accepted recommendations remain downgrade or advisory causes. They stay visible, but they do not block final publication by themselves.
 - `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` remain the source of truth for what actually shipped.
 - If trust mode is content-accepted but not final-publishable, artifact selection skips `FINAL_ANSWER.*` and falls through to the existing partial-answer path when eligible, otherwise `BEST_DRAFT.*`.
 
@@ -138,7 +167,7 @@ For fully accepted trust runs, `blocking_causes` is deterministic. The list is e
 3. carried-forward topic IDs in sorted order
 4. one semantic-warning blocker whose summaries preserve `_final_semantic_warning_records()` order and are joined with `; `
 
-This separation is intentional: `content_verdict` classifies the review outcome, while `publishability` decides whether `FINAL_ANSWER.*` may ship for trust-mode runs.
+This separation is intentional: `content_verdict` classifies the review outcome, `recommendation_admissibility` classifies per-index final vs partial eligibility, and `publishability` decides whether `FINAL_ANSWER.*` may ship for trust-mode runs.
 
 ## Bounded-review policy
 

@@ -253,6 +253,21 @@ def _trust_review_policy_block(contract: AnalysisReviewContract) -> str:
                 f"{trust.late_auditor_medium_or_higher_policy}"
             ),
         ]
+        + (
+            [
+                (
+                    "- Final-artifact eligibility is runner-owned in trust mode: only "
+                    "accept verdicts with non-inferred grounding and no runner-known per-index "
+                    "topic blocker are clean final-answer candidates."
+                ),
+                (
+                    "- accept_with_caveat and inferred acceptance remain partial-only "
+                    "considerations, and you should not add any extra payload field to encode that."
+                ),
+            ]
+            if contract.mode == "trust"
+            else []
+        )
     )
 
 

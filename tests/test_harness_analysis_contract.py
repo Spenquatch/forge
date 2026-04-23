@@ -69,7 +69,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v6"
+    assert contract.contract_version == "analysis_review_v1_contract_v7"
     assert contract.mode == "bounded"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
@@ -224,20 +224,42 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
     assert trust_example["review_loops"]["max_loops"] == 3
 
 
-def test_readme_documents_publishability_and_preview_only_markdown():
+def test_readme_documents_trust_recommendation_admissibility_and_preview_only_markdown():
     readme = Path("README.md").read_text(encoding="utf-8")
 
+    assert "analysis_review_status.recommendation_admissibility" in readme
+    assert "FINAL_ANSWER.*` is all-or-nothing" in readme
+    assert "final_answer_recommendation_indices" in readme
+    assert "partial_only_recommendation_indices" in readme
+    assert "excluded_recommendation_indices" in readme
+    assert "reasons_by_recommendation_index" in readme
+    assert "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`" in readme
+    assert "accepted-but-inferred recommendations are not final-admissible in trust mode" in readme
+    assert "candidate subset comes from the final-admissible plus partial-only recommendations" in readme
     assert "analysis_review_status.publishability" in readme
     assert "final_answer_publishable" in readme
     assert "blocking_causes" in readme
-    assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in readme
     assert "final_artifact`, `final_artifact_json`, `final_artifact_kind`" in readme
     assert "Markdown compaction is preview-only and renderer-owned." in readme
 
 
-def test_analysis_review_contract_docs_freeze_publishability_ordering_and_preview_budgets():
+def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_and_preview_budgets():
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
+    assert "analysis_review_v1_contract_v7" in contract_doc
+    assert "recommendation admissibility layer" in contract_doc
+    assert "recommendation_admissibility" in contract_doc
+    assert "runner-owned status, not a model-authored payload field" in contract_doc
+    assert "payload shape remains unchanged" in contract_doc
+    assert "FINAL_ANSWER.*` is all-or-nothing" in contract_doc
+    assert "final_answer_recommendation_indices" in contract_doc
+    assert "partial_only_recommendation_indices" in contract_doc
+    assert "excluded_recommendation_indices" in contract_doc
+    assert "reasons_by_recommendation_index" in contract_doc
+    assert "`accept_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`" in contract_doc
+    assert "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`" in contract_doc
+    assert "candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`" in contract_doc
+    assert "Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules." in contract_doc
     assert "final_answer_publishable" in contract_doc
     assert "blocking_causes" in contract_doc
     assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in contract_doc

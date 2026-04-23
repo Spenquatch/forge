@@ -1419,6 +1419,32 @@ def _stage_with_provenance(
     }
 
 
+def _build_recommendation_admissibility_status(
+    runner: HarnessRunner,
+    *,
+    final_analysis_payload: dict[str, object],
+    final_review_payload: dict[str, object],
+    content_verdict: str = "accepted_with_warnings",
+) -> dict[str, object]:
+    runner.agent_stages = [
+        _stage_with_provenance(
+            stage_index=1,
+            role_name="reviser_round_1",
+            payload=final_analysis_payload,
+        ),
+        _stage_with_provenance(
+            stage_index=2,
+            role_name="auditor",
+            payload=final_review_payload,
+        ),
+    ]
+    return runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict=content_verdict,
+    )
+
+
 
 def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     tmp_path,
@@ -1445,7 +1471,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
-    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v6"
+    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v7"
     assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
     assert summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
@@ -1462,6 +1488,12 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert summary["analysis_review_status"]["resolved_topic_ids"] == []
     assert summary["analysis_review_status"]["carried_forward_topic_ids"] == []
     assert summary["analysis_review_status"]["waived_topic_ids"] == []
+    assert summary["analysis_review_status"]["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [],
+        "partial_only_recommendation_indices": [],
+        "excluded_recommendation_indices": [],
+        "reasons_by_recommendation_index": {},
+    }
     assert summary["analysis_review_coverage"]["review_loop_exercised"] is True
     bounded_review_summary = summary["bounded_review_summary"]
     assert bounded_review_summary == summary["run_details"]["bounded_review_summary"]
@@ -1719,10 +1751,19 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
     assert summary["analysis_review_status"]["provenance"]["uncovered_recommendation_indices"] == []
     assert summary["analysis_review_status"]["accepted_recommendations_with_inferred_grounding"] == [2]
+    assert summary["analysis_review_status"]["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [1],
+        "partial_only_recommendation_indices": [2],
+        "excluded_recommendation_indices": [],
+        "reasons_by_recommendation_index": {
+            "2": ["inferred_grounding"],
+        },
+    }
     assert (
         "accepted recommendations rely on inference-only grounding: 2"
         in summary["analysis_review_status"]["downgrade_causes"]
     )
+    assert summary["artifacts"]["final_artifact_kind"] == "partial_answer"
 
     proposer_stage = summary["agent_stages"][0]
     critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
@@ -1733,16 +1774,18 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] > 0
     assert auditor_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] > 0
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
-    recommendation_two_section = final_answer_text.split("### 2. Align timeout handling", 1)[1]
+    partial_answer_text = Path(summary["artifacts"]["partial_answer_md"]).read_text(encoding="utf-8")
+    recommendation_two_section = partial_answer_text.split("### 2. Align timeout handling", 1)[1]
     recommendation_two_section = recommendation_two_section.split("### ", 1)[0]
-    recommendation_one_section = final_answer_text.split("### 1. Add concurrency controls", 1)[1]
+    recommendation_one_section = partial_answer_text.split("### 1. Add concurrency controls", 1)[1]
     recommendation_one_section = recommendation_one_section.split("### ", 1)[0]
     assert "## Review Scope" in report_text
     assert "## Bounded Review" not in report_text
     assert "## Analysis Review Status" in report_text
     assert "- Mode: `trust`" in report_text
     assert "- Provenance status: `bound`" in report_text
+    assert "- Final-answer admissible recommendation indices: `1`" in report_text
+    assert "- Partial-only admissible recommendation indices: `2`" in report_text
     assert "Accepted recommendations with inference-only grounding: 2" in report_text
     assert "This recommendation carries review caveats:" in recommendation_two_section
     assert (
@@ -2131,6 +2174,131 @@ def test_analysis_review_status_publishability_allows_advisory_only_trust_warnin
     assert summary["analysis_review_status"]["publishability"] == {
         "final_answer_publishable": True,
         "blocking_causes": [],
+    }
+
+
+def test_analysis_review_status_marks_trust_accept_with_direct_grounding_as_final(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][1]["verdict"] = "revise"
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == [1]
+    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [2]
+    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+        "2": ["not_accepted"],
+    }
+
+
+def test_analysis_review_status_marks_trust_accept_with_caveat_as_partial_only(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][0]["verdict"] = "accept_with_caveat"
+    final_review_payload["recommendation_reviews"][1]["verdict"] = "revise"
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == [1]
+    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [2]
+    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+        "1": ["accepted_with_caveat"],
+        "2": ["not_accepted"],
+    }
+
+
+def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][0]["verdict"] = "revise"
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == [2]
+    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [1]
+    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+        "1": ["not_accepted"],
+        "2": ["inferred_grounding"],
+    }
+
+
+def test_analysis_review_status_excludes_non_accepted_recommendations(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][0]["verdict"] = "revise"
+    final_review_payload["recommendation_reviews"][1]["verdict"] = "reject"
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="best_effort_exhausted",
+    )
+
+    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [1, 2]
+    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+        "1": ["not_accepted"],
+        "2": ["not_accepted"],
+    }
+
+
+def test_analysis_review_status_excludes_topic_blocked_recommendations_from_final_admissibility(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][1]["verdict"] = "revise"
+    runner.topic_ledger = [
+        {
+            "topic_id": "TOPIC-001",
+            "resolution_status": "carried_forward",
+            "recommendation_index": 1,
+        }
+    ]
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
+    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [1, 2]
+    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+        "1": ["topic_blocked"],
+        "2": ["not_accepted"],
     }
 
 
@@ -3314,7 +3482,7 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
         "Add release failure categorization"
     )
     assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
-        "analysis_review_v1_contract_v6"
+        "analysis_review_v1_contract_v7"
     )
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3

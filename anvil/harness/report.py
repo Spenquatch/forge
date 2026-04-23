@@ -6,6 +6,12 @@ from typing import Any
 from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
 
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
+_CANONICAL_ADMISSIBILITY_REASONS = {
+    "accepted_with_caveat",
+    "inferred_grounding",
+    "not_accepted",
+    "topic_blocked",
+}
 
 
 def _render_policy_list(items: list[str]) -> str:
@@ -65,6 +71,22 @@ def _render_id_list(items: list[str]) -> str:
     if not values:
         return "none"
     return ", ".join(f"`{item}`" for item in values)
+
+
+def _normalized_recommendation_indices(raw_items: Any) -> list[int]:
+    indices: list[int] = []
+    for item in raw_items or []:
+        try:
+            indices.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(indices))
+
+
+def _render_recommendation_index_list(items: list[int]) -> str:
+    if not items:
+        return "none"
+    return ", ".join(f"`{item}`" for item in items)
 
 
 def _topic_status_ids(summary: dict[str, Any], *, status_name: str) -> list[str]:
@@ -270,6 +292,45 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
             "- Accepted recommendations with inference-only grounding: "
             + ", ".join(str(item) for item in inferred_indices)
         )
+    recommendation_admissibility = status.get("recommendation_admissibility") or {}
+    if isinstance(recommendation_admissibility, dict) and recommendation_admissibility:
+        final_indices = _normalized_recommendation_indices(
+            recommendation_admissibility.get("final_answer_recommendation_indices")
+        )
+        partial_only_indices = _normalized_recommendation_indices(
+            recommendation_admissibility.get("partial_only_recommendation_indices")
+        )
+        excluded_indices = _normalized_recommendation_indices(
+            recommendation_admissibility.get("excluded_recommendation_indices")
+        )
+        reasons_by_index = recommendation_admissibility.get("reasons_by_recommendation_index") or {}
+        lines.append(
+            "- Final-answer admissible recommendation indices: "
+            + _render_recommendation_index_list(final_indices)
+        )
+        lines.append(
+            "- Partial-only admissible recommendation indices: "
+            + _render_recommendation_index_list(partial_only_indices)
+        )
+        lines.append(
+            "- Excluded recommendation indices: "
+            + _render_recommendation_index_list(excluded_indices)
+        )
+        rendered_reason_lines: list[str] = []
+        for raw_index in sorted(reasons_by_index, key=lambda item: int(item)):
+            normalized_reasons = [
+                str(reason).strip()
+                for reason in (reasons_by_index.get(raw_index) or [])
+                if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
+            ]
+            if not normalized_reasons:
+                continue
+            rendered_reason_lines.append(
+                f"  - `{raw_index}`: " + ", ".join(f"`{reason}`" for reason in normalized_reasons)
+            )
+        if rendered_reason_lines:
+            lines.append("- Recommendation admissibility reasons:")
+            lines.extend(rendered_reason_lines)
 
     semantic_warnings = status.get("semantic_warnings") or []
     if semantic_warnings:

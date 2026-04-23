@@ -16,6 +16,7 @@ from anvil.orchestrator import reload_config
 from .contracts import (
     AnalysisReviewContract,
     PartialAcceptancePolicy,
+    RecommendationAdmissibilityStatus,
     build_analysis_review_contract,
     default_blocking_class_for_kind,
 )
@@ -2102,6 +2103,16 @@ class HarnessRunner:
             if str(item.get("verdict") or "").strip().lower() in {"accept", "accept_with_caveat"}
         ]
 
+    def _accepted_recommendation_indices(self, review_payload: dict[str, Any]) -> list[int]:
+        accepted_indices: list[int] = []
+        for item in self._accepted_recommendation_reviews(review_payload):
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is not None:
+                accepted_indices.append(recommendation_index)
+        return sorted(set(accepted_indices))
+
     def _has_recommendation_caveats(self, review_payload: dict[str, Any]) -> bool:
         return any(
             str(item.get("verdict") or "").strip().lower() == "accept_with_caveat"
@@ -2129,15 +2140,7 @@ class HarnessRunner:
         recommendations = final_analysis_payload.get("recommendations")
         if not isinstance(recommendations, list):
             return []
-        accepted_indices: set[int] = set()
-        for item in self._accepted_recommendation_reviews(review_payload):
-            raw_index = item.get("recommendation_index")
-            if raw_index in (None, ""):
-                continue
-            try:
-                accepted_indices.add(int(raw_index))
-            except (TypeError, ValueError):
-                continue
+        accepted_indices = set(self._accepted_recommendation_indices(review_payload))
         inferred_indices: list[int] = []
         for index, item in enumerate(recommendations, start=1):
             if index not in accepted_indices or not isinstance(item, dict):
@@ -2145,6 +2148,81 @@ class HarnessRunner:
             if str(item.get("grounding_mode") or "").strip().lower() == "inferred":
                 inferred_indices.append(index)
         return inferred_indices
+
+    def _build_recommendation_admissibility(
+        self,
+        *,
+        final_analysis_payload: dict[str, Any],
+        final_review_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        contract = self._analysis_contract()
+        empty_status = RecommendationAdmissibilityStatus()
+        if contract.mode != "trust":
+            return empty_status.to_dict()
+
+        recommendations = final_analysis_payload.get("recommendations")
+        if not isinstance(recommendations, list):
+            return empty_status.to_dict()
+
+        review_by_index: dict[int, dict[str, Any]] = {}
+        for item in self._recommendation_reviews(final_review_payload):
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is not None:
+                review_by_index[recommendation_index] = item
+
+        topic_blocked_indices = set(
+            partial_accept_topic_eligibility(
+                self.topic_ledger,
+                accepted_recommendation_indices=self._accepted_recommendation_indices(
+                    final_review_payload
+                ),
+            )["blocked_recommendation_indices"]
+        )
+
+        final_indices: list[int] = []
+        partial_only_indices: list[int] = []
+        excluded_indices: list[int] = []
+        reasons_by_index: dict[str, list[str]] = {}
+
+        for recommendation_index, recommendation in enumerate(recommendations, start=1):
+            if not isinstance(recommendation, dict):
+                excluded_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = ["not_accepted"]
+                continue
+
+            if recommendation_index in topic_blocked_indices:
+                excluded_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = ["topic_blocked"]
+                continue
+
+            review = review_by_index.get(recommendation_index) or {}
+            verdict = str(review.get("verdict") or "").strip().lower()
+            if verdict not in {"accept", "accept_with_caveat"}:
+                excluded_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = ["not_accepted"]
+                continue
+
+            reasons: list[str] = []
+            if verdict == "accept_with_caveat":
+                reasons.append("accepted_with_caveat")
+            if str(recommendation.get("grounding_mode") or "").strip().lower() == "inferred":
+                reasons.append("inferred_grounding")
+
+            if reasons:
+                partial_only_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = reasons
+                continue
+
+            final_indices.append(recommendation_index)
+
+        return RecommendationAdmissibilityStatus(
+            final_answer_recommendation_indices=final_indices,
+            partial_only_recommendation_indices=partial_only_indices,
+            excluded_recommendation_indices=excluded_indices,
+            reasons_by_recommendation_index=reasons_by_index,
+        ).to_dict()
 
     def _latest_successful_stage(self, *, role_names: set[str] | None = None) -> dict[str, Any] | None:
         for stage in reversed(self.agent_stages):
@@ -2303,6 +2381,10 @@ class HarnessRunner:
         if contract.trust_review.payload_provenance_mode == "none" and provenance_status == "missing":
             provenance_status = "not_required"
         publishability = self._analysis_publishability(content_verdict=content_verdict)
+        recommendation_admissibility = self._build_recommendation_admissibility(
+            final_analysis_payload=final_analysis_payload,
+            final_review_payload=final_review_payload,
+        )
         return {
             "mode": contract.mode,
             "content_verdict": content_verdict,
@@ -2347,6 +2429,7 @@ class HarnessRunner:
             "disagreed_topic_ids": disagreed_topic_ids,
             "topic_ledger_count": len(self.topic_ledger),
             "downgrade_causes": downgrade_causes,
+            "recommendation_admissibility": recommendation_admissibility,
             "publishability": publishability,
         }
 

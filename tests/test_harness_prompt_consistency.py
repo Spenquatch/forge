@@ -72,7 +72,15 @@ def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
 
 
 @pytest.mark.parametrize(
-    ("strategy_kind", "mode", "trust_lines", "payload_line", "issue_line", "acceptance_lines"),
+    (
+        "strategy_kind",
+        "mode",
+        "trust_lines",
+        "final_artifact_lines",
+        "payload_line",
+        "issue_line",
+        "acceptance_lines",
+    ),
     [
         (
             "analysis_review_bounded_v1",
@@ -87,6 +95,7 @@ def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
                 "Downgrade inference-backed acceptance to caveated acceptance: False",
                 "Late auditor medium-or-higher issue policy: error",
             ],
+            [],
             "verified_evidence_refs is optional advisory metadata in this mode; keep it a subset of evidence when you provide it.",
             "blocking_class_override_reason is optional context when you intentionally override the default blocking_class.",
             [
@@ -107,6 +116,10 @@ def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
                 "Downgrade inference-backed acceptance to caveated acceptance: True",
                 "Late auditor medium-or-higher issue policy: warn",
             ],
+            [
+                "Final-artifact eligibility is runner-owned in trust mode: only accept verdicts with non-inferred grounding and no runner-known per-index topic blocker are clean final-answer candidates.",
+                "accept_with_caveat and inferred acceptance remain partial-only considerations, and you should not add any extra payload field to encode that.",
+            ],
             "In this mode, populate verified_evidence_refs with the evidence refs you directly re-checked; keep it a subset of evidence.",
             "If you intentionally override the default blocking_class for a kind, include blocking_class_override_reason with concrete justification.",
             [
@@ -120,6 +133,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     strategy_kind: str,
     mode: str,
     trust_lines: list[str],
+    final_artifact_lines: list[str],
     payload_line: str,
     issue_line: str,
     acceptance_lines: list[str],
@@ -173,7 +187,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     )
 
     common_bounded_lines = [
-        "Analysis-review contract: analysis_review_v1_contract_v6",
+        "Analysis-review contract: analysis_review_v1_contract_v7",
         f"Effective strategy kind: {strategy_kind}",
         f"Mode: {mode}",
         "Bounded review policy:",
@@ -199,6 +213,22 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert line in critic
         assert line in auditor
         assert line in reviser
+
+    if mode == "trust":
+        for line in final_artifact_lines:
+            assert line in proposer
+            assert line in critic
+            assert line in auditor
+            assert line in reviser
+    else:
+        assert "Final-artifact eligibility is runner-owned in trust mode" not in proposer
+        assert "Final-artifact eligibility is runner-owned in trust mode" not in critic
+        assert "Final-artifact eligibility is runner-owned in trust mode" not in auditor
+        assert "Final-artifact eligibility is runner-owned in trust mode" not in reviser
+        assert "partial-only considerations" not in proposer
+        assert "partial-only considerations" not in critic
+        assert "partial-only considerations" not in auditor
+        assert "partial-only considerations" not in reviser
 
     assert "Minimum accepted recommendations for partial acceptance: 2" in critic
     assert "Create stable issue IDs such as AR-001" in critic

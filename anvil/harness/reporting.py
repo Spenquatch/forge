@@ -18,6 +18,12 @@ from .topic_lifecycle import (
 
 _FULLY_ACCEPTED_RUN_VERDICTS = {"accepted", "accepted_with_warnings"}
 _PARTIAL_ACCEPTED_RUN_VERDICTS = {"accepted_partial"}
+_CANONICAL_ADMISSIBILITY_REASONS = {
+    "accepted_with_caveat",
+    "inferred_grounding",
+    "not_accepted",
+    "topic_blocked",
+}
 
 
 def artifact_ref(path: str | Path, *, kind: str, description: str) -> dict[str, str]:
@@ -50,9 +56,137 @@ def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
     return sorted(set(indices))
 
 
+def _normalized_recommendation_indices(raw_items: Any) -> list[int]:
+    indices: list[int] = []
+    for item in raw_items or []:
+        try:
+            indices.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(indices))
+
+
+def _recommendation_admissibility(summary: dict[str, Any]) -> dict[str, Any]:
+    raw_admissibility = _analysis_review_status(summary).get("recommendation_admissibility")
+    if not isinstance(raw_admissibility, dict) or not raw_admissibility:
+        return {}
+
+    reasons_by_index: dict[str, list[str]] = {}
+    for raw_index, raw_reasons in (
+        raw_admissibility.get("reasons_by_recommendation_index") or {}
+    ).items():
+        try:
+            normalized_index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        normalized_reasons = [
+            str(reason).strip()
+            for reason in (raw_reasons or [])
+            if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
+        ]
+        if normalized_reasons:
+            reasons_by_index[str(normalized_index)] = normalized_reasons
+
+    normalized = {
+        "final_answer_recommendation_indices": _normalized_recommendation_indices(
+            raw_admissibility.get("final_answer_recommendation_indices")
+        ),
+        "partial_only_recommendation_indices": _normalized_recommendation_indices(
+            raw_admissibility.get("partial_only_recommendation_indices")
+        ),
+        "excluded_recommendation_indices": _normalized_recommendation_indices(
+            raw_admissibility.get("excluded_recommendation_indices")
+        ),
+        "reasons_by_recommendation_index": reasons_by_index,
+    }
+    if not any(
+        (
+            normalized["final_answer_recommendation_indices"],
+            normalized["partial_only_recommendation_indices"],
+            normalized["excluded_recommendation_indices"],
+            normalized["reasons_by_recommendation_index"],
+        )
+    ):
+        return {}
+    return normalized
+
+
+def _partial_acceptance_min_accepted_recommendations(summary: dict[str, Any]) -> int:
+    contract = summary.get("analysis_review_contract") or {}
+    partial_acceptance = contract.get("partial_acceptance") or {}
+    raw_minimum = partial_acceptance.get("min_accepted_recommendations")
+    if raw_minimum is None:
+        raw_minimum = ((summary.get("task") or {}).get("review_requirements") or {}).get(
+            "min_recommendations"
+        )
+    try:
+        return max(1, int(raw_minimum))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _partial_candidate_recommendation_indices(summary: dict[str, Any]) -> list[int]:
+    admissibility = _recommendation_admissibility(summary)
+    if admissibility:
+        return sorted(
+            set(admissibility["final_answer_recommendation_indices"]).union(
+                admissibility["partial_only_recommendation_indices"]
+            )
+        )
+    return _accepted_recommendation_indices(summary)
+
+
+def _recommendation_exclusion_reasons_by_index(
+    summary: dict[str, Any],
+    *,
+    source_recommendation_indices: list[int],
+    included_recommendation_indices: list[int],
+) -> dict[str, list[str]]:
+    included_index_set = set(included_recommendation_indices)
+    admissibility = _recommendation_admissibility(summary)
+    if admissibility:
+        reasons_by_index = admissibility.get("reasons_by_recommendation_index") or {}
+        return {
+            str(index): list(reasons_by_index.get(str(index)) or [])
+            for index in source_recommendation_indices
+            if index not in included_index_set and list(reasons_by_index.get(str(index)) or [])
+        }
+
+    candidate_indices = set(_partial_candidate_recommendation_indices(summary))
+    topic_eligibility = partial_accept_topic_eligibility(
+        _topic_ledger(summary),
+        accepted_recommendation_indices=sorted(candidate_indices),
+    )
+    topic_blocked_indices = set(topic_eligibility["blocked_recommendation_indices"])
+    reasons_by_index: dict[str, list[str]] = {}
+    for index in source_recommendation_indices:
+        if index in included_index_set:
+            continue
+        if index in topic_blocked_indices:
+            reasons_by_index[str(index)] = ["topic_blocked"]
+        elif index not in candidate_indices:
+            reasons_by_index[str(index)] = ["not_accepted"]
+    return reasons_by_index
+
+
+def _final_answer_admissible(summary: dict[str, Any], payload: dict[str, Any]) -> bool:
+    admissibility = _recommendation_admissibility(summary)
+    if not admissibility:
+        return True
+
+    recommendations = payload.get("recommendations")
+    recommendation_count = len(recommendations) if isinstance(recommendations, list) else 0
+    source_indices = _recommendation_source_indices(payload, recommendation_count)
+    return (
+        source_indices == admissibility["final_answer_recommendation_indices"]
+        and not admissibility["partial_only_recommendation_indices"]
+        and not admissibility["excluded_recommendation_indices"]
+    )
+
+
 def _partial_answer_eligibility(summary: dict[str, Any]) -> tuple[bool, list[int]]:
-    accepted_indices = _accepted_recommendation_indices(summary)
-    if not accepted_indices:
+    candidate_indices = _partial_candidate_recommendation_indices(summary)
+    if not candidate_indices:
         return (False, [])
 
     analysis_status = _analysis_review_status(summary)
@@ -66,13 +200,13 @@ def _partial_answer_eligibility(summary: dict[str, Any]) -> tuple[bool, list[int
 
     topic_eligibility = partial_accept_topic_eligibility(
         _topic_ledger(summary),
-        accepted_recommendation_indices=accepted_indices,
+        accepted_recommendation_indices=candidate_indices,
     )
     if topic_eligibility["global_blocking_topic_ids"]:
         return (False, [])
 
     eligible_indices = list(topic_eligibility["eligible_recommendation_indices"])
-    if not eligible_indices:
+    if len(eligible_indices) < _partial_acceptance_min_accepted_recommendations(summary):
         return (False, [])
     return (True, eligible_indices)
 
@@ -315,6 +449,11 @@ def _build_partial_artifact_summary(
     analysis_status.update(
         {
             "review_status_scope": "partial_subset",
+            "recommendation_admissibility": copy.deepcopy(
+                payload.get("recommendation_admissibility")
+                or analysis_status.get("recommendation_admissibility")
+                or {}
+            ),
             "accepted_recommendations_with_caveats": sorted(set(accepted_caveat_indices)),
             "accepted_recommendations_with_inferred_grounding": sorted(set(inferred_indices)),
             "open_topic_ids": topic_ids_for_status_name(filtered_topic_ledger, status_name="open"),
@@ -385,6 +524,78 @@ def _append_recommendation_caveat_callout(lines: list[str], caveat_lines: list[s
     lines.append("")
 
 
+def _render_recommendation_index_list(items: list[int]) -> str:
+    if not items:
+        return "none"
+    return ", ".join(f"`{item}`" for item in items)
+
+
+def _append_partial_admissibility_section(
+    lines: list[str],
+    *,
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    included_indices = _normalized_recommendation_indices(
+        payload.get("included_recommendation_indices")
+    )
+    excluded_indices = _normalized_recommendation_indices(
+        payload.get("excluded_recommendation_indices")
+    )
+    admissibility = (
+        payload.get("recommendation_admissibility")
+        if isinstance(payload.get("recommendation_admissibility"), dict)
+        else _recommendation_admissibility(summary)
+    )
+    if not included_indices and not excluded_indices and not admissibility:
+        return
+
+    reasons_by_index = payload.get("excluded_recommendation_reasons_by_index")
+    if not isinstance(reasons_by_index, dict) or not reasons_by_index:
+        reasons_by_index = _recommendation_exclusion_reasons_by_index(
+            summary,
+            source_recommendation_indices=included_indices + excluded_indices,
+            included_recommendation_indices=included_indices,
+        )
+
+    lines.extend(["## Recommendation Admissibility", ""])
+    lines.append(
+        "- Included recommendation indices: "
+        + _render_recommendation_index_list(included_indices)
+    )
+    if admissibility:
+        lines.append(
+            "- Final-answer admissible indices: "
+            + _render_recommendation_index_list(
+                admissibility.get("final_answer_recommendation_indices") or []
+            )
+        )
+        lines.append(
+            "- Partial-only admissible indices: "
+            + _render_recommendation_index_list(
+                admissibility.get("partial_only_recommendation_indices") or []
+            )
+        )
+    lines.append(
+        "- Excluded recommendation indices: "
+        + _render_recommendation_index_list(excluded_indices)
+    )
+    if reasons_by_index:
+        lines.append("- Exclusion reasons:")
+        for raw_index in sorted(reasons_by_index, key=lambda item: int(item)):
+            reasons = [
+                str(reason).strip()
+                for reason in (reasons_by_index.get(raw_index) or [])
+                if str(reason).strip()
+            ]
+            if not reasons:
+                continue
+            lines.append(
+                f"  - `{raw_index}`: " + ", ".join(f"`{reason}`" for reason in reasons)
+            )
+    lines.append("")
+
+
 def _render_analysis_section(lines: list[str], title: str, section: Any) -> None:
     if not isinstance(section, dict):
         return
@@ -410,16 +621,25 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
     recommendations = payload.get("recommendations")
     if not isinstance(recommendations, list) or not recommendations or not recommendation_indices:
         return None
+    source_indices = _recommendation_source_indices(payload, len(recommendations))
+    if not set(recommendation_indices).issubset(set(source_indices)):
+        return None
     selected_recommendations = [
         copy.deepcopy(item)
-        for index, item in enumerate(recommendations, start=1)
-        if index in recommendation_indices and isinstance(item, dict)
+        for item, source_index in zip(recommendations, source_indices, strict=False)
+        if source_index in recommendation_indices and isinstance(item, dict)
     ]
     if not selected_recommendations:
         return None
     excluded_indices = [
-        index for index in range(1, len(recommendations) + 1) if index not in recommendation_indices
+        index for index in source_indices if index not in set(recommendation_indices)
     ]
+    excluded_reasons = _recommendation_exclusion_reasons_by_index(
+        summary,
+        source_recommendation_indices=source_indices,
+        included_recommendation_indices=recommendation_indices,
+    )
+    recommendation_admissibility = _recommendation_admissibility(summary)
     partial_payload = copy.deepcopy(payload)
     partial_payload["summary"] = (
         str(payload.get("summary") or "").strip()
@@ -431,6 +651,11 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
     partial_payload["recommendations"] = selected_recommendations
     partial_payload["included_recommendation_indices"] = recommendation_indices
     partial_payload["excluded_recommendation_indices"] = excluded_indices
+    partial_payload["excluded_recommendation_reasons_by_index"] = excluded_reasons
+    if recommendation_admissibility:
+        partial_payload["recommendation_admissibility"] = copy.deepcopy(
+            recommendation_admissibility
+        )
     filtered_reviews: list[dict[str, Any]] = []
     for item in summary.get("recommendation_reviews") or []:
         if not isinstance(item, dict):
@@ -443,7 +668,8 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
             filtered_reviews.append(copy.deepcopy(item))
     partial_payload["recommendation_reviews"] = filtered_reviews
     partial_payload["caveats"] = [
-        f"This is a partial answer. Excluded recommendations: {', '.join(str(i) for i in excluded_indices) or 'none'}."
+        "This is a partial answer. Excluded recommendations: "
+        + f"{', '.join(str(i) for i in excluded_indices) or 'none'}."
     ]
     return partial_payload
 
@@ -681,6 +907,13 @@ def render_deliverable_markdown(
             lines.append(f"- {item}")
         lines.append("")
 
+    if artifact_kind == "partial_answer":
+        _append_partial_admissibility_section(
+            lines,
+            payload=payload,
+            summary=summary or {},
+        )
+
     _render_analysis_section(lines, "Strengths", payload.get("strengths"))
     _render_analysis_section(lines, "Uncertainties", payload.get("uncertainties"))
 
@@ -784,19 +1017,58 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict) or not payload:
             if best_draft is not None:
                 payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
-        if isinstance(payload, dict) and payload:
+        if isinstance(payload, dict) and payload and _final_answer_admissible(summary, payload):
             artifact_kind = "final_answer"
             artifact_json_path = run_dir / "FINAL_ANSWER.json"
             artifact_md_path = run_dir / "FINAL_ANSWER.md"
-    elif partially_accepted or final_answer_blocked:
+        else:
+            final_answer_blocked = True
+    if artifact_kind is None and (partially_accepted or final_answer_blocked):
         partial_allowed, _ = _partial_answer_eligibility(summary)
         if partial_allowed:
-            payload = summary.get("partial_answer")
-            if not isinstance(payload, dict) or not payload:
-                source_payload = summary.get("final_answer")
-                if (not isinstance(source_payload, dict) or not source_payload) and best_draft is not None:
-                    source_payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
-                payload = build_partial_answer_payload(summary, source_payload)
+            existing_partial_payload = summary.get("partial_answer")
+            source_payload = summary.get("final_answer")
+            if (not isinstance(source_payload, dict) or not source_payload) and best_draft is not None:
+                source_payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
+            payload = build_partial_answer_payload(summary, source_payload)
+            if (
+                (not isinstance(payload, dict) or not payload)
+                and isinstance(existing_partial_payload, dict)
+                and existing_partial_payload
+            ):
+                payload = copy.deepcopy(existing_partial_payload)
+                recommendations = payload.get("recommendations")
+                recommendation_count = (
+                    len(recommendations) if isinstance(recommendations, list) else 0
+                )
+                included_indices = _normalized_recommendation_indices(
+                    payload.get("included_recommendation_indices")
+                )
+                excluded_indices = sorted(
+                    set(_recommendation_source_indices(payload, recommendation_count)).union(
+                        _normalized_recommendation_indices(
+                            payload.get("excluded_recommendation_indices")
+                        )
+                    )
+                    - set(included_indices)
+                )
+                payload["excluded_recommendation_indices"] = excluded_indices
+                payload.setdefault(
+                    "excluded_recommendation_reasons_by_index",
+                    _recommendation_exclusion_reasons_by_index(
+                        summary,
+                        source_recommendation_indices=sorted(
+                            set(included_indices).union(excluded_indices)
+                        ),
+                        included_recommendation_indices=included_indices,
+                    ),
+                )
+                recommendation_admissibility = _recommendation_admissibility(summary)
+                if recommendation_admissibility:
+                    payload.setdefault(
+                        "recommendation_admissibility",
+                        copy.deepcopy(recommendation_admissibility),
+                    )
             if isinstance(payload, dict) and payload:
                 artifact_kind = "partial_answer"
                 artifact_json_path = run_dir / "PARTIAL_ANSWER.json"

@@ -19,6 +19,12 @@ AnalysisReviewMode = Literal["bounded", "trust"]
 PayloadProvenanceMode = Literal["none", "payload_hash_and_refs"]
 LateAuditorPolicy = Literal["error", "warn"]
 GroundingMode = Literal["direct", "mixed", "inferred"]
+RecommendationAdmissibilityReason = Literal[
+    "accepted_with_caveat",
+    "inferred_grounding",
+    "not_accepted",
+    "topic_blocked",
+]
 
 
 CONFIDENCE_RUBRIC_LINES: tuple[str, ...] = (
@@ -51,6 +57,37 @@ ANALYSIS_REVIEW_MODE_BY_STRATEGY_KIND: dict[str, AnalysisReviewMode] = {
 }
 
 GROUNDING_MODE_VALUES: tuple[GroundingMode, ...] = ("direct", "mixed", "inferred")
+RECOMMENDATION_ADMISSIBILITY_REASON_VALUES: tuple[RecommendationAdmissibilityReason, ...] = (
+    "accepted_with_caveat",
+    "inferred_grounding",
+    "not_accepted",
+    "topic_blocked",
+)
+
+
+@dataclass
+class RecommendationAdmissibilityStatus:
+    final_answer_recommendation_indices: list[int] = field(default_factory=list)
+    partial_only_recommendation_indices: list[int] = field(default_factory=list)
+    excluded_recommendation_indices: list[int] = field(default_factory=list)
+    reasons_by_recommendation_index: dict[str, list[RecommendationAdmissibilityReason]] = field(
+        default_factory=dict
+    )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "final_answer_recommendation_indices": list(
+                self.final_answer_recommendation_indices
+            ),
+            "partial_only_recommendation_indices": list(
+                self.partial_only_recommendation_indices
+            ),
+            "excluded_recommendation_indices": list(self.excluded_recommendation_indices),
+            "reasons_by_recommendation_index": {
+                str(index): list(reasons)
+                for index, reasons in self.reasons_by_recommendation_index.items()
+            },
+        }
 
 
 @dataclass
@@ -153,7 +190,7 @@ def build_analysis_review_contract(
     mode = derive_analysis_review_mode(strategy.kind)
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v6",
+        contract_version="analysis_review_v1_contract_v7",
         strategy_kind=str(strategy.kind),
         mode=mode,
         stop_policy=strategy.review_loops,

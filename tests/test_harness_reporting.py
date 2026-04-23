@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from anvil.harness.nodes.write_artifacts import write_artifacts_node
 from anvil.harness.report import render_report
 from anvil.harness.reporting import (
@@ -1949,3 +1951,287 @@ def test_render_report_uses_generic_publishability_fallback_for_fully_accepted_r
     report = render_report(summary)
 
     assert "- Publication blockers: withheld due to non-publishable run state" in report
+
+
+def _recommendation_payload(*titles: str) -> dict[str, object]:
+    return {
+        "summary": "Trusted analysis payload.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": title,
+                "rationale": f"{title} rationale.",
+                "evidence": [f"{index}.py"],
+                "proposed_change": f"Ship {title.lower()}.",
+                "confidence": 0.7 + (index * 0.01),
+            }
+            for index, title in enumerate(titles, start=1)
+        ],
+    }
+
+
+def _trust_status(
+    *,
+    final_indices: list[int],
+    partial_only_indices: list[int],
+    excluded_indices: list[int],
+    reasons_by_index: dict[str, list[str]] | None = None,
+    provenance_status: str = "bound",
+    final_answer_publishable: bool = True,
+) -> dict[str, object]:
+    return {
+        "mode": "trust",
+        "content_verdict": "accepted_with_warnings",
+        "semantic_warning_count": 0,
+        "publishability": {
+            "final_answer_publishable": final_answer_publishable,
+            "blocking_causes": [],
+        },
+        "provenance": {
+            "status": provenance_status,
+            "policy_mode": "payload_hash_and_refs",
+            "required": True,
+        },
+        "open_topic_ids": [],
+        "carried_forward_topic_ids": [],
+        "resolved_topic_ids": [],
+        "waived_topic_ids": [],
+        "disagreed_topic_ids": [],
+        "topic_ledger_count": 0,
+        "downgrade_causes": [],
+        "recommendation_admissibility": {
+            "final_answer_recommendation_indices": final_indices,
+            "partial_only_recommendation_indices": partial_only_indices,
+            "excluded_recommendation_indices": excluded_indices,
+            "reasons_by_recommendation_index": reasons_by_index or {},
+        },
+    }
+
+
+def test_apply_final_artifacts_emits_final_answer_when_all_accepted_recommendations_are_final_admissible(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second")
+    summary = {
+        "task": {"id": "task-final-admissible"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 1},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1, 2],
+            partial_only_indices=[],
+            excluded_indices=[],
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["artifacts"]["final_artifact_kind"] == "final_answer"
+    assert (tmp_path / "FINAL_ANSWER.json").exists()
+    assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
+    assert not (tmp_path / "BEST_DRAFT.json").exists()
+
+
+def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_subset(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second", "Third")
+    summary = {
+        "task": {"id": "task-partial-admissible"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[2],
+            excluded_indices=[3],
+            reasons_by_index={
+                "2": ["accepted_with_caveat"],
+                "3": ["topic_blocked"],
+            },
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    partial_json = json.loads((tmp_path / "PARTIAL_ANSWER.json").read_text(encoding="utf-8"))
+    partial_markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+    report_markdown = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+    summary_json = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+
+    assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert partial_json["included_recommendation_indices"] == [1, 2]
+    assert partial_json["excluded_recommendation_indices"] == [3]
+    assert partial_json["excluded_recommendation_reasons_by_index"] == {
+        "3": ["topic_blocked"]
+    }
+    assert "- Included recommendation indices: `1`, `2`" in partial_markdown
+    assert "- Final-answer admissible indices: `1`" in partial_markdown
+    assert "- Partial-only admissible indices: `2`" in partial_markdown
+    assert "  - `3`: `topic_blocked`" in partial_markdown
+    assert (
+        summary_json["analysis_review_status"]["recommendation_admissibility"][
+            "reasons_by_recommendation_index"
+        ]["3"]
+        == ["topic_blocked"]
+    )
+    assert "- Excluded recommendation indices: `3`" in report_markdown
+    assert "  - `3`: `topic_blocked`" in report_markdown
+
+
+def test_apply_final_artifacts_falls_back_to_best_draft_when_global_topic_blocker_prevents_partial_publication(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second")
+    summary = {
+        "task": {"id": "task-global-blocker"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 1},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[2],
+            excluded_indices=[],
+            reasons_by_index={"2": ["accepted_with_caveat"]},
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-GLOBAL",
+                "resolution_status": "carried_forward",
+                "recommendation_index": None,
+            }
+        ],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["artifacts"]["final_artifact_kind"] == "best_draft"
+    assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
+    assert (tmp_path / "BEST_DRAFT.json").exists()
+
+
+def test_apply_final_artifacts_falls_back_to_best_draft_when_partial_subset_drops_below_minimum(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second")
+    summary = {
+        "task": {"id": "task-minimum-partial"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[2],
+            excluded_indices=[],
+            reasons_by_index={"2": ["accepted_with_caveat"]},
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [
+            {
+                "topic_id": "TOPIC-002",
+                "resolution_status": "carried_forward",
+                "recommendation_index": 2,
+            }
+        ],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["artifacts"]["final_artifact_kind"] == "best_draft"
+    assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
+    assert (tmp_path / "BEST_DRAFT.json").exists()
+
+
+def test_apply_final_artifacts_never_emits_final_answer_when_source_payload_omits_accepted_recommendations(
+    tmp_path,
+):
+    incomplete_final_answer = _recommendation_payload("First")
+    complete_best_draft = _recommendation_payload("First", "Second")
+    incomplete_final_answer["included_recommendation_indices"] = [1]
+    summary = {
+        "task": {"id": "task-no-silent-omission"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1, 2],
+            partial_only_indices=[],
+            excluded_indices=[],
+        ),
+        "final_answer": incomplete_final_answer,
+        "drafts": [_best_draft_record(complete_best_draft)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["artifacts"]["final_artifact_kind"] == "best_draft"
+    assert not (tmp_path / "FINAL_ANSWER.json").exists()
+    assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
+    assert (tmp_path / "BEST_DRAFT.json").exists()
+
+
+def test_build_partial_answer_payload_preserves_original_indices_and_canonical_exclusion_reasons():
+    payload = _recommendation_payload("First", "Second", "Third")
+    summary = {
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[3],
+            excluded_indices=[2],
+            reasons_by_index={
+                "2": ["not_accepted"],
+                "3": ["inferred_grounding"],
+            },
+        ),
+        "topic_ledger": [],
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 3, "verdict": "accept", "summary": "Inference-backed."},
+        ],
+    }
+
+    partial_payload = build_partial_answer_payload(summary, payload)
+
+    assert partial_payload is not None
+    assert partial_payload["included_recommendation_indices"] == [1, 3]
+    assert partial_payload["excluded_recommendation_indices"] == [2]
+    assert partial_payload["excluded_recommendation_reasons_by_index"] == {
+        "2": ["not_accepted"]
+    }
+    assert [item["title"] for item in partial_payload["recommendations"]] == [
+        "First",
+        "Third",
+    ]
