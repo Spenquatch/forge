@@ -23,7 +23,7 @@ This update adds a new task/strategy execution surface to Forge without removing
 - Example task/strategy files under `examples/harness/`
 - Primary deliverable artifacts for harness runs:
   - `FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer
-  - `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for eligible accepted-partial outputs
+  - `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable
   - `BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed
 - New targeted tests for:
   - harness runner flow

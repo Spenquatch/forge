@@ -736,23 +736,93 @@ def _artifact_label_for_kind(artifact_kind: str) -> str:
         ) from exc
 
 
+def _final_artifact_withholding_note_inputs(summary: dict[str, Any]) -> dict[str, Any]:
+    verdict = str(summary.get("verdict") or "").strip()
+    if verdict not in _FULLY_ACCEPTED_RUN_VERDICTS:
+        return {
+            "blocking_causes": [],
+            "admissibility_withheld_entries": [],
+        }
+
+    _, blocking_causes = _final_answer_publication_state(summary)
+    admissibility = _recommendation_admissibility(summary)
+    final_indices = set(admissibility.get("final_answer_recommendation_indices") or [])
+    withheld_indices = sorted(
+        set(admissibility.get("partial_only_recommendation_indices") or []).union(
+            admissibility.get("excluded_recommendation_indices") or []
+        )
+        - final_indices
+    )
+    reasons_by_index = admissibility.get("reasons_by_recommendation_index") or {}
+    admissibility_withheld_entries: list[dict[str, Any]] = []
+    for recommendation_index in withheld_indices:
+        reasons = [
+            str(reason).strip()
+            for reason in (reasons_by_index.get(str(recommendation_index)) or [])
+            if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
+        ]
+        if not reasons:
+            continue
+        admissibility_withheld_entries.append(
+            {
+                "recommendation_index": recommendation_index,
+                "reasons": reasons,
+            }
+        )
+
+    return {
+        "blocking_causes": list(blocking_causes),
+        "admissibility_withheld_entries": admissibility_withheld_entries,
+    }
+
+
 def _append_blocked_publication_note(
     lines: list[str],
     *,
     artifact_kind: str,
-    blocking_causes: list[str],
+    note_inputs: dict[str, Any],
 ) -> None:
-    if artifact_kind not in {"partial_answer", "best_draft"} or not blocking_causes:
+    if artifact_kind not in {"partial_answer", "best_draft"}:
+        return
+
+    blocking_causes = [
+        str(item).strip()
+        for item in (note_inputs.get("blocking_causes") or [])
+        if str(item).strip()
+    ]
+    admissibility_withheld_entries = [
+        item
+        for item in (note_inputs.get("admissibility_withheld_entries") or [])
+        if isinstance(item, dict)
+    ]
+    if not blocking_causes and not admissibility_withheld_entries:
         return
     lines.extend(
         [
             "> [!NOTE]",
             "> Final answer publication was blocked, so this deliverable is emitted as a fallback artifact.",
-            "> Blocking causes:",
         ]
     )
-    for cause in blocking_causes:
-        lines.append(f"> - {cause}")
+    if blocking_causes:
+        lines.append("> Blocking causes:")
+        for cause in blocking_causes:
+            lines.append(f"> - {cause}")
+    if admissibility_withheld_entries:
+        lines.append("> Recommendation indices withheld from `FINAL_ANSWER.*`:")
+        for item in admissibility_withheld_entries:
+            reasons = [
+                str(reason).strip()
+                for reason in (item.get("reasons") or [])
+                if str(reason).strip()
+            ]
+            if not reasons:
+                continue
+            lines.append(
+                "> - `"
+                + str(item.get("recommendation_index"))
+                + "`: "
+                + ", ".join(f"`{reason}`" for reason in reasons)
+            )
     lines.append("")
 
 
@@ -789,7 +859,6 @@ def render_deliverable_markdown(
     lines: list[str] = [f"# {artifact_label}: {task_id}", ""]
     verdict = str((summary or {}).get("verdict") or "").strip()
     analysis_status = _analysis_review_status(summary or {})
-    publishability = _analysis_publishability(summary or {})
     review_lookup = _recommendation_review_lookup(summary or {})
     if not accepted:
         lines.extend(
@@ -807,18 +876,13 @@ def render_deliverable_markdown(
                 "",
             ]
         )
+    final_artifact_withholding_note_inputs = _final_artifact_withholding_note_inputs(
+        summary or {}
+    )
     _append_blocked_publication_note(
         lines,
         artifact_kind=artifact_kind,
-        blocking_causes=(
-            [
-                str(item)
-                for item in (publishability.get("blocking_causes") or [])
-                if str(item).strip()
-            ]
-            if accepted and not publishability.get("final_answer_publishable", True)
-            else []
-        ),
+        note_inputs=final_artifact_withholding_note_inputs if accepted else {},
     )
 
     if analysis_status:
@@ -932,16 +996,16 @@ def render_deliverable_markdown(
         for display_index, item in enumerate(recommendations, start=1):
             if not isinstance(item, dict):
                 continue
-            title = str(item.get("title") or f"Recommendation {display_index}")
+            recommendation_index = source_indices[display_index - 1]
+            title = str(item.get("title") or f"Recommendation {recommendation_index}")
             classification = str(item.get("classification") or "").strip()
             priority = str(item.get("priority") or "").strip()
             header_parts = [title]
             meta = ", ".join(bit for bit in (classification, priority) if bit)
             if meta:
                 header_parts.append(f"({meta})")
-            lines.append(f"### {display_index}. {' '.join(header_parts)}")
+            lines.append(f"### {recommendation_index}. {' '.join(header_parts)}")
             lines.append("")
-            recommendation_index = source_indices[display_index - 1]
             _append_recommendation_caveat_callout(
                 lines,
                 _recommendation_caveat_lines(

@@ -213,7 +213,7 @@ The harness writes a run directory containing:
 - `summary.json`
 - `REPORT.md`
 - `FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer
-- `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for `accepted_partial` runs when the shipped subset is eligible to publish
+- `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable
 - `BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed, including trust-mode fallback from blocked partial acceptance
 - per-stage prompt/schema/output artifacts
 - validator logs and workspace policy checkpoints

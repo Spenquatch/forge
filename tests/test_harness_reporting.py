@@ -226,14 +226,70 @@ def test_render_deliverable_markdown_uses_original_indices_for_partial_answers()
         summary=summary,
     )
 
-    recommendation_one = _rendered_section(markdown, "### 1. Second original recommendation")
-    recommendation_two = _rendered_section(markdown, "### 2. Third original recommendation")
+    recommendation_one = _rendered_section(markdown, "### 2. Second original recommendation")
+    recommendation_two = _rendered_section(markdown, "### 3. Third original recommendation")
 
     assert "validate rollout ordering before landing it" in recommendation_one
     assert (
         "This recommendation relies on inference-only grounding rather than direct verified evidence."
         in recommendation_two
     )
+
+
+def test_render_deliverable_markdown_adds_admissibility_withholding_note_for_partial_fallback():
+    payload = {
+        "summary": "Partial fallback output.",
+        "included_recommendation_indices": [1, 2],
+        "excluded_recommendation_indices": [3],
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "First recommendation",
+                "rationale": "Final-admissible.",
+                "evidence": ["a.py"],
+                "proposed_change": "Ship it.",
+                "confidence": 0.66,
+            },
+            {
+                "classification": "recommendation",
+                "priority": "medium",
+                "title": "Second recommendation",
+                "rationale": "Only partial-admissible.",
+                "evidence": ["b.py"],
+                "proposed_change": "Ship with caveat.",
+                "confidence": 0.62,
+            },
+        ],
+    }
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[2],
+            excluded_indices=[3],
+            reasons_by_index={
+                "2": ["accepted_with_caveat"],
+                "3": ["topic_blocked"],
+            },
+        ),
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-789",
+        payload,
+        artifact_kind="partial_answer",
+        artifact_label="PARTIAL_ANSWER",
+        accepted=True,
+        summary=summary,
+    )
+
+    assert markdown.index("> Recommendation indices withheld from `FINAL_ANSWER.*`:") < markdown.index(
+        "## Review Status"
+    )
+    assert "> - `2`: `accepted_with_caveat`" in markdown
+    assert "> - `3`: `topic_blocked`" in markdown
+    assert "> Blocking causes:" not in markdown
 
 
 def test_render_deliverable_markdown_omits_none_reason_label_in_analysis_sections():
@@ -2079,6 +2135,13 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     assert partial_json["excluded_recommendation_reasons_by_index"] == {
         "3": ["topic_blocked"]
     }
+    assert (
+        partial_markdown.index("> Recommendation indices withheld from `FINAL_ANSWER.*`:")
+        < partial_markdown.index("## Review Status")
+    )
+    assert "> - `2`: `accepted_with_caveat`" in partial_markdown
+    assert "> - `3`: `topic_blocked`" in partial_markdown
+    assert "> Blocking causes:" not in partial_markdown
     assert "- Included recommendation indices: `1`, `2`" in partial_markdown
     assert "- Final-answer admissible indices: `1`" in partial_markdown
     assert "- Partial-only admissible indices: `2`" in partial_markdown
@@ -2091,6 +2154,51 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     )
     assert "- Excluded recommendation indices: `3`" in report_markdown
     assert "  - `3`: `topic_blocked`" in report_markdown
+
+
+def test_apply_final_artifacts_writes_partial_answer_with_original_indices_in_markdown(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second", "Third")
+    summary = {
+        "task": {"id": "task-partial-original-indices"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[2],
+            partial_only_indices=[3],
+            excluded_indices=[1],
+            reasons_by_index={
+                "1": ["not_accepted"],
+                "3": ["accepted_with_caveat"],
+            },
+        ),
+        "final_answer": payload,
+        "recommendation_reviews": [
+            {"recommendation_index": 2, "verdict": "accept", "summary": "Clean."},
+            {
+                "recommendation_index": 3,
+                "verdict": "accept_with_caveat",
+                "summary": "Usable with rollout caveat.",
+            },
+        ],
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    partial_markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert updated["partial_answer"]["included_recommendation_indices"] == [2, 3]
+    assert "### 2. Second" in partial_markdown
+    assert "### 3. Third" in partial_markdown
+    assert "### 1. First" not in partial_markdown
 
 
 def test_apply_final_artifacts_falls_back_to_best_draft_when_global_topic_blocker_prevents_partial_publication(
@@ -2161,10 +2269,17 @@ def test_apply_final_artifacts_falls_back_to_best_draft_when_partial_subset_drop
     }
 
     updated = apply_final_artifacts(summary)
+    best_draft_markdown = (tmp_path / "BEST_DRAFT.md").read_text(encoding="utf-8")
 
     assert updated["artifacts"]["final_artifact_kind"] == "best_draft"
     assert not (tmp_path / "PARTIAL_ANSWER.json").exists()
     assert (tmp_path / "BEST_DRAFT.json").exists()
+    assert (
+        best_draft_markdown.index("> Recommendation indices withheld from `FINAL_ANSWER.*`:")
+        < best_draft_markdown.index("## Review Status")
+    )
+    assert "> - `2`: `accepted_with_caveat`" in best_draft_markdown
+    assert "> Blocking causes:" not in best_draft_markdown
 
 
 def test_apply_final_artifacts_never_emits_final_answer_when_source_payload_omits_accepted_recommendations(

@@ -227,6 +227,7 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
 def test_readme_documents_trust_recommendation_admissibility_and_preview_only_markdown():
     readme = Path("README.md").read_text(encoding="utf-8")
 
+    assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable" in readme
     assert "analysis_review_status.recommendation_admissibility" in readme
     assert "FINAL_ANSWER.*` is all-or-nothing" in readme
     assert "final_answer_recommendation_indices" in readme
@@ -278,7 +279,7 @@ def test_surface_update_notes_document_primary_deliverable_artifacts():
 
     assert "Primary deliverable artifacts for harness runs" in notes
     assert "FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer" in notes
-    assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` for eligible accepted-partial outputs" in notes
+    assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable" in notes
     assert "BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed" in notes
 
 
