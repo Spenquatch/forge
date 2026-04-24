@@ -46,12 +46,17 @@ def sanitize_summary_text(text: Any, *, surface: str) -> str:
 
 def partial_acceptance_summary_suffix(
     included_recommendation_indices: list[int],
+    withheld_recommendation_indices: list[int],
     excluded_recommendation_indices: list[int],
 ) -> str:
     return (
-        f"Partial acceptance: recommendations {', '.join(str(i) for i in included_recommendation_indices)} "
-        f"are included; recommendations "
-        f"{', '.join(str(i) for i in excluded_recommendation_indices) or 'none'} were excluded."
+        "Partial acceptance: "
+        "Recommendation indices included in `PARTIAL_ANSWER.*`: "
+        f"{_render_summary_recommendation_index_list(included_recommendation_indices)}; "
+        "Recommendation indices withheld from `FINAL_ANSWER.*`: "
+        f"{_render_summary_recommendation_index_list(withheld_recommendation_indices)}; "
+        "Recommendation indices excluded from `PARTIAL_ANSWER.*`: "
+        f"{_render_summary_recommendation_index_list(excluded_recommendation_indices)}."
     )
 
 
@@ -88,7 +93,14 @@ def sanitize_artifact_payload(
         excluded_indices = _normalized_recommendation_indices(
             sanitized.get("excluded_recommendation_indices")
         )
-        suffix = partial_acceptance_summary_suffix(included_indices, excluded_indices)
+        suffix = partial_acceptance_summary_suffix(
+            included_indices,
+            _withheld_recommendation_indices(
+                sanitized.get("recommendation_admissibility"),
+                fallback_indices=excluded_indices,
+            ),
+            excluded_indices,
+        )
         if summary_text.endswith(suffix):
             model_summary = summary_text[: -len(suffix)].rstrip()
             sanitized_model_summary = sanitize_summary_text(
@@ -121,3 +133,30 @@ def _normalized_recommendation_indices(raw_items: Any) -> list[int]:
         except (TypeError, ValueError):
             continue
     return sorted(set(indices))
+
+
+def _render_summary_recommendation_index_list(items: list[int]) -> str:
+    if not items:
+        return "none"
+    return ", ".join(str(item) for item in items)
+
+
+def _withheld_recommendation_indices(
+    recommendation_admissibility: Any,
+    *,
+    fallback_indices: list[int],
+) -> list[int]:
+    if not isinstance(recommendation_admissibility, dict) or not recommendation_admissibility:
+        return sorted(set(fallback_indices))
+
+    withheld_indices = [
+        *(
+            recommendation_admissibility.get("partial_only_recommendation_indices")
+            or []
+        ),
+        *(
+            recommendation_admissibility.get("excluded_recommendation_indices")
+            or []
+        ),
+    ]
+    return _normalized_recommendation_indices(withheld_indices)

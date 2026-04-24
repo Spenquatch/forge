@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v7` keeps the bounded-review rules from v6, keeps trust-mode recommendation evidence explicitly uncapped, and adds runner-owned recommendation withholding for trust-mode final vs partial artifact selection without changing the model-authored payload shape.
+`analysis_review_v1_contract_v7` keeps the bounded-review rules from v6, keeps trust-mode recommendation evidence explicitly uncapped, and adds runner-owned recommendation admissibility for bounded and trust artifact selection without changing the model-authored payload shape.
 
 ## What the contract governs
 
@@ -127,6 +127,10 @@ Rules:
 
 - `final_answer_recommendation_indices`, `partial_only_recommendation_indices`, `excluded_recommendation_indices`, and `reasons_by_recommendation_index` are the frozen field names.
 - `recommendation_admissibility` is runner-owned status, not a model-authored payload field. The payload shape remains unchanged.
+- `recommendation_admissibility` is canonical in both bounded mode and trust mode, and both modes share the same status object shape.
+- `final_answer_recommendation_indices` is the runner-owned canonical published-final subset in both modes.
+- In bounded mode, accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices` unless they are topic-blocked.
+- In bounded mode, `partial_only_recommendation_indices` stays empty.
 - In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*`.
 - A recommendation stays in `final_answer_recommendation_indices` only when its review verdict is `accept`, its grounding is not `inferred`, and no runner-known per-index topic blocker applies.
 - `accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`; they are withheld from `FINAL_ANSWER.*` in trust mode.
@@ -134,6 +138,7 @@ Rules:
 - `reasons_by_recommendation_index` uses only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`.
 - The candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`, but publishing `PARTIAL_ANSWER.*` still reuses the existing partial gates.
 - Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules. This withholding ledger does not replace them.
+- When that scoped partial fallback is rendered, freeze the partial-answer scope lines to `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`.
 
 Slice C also keeps an explicit publishability layer under `analysis_review_status`:
 
@@ -161,6 +166,9 @@ Rules:
 - `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` remain the source of truth for what actually shipped.
 - If trust mode is content-accepted but not final-publishable, artifact selection skips `FINAL_ANSWER.*` and falls through to the existing partial-answer path when eligible, otherwise `BEST_DRAFT.*`.
 - Reports and fallback deliverables freeze their wording to `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`.
+- Partial-answer scope lines are frozen only for `PARTIAL_ANSWER.*`: `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`.
+- `REPORT.md` freezes only final-publication / final-withholding wording and does not render `Recommendation indices included in PARTIAL_ANSWER.*` or `Recommendation indices excluded from PARTIAL_ANSWER.*`.
+- Topic lifecycle summaries keep `Open topics:` and `Carried-forward topics:` as separate labels; carried-forward items are not folded into open wording.
 - Reviewer or model-authored prose may describe quality, caveats, or evidence gaps, but only runner-owned `analysis_review_status.publishability`, `analysis_review_status.recommendation_admissibility`, and `summary.json["artifacts"]` decide artifact eligibility and publication state.
 
 For fully accepted trust runs, `blocking_causes` is deterministic. The list is emitted in this order:
@@ -239,8 +247,8 @@ Use one additive recommendation payload shape:
 
 Bounded mode and trust mode share that shape. The difference is policy:
 
-- bounded mode may omit the trust-oriented fields
-- trust mode should populate them deliberately and is expected to enforce stricter semantics downstream
+- bounded mode populates the shared admissibility fields without using trust-only `partial_only` downgrades
+- trust mode populates the same shape and is expected to enforce stricter downstream semantics
 
 Critic and auditor issue payloads stay on the same shared family and add `blocking_class_override_reason` when they intentionally override the default blocking class implied by issue kind:
 

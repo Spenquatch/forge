@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from anvil.config_loader import ProviderCfg
 from anvil.harness.files import load_structured_file
-from anvil.harness.providers import _soft_validate_schema
+from anvil.harness.providers import ForgeProviderAdapter, _soft_validate_schema
 from anvil.harness.runner import HarnessRunner
 from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
@@ -381,6 +382,38 @@ class _InvalidSemanticWithProviderNoiseHarnessAdapter(_AcceptingHarnessAdapter):
             raw_meta=run.raw_meta,
             error="WARN codex_core::plugins::manifest: noisy provider warning",
         )
+
+
+class _FakeSuccessfulCliWarningResult:
+    def __init__(self, payload: dict[str, object]):
+        self.exit_code = 0
+        self.stdout_text = json.dumps(payload)
+        self.stderr_text = (
+            "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
+        )
+        self.command = ["fake-cli"]
+        self.structured_output = payload
+        self.metadata = {}
+        self.usage = None
+
+
+class _SuccessfulCliWarningProvider:
+    model_name = "fake-cli-model"
+
+    def __init__(self):
+        self._payload_adapter = _AcceptingHarnessAdapter()
+        self.last_cli_result = None
+
+    async def generate(self, prompt: str, role: str = "execute", **kwargs):
+        role_name = {
+            "execute": "proposer",
+            "critique": "critic",
+            "review": "auditor",
+            "refine": "reviser_round_1",
+        }[role]
+        payload = self._payload_adapter._payload_for_role(role_name)
+        self.last_cli_result = _FakeSuccessfulCliWarningResult(payload)
+        return self.last_cli_result.stdout_text
 
 
 class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
@@ -1489,7 +1522,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert summary["analysis_review_status"]["carried_forward_topic_ids"] == []
     assert summary["analysis_review_status"]["waived_topic_ids"] == []
     assert summary["analysis_review_status"]["recommendation_admissibility"] == {
-        "final_answer_recommendation_indices": [],
+        "final_answer_recommendation_indices": [1, 2],
         "partial_only_recommendation_indices": [],
         "excluded_recommendation_indices": [],
         "reasons_by_recommendation_index": {},
@@ -1560,6 +1593,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert "## Analysis Review Status" in report_text
     assert "- Mode: `bounded`" in report_text
     assert "- Provenance status: `not_required`" in report_text
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: none" in report_text
     assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
     assert '"rendered_in_report_section": true' in report_text
     assert '"bounded_review_summary": {' in report_text
@@ -1785,6 +1819,8 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert "- Mode: `trust`" in report_text
     assert "- Provenance status: `bound`" in report_text
     assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in report_text
+    assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_text
+    assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in report_text
     assert "  - `2`: `inferred_grounding`" in report_text
     assert "Accepted recommendations with inference-only grounding: 2" in report_text
     assert "This recommendation carries review caveats:" in recommendation_two_section
@@ -1793,6 +1829,50 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
         in recommendation_two_section
     )
     assert "This recommendation carries review caveats:" not in recommendation_one_section
+
+
+def test_analysis_review_runner_does_not_render_successful_cli_stderr_as_stage_error(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+    fake_provider = _SuccessfulCliWarningProvider()
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: ForgeProviderAdapter(name),
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact",
+        lambda name: fake_provider,
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config",
+        lambda name: ProviderCfg(
+            type="cli",
+            class_path="fake.Provider",
+            model_name="fake-cli-model",
+        ),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    proposer_stage = summary["agent_stages"][0]
+    assert proposer_stage["ok"] is True
+    assert proposer_stage.get("error") in (None, "")
+    assert Path(proposer_stage["stderr_path"]).read_text(encoding="utf-8") == (
+        "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
+    )
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "- Error:" not in report_text
 
 
 def test_analysis_review_runner_trust_review_normalization_binds_structured_review_refs(
@@ -2351,6 +2431,86 @@ def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(
     }
 
 
+def test_analysis_review_status_marks_bounded_accepted_recommendations_as_final_admissible(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [1, 2],
+        "partial_only_recommendation_indices": [],
+        "excluded_recommendation_indices": [],
+        "reasons_by_recommendation_index": {},
+    }
+
+
+def test_analysis_review_status_marks_bounded_accept_with_caveat_as_final_admissible(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][0]["verdict"] = "accept_with_caveat"
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [1, 2],
+        "partial_only_recommendation_indices": [],
+        "excluded_recommendation_indices": [],
+        "reasons_by_recommendation_index": {},
+    }
+
+
+def test_analysis_review_status_marks_bounded_non_accepted_recommendations_as_excluded(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][1]["verdict"] = "revise"
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [1],
+        "partial_only_recommendation_indices": [],
+        "excluded_recommendation_indices": [2],
+        "reasons_by_recommendation_index": {"2": ["not_accepted"]},
+    }
+
+
 def test_analysis_review_status_excludes_non_accepted_recommendations(tmp_path):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _TrustInferenceHarnessAdapter()
@@ -2404,6 +2564,39 @@ def test_analysis_review_status_excludes_topic_blocked_recommendations_from_fina
     assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
         "1": ["topic_blocked"],
         "2": ["not_accepted"],
+    }
+
+
+def test_analysis_review_status_marks_bounded_topic_blocked_recommendations_as_excluded(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    adapter = _AcceptingHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    runner.topic_ledger = [
+        {
+            "topic_id": "TOPIC-001",
+            "resolution_status": "carried_forward",
+            "recommendation_index": 1,
+        }
+    ]
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_partial",
+    )
+
+    assert status["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [2],
+        "partial_only_recommendation_indices": [],
+        "excluded_recommendation_indices": [1],
+        "reasons_by_recommendation_index": {"1": ["topic_blocked"]},
     }
 
 
@@ -3097,18 +3290,29 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
     ]
     assert summary["analysis_review_status"]["open_topic_ids"] == []
     assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [1],
+        "partial_only_recommendation_indices": [],
+        "excluded_recommendation_indices": [2],
+        "reasons_by_recommendation_index": {"2": ["topic_blocked"]},
+    }
+    assert "final_answer_md" not in summary["artifacts"]
+    assert "partial_answer_md" not in summary["artifacts"]
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    best_draft_text = Path(summary["artifacts"]["best_draft_md"]).read_text(
+        encoding="utf-8"
+    )
     assert (
         "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `carried_forward` | `2` | not_addressed \\| The recommendation text improved, but the fallback classification is still too implicit. \\| Operators still need a concrete fallback label. |"
         in report_text
     )
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in report_text
     assert (
         "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 2 needs a concrete fallback classification. — not_addressed | The recommendation text improved, but the fallback classification is still too implicit. | Operators still need a concrete fallback label."
-        in final_answer_text
+        in best_draft_text
     )
-    assert "- Carried-forward topic IDs: `TOPIC-001`" in final_answer_text
+    assert "- Carried-forward topic IDs: `TOPIC-001`" in best_draft_text
 
     runner._ingest_review_payload(
         {

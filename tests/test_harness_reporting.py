@@ -588,7 +588,7 @@ def test_apply_final_artifacts_scopes_partial_answer_review_status_to_included_r
             "disagreed_topic_ids": [],
             "topic_ledger_count": 1,
             "downgrade_causes": [
-                "review topics remain open: TOPIC-001",
+                "review topics are carried forward: TOPIC-001",
                 "accepted recommendation reviews include accept_with_caveat: 2",
                 "accepted recommendations rely on inference-only grounding: 3",
             ],
@@ -753,7 +753,7 @@ def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_parti
             "disagreed_topic_ids": [],
             "topic_ledger_count": 1,
             "downgrade_causes": [
-                "review topics remain open: TOPIC-001",
+                "review topics are carried forward: TOPIC-001",
                 "accepted recommendation reviews include accept_with_caveat: 2",
             ],
         },
@@ -1046,7 +1046,7 @@ def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_best_
             "waived_topic_ids": [],
             "disagreed_topic_ids": [],
             "topic_ledger_count": 1,
-            "downgrade_causes": ["review topics remain open: TOPIC-001"],
+            "downgrade_causes": ["review topics are carried forward: TOPIC-001"],
         },
         "topic_ledger": [
             {
@@ -1078,6 +1078,8 @@ def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_best_
     assert "final_answer_md" not in updated["artifacts"]
     assert markdown.index("> Publication blockers:") < markdown.index("## Review Status")
     assert "> - review topics are carried forward: TOPIC-001" in markdown
+    report_markdown = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+    assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_markdown
 
 
 def test_write_artifacts_node_clears_ineligible_partial_artifacts_and_falls_back_to_best_draft(
@@ -1373,7 +1375,7 @@ def test_render_deliverable_markdown_renders_carried_forward_topic_resolution_no
             "carried_forward_topic_ids": ["TOPIC-001"],
             "resolved_topic_ids": [],
             "waived_topic_ids": [],
-            "downgrade_causes": ["review topics remain open: TOPIC-001"],
+            "downgrade_causes": ["review topics are carried forward: TOPIC-001"],
         },
         "topic_ledger": [
             {
@@ -1950,7 +1952,7 @@ def test_render_report_renders_publishability_and_compact_provenance_previews():
             "carried_forward_topic_ids": ["TOPIC-001"],
             "resolved_topic_ids": [],
             "waived_topic_ids": [],
-            "downgrade_causes": ["review topics remain open: TOPIC-001"],
+            "downgrade_causes": ["review topics are carried forward: TOPIC-001"],
         },
         "topic_ledger": [],
         "issue_ledger": [],
@@ -2177,6 +2179,76 @@ def _trust_status(
     }
 
 
+def _bounded_status(
+    *,
+    final_indices: list[int],
+    partial_only_indices: list[int],
+    excluded_indices: list[int],
+    reasons_by_index: dict[str, list[str]] | None = None,
+    content_verdict: str = "accepted_with_warnings",
+) -> dict[str, object]:
+    return {
+        "mode": "bounded",
+        "content_verdict": content_verdict,
+        "semantic_warning_count": 0,
+        "publishability": {
+            "final_answer_publishable": True,
+            "blocking_causes": [],
+        },
+        "provenance": {
+            "status": "not_required",
+            "policy_mode": "none",
+            "required": False,
+        },
+        "open_topic_ids": [],
+        "carried_forward_topic_ids": [],
+        "resolved_topic_ids": [],
+        "waived_topic_ids": [],
+        "disagreed_topic_ids": [],
+        "topic_ledger_count": 0,
+        "downgrade_causes": [],
+        "recommendation_admissibility": {
+            "final_answer_recommendation_indices": final_indices,
+            "partial_only_recommendation_indices": partial_only_indices,
+            "excluded_recommendation_indices": excluded_indices,
+            "reasons_by_recommendation_index": reasons_by_index or {},
+        },
+    }
+
+
+def test_apply_final_artifacts_bounded_accepted_emits_final_answer_and_report_shows_no_withheld_indices(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second")
+    summary = {
+        "task": {"id": "task-bounded-final-admissible"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "mode": "bounded",
+            "partial_acceptance": {"min_accepted_recommendations": 1},
+        },
+        "analysis_review_status": _bounded_status(
+            final_indices=[1, 2],
+            partial_only_indices=[],
+            excluded_indices=[],
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    report_markdown = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact_kind"] == "final_answer"
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: none" in report_markdown
+    assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_markdown
+    assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in report_markdown
+
+
 def test_apply_final_artifacts_emits_final_answer_when_all_accepted_recommendations_are_final_admissible(
     tmp_path,
 ):
@@ -2294,8 +2366,9 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     assert "> - `2`: `accepted_with_caveat`" in partial_markdown
     assert "> - `3`: `topic_blocked`" in partial_markdown
     assert "> Publication blockers:" not in partial_markdown
-    assert "- Included recommendation indices: `1`, `2`" in partial_markdown
+    assert "- Recommendation indices included in `PARTIAL_ANSWER.*`: `1`, `2`" in partial_markdown
     assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`" in partial_markdown
+    assert "- Recommendation indices excluded from `PARTIAL_ANSWER.*`: `3`" in partial_markdown
     assert "  - `3`: `topic_blocked`" in partial_markdown
     assert (
         summary_json["analysis_review_status"]["recommendation_admissibility"][
@@ -2304,6 +2377,8 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
         == ["topic_blocked"]
     )
     assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`" in report_markdown
+    assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_markdown
+    assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in report_markdown
     assert "  - `3`: `topic_blocked`" in report_markdown
 
 
@@ -2357,7 +2432,12 @@ def test_apply_final_artifacts_preserves_partial_acceptance_suffix_when_sanitizi
     assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
     assert "publication-ready" not in partial_json["summary"].lower()
     assert "final artifact" not in partial_json["summary"].lower()
-    assert "Partial acceptance: recommendations 1, 2 are included; recommendations 3 were excluded." in partial_json["summary"]
+    assert (
+        "Partial acceptance: Recommendation indices included in `PARTIAL_ANSWER.*`: 1, 2; "
+        "Recommendation indices withheld from `FINAL_ANSWER.*`: 2, 3; "
+        "Recommendation indices excluded from `PARTIAL_ANSWER.*`: 3."
+        in partial_json["summary"]
+    )
     assert partial_json["recommendation_reviews"][1]["summary"] == (
         "Runner note: review summary withheld because publication eligibility is runner-owned."
     )
@@ -2561,3 +2641,50 @@ def test_build_partial_answer_payload_preserves_original_indices_and_canonical_e
         "First",
         "Third",
     ]
+
+
+def test_apply_final_artifacts_bounded_partial_emits_partial_answer_without_partial_only_indices(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second", "Third")
+    summary = {
+        "task": {"id": "task-bounded-partial-admissible"},
+        "verdict": "accepted_partial",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "mode": "bounded",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _bounded_status(
+            final_indices=[1, 2],
+            partial_only_indices=[],
+            excluded_indices=[3],
+            reasons_by_index={"3": ["not_accepted"]},
+            content_verdict="accepted_partial",
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "recommendation_reviews": [
+            {"recommendation_index": 1, "verdict": "accept", "summary": "Clean."},
+            {"recommendation_index": 2, "verdict": "accept_with_caveat", "summary": "Usable."},
+            {"recommendation_index": 3, "verdict": "revise", "summary": "Needs work."},
+        ],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    partial_json = json.loads((tmp_path / "PARTIAL_ANSWER.json").read_text(encoding="utf-8"))
+    partial_markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+    report_markdown = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert partial_json["included_recommendation_indices"] == [1, 2]
+    assert partial_json["excluded_recommendation_indices"] == [3]
+    assert partial_json["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
+    assert "- Recommendation indices included in `PARTIAL_ANSWER.*`: `1`, `2`" in partial_markdown
+    assert "- Recommendation indices excluded from `PARTIAL_ANSWER.*`: `3`" in partial_markdown
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `3`" in report_markdown
+    assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_markdown
+    assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in report_markdown

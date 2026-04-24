@@ -25,10 +25,11 @@ This update adds a new task/strategy execution surface to Forge without removing
   - `FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer
   - `PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable
   - `BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed
-- Trust-mode publication wording is runner-owned:
-  - `Final publication: publishable|blocked`
-  - `Publication blockers:`
-  - `Recommendation indices withheld from FINAL_ANSWER.*:`
+- Runner-owned report and artifact wording is frozen:
+  - `REPORT.md` keeps `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`
+  - `PARTIAL_ANSWER.*` keeps `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`
+  - `Open topics:`
+  - `Carried-forward topics:`
 - The advisory carveout is limited to the exact warning strings `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.`; reviewer prose does not decide artifact eligibility.
 - New targeted tests for:
   - harness runner flow

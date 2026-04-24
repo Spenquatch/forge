@@ -55,6 +55,30 @@ class _FakeCliFailureProvider:
         raise RuntimeError("cli failed")
 
 
+class _FakeSuccessfulCliWarningResult:
+    def __init__(self):
+        self.exit_code = 0
+        self.stdout_text = '{"summary":"ok"}'
+        self.stderr_text = (
+            "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
+        )
+        self.command = ["fake-claude"]
+        self.structured_output = {"summary": "ok"}
+        self.metadata = {}
+        self.usage = None
+
+
+class _FakeSuccessfulCliWarningProvider:
+    model_name = "fake-cli-model"
+
+    def __init__(self):
+        self.last_cli_result = None
+
+    async def generate(self, prompt: str, role: str = "execute", **kwargs):
+        self.last_cli_result = _FakeSuccessfulCliWarningResult()
+        return self.last_cli_result.stdout_text
+
+
 class _FakeCodexSchemaFailureResult:
     def __init__(self):
         self.exit_code = 1
@@ -248,6 +272,43 @@ def test_provider_adapter_prefers_codex_stdout_error_events_over_stderr_noise(
     assert "invalid_json_schema" in (result.failure_summary or "")
     assert "verified_evidence_refs" in (result.failure_summary or "")
     assert "permission error" not in (result.failure_summary or "").lower()
+
+
+def test_provider_adapter_keeps_successful_cli_stderr_in_error_artifact_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact",
+        lambda name: _FakeSuccessfulCliWarningProvider(),
+    )
+    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
+
+    adapter = ForgeProviderAdapter("claude_code")
+    request = StageRequest(
+        role_name="critic",
+        role_config=RoleConfig(provider="claude_code", model="sonnet", access="read"),
+        prompt_text="Critique this draft.",
+        schema={
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+            },
+            "required": ["summary"],
+        },
+        cwd=str(tmp_path),
+        out_dir=str(tmp_path / "stage-success-warning"),
+    )
+
+    result = adapter.run(request)
+
+    assert result.ok is True
+    assert result.structured_output == {"summary": "ok"}
+    assert result.error is None
+    assert result.failure_kind is None
+    assert result.failure_summary is None
+    assert Path(result.stderr_path).read_text(encoding="utf-8") == (
+        "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
+    )
 
 
 def test_provider_adapter_inherits_cli_role_defaults_for_mapped_analysis_review_roles(

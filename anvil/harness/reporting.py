@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from .files import write_json, write_text
-from .publication_authority import sanitize_artifact_payload, sanitize_summary_text
+from .publication_authority import (
+    partial_acceptance_summary_suffix,
+    sanitize_artifact_payload,
+    sanitize_summary_text,
+)
 from .report import render_report
 from .selection import select_best_draft
 from .topic_lifecycle import (
@@ -412,14 +416,17 @@ def _partial_artifact_downgrade_causes(
         for item in issue_ledger
     ):
         causes.append("low-severity reviewer issues remain open")
-    unresolved_topic_ids = sorted(
-        {
-            *topic_ids_for_status_name(topic_ledger, status_name="open"),
-            *topic_ids_for_status_name(topic_ledger, status_name="carried_forward"),
-        }
+    open_topic_ids = topic_ids_for_status_name(topic_ledger, status_name="open")
+    if open_topic_ids:
+        causes.append("open review topics remain: " + ", ".join(open_topic_ids))
+    carried_forward_topic_ids = topic_ids_for_status_name(
+        topic_ledger,
+        status_name="carried_forward",
     )
-    if unresolved_topic_ids:
-        causes.append("review topics remain open: " + ", ".join(unresolved_topic_ids))
+    if carried_forward_topic_ids:
+        causes.append(
+            "review topics are carried forward: " + ", ".join(carried_forward_topic_ids)
+        )
     accepted_caveat_indices = sorted(
         int(item.get("recommendation_index"))
         for item in recommendation_reviews
@@ -593,7 +600,7 @@ def _append_partial_admissibility_section(
 
     lines.extend(["## Recommendation Withholding", ""])
     lines.append(
-        "- Included recommendation indices: "
+        "- Recommendation indices included in `PARTIAL_ANSWER.*`: "
         + _render_recommendation_index_list(included_indices)
     )
     if admissibility:
@@ -609,6 +616,10 @@ def _append_partial_admissibility_section(
             "- Recommendation indices withheld from `FINAL_ANSWER.*`: "
             + _render_recommendation_index_list(excluded_indices)
         )
+    lines.append(
+        "- Recommendation indices excluded from `PARTIAL_ANSWER.*`: "
+        + _render_recommendation_index_list(excluded_indices)
+    )
     if reasons_by_index:
         for raw_index in sorted(reasons_by_index, key=lambda item: int(item)):
             reasons = [
@@ -668,12 +679,19 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
         included_recommendation_indices=recommendation_indices,
     )
     recommendation_admissibility = _recommendation_admissibility(summary)
+    withheld_indices = (
+        [item["recommendation_index"] for item in _recommendation_withholding_entries(recommendation_admissibility)]
+        if recommendation_admissibility
+        else excluded_indices
+    )
     partial_payload = copy.deepcopy(payload)
     partial_payload["summary"] = (
         str(payload.get("summary") or "").strip()
-        + (
-            f"\n\nPartial acceptance: recommendations {', '.join(str(i) for i in recommendation_indices)} "
-            f"are included; recommendations {', '.join(str(i) for i in excluded_indices) or 'none'} were excluded."
+        + "\n\n"
+        + partial_acceptance_summary_suffix(
+            recommendation_indices,
+            withheld_indices,
+            excluded_indices,
         )
     ).strip()
     partial_payload["recommendations"] = selected_recommendations

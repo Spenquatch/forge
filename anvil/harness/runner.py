@@ -1496,12 +1496,17 @@ class HarnessRunner:
         causes: list[str] = []
         if self._count_review_issues(review_payload, {"low"}):
             causes.append("low-severity reviewer issues remain open")
-        unresolved_topic_ids_list = topic_ids_for_status_name(self.topic_ledger, status_name="open")
-        unresolved_topic_ids_list.extend(
-            topic_ids_for_status_name(self.topic_ledger, status_name="carried_forward")
+        open_topic_ids = topic_ids_for_status_name(self.topic_ledger, status_name="open")
+        if open_topic_ids:
+            causes.append("open review topics remain: " + ", ".join(open_topic_ids))
+        carried_forward_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger,
+            status_name="carried_forward",
         )
-        if unresolved_topic_ids_list:
-            causes.append("review topics remain open: " + ", ".join(unresolved_topic_ids_list))
+        if carried_forward_topic_ids:
+            causes.append(
+                "review topics are carried forward: " + ", ".join(carried_forward_topic_ids)
+            )
         accepted_caveat_indices = self._accepted_caveat_recommendation_indices(review_payload)
         if accepted_caveat_indices:
             causes.append(
@@ -2171,8 +2176,6 @@ class HarnessRunner:
     ) -> dict[str, Any]:
         contract = self._analysis_contract()
         empty_status = RecommendationAdmissibilityStatus()
-        if contract.mode != "trust":
-            return empty_status.to_dict()
 
         recommendations = final_analysis_payload.get("recommendations")
         if not isinstance(recommendations, list):
@@ -2219,10 +2222,11 @@ class HarnessRunner:
                 continue
 
             reasons: list[str] = []
-            if verdict == "accept_with_caveat":
-                reasons.append("accepted_with_caveat")
-            if str(recommendation.get("grounding_mode") or "").strip().lower() == "inferred":
-                reasons.append("inferred_grounding")
+            if contract.mode == "trust":
+                if verdict == "accept_with_caveat":
+                    reasons.append("accepted_with_caveat")
+                if str(recommendation.get("grounding_mode") or "").strip().lower() == "inferred":
+                    reasons.append("inferred_grounding")
 
             if reasons:
                 partial_only_indices.append(recommendation_index)

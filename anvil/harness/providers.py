@@ -28,6 +28,27 @@ ROLE_TO_FORGE_ROLE: dict[str, str] = {
 }
 
 
+def _map_role_name_to_provider_role(role_name: str) -> str:
+    normalized_role_name = str(role_name or "").strip().lower()
+    if normalized_role_name in ROLE_TO_FORGE_ROLE:
+        return ROLE_TO_FORGE_ROLE[normalized_role_name]
+    if normalized_role_name.startswith("reviser") or normalized_role_name.startswith(
+        "patcher"
+    ):
+        return "refine"
+    if normalized_role_name.startswith("critic") or normalized_role_name.startswith(
+        "falsifier"
+    ):
+        return "critique"
+    if normalized_role_name.startswith("auditor"):
+        return "review"
+    if normalized_role_name.startswith("proposer") or normalized_role_name.startswith(
+        "solver"
+    ):
+        return "execute"
+    return "execute"
+
+
 class BaseProviderAdapter:
     name: str
 
@@ -81,7 +102,7 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             )
 
         provider_type = (cfg.type or "").lower()
-        mapped_role = ROLE_TO_FORGE_ROLE.get(request.role_name, "execute")
+        mapped_role = _map_role_name_to_provider_role(request.role_name)
         kwargs = _build_provider_kwargs(request, provider_type)
         prompt_text = _render_prompt_for_provider(
             request.prompt_text,
@@ -92,6 +113,7 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         started = time.monotonic()
         raw_text = ""
         error_text: Optional[str] = None
+        stderr_text: Optional[str] = None
         exit_code = 0
         structured_output: Optional[dict[str, Any]] = None
         failure_kind: Optional[str] = None
@@ -112,7 +134,8 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             if cli_result is not None:
                 exit_code = int(getattr(cli_result, "exit_code", 1) or 1)
                 raw_text = getattr(cli_result, "stdout_text", raw_text) or raw_text
-                error_text = getattr(cli_result, "stderr_text", None) or str(exc)
+                stderr_text = getattr(cli_result, "stderr_text", None) or None
+                error_text = stderr_text or str(exc)
                 command = list(getattr(cli_result, "command", []) or [])
                 raw_meta.update(_cli_result_meta(cli_result))
                 if getattr(cli_result, "structured_output", None) is not None:
@@ -132,8 +155,9 @@ class ForgeProviderAdapter(BaseProviderAdapter):
                 raw_text = getattr(cli_result, "stdout_text", raw_text) or raw_text
                 command = list(getattr(cli_result, "command", []) or command)
                 raw_meta.update(_cli_result_meta(cli_result))
-                if error_text is None:
-                    stderr_text = getattr(cli_result, "stderr_text", "") or ""
+                cli_stderr_text = getattr(cli_result, "stderr_text", "") or ""
+                stderr_text = cli_stderr_text or stderr_text
+                if error_text is None and exit_code != 0:
                     error_text = stderr_text or None
                 maybe_structured = getattr(cli_result, "structured_output", None)
                 if structured_output is None and isinstance(maybe_structured, dict):
@@ -163,11 +187,23 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         else:
             validation_errors = _soft_validate_schema(structured_output, request.schema)
             if validation_errors:
-                error_blob = "\n".join(validation_errors)
-                error_text = (error_text + "\n" if error_text else "") + error_blob
+                error_text = "\n".join(validation_errors)
+
+        if (
+            provider_type == "cli"
+            and exit_code == 0
+            and structured_output is not None
+            and not validation_errors
+            and failure_kind is None
+        ):
+            error_text = None
+            failure_summary = None
 
         write_text(stdout_path, raw_text)
-        write_text(stderr_path, error_text or "")
+        write_text(
+            stderr_path,
+            (stderr_text if provider_type == "cli" else error_text) or "",
+        )
         if structured_output is not None:
             write_json(output_path, structured_output)
 
