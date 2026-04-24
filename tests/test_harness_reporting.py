@@ -19,6 +19,13 @@ def _rendered_section(markdown: str, heading_prefix: str) -> str:
     return section
 
 
+def _top_level_section(markdown: str, heading: str) -> str:
+    section = markdown.split(heading, 1)[1]
+    if "\n## " in section:
+        section = section.split("\n## ", 1)[0]
+    return section
+
+
 def _best_draft_record(payload: dict[str, object]) -> dict[str, object]:
     return {
         "draft_id": "draft-clean",
@@ -289,7 +296,58 @@ def test_render_deliverable_markdown_adds_admissibility_withholding_note_for_par
     )
     assert "> - `2`: `accepted_with_caveat`" in markdown
     assert "> - `3`: `topic_blocked`" in markdown
-    assert "> Blocking causes:" not in markdown
+    assert "> Publication blockers:" not in markdown
+
+
+def test_render_deliverable_markdown_sanitizes_recommendation_caveat_claims():
+    payload = {
+        "summary": "Accepted recommendations.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "high",
+                "title": "Clarify release policy",
+                "rationale": "The rollout policy still needs tightening.",
+                "evidence": ["release.py"],
+                "proposed_change": "Document the exact release gate.",
+                "confidence": 0.81,
+            }
+        ],
+    }
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "recommendation_reviews": [
+            {
+                "recommendation_index": 1,
+                "verdict": "accept_with_caveat",
+                "summary": "This recommendation is publication-ready and can ship as the final artifact.",
+            }
+        ],
+        "analysis_review_status": {
+            "mode": "trust",
+            "semantic_warning_count": 0,
+            "downgrade_causes": [],
+            "provenance": {
+                "status": "bound",
+                "policy_mode": "payload_hash_and_refs",
+            },
+        },
+    }
+
+    markdown = render_deliverable_markdown(
+        "task-authority-caveat",
+        payload,
+        artifact_kind="final_answer",
+        artifact_label="FINAL_ANSWER",
+        accepted=True,
+        summary=summary,
+    )
+
+    recommendation = _rendered_section(markdown, "### 1. Clarify release policy")
+
+    assert "publication-ready" not in recommendation.lower()
+    assert "final artifact" not in recommendation.lower()
+    assert "Runner note: review summary withheld because publication eligibility is runner-owned." in recommendation
 
 
 def test_render_deliverable_markdown_omits_none_reason_label_in_analysis_sections():
@@ -725,7 +783,7 @@ def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_parti
     assert "final_answer_md" not in updated["artifacts"]
     assert "final_answer_json" not in updated["artifacts"]
     assert updated["partial_answer"]["included_recommendation_indices"] == [1, 3]
-    assert markdown.index("> Blocking causes:") < markdown.index("## Review Status")
+    assert markdown.index("> Publication blockers:") < markdown.index("## Review Status")
     assert "> - review topics are carried forward: TOPIC-001" in markdown
     assert "- (+1 more)" in markdown
     assert "- f.py" not in markdown
@@ -861,7 +919,7 @@ def test_apply_final_artifacts_non_accepted_partial_does_not_render_blocked_publ
 
     assert updated["artifacts"]["final_artifact"].endswith("PARTIAL_ANSWER.md")
     assert "> This run did not reach a fully accepted verdict." in markdown
-    assert "> Blocking causes:" not in markdown
+    assert "> Publication blockers:" not in markdown
     assert "content verdict is not fully accepted: accepted_partial" not in markdown
 
 
@@ -918,7 +976,7 @@ def test_apply_final_artifacts_non_accepted_best_draft_does_not_render_blocked_p
 
     assert updated["artifacts"]["final_artifact"].endswith("BEST_DRAFT.md")
     assert "> This run did not reach a fully accepted verdict." in markdown
-    assert "> Blocking causes:" not in markdown
+    assert "> Publication blockers:" not in markdown
     assert "content verdict is not fully accepted: best_effort_exhausted" not in markdown
 
 
@@ -1018,7 +1076,7 @@ def test_apply_final_artifacts_blocks_trust_final_answer_and_falls_back_to_best_
     assert "partial_answer_md" not in updated["artifacts"]
     assert "final_answer_json" not in updated["artifacts"]
     assert "final_answer_md" not in updated["artifacts"]
-    assert markdown.index("> Blocking causes:") < markdown.index("## Review Status")
+    assert markdown.index("> Publication blockers:") < markdown.index("## Review Status")
     assert "> - review topics are carried forward: TOPIC-001" in markdown
 
 
@@ -1592,6 +1650,60 @@ def test_render_report_renders_disagreed_topic_status_section():
     assert "- Disagreed topics: `1` (`TOPIC-001`)" in report
 
 
+def test_render_report_sanitizes_recommendation_review_and_draft_summaries():
+    payload = _recommendation_payload("First")
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "task": {"id": "task-report-sanitized"},
+        "verdicts": {
+            "content_verdict": "accepted_with_warnings",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[],
+            excluded_indices=[],
+        ),
+        "drafts": [
+            _best_draft_record(
+                {
+                    **payload,
+                    "summary": "This draft is publication-ready and can be used as the final artifact.",
+                }
+            )
+        ],
+        "recommendation_reviews": [
+            {
+                "recommendation_index": 1,
+                "verdict": "accept_with_caveat",
+                "summary": "This recommendation is publication-ready and acceptable as the final artifact.",
+                "confidence_assessment": "well_calibrated",
+            }
+        ],
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": payload,
+    }
+
+    report = render_report(summary)
+
+    assert "publication-ready" not in report.lower()
+    assert "final artifact" not in report.lower()
+    assert "Runner note: review summary withheld because publication eligibility is runner-owned." in report
+    assert "Runner note: draft summary withheld because publication eligibility is runner-owned." in report
+
+
 def test_render_report_renders_review_provenance_section_for_scoped_global_closure():
     summary = {
         "verdict": "accepted_with_warnings",
@@ -2096,6 +2208,46 @@ def test_apply_final_artifacts_emits_final_answer_when_all_accepted_recommendati
     assert not (tmp_path / "BEST_DRAFT.json").exists()
 
 
+def test_apply_final_artifacts_uses_one_sanitized_payload_copy_per_final_answer_artifact(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second")
+    payload["summary"] = "This analysis is publication-ready and is the final artifact."
+    summary = {
+        "task": {"id": "task-final-sanitized"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 1},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1, 2],
+            partial_only_indices=[],
+            excluded_indices=[],
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    final_json = json.loads((tmp_path / "FINAL_ANSWER.json").read_text(encoding="utf-8"))
+    final_markdown = (tmp_path / "FINAL_ANSWER.md").read_text(encoding="utf-8")
+    summary_json = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    summary_section = _top_level_section(final_markdown, "## Summary")
+
+    assert updated["artifacts"]["final_artifact_kind"] == "final_answer"
+    assert final_json["summary"] == (
+        "Runner note: model-authored summary withheld because publication eligibility is runner-owned."
+    )
+    assert "publication-ready" not in summary_section.lower()
+    assert "final artifact" not in summary_section.lower()
+    assert final_json["summary"] in summary_section
+    assert summary_json["final_answer"]["summary"] == payload["summary"]
+
+
 def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_subset(
     tmp_path,
 ):
@@ -2141,7 +2293,7 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     )
     assert "> - `2`: `accepted_with_caveat`" in partial_markdown
     assert "> - `3`: `topic_blocked`" in partial_markdown
-    assert "> Blocking causes:" not in partial_markdown
+    assert "> Publication blockers:" not in partial_markdown
     assert "- Included recommendation indices: `1`, `2`" in partial_markdown
     assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`" in partial_markdown
     assert "  - `3`: `topic_blocked`" in partial_markdown
@@ -2153,6 +2305,66 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     )
     assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`" in report_markdown
     assert "  - `3`: `topic_blocked`" in report_markdown
+
+
+def test_apply_final_artifacts_preserves_partial_acceptance_suffix_when_sanitizing_partial_summary(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second", "Third")
+    payload["summary"] = "This draft is publication-ready and should ship as the final artifact."
+    summary = {
+        "task": {"id": "task-partial-sanitized"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v7",
+            "partial_acceptance": {"min_accepted_recommendations": 2},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[1],
+            partial_only_indices=[2],
+            excluded_indices=[3],
+            reasons_by_index={
+                "2": ["accepted_with_caveat"],
+                "3": ["topic_blocked"],
+            },
+            final_answer_publishable=False,
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "recommendation_reviews": [
+            {
+                "recommendation_index": 1,
+                "verdict": "accept",
+                "summary": "Clean.",
+            },
+            {
+                "recommendation_index": 2,
+                "verdict": "accept_with_caveat",
+                "summary": "This recommendation is publication-ready and fit for the final artifact.",
+            },
+        ],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    partial_json = json.loads((tmp_path / "PARTIAL_ANSWER.json").read_text(encoding="utf-8"))
+    partial_markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+    summary_section = _top_level_section(partial_markdown, "## Summary")
+    recommendation_two = _rendered_section(partial_markdown, "### 2. Second")
+
+    assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert "publication-ready" not in partial_json["summary"].lower()
+    assert "final artifact" not in partial_json["summary"].lower()
+    assert "Partial acceptance: recommendations 1, 2 are included; recommendations 3 were excluded." in partial_json["summary"]
+    assert partial_json["recommendation_reviews"][1]["summary"] == (
+        "Runner note: review summary withheld because publication eligibility is runner-owned."
+    )
+    assert partial_json["summary"] in summary_section
+    assert "publication-ready" not in recommendation_two.lower()
+    assert "final artifact" not in recommendation_two.lower()
+    assert "Runner note: review summary withheld because publication eligibility is runner-owned." in recommendation_two
 
 
 def test_apply_final_artifacts_writes_partial_answer_with_original_indices_in_markdown(
@@ -2278,7 +2490,7 @@ def test_apply_final_artifacts_falls_back_to_best_draft_when_partial_subset_drop
         < best_draft_markdown.index("## Review Status")
     )
     assert "> - `2`: `accepted_with_caveat`" in best_draft_markdown
-    assert "> Blocking causes:" not in best_draft_markdown
+    assert "> Publication blockers:" not in best_draft_markdown
 
 
 def test_apply_final_artifacts_never_emits_final_answer_when_source_payload_omits_accepted_recommendations(

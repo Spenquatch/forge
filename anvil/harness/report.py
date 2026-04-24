@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .publication_authority import sanitize_summary_text
 from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
 
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
@@ -812,8 +813,12 @@ def render_report(summary: dict[str, Any]) -> str:
             scores = draft.get('scores') or {}
             if scores:
                 lines.append(f"- Scores: `{json.dumps(scores, sort_keys=True)}`")
-            if draft.get('summary'):
-                lines.append(f"- Summary: {draft.get('summary')}")
+            draft_summary = sanitize_summary_text(
+                draft.get("summary"),
+                surface="draft_summary",
+            )
+            if draft_summary:
+                lines.append(f"- Summary: {draft_summary}")
             metadata = draft.get("metadata") or {}
             if metadata.get("review_attempted") and not metadata.get("review_completed"):
                 lines.append(
@@ -826,8 +831,12 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("## Recommendation Reviews")
         lines.append("")
         for item in recommendation_reviews:
+            review_summary = sanitize_summary_text(
+                item.get("summary"),
+                surface="recommendation_review",
+            )
             lines.append(
-                f"- Recommendation {item.get('recommendation_index')}: `{item.get('verdict')}` — {item.get('summary')}"
+                f"- Recommendation {item.get('recommendation_index')}: `{item.get('verdict')}` — {review_summary}"
             )
             if item.get("open_issue_ids"):
                 lines.append(f"  - Open issues: {_render_policy_list(item.get('open_issue_ids', []))}")

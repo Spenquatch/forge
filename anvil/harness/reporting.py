@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .files import write_json, write_text
+from .publication_authority import sanitize_artifact_payload, sanitize_summary_text
 from .report import render_report
 from .selection import select_best_draft
 from .topic_lifecycle import (
@@ -526,7 +527,10 @@ def _recommendation_caveat_lines(
     review = review_lookup.get(recommendation_index) or {}
     verdict = str(review.get("verdict") or "").strip().lower()
     if verdict == "accept_with_caveat":
-        review_summary = str(review.get("summary") or "").strip()
+        review_summary = sanitize_summary_text(
+            review.get("summary"),
+            surface="recommendation_review",
+        )
         caveat_lines.append(
             review_summary or "This recommendation was accepted with caveats."
         )
@@ -806,7 +810,7 @@ def _append_blocked_publication_note(
         ]
     )
     if blocking_causes:
-        lines.append("> Blocking causes:")
+        lines.append("> Publication blockers:")
         for cause in blocking_causes:
             lines.append(f"> - {cause}")
     if admissibility_withheld_entries:
@@ -1157,17 +1161,18 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             summary["best_draft"] = best_draft
 
     if artifact_json_path is not None and artifact_md_path is not None and isinstance(payload, dict) and payload:
+        emitted_payload = sanitize_artifact_payload(payload, artifact_kind=artifact_kind)
         render_summary = (
             _build_partial_artifact_summary(summary, payload)
             if artifact_kind == "partial_answer"
             else summary
         )
-        write_json(artifact_json_path, payload)
+        write_json(artifact_json_path, emitted_payload)
         write_text(
             artifact_md_path,
             render_deliverable_markdown(
                 task_id,
-                payload,
+                emitted_payload,
                 artifact_kind=artifact_kind,
                 artifact_label=_artifact_label_for_kind(artifact_kind),
                 accepted=fully_accepted,
