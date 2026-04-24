@@ -1,34 +1,56 @@
-# Next Iteration Plan: Canonical Final Publication State
+# Next Iteration Plan: Bounded Discovery Completeness Backfill
 
 ## Purpose
 
-Slice F and the follow-on hardening landed. Good.
+The current `PLAN.md` targets the publication-state contradiction from the April 24 trust replay. That was previous item 1.
 
-The next bug is narrower. It is not recommendation admissibility, topic closure proof, or trust wording in general. It is one product-facing contradiction in the final publication state.
+This plan replaces it with previous item 2.
 
-The April 24 trust replay at `.forge-harness-runs/20260424T191008Z-recommend_automation_improvements-838bd449` shows all of these at once:
+The bug now is narrower and more important to day-to-day usage: bounded mode is producing a cleaner artifact, but it is also missing directly grounded recommendations that trust mode is finding from the same repo-local evidence.
 
-1. `REPORT.md` says `Final publication: publishable`
-2. `REPORT.md` says `Publication blockers: none`
-3. the primary deliverable is `PARTIAL_ANSWER.md`
-4. the partial deliverable says final publication was blocked and Recommendation 2 was withheld
+That is not a good product distinction.
 
-That means the harness currently has two competing truths for the same run. Humans can notice the contradiction. Downstream tooling cannot.
+Bounded should stay simpler than trust. It should not stay blinder than trust.
 
-This slice fixes exactly that.
+## Accepted Premises
 
-## The Exact Failure Mechanism
+These are locked for this slice:
 
-The contradiction is mechanical, not mysterious:
+1. `analysis_review_bounded_v1` and `analysis_review_trust_v1` remain separate strategy kinds.
+2. Trust keeps its stronger provenance and publication gates.
+3. Bounded keeps its cleaner final-answer semantics and evidence caps.
+4. Missing a nearby, repo-local, spec-backed recommendation is a bounded-mode bug, not an acceptable tradeoff.
+5. This slice fixes recommendation discovery completeness, not artifact publication state.
 
-1. `anvil/harness/runner.py:_analysis_publishability()` computes `analysis_review_status.publishability` before artifact projection.
-2. `anvil/harness/reporting.py:apply_final_artifacts()` later tries to emit `FINAL_ANSWER.*`.
-3. if `_final_answer_admissible()` rejects the payload, `apply_final_artifacts()` silently flips local control flow to `PARTIAL_ANSWER.*` or `BEST_DRAFT.*`.
-4. `anvil/harness/report.py` still renders `Final publication: publishable|blocked` from the earlier `analysis_review_status.publishability` object.
+## The Exact Failure
 
-So the selected deliverable and the rendered publication state can diverge.
+The April 24 pair makes the gap concrete:
 
-That is the whole bug.
+- bounded run: `.forge-harness-runs/20260424T191006Z-recommend_automation_improvements-6a97899b`
+- trust run: `.forge-harness-runs/20260424T191008Z-recommend_automation_improvements-838bd449`
+
+Observed difference:
+
+1. bounded ships a `FINAL_ANSWER.md` with 3 recommendations
+2. trust produces a `PARTIAL_ANSWER.md` with 4 recommendations
+3. the extra trust recommendation is not a weird provenance-only artifact, it is a repo-local, spec-backed release-watch issue-tracking recommendation grounded in `docs/project_management/next/codex-cli-parity/C1-spec.md`
+4. trust also frames timeout and parity issues across the full sibling workflow seam more completely than bounded
+
+So the harness is currently teaching users the wrong lesson:
+
+```text
+bounded = cleaner artifact, but maybe incomplete repo understanding
+trust   = fuller repo understanding, but stricter publication semantics
+```
+
+That is the whole problem.
+
+The product distinction should be:
+
+```text
+bounded = same core repo understanding, lighter-weight audit contract
+trust   = same or deeper understanding, stronger provenance and final-publication rules
+```
 
 ## Step 0: Scope Challenge
 
@@ -36,34 +58,49 @@ That is the whole bug.
 
 Use **HOLD SCOPE**.
 
-This is one seam:
+This slice is one seam:
 
-- final publication state finalization
-- artifact selection
-- report/rendered status parity
+- bounded-mode recommendation discovery around prioritized files
+- bounded prompt guidance for repo-local corroboration
+- regression coverage that proves bounded may carry the fuller recommendation set
 
-Do not reopen trust architecture. Do not reopen Slice F. Do not invent a new publication state model.
+Do not reopen:
+
+- trust publication semantics
+- recommendation admissibility semantics
+- payload provenance
+- new strategy kinds
+- a new rule engine that auto-discovers recommendations without model work
 
 ### What already exists
 
 | Sub-problem | Existing code | Why it is enough |
 |---|---|---|
-| pre-artifact publication gating | `anvil/harness/runner.py:_analysis_publishability()` | already owns provenance/topic/semantic/content blockers |
-| final artifact selection | `anvil/harness/reporting.py:apply_final_artifacts()` | already decides `FINAL_ANSWER.*` vs `PARTIAL_ANSWER.*` vs `BEST_DRAFT.*` |
-| final-answer payload admissibility check | `anvil/harness/reporting.py:_final_answer_admissible()` | already catches the payload mismatch that triggers the contradiction |
-| report-side publication rendering | `anvil/harness/report.py` | already renders both publication state and primary deliverable |
-| regression coverage for fallback artifacts | `tests/test_harness_reporting.py` | already covers partial-answer and best-draft fallback paths, but not canonical-state parity |
-| contract wording | `README.md`, `docs/analysis_review_contract.md`, `tests/test_harness_analysis_contract.py` | already freeze field names and artifact semantics |
+| task starting slice | `anvil/harness/prompts.py:_task_block()` | already injects `files_hint` into every analysis prompt |
+| bounded review discipline | `anvil/harness/prompts.py` critic/auditor/reviser guidance | already tells bounded reviewers to stay inside `review_surface` and record `scope_escapes` |
+| bounded caps | `anvil/harness/contracts.py:BoundedReviewPolicy` and `anvil/harness/semantic_validation.py` | already cap evidence and review-surface size |
+| evidence trimming | `anvil/harness/runner.py:3316-3327` | already trims bounded evidence to cap, so this slice must stay within cap instead of removing it |
+| scope-escape reporting | `anvil/harness/runner.py:1307-1414` | already records and renders bounded scope escapes |
+| prompt regression coverage | `tests/test_harness_prompt_consistency.py` | already locks bounded vs trust prompt differences |
+| bounded harness acceptance coverage | `tests/test_harness_runner.py` | already has offline adapters and bounded-summary assertions |
+| contract docs | `README.md`, `docs/analysis_review_contract.md`, `tests/test_harness_analysis_contract.py` | already freeze user-facing semantics and are the right place to document bounded corroboration expectations |
 
 ### Minimum change that achieves the goal
 
-Do not add a new top-level state object.
+Do not add a new model stage.
+
+Do not add a new strategy kind.
+
+Do not add a repo-wide heuristic file discovery engine.
 
 The minimum complete fix is:
 
-1. keep `analysis_review_status.publishability` as the canonical field
-2. finalize that field after artifact selection knows what actually shipped
-3. make `REPORT.md`, `summary.json`, and fallback deliverables all project that finalized field
+1. teach bounded prompts that `files_hint` is the starting slice, not the total truth
+2. require one-hop, repo-local corroboration when a recommendation depends on:
+   - a normative requirement claim
+   - a sibling-workflow parity claim
+3. keep that corroboration inside the existing bounded caps by using `must_check_files` and `optional_check_files` correctly
+4. add regression tests that prove bounded mode can emit the fuller recommendation set without changing bounded publication semantics
 
 Anything bigger is overbuilt.
 
@@ -71,432 +108,380 @@ Anything bigger is overbuilt.
 
 Target touched files:
 
-- `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
-- `tests/test_harness_reporting.py`
+- `anvil/harness/prompts.py`
+- `tests/test_harness_prompt_consistency.py`
+- `tests/test_harness_runner.py`
 - `README.md`
 - `docs/analysis_review_contract.md`
 - `tests/test_harness_analysis_contract.py`
 
-Optional only if wording drift forces it:
-
-- `FORGE_HARNESS_SURFACE_UPDATE_NOTES.md`
-
-This stays under one module seam and one doc seam. Good.
+This is under the 8-file smell threshold and does not add a new class or service.
 
 ### Search check
 
-- **[Layer 1]** reuse `analysis_review_status.publishability`
-- **[Layer 1]** reuse `summary["artifacts"]["final_artifact_kind"]`
-- **[Layer 1]** reuse `_final_answer_admissible()` as the predicate source, or refactor it into a blocker-producing helper
-- **[Layer 3]** stop letting pre-selection policy masquerade as final publication truth
+- **[Layer 1]** reuse `files_hint`
+- **[Layer 1]** reuse `review_surface.must_check_files` / `optional_check_files`
+- **[Layer 1]** reuse `scope_escapes`
+- **[Layer 1]** reuse existing bounded evidence caps
+- **[Layer 3]** fix bounded-mode blindness with prompt and regression work, not with a new orchestration stage
 
-No external search needed. The bug is entirely repo-local.
+No external web search is needed. This is entirely repo-local.
 
 ### Completeness check
 
 Take the complete version.
 
-A runtime-only patch is not enough if docs and tests still describe pre-selection publishability as if it were final truth. The extra cost to update docs and regression tests is minutes.
+Prompt-only without regression tests is not enough.
+
+Regression tests without contract docs is not enough.
+
+The extra work to update docs and contract assertions is minutes, not a real tradeoff.
 
 ### Distribution check
 
-No new artifact type. No CI or release work changes.
-
-This slice changes the truth contract behind existing run artifacts only.
+No new artifact type. No CI/release pipeline work. No distribution change.
 
 ## Architecture Review
 
 ### Current flow
 
 ```text
-runner builds analysis_review_status.publishability
-    │
-    ├── report renders "Final publication: publishable"
+task.files_hint
     │
     ▼
-apply_final_artifacts()
+bounded proposer starts from prioritized files
     │
-    ├── tries FINAL_ANSWER payload
-    ├── _final_answer_admissible() returns false
-    └── falls back to PARTIAL_ANSWER or BEST_DRAFT
-         without finalizing publishability
+    ├── recommendation must stay inside bounded evidence caps
+    ├── recommendation review_surface is usually authored from the same starting slice
+    └── no prompt rule forces repo-local corroboration for spec or parity claims
+            │
+            ▼
+bounded critic/auditor mostly validate the authored slice
+    │
+    └── result can be locally grounded but still incomplete
 ```
-
-That is how we get one run claiming both "publishable" and "blocked".
 
 ### Target flow
 
 ```text
-runner builds initial publishability candidate
+task.files_hint
     │
     ▼
-apply_final_artifacts()
+bounded proposer starts from prioritized files
     │
-    ├── evaluates actual FINAL_ANSWER payload admissibility
-    ├── finalizes analysis_review_status.publishability
-    │    ├── final_answer_publishable = true only if FINAL_ANSWER actually ships
-    │    └── blocking_causes include payload/admissibility blockers when fallback wins
-    └── emits FINAL_ANSWER or PARTIAL_ANSWER or BEST_DRAFT
-         from the same finalized state
+    ├── if claim is requirement/spec-backed:
+    │      inspect one governing repo-local doc or manifest
     │
-    ▼
-REPORT.md + summary.json + fallback markdown all read the same finalized truth
+    ├── if claim is sibling-parity-backed:
+    │      inspect the sibling workflow and compare the full like-for-like pipeline seam
+    │
+    ├── include corroborating files in evidence + review_surface within existing caps
+    └── reserve scope_escapes for later-stage review that must leave the declared surface
+            │
+            ▼
+bounded critic/auditor verify the fuller surface
+    │
+    └── bounded can discover the same core recommendation set as trust,
+        while trust still owns the stricter provenance/publication layer
 ```
 
-### Canonical invariant
+### Canonical rules
 
-After this slice, these must always agree:
+Freeze these rules for this slice:
 
-1. `analysis_review_status.publishability.final_answer_publishable`
-2. `summary["artifacts"]["final_artifact_kind"] == "final_answer"`
-3. `REPORT.md` lines for `Final publication:` and `Primary deliverable:`
-
-Concrete invariant:
-
-```text
-analysis_review_status.publishability.final_answer_publishable
-==
-(summary["artifacts"]["final_artifact_kind"] == "final_answer")
-```
-
-If that expression is false in either direction, the run is invalid.
-
-### Canonical implementation contract
-
-Freeze these rules:
-
-1. `analysis_review_status.publishability` remains the canonical publication-state field.
-   No new sibling field. No `publication_outcome_v2`. No renderer-only override.
-
-2. `apply_final_artifacts()` becomes the finalizer for publishability.
-   Runner still computes the initial candidate state. Artifact selection finalizes it.
-
-3. If `FINAL_ANSWER.*` does not ship for any reason, `final_answer_publishable` must end as `false`.
-
-4. `blocking_causes` must explain the final demotion reason when artifact selection falls off the final-answer path.
-
-5. Payload/admissibility blockers must be deterministic. Use exact strings:
-   - `final answer payload includes recommendation indices withheld from FINAL_ANSWER.*: <indices>`
-   - `final answer payload omits recommendation indices required for FINAL_ANSWER.*: <indices>`
-
-6. Existing policy blockers keep their current wording and order. Payload blockers append after existing blockers.
-
-7. `report.py` continues to render from `analysis_review_status.publishability`. It does not grow its own artifact-state logic.
-
-8. Bounded mode keeps its current admissibility semantics. This slice only enforces publication-state parity. If bounded ever falls off the final-answer path, the same invariant applies.
+1. `files_hint` remains a prioritization input, not a hard boundary.
+2. Bounded mode may inspect repo-local corroborating files outside `files_hint`.
+3. Corroboration is limited to one hop:
+   - governing spec/manifest/doc for requirement claims
+   - sibling workflow or sibling implementation for parity claims
+4. Bounded mode must keep corroboration inside the current caps:
+   - evidence cap stays 3
+   - `must_check_files` cap stays 3
+   - `optional_check_files` cap stays 2
+5. This slice does not change:
+   - trust provenance rules
+   - trust partial-only semantics
+   - bounded final-answer admissibility semantics
+   - runner-owned recommendation admissibility
 
 ### File-by-file implementation plan
 
-#### 1. `anvil/harness/reporting.py`
+#### 1. `anvil/harness/prompts.py`
 
-Make `apply_final_artifacts()` finalize publication state instead of carrying a private `final_answer_blocked` truth.
+This is the primary implementation file.
 
-Required changes:
+Add one shared bounded-corroboration guidance block and use it in proposer, critic, reviser, and auditor prompts.
 
-- Refactor `_final_answer_admissible()` into a blocker-aware helper, or add a sibling helper:
-  - input: `summary`, candidate payload
-  - output: deterministic blocker strings, not just `True` / `False`
-- In `apply_final_artifacts()`:
-  - compute existing publishability from `analysis_review_status.publishability`
-  - if the run is fully accepted and the initial state says publishable, evaluate payload blockers before selecting `FINAL_ANSWER.*`
-  - if payload blockers exist:
-    - set `analysis_review_status.publishability.final_answer_publishable = False`
-    - append payload blockers to `blocking_causes`
-    - keep selecting `PARTIAL_ANSWER.*` or `BEST_DRAFT.*` exactly as today
-- Write the finalized publishability back to both:
-  - `summary["analysis_review_status"]`
-  - `summary["run_details"]["analysis_review_status"]` when present
-- Keep `_append_blocked_publication_note()` reading the finalized blocker list, not an alternate local truth
+Required prompt behavior:
 
-Do not create a new module for this. Keep it in `reporting.py`.
+1. `files_hint` is the starting slice.
+2. When a recommendation depends on repo-local requirements, the model must inspect and cite the nearest governing doc or manifest.
+3. When a recommendation depends on parity or symmetry, the model must inspect and cite the sibling implementation that establishes the baseline.
+4. For parity claims, the model must compare the full like-for-like pipeline seam, not just one convenient step.
+5. The corroborating files must be included in `files_reviewed`, `evidence`, and `review_surface` within existing caps.
+6. `scope_escapes` stay for later review stages that leave the authored review surface, not for proposer laziness.
 
-#### 2. `anvil/harness/report.py`
+Concrete prompt updates:
 
-Keep rendering thin.
+- proposer:
+  - add a bounded-mode instruction that requirement claims must pull in one governing repo-local doc or manifest
+  - add a bounded-mode instruction that parity claims must pull in the sibling workflow or sibling implementation
+  - add a bounded-mode instruction to use `must_check_files` for directly governing corroboration and `optional_check_files` for supporting corroboration
+- critic:
+  - add a bounded-mode instruction to flag missing repo-local corroboration when a recommendation makes a requirement or parity claim without the governing file in evidence/review surface
+- reviser:
+  - add a bounded-mode instruction to repair missing corroboration by widening `review_surface` within cap before inventing new recommendations
+- auditor:
+  - add a bounded-mode instruction to reject clean closure when spec/parity-backed claims still lack the needed corroborating file
 
-Required changes:
+Do not add repo-specific hardcoded filenames to prompt code.
 
-- no new decision logic
-- no artifact-kind reinterpretation
-- only consume finalized `analysis_review_status.publishability`
+Keep the rule generic.
 
-If needed, add one defensive assertion in tests that the report overview and the analysis-review-status section both show the same final publication state.
+#### 2. `tests/test_harness_prompt_consistency.py`
 
-#### 3. `README.md`
+Lock the new behavior explicitly.
 
-Update the contract text so it says the correct thing:
+Required assertions:
 
-- `analysis_review_status.publishability` is the canonical final publication outcome
-- artifact selection finalizes that outcome
-- if `FINAL_ANSWER.*` does not ship, `final_answer_publishable` must be `false`
-- `summary["artifacts"]` and `publishability` must agree
+- bounded prompts say `files_hint` is a starting slice, not the total review universe
+- bounded prompts require one-hop repo-local corroboration for requirement/spec claims
+- bounded prompts require sibling corroboration for parity claims
+- bounded prompts tell the model to keep corroboration inside current caps
+- trust prompt expectations remain unchanged for provenance and uncapped evidence
 
-Do not turn README into an ADR. One concise paragraph is enough.
+Do not loosen existing trust assertions to make this test pass.
+
+#### 3. `tests/test_harness_runner.py`
+
+Add one new bounded offline regression using a fake adapter.
+
+Scenario to encode:
+
+- same automation-review task shape
+- bounded proposer returns 4 recommendations
+- recommendation 1 includes a workflow plus a governing spec doc in evidence/review surface
+- recommendation 3 includes both sibling snapshot workflows so the timeout recommendation covers `prepare` and the broader parity seam
+- bounded run still publishes `FINAL_ANSWER.*`
+
+Required assertions:
+
+- `summary["analysis_review_contract"]["mode"] == "bounded"`
+- `summary["artifacts"]["final_artifact_kind"] == "final_answer"`
+- bounded final answer contains 4 recommendations
+- the spec-backed release-watch recommendation is preserved in bounded mode
+- the fuller timeout/parity recommendation is preserved in bounded mode
+- every recommendation still respects the bounded evidence/review-surface caps
+- bounded summary still renders valid review-surface coverage
+
+This test is not trying to prove live-model determinism.
+
+It is proving the bounded contract allows the fuller shape we want.
 
 #### 4. `docs/analysis_review_contract.md`
 
-Add the explicit invariant and blocker semantics.
+Add one explicit bounded-corroboration section.
 
 Must document:
 
-- `final_answer_publishable` is not merely a pre-selection gate
-- it is finalized after artifact projection
-- payload/admissibility mismatch can add final publication blockers
-- `REPORT.md` and `summary.json["artifacts"]` must agree with that finalized state
+- bounded mode is discovery-bounded, not workflow-file-only
+- bounded may use repo-local corroboration outside `files_hint`
+- requirement claims need a governing repo-local doc/manifest when one exists
+- parity claims need a sibling implementation when one exists
+- bounded still stays inside current evidence and review-surface caps
+- trust remains stricter on provenance and publication, not just broader on discovery
 
-Keep the field names unchanged.
+#### 5. `README.md`
 
-#### 5. `tests/test_harness_reporting.py`
+Add one concise paragraph in the harness surface section:
 
-This is the main regression lock.
+- bounded and trust should differ in audit depth and publication rules
+- bounded is still expected to make repo-local, spec-backed recommendations when the corroboration is one hop away
 
-Required changes:
-
-- extend the trust partial-fallback test so it also asserts:
-  - `summary.json["analysis_review_status"]["publishability"]["final_answer_publishable"] is False`
-  - `REPORT.md` says `Final publication: blocked`
-  - `REPORT.md` primary deliverable is `partial_answer`
-  - the new payload blocker string is present
-- extend the best-draft fallback test for omitted accepted recommendations so it also asserts:
-  - `final_answer_publishable` flips to `False`
-  - `REPORT.md` says `blocked`
-  - `blocking_causes` includes the omission blocker
-- add one explicit parity regression:
-  - no accepted run may produce `PARTIAL_ANSWER.*` or `BEST_DRAFT.*` while the report still says `publishable`
-- keep the bounded accepted-final test unchanged except for one extra assertion:
-  - it still says `publishable`
-  - it still ships `FINAL_ANSWER.*`
+Keep it short.
 
 #### 6. `tests/test_harness_analysis_contract.py`
 
-Add assertions for the new invariant language in:
+Update contract-doc assertions for the new bounded-corroboration wording in `README.md` and `docs/analysis_review_contract.md`.
 
-- `README.md`
-- `docs/analysis_review_contract.md`
-
-Only touch other doc assertions if current wording becomes contradictory.
+Do not add brittle full-paragraph string asserts if a shorter stable phrase will do.
 
 ## Code Quality Review
 
-### Issue 1: duplicated authority in publication state
+### Engineering constraints
 
-Current problem:
+1. Do not add a new `analysis_review_*_v2` strategy kind.
+2. Do not add runner-owned recommendation-discovery state.
+3. Keep the change DRY by using one prompt helper block, not four copy-pasted paragraphs.
+4. Do not push repo-specific filenames into prompt code.
+5. Do not change semantic validation caps in this slice.
 
-- `analysis_review_status.publishability` says one thing
-- local `final_answer_blocked` flow in `apply_final_artifacts()` can say another
+### Minimal-diff recommendation
 
-Decision:
+Use prompt guidance plus regression coverage.
 
-- one authoritative finalization point in `apply_final_artifacts()`
-- zero renderer-owned reinterpretation
-
-Why:
-
-This matches your preferences exactly: explicit over clever, minimal diff, no duplicate sources of truth.
-
-### Issue 2: avoid inventing a new publication schema
-
-Decision:
-
-- keep `publishability`
-- keep `final_answer_publishable`
-- keep `blocking_causes`
-
-Why:
-
-A new state object would be architecture cosplay. The bug is not missing vocabulary. It is stale vocabulary.
-
-### Issue 3: do not hide the mismatch behind markdown-only notes
-
-Decision:
-
-- the blocker must live in structured status first
-- markdown notes only project it
-
-Why:
-
-Machines read `summary.json`. Humans read markdown. The structured state wins.
+Do not touch `anvil/harness/runner.py` or `anvil/harness/semantic_validation.py` unless the new bounded runner regression exposes a real contract hole.
 
 ## Test Review
 
-### Framework
+### Test framework
 
-Use `pytest`.
+This repo uses `pytest`.
 
 ### Code path coverage
 
 ```text
-CODE PATH COVERAGE
-==================
+PLAN CHANGE COVERAGE
+===========================
+[+] anvil/harness/prompts.py
+    │
+    ├── bounded proposer guidance
+    │   ├── [GAP] starting-slice wording
+    │   ├── [GAP] requirement/spec corroboration rule
+    │   └── [GAP] parity corroboration rule
+    │
+    ├── bounded critic guidance
+    │   └── [GAP] missing-corroboration rejection rule
+    │
+    ├── bounded reviser guidance
+    │   └── [GAP] widen review_surface-within-cap repair rule
+    │
+    └── bounded auditor guidance
+        └── [GAP] no clean closure without corroboration rule
 
-[+] anvil/harness/reporting.py::apply_final_artifacts()
+[+] tests/test_harness_prompt_consistency.py
     │
-    ├── fully accepted + publishable + payload matches final admissibility
-    │   └── [★★ TESTED] emits FINAL_ANSWER
-    │
-    ├── fully accepted + publishable + payload includes withheld indices
-    │   └── [GAP] must demote to PARTIAL_ANSWER and finalize publishability=false
-    │
-    ├── fully accepted + publishable + payload omits required final indices
-    │   └── [GAP] must demote to BEST_DRAFT and finalize publishability=false
-    │
-    └── fully accepted + already blocked by provenance/topic/warnings
-        └── [★★ TESTED] fallback path exists, but blocker finalization parity should be asserted
+    ├── [GAP] bounded corroboration text locked
+    └── [★★★ TESTED after change] trust text unchanged
 
-[+] anvil/harness/report.py::render_report()
+[+] tests/test_harness_runner.py
     │
-    ├── Overview section renders Final publication
-    ├── Overview section renders Primary deliverable
-    └── Analysis Review Status section renders Final publication / blockers
-        └── [GAP] report must never claim publishable when primary deliverable is not final_answer
+    ├── [GAP] bounded can emit 4-rec fuller recommendation set
+    ├── [GAP] bounded final answer still publishes
+    └── [GAP] bounded caps still enforced with corroborating files present
 
-[+] Fallback deliverable markdown
-    │
-    ├── PARTIAL_ANSWER note shows blockers and withheld indices
-    └── BEST_DRAFT note shows blockers and withheld indices when applicable
-        └── [★★ TESTED] note exists, but structured publishability parity should be asserted
-
-────────────────────────────────────────────
-COVERAGE TARGET
-  Runtime parity checks: 4
-  Report parity checks: 3
-  Contract/doc assertions: 2
-────────────────────────────────────────────
+─────────────────────────────────
+COVERAGE TARGET: 8/8 paths tested
+QUALITY TARGET: all new assertions ★★★
+─────────────────────────────────
 ```
 
-### Required test edits
+### Required test commands
 
-1. Extend the existing trust partial-fallback regression in `tests/test_harness_reporting.py`.
-   Add assertions for finalized `publishability`, report status, and exact blocker string.
+Run exactly these:
 
-2. Extend the existing best-draft fallback regression for omitted accepted recommendations.
-   Add assertions for finalized `publishability`, report status, and exact omission blocker.
+```bash
+poetry run pytest -q tests/test_harness_prompt_consistency.py
+poetry run pytest -q tests/test_harness_runner.py
+poetry run pytest -q tests/test_harness_analysis_contract.py
+```
 
-3. Add one explicit parity regression:
-   if `final_artifact_kind != "final_answer"`, report text must not contain `Final publication: publishable`.
+### Manual dogfood acceptance
 
-4. Keep one bounded accepted-final regression as the control.
-   It proves this slice does not accidentally demote good final answers.
+After tests pass, rerun the automation task in both modes against the same target repo:
 
-5. Update `tests/test_harness_analysis_contract.py` for the new invariant wording.
+```bash
+poetry run python -m anvil.harness.cli run \
+  --task examples/harness/tasks/recommend_automation_improvements.yaml \
+  --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml \
+  --workspace /Users/spensermcconnell/__Active_Code/atomize-hq/unified-agent-api \
+  --out-root .forge-harness-runs
 
-### Regression rule
+poetry run python -m anvil.harness.cli run \
+  --task examples/harness/tasks/recommend_automation_improvements.yaml \
+  --strategy examples/harness/strategies/analysis_review_trust_codex_claude.yaml \
+  --workspace /Users/spensermcconnell/__Active_Code/atomize-hq/unified-agent-api \
+  --out-root .forge-harness-runs
+```
 
-This is a regression slice.
+Manual acceptance criteria:
 
-The trust replay already proved a previously shipped branch can emit contradictory publication state. Regression tests are mandatory. No TODO deferral.
+1. bounded discovers the release-watch issue-tracking recommendation
+2. bounded discovers the fuller timeout/parity recommendation
+3. bounded still ships `FINAL_ANSWER.*`
+4. trust may still differ on caveat language and final publication, but not by omitting those core recommendations from bounded
+
+Live-model wording does not need to match byte-for-byte.
+
+The recommendation set does.
 
 ## Performance Review
 
-No meaningful runtime risk.
+No meaningful runtime risk is expected.
 
-The new work is tiny:
-
-- normalize recommendation indices
-- compute two set diffs
-- append deterministic blocker strings
-
-Guardrails:
-
-- do not add another deep-copy pass over the whole summary
-- do not recompute draft selection
-- do not scan recommendation lists more than once per finalization path
+This slice adds prompt text and tests. The only operational cost is slightly longer prompt bodies, which is negligible relative to current harness round-trip time.
 
 ## Failure Modes Registry
 
-| Failure mode | Test required | Error handling required | User-visible impact if missed |
-|---|---|---|---|
-| partial deliverable ships while report still says publishable | yes | yes | contradictory run report, tooling cannot trust summary |
-| best draft ships because final payload omitted accepted recommendations but publishability stays true | yes | yes | silent downgrade with false publishability |
-| payload blocker is added only to markdown note, not structured status | yes | yes | JSON/markdown drift |
-| duplicate blocker strings accumulate across retries or rewrites | yes | yes | noisy reports and unstable assertions |
-| bounded accepted-final run is accidentally demoted by trust-only logic leaking across modes | yes | yes | false negative final publication |
+| Failure mode | Test covers it | Error handling exists | User-visible impact | Required mitigation |
+|---|---|---|---|---|
+| bounded prompt still treats `files_hint` as a hard boundary | yes | no | bounded keeps missing spec-backed recommendations | prompt consistency assertions |
+| bounded models wander too far outside prioritized files | partial | yes, via `scope_escapes` visibility | noisier bounded recommendations | one-hop corroboration wording and existing caps |
+| bounded parity claims stay shallow and miss adjacent jobs like `prepare` | yes | no | incomplete recommendation set | runner regression with fuller parity-backed recommendation |
+| docs drift and future contributors reintroduce bounded-blindness as “expected” | yes | no | contract confusion | README + contract doc + contract tests |
 
-Critical gap definition for this slice:
-
-If a fallback artifact can ship without `analysis_review_status.publishability` changing to `blocked`, that is a critical gap.
+Critical gap to avoid: shipping prompt changes without the bounded runner regression.
 
 ## What Already Exists
 
-The repo already has most of the machinery this slice needs:
+Use these instead of rebuilding anything:
 
-- `apply_final_artifacts()` already owns final artifact selection
-- `_final_answer_admissible()` already knows when the final payload should not ship
-- `render_report()` already renders both publication state and primary deliverable
-- existing tests already cover partial-answer and best-draft fallback mechanics
-
-The slice is not about building those seams. It is about making them agree.
+- `files_hint` already tells models where to start
+- `review_surface` already constrains bounded verification
+- `scope_escapes` already make bounded expansion observable
+- evidence/review-surface caps already bound the slice size
+- offline fake adapters already make this behavior testable without live providers
 
 ## NOT in Scope
 
-- recommendation admissibility redesign
-- topic closure proof changes
-- new artifact kinds
-- trust vs bounded strategy redesign
-- new publication state schema
-- line-level provenance
-- replay-diff tooling
-- validator policy changes unrelated to final publication-state parity
+- publication-state parity, that is previous item 1 and already has its own plan
+- trust-mode provenance or withholding semantics
+- changing bounded evidence caps from 3 / 3 / 2
+- automatic repo crawling to discover governing docs heuristically
+- adding a new analysis stage or strategy kind
+- external-search-backed recommendation discovery
+
+## TODOS.md
+
+No new TODOs should be added from this slice.
+
+The existing backlog already captures the larger “bounded vs trust product distinction” questions. This slice is the tactical fix.
 
 ## Worktree Parallelization Strategy
 
-Sequential implementation, no parallelization opportunity.
+Sequential implementation, no useful parallelization opportunity.
 
-Reason:
+Everything touches the same harness planning surface:
 
-- the blocker vocabulary lives in one seam
-- runtime, report assertions, and docs all depend on the same exact wording
-- parallel worktrees would mostly fight over strings and truth ownership
+- prompt guidance
+- prompt tests
+- bounded regression test
+- contract docs
 
-Do it in one lane:
-
-1. finalize runtime state in `reporting.py`
-2. lock report regression tests
-3. update docs and contract assertions
+Splitting this across worktrees buys little and increases wording drift risk.
 
 ## Completion Summary
 
-- Step 0: Scope Challenge, scope held
-- Architecture Review: one core issue, split publication authority between status and artifact selection
-- Code Quality Review: three issues found, all resolved by one finalization seam
-- Test Review: coverage diagram produced, four regression assertions required
-- Performance Review: no material runtime risk
+- Step 0: Scope Challenge, hold scope accepted
+- Design Review: skipped, no UI scope
+- Architecture Review: complete
+- Code Quality Review: complete
+- Test Review: diagram produced, 8 coverage targets identified
+- Performance Review: 0 issues
 - NOT in scope: written
 - What already exists: written
-- Failure modes: one critical gap class pinned, five failure modes enumerated
-- Parallelization: sequential, one lane
-- Lake Score: complete option chosen, no shortcut accepted
-
-## Exit Criteria
-
-This slice is done only when all of these are true:
-
-1. no run can emit `PARTIAL_ANSWER.*` or `BEST_DRAFT.*` while `REPORT.md` still says `Final publication: publishable`
-2. `analysis_review_status.publishability.final_answer_publishable` matches `summary["artifacts"]["final_artifact_kind"] == "final_answer"`
-3. trust fallback runs persist payload/admissibility blockers into structured status
-4. the trust partial-fallback regression covers the exact contradiction seen on April 24
-5. the omitted-accepted-recommendation best-draft regression covers the second silent mismatch path
-6. bounded accepted-final behavior remains unchanged
-7. README and contract docs explicitly describe publishability as finalized post-selection truth
+- TODOS.md updates: none
+- Failure modes: 0 unresolved critical gaps if regression coverage lands
+- Outside voice: skipped for this narrow repo-local slice
+- Parallelization: sequential
+- Lake Score: 4/4 key decisions chose the complete option
 
 ## Decision Audit Trail
 
 | # | Phase | Decision | Classification | Principle | Rationale | Rejected |
 |---|---|---|---|---|---|---|
-| 1 | CEO | Hold scope on publication-state parity only | mechanical | P3 pragmatic | The active bug is one contradiction, not a broader trust redesign | reopening Slice F or trust architecture |
-| 2 | Eng | Keep `analysis_review_status.publishability` as the canonical field | mechanical | P5 explicit | The bug is stale state, not missing schema | adding `publication_state_v2` |
-| 3 | Eng | Finalize publishability inside `apply_final_artifacts()` | mechanical | P1 completeness | Artifact selection is where actual ship state becomes known | report-side reinterpretation |
-| 4 | Eng | Use deterministic payload blocker strings for extra vs missing indices | mechanical | P5 explicit | Tests and reports need stable reasons, not vague “inadmissible” wording | one generic blocker with no detail |
-| 5 | Eng | Keep the slice sequential | mechanical | P3 pragmatic | This seam is small and wording-sensitive | parallel worktrees for runtime/tests/docs |
-
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | clear | Scope held to one product bug: canonical final publication state |
-| Codex Review | `codex review` | Independent 2nd opinion | 1 | clear | Root cause is split authority between pre-selection publishability and post-selection artifact fallback |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | clear | One seam, six target files, four regression assertions, no new schema |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped | No UI scope |
-
-**VERDICT:** CLEARED. This is the next slice. It is narrow, implementable, and specific enough to code without another planning pass.
+| 1 | CEO | Replace the current publication-state slice with a new bounded-completeness slice | mechanical | pragmatic | user explicitly asked to fix previous item 2, not item 1 | keeping the old `PLAN.md` focus |
+| 2 | CEO | Keep bounded and trust as separate strategy kinds | mechanical | explicit over clever | the problem is discovery completeness, not missing strategy proliferation | `analysis_review_bounded_v2` |
+| 3 | Eng | Implement via prompt guidance plus regression coverage | taste | minimal diff | runner-side recommendation discovery would be overbuilt for this seam | new analysis stage or discovery engine |
+| 4 | Eng | Require one-hop repo-local corroboration for requirement and parity claims | mechanical | completeness | this is the smallest rule that closes the observed gap | workflow-file-only bounded review |
+| 5 | Eng | Keep current bounded caps unchanged | mechanical | boring by default | the bug is blindness, not cap size | cap expansion as the primary fix |

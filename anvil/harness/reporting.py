@@ -29,6 +29,10 @@ _CANONICAL_ADMISSIBILITY_REASONS = {
     "not_accepted",
     "topic_blocked",
 }
+_FINAL_ANSWER_INCLUDES_WITHHELD_PREFIX = "final answer payload includes recommendation indices withheld from FINAL_ANSWER.*: "
+_FINAL_ANSWER_OMITS_REQUIRED_PREFIX = (
+    "final answer payload omits recommendation indices required for FINAL_ANSWER.*: "
+)
 
 
 def artifact_ref(path: str | Path, *, kind: str, description: str) -> dict[str, str]:
@@ -71,8 +75,26 @@ def _normalized_recommendation_indices(raw_items: Any) -> list[int]:
     return sorted(set(indices))
 
 
+def _render_plain_recommendation_indices(items: list[int]) -> str:
+    return ", ".join(str(item) for item in items)
+
+
+def _normalized_blocking_causes(raw_items: Any) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items or []:
+        cause = str(item).strip()
+        if not cause or cause in seen:
+            continue
+        seen.add(cause)
+        normalized.append(cause)
+    return normalized
+
+
 def _recommendation_admissibility(summary: dict[str, Any]) -> dict[str, Any]:
-    raw_admissibility = _analysis_review_status(summary).get("recommendation_admissibility")
+    raw_admissibility = _analysis_review_status(summary).get(
+        "recommendation_admissibility"
+    )
     if not isinstance(raw_admissibility, dict) or not raw_admissibility:
         return {}
 
@@ -124,8 +146,11 @@ def _recommendation_withholding_entries(
     )
     withheld_indices = sorted(
         set(
-            recommendation_admissibility.get("partial_only_recommendation_indices") or []
-        ).union(recommendation_admissibility.get("excluded_recommendation_indices") or [])
+            recommendation_admissibility.get("partial_only_recommendation_indices")
+            or []
+        ).union(
+            recommendation_admissibility.get("excluded_recommendation_indices") or []
+        )
     )
     entries: list[dict[str, Any]] = []
     for recommendation_index in withheld_indices:
@@ -150,9 +175,9 @@ def _partial_acceptance_min_accepted_recommendations(summary: dict[str, Any]) ->
     partial_acceptance = contract.get("partial_acceptance") or {}
     raw_minimum = partial_acceptance.get("min_accepted_recommendations")
     if raw_minimum is None:
-        raw_minimum = ((summary.get("task") or {}).get("review_requirements") or {}).get(
-            "min_recommendations"
-        )
+        raw_minimum = (
+            (summary.get("task") or {}).get("review_requirements") or {}
+        ).get("min_recommendations")
     try:
         return max(1, int(raw_minimum))
     except (TypeError, ValueError):
@@ -183,7 +208,8 @@ def _recommendation_exclusion_reasons_by_index(
         return {
             str(index): list(reasons_by_index.get(str(index)) or [])
             for index in source_recommendation_indices
-            if index not in included_index_set and list(reasons_by_index.get(str(index)) or [])
+            if index not in included_index_set
+            and list(reasons_by_index.get(str(index)) or [])
         }
 
     candidate_indices = set(_partial_candidate_recommendation_indices(summary))
@@ -204,18 +230,7 @@ def _recommendation_exclusion_reasons_by_index(
 
 
 def _final_answer_admissible(summary: dict[str, Any], payload: dict[str, Any]) -> bool:
-    admissibility = _recommendation_admissibility(summary)
-    if not admissibility:
-        return True
-
-    recommendations = payload.get("recommendations")
-    recommendation_count = len(recommendations) if isinstance(recommendations, list) else 0
-    source_indices = _recommendation_source_indices(payload, recommendation_count)
-    return (
-        source_indices == admissibility["final_answer_recommendation_indices"]
-        and not admissibility["partial_only_recommendation_indices"]
-        and not admissibility["excluded_recommendation_indices"]
-    )
+    return not _final_answer_payload_blockers(summary, payload)
 
 
 def _partial_answer_eligibility(summary: dict[str, Any]) -> tuple[bool, list[int]]:
@@ -240,7 +255,9 @@ def _partial_answer_eligibility(summary: dict[str, Any]) -> tuple[bool, list[int
         return (False, [])
 
     eligible_indices = list(topic_eligibility["eligible_recommendation_indices"])
-    if len(eligible_indices) < _partial_acceptance_min_accepted_recommendations(summary):
+    if len(eligible_indices) < _partial_acceptance_min_accepted_recommendations(
+        summary
+    ):
         return (False, [])
     return (True, eligible_indices)
 
@@ -270,6 +287,99 @@ def _analysis_publishability(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _set_analysis_review_status(
+    summary: dict[str, Any],
+    analysis_status: dict[str, Any],
+) -> None:
+    summary["analysis_review_status"] = copy.deepcopy(analysis_status)
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict) and isinstance(
+        run_details.get("analysis_review_status"), dict
+    ):
+        run_details["analysis_review_status"] = copy.deepcopy(analysis_status)
+
+
+def _is_payload_publication_blocker(cause: str) -> bool:
+    return cause.startswith(_FINAL_ANSWER_INCLUDES_WITHHELD_PREFIX) or cause.startswith(
+        _FINAL_ANSWER_OMITS_REQUIRED_PREFIX
+    )
+
+
+def _runner_publication_blockers(summary: dict[str, Any]) -> list[str]:
+    return [
+        cause
+        for cause in _normalized_blocking_causes(
+            (_analysis_publishability(summary) or {}).get("blocking_causes")
+        )
+        if not _is_payload_publication_blocker(cause)
+    ]
+
+
+def _final_answer_payload_blockers(
+    summary: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[str]:
+    admissibility = _recommendation_admissibility(summary)
+    if not admissibility:
+        return []
+
+    required_final_indices = _normalized_recommendation_indices(
+        admissibility.get("final_answer_recommendation_indices")
+    )
+    recommendations = payload.get("recommendations")
+    recommendation_count = (
+        len(recommendations) if isinstance(recommendations, list) else 0
+    )
+    actual_payload_indices = _recommendation_source_indices(
+        payload, recommendation_count
+    )
+    includes_withheld_indices = sorted(
+        set(actual_payload_indices) - set(required_final_indices)
+    )
+    omits_required_indices = sorted(
+        set(required_final_indices) - set(actual_payload_indices)
+    )
+
+    blocking_causes: list[str] = []
+    if includes_withheld_indices:
+        blocking_causes.append(
+            _FINAL_ANSWER_INCLUDES_WITHHELD_PREFIX
+            + _render_plain_recommendation_indices(includes_withheld_indices)
+        )
+    if omits_required_indices:
+        blocking_causes.append(
+            _FINAL_ANSWER_OMITS_REQUIRED_PREFIX
+            + _render_plain_recommendation_indices(omits_required_indices)
+        )
+    return blocking_causes
+
+
+def _finalize_analysis_publishability(
+    summary: dict[str, Any],
+    *,
+    artifact_kind: str | None,
+    payload_blockers: list[str],
+) -> None:
+    analysis_status = _analysis_review_status(summary)
+    if not analysis_status:
+        return
+
+    finalized_status = copy.deepcopy(analysis_status)
+    if artifact_kind == "final_answer":
+        finalized_status["publishability"] = {
+            "final_answer_publishable": True,
+            "blocking_causes": [],
+        }
+    else:
+        finalized_status["publishability"] = {
+            "final_answer_publishable": False,
+            "blocking_causes": _normalized_blocking_causes(
+                _runner_publication_blockers(summary) + list(payload_blockers)
+            ),
+        }
+    _set_analysis_review_status(summary, finalized_status)
+
+
 def _final_answer_publication_state(summary: dict[str, Any]) -> tuple[bool, list[str]]:
     verdict = str(summary.get("verdict") or "").strip()
     if verdict not in _FULLY_ACCEPTED_RUN_VERDICTS:
@@ -279,11 +389,9 @@ def _final_answer_publication_state(summary: dict[str, Any]) -> tuple[bool, list
     if not publishability:
         return (True, [])
 
-    blocking_causes = [
-        str(item)
-        for item in (publishability.get("blocking_causes") or [])
-        if str(item).strip()
-    ]
+    blocking_causes = _normalized_blocking_causes(
+        publishability.get("blocking_causes") or []
+    )
     return (bool(publishability.get("final_answer_publishable")), blocking_causes)
 
 
@@ -366,7 +474,9 @@ def _recommendation_review_lookup(summary: dict[str, Any]) -> dict[int, dict[str
     return lookup
 
 
-def _recommendation_source_indices(payload: dict[str, Any], recommendation_count: int) -> list[int]:
+def _recommendation_source_indices(
+    payload: dict[str, Any], recommendation_count: int
+) -> list[int]:
     source_indices = payload.get("included_recommendation_indices")
     if isinstance(source_indices, list):
         normalized_indices: list[int] = []
@@ -412,7 +522,8 @@ def _partial_artifact_downgrade_causes(
     causes: list[str] = []
     if any(
         str(item.get("severity") or "").strip().lower() == "low"
-        and str(item.get("resolution_status") or "").strip() in {"open", "carried_forward"}
+        and str(item.get("resolution_status") or "").strip()
+        in {"open", "carried_forward"}
         for item in issue_ledger
     ):
         causes.append("low-severity reviewer issues remain open")
@@ -468,7 +579,9 @@ def _build_partial_artifact_summary(
     analysis_status = copy.deepcopy(_analysis_review_status(summary))
     included_index_set = set(included_recommendation_indices)
     inferred_indices: list[int] = []
-    for item in (analysis_status.get("accepted_recommendations_with_inferred_grounding") or []):
+    for item in (
+        analysis_status.get("accepted_recommendations_with_inferred_grounding") or []
+    ):
         try:
             recommendation_index = int(item)
         except (TypeError, ValueError):
@@ -491,14 +604,22 @@ def _build_partial_artifact_summary(
                 or analysis_status.get("recommendation_admissibility")
                 or {}
             ),
-            "accepted_recommendations_with_caveats": sorted(set(accepted_caveat_indices)),
-            "accepted_recommendations_with_inferred_grounding": sorted(set(inferred_indices)),
-            "open_topic_ids": topic_ids_for_status_name(filtered_topic_ledger, status_name="open"),
+            "accepted_recommendations_with_caveats": sorted(
+                set(accepted_caveat_indices)
+            ),
+            "accepted_recommendations_with_inferred_grounding": sorted(
+                set(inferred_indices)
+            ),
+            "open_topic_ids": topic_ids_for_status_name(
+                filtered_topic_ledger, status_name="open"
+            ),
             "carried_forward_topic_ids": topic_ids_for_status_name(
                 filtered_topic_ledger,
                 status_name="carried_forward",
             ),
-            "waived_topic_ids": topic_ids_for_status_name(filtered_topic_ledger, status_name="waived"),
+            "waived_topic_ids": topic_ids_for_status_name(
+                filtered_topic_ledger, status_name="waived"
+            ),
             "resolved_topic_ids": topic_ids_for_status_name(
                 filtered_topic_ledger,
                 status_name="resolved",
@@ -517,7 +638,7 @@ def _build_partial_artifact_summary(
         }
     )
     scoped_summary = copy.deepcopy(summary)
-    scoped_summary["analysis_review_status"] = analysis_status
+    _set_analysis_review_status(scoped_summary, analysis_status)
     scoped_summary["recommendation_reviews"] = filtered_reviews
     scoped_summary["topic_ledger"] = filtered_topic_ledger
     scoped_summary["issue_ledger"] = filtered_issue_ledger
@@ -542,7 +663,9 @@ def _recommendation_caveat_lines(
             review_summary or "This recommendation was accepted with caveats."
         )
     inferred_indices: set[int] = set()
-    for item in (analysis_status.get("accepted_recommendations_with_inferred_grounding") or []):
+    for item in (
+        analysis_status.get("accepted_recommendations_with_inferred_grounding") or []
+    ):
         try:
             inferred_indices.add(int(item))
         except (TypeError, ValueError):
@@ -554,7 +677,9 @@ def _recommendation_caveat_lines(
     return caveat_lines
 
 
-def _append_recommendation_caveat_callout(lines: list[str], caveat_lines: list[str]) -> None:
+def _append_recommendation_caveat_callout(
+    lines: list[str], caveat_lines: list[str]
+) -> None:
     if not caveat_lines:
         return
     lines.append("> [!NOTE]")
@@ -638,7 +763,9 @@ def _append_partial_admissibility_section(
 def _render_analysis_section(lines: list[str], title: str, section: Any) -> None:
     if not isinstance(section, dict):
         return
-    items = [str(item).strip() for item in section.get("items", []) if str(item).strip()]
+    items = [
+        str(item).strip() for item in section.get("items", []) if str(item).strip()
+    ]
     none_reason = str(section.get("none_reason") or "").strip()
     if not items and not none_reason:
         return
@@ -651,14 +778,20 @@ def _render_analysis_section(lines: list[str], title: str, section: Any) -> None
     lines.append("")
 
 
-def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any] | None:
+def build_partial_answer_payload(
+    summary: dict[str, Any], payload: dict[str, Any] | None
+) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or not payload:
         return None
     eligible, recommendation_indices = _partial_answer_eligibility(summary)
     if not eligible:
         return None
     recommendations = payload.get("recommendations")
-    if not isinstance(recommendations, list) or not recommendations or not recommendation_indices:
+    if (
+        not isinstance(recommendations, list)
+        or not recommendations
+        or not recommendation_indices
+    ):
         return None
     source_indices = _recommendation_source_indices(payload, len(recommendations))
     if not set(recommendation_indices).issubset(set(source_indices)):
@@ -680,7 +813,12 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
     )
     recommendation_admissibility = _recommendation_admissibility(summary)
     withheld_indices = (
-        [item["recommendation_index"] for item in _recommendation_withholding_entries(recommendation_admissibility)]
+        [
+            item["recommendation_index"]
+            for item in _recommendation_withholding_entries(
+                recommendation_admissibility
+            )
+        ]
         if recommendation_admissibility
         else excluded_indices
     )
@@ -720,7 +858,9 @@ def build_partial_answer_payload(summary: dict[str, Any], payload: dict[str, Any
     return partial_payload
 
 
-def _augment_best_draft_payload(best_draft: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _augment_best_draft_payload(
+    best_draft: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
     enriched = copy.deepcopy(payload)
     caveats = [str(item) for item in enriched.get("caveats", []) if str(item).strip()]
     review_state = str(best_draft.get("review_state") or "not_evaluated")
@@ -738,7 +878,9 @@ def _augment_best_draft_payload(best_draft: dict[str, Any], payload: dict[str, A
     return enriched
 
 
-def _clear_partial_artifact_state(summary: dict[str, Any], artifacts: dict[str, Any]) -> None:
+def _clear_partial_artifact_state(
+    summary: dict[str, Any], artifacts: dict[str, Any]
+) -> None:
     summary.pop("partial_answer", None)
     artifacts.pop("partial_answer_json", None)
     artifacts.pop("partial_answer_md", None)
@@ -858,7 +1000,9 @@ def _render_recommendation_evidence_item(evidence_item: Any) -> str:
     return str(evidence_item)
 
 
-def _append_recommendation_evidence_preview(lines: list[str], evidence: list[Any]) -> None:
+def _append_recommendation_evidence_preview(
+    lines: list[str], evidence: list[Any]
+) -> None:
     if not evidence:
         return
     lines.append("**Evidence:**")
@@ -913,35 +1057,57 @@ def render_deliverable_markdown(
         provenance = analysis_status.get("provenance") or {}
         topic_ledger = _topic_ledger(summary or {})
         open_topic_ids = _topic_status_ids(summary or {}, status_name="open")
-        carried_forward_topic_ids = _topic_status_ids(summary or {}, status_name="carried_forward")
+        carried_forward_topic_ids = _topic_status_ids(
+            summary or {}, status_name="carried_forward"
+        )
         resolved_topic_ids = _topic_status_ids(summary or {}, status_name="resolved")
         waived_topic_ids = _topic_status_ids(summary or {}, status_name="waived")
         disagreed_topic_ids = _topic_status_ids(summary or {}, status_name="disagreed")
-        review_status_scope = str(analysis_status.get("review_status_scope") or "").strip()
+        review_status_scope = str(
+            analysis_status.get("review_status_scope") or ""
+        ).strip()
         lines.extend(["## Review Status", ""])
         if verdict:
             lines.append(f"- Verdict: `{verdict}`")
         if review_status_scope == "partial_subset":
             lines.append("- Review status scope: `included recommendations only`")
-            lines.append(f"- Run-level mode: `{analysis_status.get('mode', 'unknown')}`")
-            lines.append(f"- Run-level provenance status: `{provenance.get('status', 'unknown')}`")
-            lines.append(f"- Run-level provenance policy: `{provenance.get('policy_mode', 'none')}`")
+            lines.append(
+                f"- Run-level mode: `{analysis_status.get('mode', 'unknown')}`"
+            )
+            lines.append(
+                f"- Run-level provenance status: `{provenance.get('status', 'unknown')}`"
+            )
+            lines.append(
+                f"- Run-level provenance policy: `{provenance.get('policy_mode', 'none')}`"
+            )
             lines.append(
                 f"- Run-level semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`"
             )
         else:
             lines.append(f"- Mode: `{analysis_status.get('mode', 'unknown')}`")
-            lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
-            lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
-            lines.append(f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`")
+            lines.append(
+                f"- Provenance status: `{provenance.get('status', 'unknown')}`"
+            )
+            lines.append(
+                f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`"
+            )
+            lines.append(
+                f"- Semantic warnings: `{analysis_status.get('semantic_warning_count', 0)}`"
+            )
         if (
             str(analysis_status.get("mode") or "").strip().lower() == "trust"
             and str(provenance.get("status") or "").strip().lower() != "bound"
         ):
             incomplete_parts: list[str] = []
-            uncovered_recommendation_indices = provenance.get("uncovered_recommendation_indices") or []
-            uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or []
-            uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or []
+            uncovered_recommendation_indices = (
+                provenance.get("uncovered_recommendation_indices") or []
+            )
+            uncovered_global_issue_ids = (
+                provenance.get("uncovered_global_issue_ids") or []
+            )
+            uncovered_global_topic_ids = (
+                provenance.get("uncovered_global_topic_ids") or []
+            )
             if uncovered_recommendation_indices:
                 incomplete_parts.append(
                     "recommendation-linked closures for recommendation indices "
@@ -958,7 +1124,9 @@ def render_deliverable_markdown(
                     + ", ".join(str(item) for item in uncovered_global_topic_ids)
                 )
             if not incomplete_parts:
-                incomplete_parts.append("structured review provenance is not fully bound")
+                incomplete_parts.append(
+                    "structured review provenance is not fully bound"
+                )
             lines.append("- Closure proof incomplete: " + "; ".join(incomplete_parts))
         topic_ledger_count = analysis_status.get("topic_ledger_count")
         effective_count = topic_ledger_count
@@ -969,16 +1137,24 @@ def render_deliverable_markdown(
         if open_topic_ids:
             lines.append("- Open topic IDs: " + _render_id_list(open_topic_ids))
         if carried_forward_topic_ids:
-            lines.append("- Carried-forward topic IDs: " + _render_id_list(carried_forward_topic_ids))
+            lines.append(
+                "- Carried-forward topic IDs: "
+                + _render_id_list(carried_forward_topic_ids)
+            )
         if resolved_topic_ids:
             lines.append("- Resolved topic IDs: " + _render_id_list(resolved_topic_ids))
         if waived_topic_ids:
             lines.append("- Waived topic IDs: " + _render_id_list(waived_topic_ids))
         if disagreed_topic_ids:
-            lines.append("- Disagreed topic IDs: " + _render_id_list(disagreed_topic_ids))
+            lines.append(
+                "- Disagreed topic IDs: " + _render_id_list(disagreed_topic_ids)
+            )
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:
-            lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))
+            lines.append(
+                "- Downgrade causes: "
+                + "; ".join(str(item) for item in downgrade_causes)
+            )
         lines.append("")
 
     _append_topic_lifecycle(lines, summary or {})
@@ -1053,7 +1229,16 @@ def render_deliverable_markdown(
             if confidence is not None:
                 lines.extend([f"**Confidence:** {confidence}", ""])
     else:
-        lines.extend(["## Structured Output", "", "```json", json.dumps(payload, indent=2, sort_keys=False), "```", ""])
+        lines.extend(
+            [
+                "## Structured Output",
+                "",
+                "```json",
+                json.dumps(payload, indent=2, sort_keys=False),
+                "```",
+                "",
+            ]
+        )
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1067,7 +1252,9 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     """
 
     summary = copy.deepcopy(summary)
-    run_dir = ensure_run_dir((summary.get("artifacts") or {}).get("run_dir") or summary.get("run_dir") or ".")
+    run_dir = ensure_run_dir(
+        (summary.get("artifacts") or {}).get("run_dir") or summary.get("run_dir") or "."
+    )
     artifacts = dict(summary.get("artifacts") or {})
     task = summary.get("task") or {}
     task_id = str(task.get("id") or "task")
@@ -1093,19 +1280,36 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     verdict = str(summary.get("verdict") or "")
     fully_accepted = verdict in _FULLY_ACCEPTED_RUN_VERDICTS
     partially_accepted = verdict in _PARTIAL_ACCEPTED_RUN_VERDICTS
-    final_answer_publishable, _ = _final_answer_publication_state(summary)
-    final_answer_blocked = fully_accepted and not final_answer_publishable
+    initial_final_answer_publishable, _ = _final_answer_publication_state(summary)
+    final_answer_blocked = fully_accepted and not initial_final_answer_publishable
     payload: dict[str, Any] | None = None
+    final_answer_candidate_payload: dict[str, Any] | None = None
+    final_answer_payload_blockers: list[str] = []
     artifact_kind = None
     artifact_json_path: Path | None = None
     artifact_md_path: Path | None = None
 
-    if fully_accepted and final_answer_publishable:
-        payload = summary.get("final_answer")
-        if not isinstance(payload, dict) or not payload:
+    if fully_accepted:
+        final_answer_candidate_payload = summary.get("final_answer")
+        if (
+            not isinstance(final_answer_candidate_payload, dict)
+            or not final_answer_candidate_payload
+        ):
             if best_draft is not None:
-                payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
-        if isinstance(payload, dict) and payload and _final_answer_admissible(summary, payload):
+                final_answer_candidate_payload = copy.deepcopy(
+                    (best_draft.get("metadata") or {}).get("payload") or {}
+                )
+        if (
+            isinstance(final_answer_candidate_payload, dict)
+            and final_answer_candidate_payload
+        ):
+            final_answer_payload_blockers = _final_answer_payload_blockers(
+                summary,
+                final_answer_candidate_payload,
+            )
+    if fully_accepted and initial_final_answer_publishable:
+        payload = final_answer_candidate_payload
+        if isinstance(payload, dict) and payload and not final_answer_payload_blockers:
             artifact_kind = "final_answer"
             artifact_json_path = run_dir / "FINAL_ANSWER.json"
             artifact_md_path = run_dir / "FINAL_ANSWER.md"
@@ -1116,8 +1320,12 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
         if partial_allowed:
             existing_partial_payload = summary.get("partial_answer")
             source_payload = summary.get("final_answer")
-            if (not isinstance(source_payload, dict) or not source_payload) and best_draft is not None:
-                source_payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
+            if (
+                not isinstance(source_payload, dict) or not source_payload
+            ) and best_draft is not None:
+                source_payload = copy.deepcopy(
+                    (best_draft.get("metadata") or {}).get("payload") or {}
+                )
             payload = build_partial_answer_payload(summary, source_payload)
             if (
                 (not isinstance(payload, dict) or not payload)
@@ -1133,7 +1341,9 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
                     payload.get("included_recommendation_indices")
                 )
                 excluded_indices = sorted(
-                    set(_recommendation_source_indices(payload, recommendation_count)).union(
+                    set(
+                        _recommendation_source_indices(payload, recommendation_count)
+                    ).union(
                         _normalized_recommendation_indices(
                             payload.get("excluded_recommendation_indices")
                         )
@@ -1170,7 +1380,9 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
 
     if artifact_kind is None and (not fully_accepted or final_answer_blocked):
         if best_draft is not None:
-            payload = copy.deepcopy((best_draft.get("metadata") or {}).get("payload") or {})
+            payload = copy.deepcopy(
+                (best_draft.get("metadata") or {}).get("payload") or {}
+            )
             if isinstance(payload, dict) and payload:
                 payload = _augment_best_draft_payload(best_draft, payload)
             artifact_kind = "best_draft"
@@ -1178,8 +1390,21 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             artifact_md_path = run_dir / "BEST_DRAFT.md"
             summary["best_draft"] = best_draft
 
-    if artifact_json_path is not None and artifact_md_path is not None and isinstance(payload, dict) and payload:
-        emitted_payload = sanitize_artifact_payload(payload, artifact_kind=artifact_kind)
+    _finalize_analysis_publishability(
+        summary,
+        artifact_kind=artifact_kind,
+        payload_blockers=final_answer_payload_blockers,
+    )
+
+    if (
+        artifact_json_path is not None
+        and artifact_md_path is not None
+        and isinstance(payload, dict)
+        and payload
+    ):
+        emitted_payload = sanitize_artifact_payload(
+            payload, artifact_kind=artifact_kind
+        )
         render_summary = (
             _build_partial_artifact_summary(summary, payload)
             if artifact_kind == "partial_answer"
@@ -1255,7 +1480,9 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
         "strategy_name": (state.get("strategy_spec") or {}).get("name"),
         "strategy_kind": state.get("strategy_kind"),
         "warnings": list(state.get("warnings") or []),
-        "verdict": state.get("run_verdict") or state.get("content_verdict") or "invalid_config",
+        "verdict": state.get("run_verdict")
+        or state.get("content_verdict")
+        or "invalid_config",
         "verdicts": {
             "run_verdict": state.get("run_verdict"),
             "content_verdict": state.get("content_verdict"),
@@ -1264,7 +1491,9 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
             "config_verdict": state.get("config_verdict"),
         },
         "final_summary": state.get("summary_text"),
-        "workspace_write_policy": ((state.get("task_spec") or {}).get("workspace_write_policy") or {}),
+        "workspace_write_policy": (
+            (state.get("task_spec") or {}).get("workspace_write_policy") or {}
+        ),
         "workspace_policy_checks": list(state.get("policy_checks") or []),
         "agent_stages": list(state.get("stage_history") or []),
         "validator_rounds": list(state.get("validator_rounds") or []),

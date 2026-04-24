@@ -15,7 +15,9 @@ from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.types import ProviderRun
 
 
-def _failed_provider_run(request, *, message: str, failure_kind: str = "provider_unavailable") -> ProviderRun:
+def _failed_provider_run(
+    request, *, message: str, failure_kind: str = "provider_unavailable"
+) -> ProviderRun:
     out_dir = Path(request.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "response.txt").write_text("", encoding="utf-8")
@@ -63,7 +65,9 @@ class _AcceptingHarnessAdapter:
         ]
 
     @staticmethod
-    def _review_surface(*, must_check_files: list[str], optional_check_files: list[str], scope_note: str) -> dict:
+    def _review_surface(
+        *, must_check_files: list[str], optional_check_files: list[str], scope_note: str
+    ) -> dict:
         return {
             "must_check_files": must_check_files,
             "optional_check_files": optional_check_files,
@@ -114,8 +118,12 @@ class _AcceptingHarnessAdapter:
                     "proposed_change": "Add a workflow-level concurrency group keyed by workflow and ref.",
                     "confidence": 0.91,
                     "review_surface": self._review_surface(
-                        must_check_files=[".github/workflows/codex-cli-release-watch.yml"],
-                        optional_check_files=[".github/workflows/claude-code-release-watch.yml"],
+                        must_check_files=[
+                            ".github/workflows/codex-cli-release-watch.yml"
+                        ],
+                        optional_check_files=[
+                            ".github/workflows/claude-code-release-watch.yml"
+                        ],
                         scope_note="Limit review to the release-watch workflow concurrency behavior.",
                     ),
                 },
@@ -128,8 +136,12 @@ class _AcceptingHarnessAdapter:
                     "proposed_change": "Use explicit timeout-minutes consistently across both release paths.",
                     "confidence": 0.81,
                     "review_surface": self._review_surface(
-                        must_check_files=[".github/workflows/claude-code-release-watch.yml"],
-                        optional_check_files=[".github/workflows/codex-cli-release-watch.yml"],
+                        must_check_files=[
+                            ".github/workflows/claude-code-release-watch.yml"
+                        ],
+                        optional_check_files=[
+                            ".github/workflows/codex-cli-release-watch.yml"
+                        ],
                         scope_note="Focus on timeout settings in the release-watch workflows.",
                     ),
                 },
@@ -207,7 +219,9 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 "proposed_change": "Document or annotate the distinct failure paths.",
                 "confidence": 0.69 if not revised else 0.58,
                 "review_surface": self._review_surface(
-                    must_check_files=[".github/workflows/claude-code-release-watch.yml"],
+                    must_check_files=[
+                        ".github/workflows/claude-code-release-watch.yml"
+                    ],
                     optional_check_files=[],
                     scope_note="Keep the review bounded to existing release-watch failure-path handling.",
                 ),
@@ -422,7 +436,10 @@ class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
         if request.role_name != "proposer":
             return run
         payload = dict(run.structured_output or {})
-        if isinstance(payload.get("recommendations"), list) and payload["recommendations"]:
+        if (
+            isinstance(payload.get("recommendations"), list)
+            and payload["recommendations"]
+        ):
             payload["recommendations"][0] = dict(payload["recommendations"][0])
             payload["recommendations"][0]["confidence"] = "not-a-number"
         return ProviderRun(
@@ -443,7 +460,9 @@ class _InvalidSchemaHarnessAdapter(_AcceptingHarnessAdapter):
             structured_output=payload,
             raw_meta=run.raw_meta,
             error="Schema validation failed.",
-            schema_validation_errors=["$.recommendations[0].affected_files: expected array"],
+            schema_validation_errors=[
+                "$.recommendations[0].affected_files: expected array"
+            ],
         )
 
 
@@ -582,9 +601,9 @@ class _TopicLifecycleHarnessAdapter(_AcceptingHarnessAdapter):
             }
         if role_name == "reviser_round_1":
             payload = self._base_analysis(revised=True)
-            payload["recommendations"][1]["proposed_change"] = (
-                "Use explicit timeout-minutes consistently across both release paths and name the operator fallback classification."
-            )
+            payload["recommendations"][1][
+                "proposed_change"
+            ] = "Use explicit timeout-minutes consistently across both release paths and name the operator fallback classification."
             payload["topic_resolution_map"] = [
                 {
                     "topic_id": self._TOPIC_ID,
@@ -886,7 +905,9 @@ class _PartialAcceptanceWithTopicDebtHarnessAdapter(_PartialAcceptanceHarnessAda
         return super()._payload_for_role(role_name)
 
 
-class _PartialAcceptanceWithGlobalTopicDebtHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+class _PartialAcceptanceWithGlobalTopicDebtHarnessAdapter(
+    _PartialAcceptanceHarnessAdapter
+):
     _TOPIC_ID = "TOPIC-001"
 
     def _payload_for_role(self, role_name: str):
@@ -937,7 +958,9 @@ class _TopicResolutionRecommendationHarnessAdapter(_TopicLifecycleHarnessAdapter
         return super()._payload_for_role(role_name)
 
 
-class _TrustTopicResolutionRecommendationHarnessAdapter(_TopicResolutionRecommendationHarnessAdapter):
+class _TrustTopicResolutionRecommendationHarnessAdapter(
+    _TopicResolutionRecommendationHarnessAdapter
+):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
         payload["recommendations"][0]["verified_evidence_refs"] = [
@@ -1026,7 +1049,9 @@ class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
 class _TrustSemanticWarningHarnessAdapter(_TrustInferenceHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
-        payload["strengths"]["none_reason"] = "The summary section still includes a redundant none_reason."
+        payload["strengths"][
+            "none_reason"
+        ] = "The summary section still includes a redundant none_reason."
         return payload
 
 
@@ -1099,7 +1124,9 @@ class _TrustGlobalIssueLifecycleHarnessAdapter(_TrustInferenceHarnessAdapter):
         if role_name == "critic":
             payload = super()._payload_for_role(role_name)
             payload["verdict"] = "revise"
-            payload["summary"] = "A global issue remains open and needs explicit tracking."
+            payload["summary"] = (
+                "A global issue remains open and needs explicit tracking."
+            )
             payload["issues"] = [
                 {
                     "issue_id": self._ISSUE_ID,
@@ -1133,7 +1160,9 @@ class _TrustGlobalIssueLifecycleHarnessAdapter(_TrustInferenceHarnessAdapter):
         if role_name == "auditor":
             payload = super()._payload_for_role(role_name)
             payload["verdict"] = "accept_partial"
-            payload["summary"] = "The recommendations are usable, and the remaining global issue is explicitly carried forward with scoped proof."
+            payload["summary"] = (
+                "The recommendations are usable, and the remaining global issue is explicitly carried forward with scoped proof."
+            )
             payload["issues"] = []
             payload["resolved_issue_ids"] = []
             payload["carried_forward_issue_ids"] = [self._ISSUE_ID]
@@ -1142,7 +1171,9 @@ class _TrustGlobalIssueLifecycleHarnessAdapter(_TrustInferenceHarnessAdapter):
                 {
                     "issue_id": self._ISSUE_ID,
                     "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
-                    "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                    "verified_evidence_refs": [
+                        ".github/workflows/codex-cli-release-watch.yml"
+                    ],
                     "summary": "The carried-forward global issue was re-checked directly.",
                 }
             ]
@@ -1159,7 +1190,9 @@ class _TrustVerdictWithoutRefsHarnessAdapter(_AcceptingHarnessAdapter):
         return payload
 
 
-class _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+class _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+    _PartialAcceptanceHarnessAdapter
+):
     def __init__(self, *, blocking_class: str) -> None:
         self.blocking_class = blocking_class
 
@@ -1171,9 +1204,11 @@ class _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(_PartialAcceptanceH
             {
                 "issue_id": "AR-001",
                 "severity": "medium",
-                "kind": "insufficient_specificity"
-                if self.blocking_class != "correctness"
-                else "missing_evidence",
+                "kind": (
+                    "insufficient_specificity"
+                    if self.blocking_class != "correctness"
+                    else "missing_evidence"
+                ),
                 "blocking_class": self.blocking_class,
                 "recommendation_index": 2,
                 "title": "Recommendation 2 still carries localized review debt.",
@@ -1222,7 +1257,9 @@ class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
             }
             (out_dir / "response.txt").write_text("quota", encoding="utf-8")
             (out_dir / "error.txt").write_text(payload["result"], encoding="utf-8")
-            (out_dir / "structured_output.json").write_text(json.dumps(payload), encoding="utf-8")
+            (out_dir / "structured_output.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
             return ProviderRun(
                 role_name=request.role_name,
                 provider="fake-claude",
@@ -1319,7 +1356,6 @@ class _TrustLineQualifiedEvidenceHarnessAdapter(_TrustInferenceHarnessAdapter):
         return payload
 
 
-
 def _write_task_and_strategy(
     tmp_path: Path,
     *,
@@ -1385,7 +1421,6 @@ validators: []
     return task_path, strategy_path
 
 
-
 def _prepare_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1398,7 +1433,9 @@ def _prepare_workspace(tmp_path: Path) -> Path:
         "name: claude\n",
         encoding="utf-8",
     )
-    (workspace / ".github" / "workflows" / "claude-code-update-snapshot.yml").write_text(
+    (
+        workspace / ".github" / "workflows" / "claude-code-update-snapshot.yml"
+    ).write_text(
         "name: claude-update\n",
         encoding="utf-8",
     )
@@ -1478,7 +1515,6 @@ def _build_recommendation_admissibility_status(
     )
 
 
-
 def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     tmp_path,
     monkeypatch,
@@ -1487,7 +1523,9 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     task_path, strategy_path = _write_task_and_strategy(tmp_path)
 
     monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
-    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: _AcceptingHarnessAdapter())
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider", lambda name: _AcceptingHarnessAdapter()
+    )
 
     runner = HarnessRunner(
         task_path=task_path,
@@ -1504,15 +1542,30 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["final_answer_json"]).exists()
     assert Path(summary["artifacts"]["final_answer_md"]).exists()
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
-    assert summary["analysis_review_contract"]["contract_version"] == "analysis_review_v1_contract_v7"
+    assert (
+        summary["analysis_review_contract"]["contract_version"]
+        == "analysis_review_v1_contract_v7"
+    )
     assert summary["analysis_review_contract"]["mode"] == "bounded"
-    assert summary["analysis_review_contract"]["partial_acceptance"]["min_accepted_recommendations"] == 2
-    assert summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
-    assert summary["final_answer"]["recommendations"][0]["title"] == "Add concurrency controls"
-    assert summary["final_answer"]["recommendations"][0]["review_surface"]["must_check_files"] == [
-        ".github/workflows/codex-cli-release-watch.yml"
+    assert (
+        summary["analysis_review_contract"]["partial_acceptance"][
+            "min_accepted_recommendations"
+        ]
+        == 2
+    )
+    assert (
+        summary["analysis_review_contract"]["bounded_review"]["critic_issue_cap"] == 5
+    )
+    assert (
+        summary["final_answer"]["recommendations"][0]["title"]
+        == "Add concurrency controls"
+    )
+    assert summary["final_answer"]["recommendations"][0]["review_surface"][
+        "must_check_files"
+    ] == [".github/workflows/codex-cli-release-watch.yml"]
+    assert summary["final_answer"]["strengths"]["items"] == [
+        "Grounded in workflow files"
     ]
-    assert summary["final_answer"]["strengths"]["items"] == ["Grounded in workflow files"]
     assert summary["recommendation_reviews"][0]["verdict"] == "accept"
     assert summary["issue_ledger"] == []
     assert summary["topic_ledger"] == []
@@ -1581,23 +1634,32 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert reviser_stage["requested_access"] == "write"
     assert reviser_stage["effective_access"] == "read"
     assert Path(proposer_stage["semantic_validation_path"]).exists()
-    proposer_semantic = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
+    proposer_semantic = load_structured_file(
+        Path(proposer_stage["semantic_validation_path"])
+    )
     assert proposer_semantic["ok"] is True
     assert proposer_semantic["skipped"] is False
     assert proposer_semantic["payload_provenance"]["status"] == "not_required"
     assert proposer_semantic["payload_provenance"]["policy_mode"] == "none"
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(
+        encoding="utf-8"
+    )
     assert "## Review Scope" in report_text
     assert "## Bounded Review" not in report_text
     assert "## Analysis Review Status" in report_text
     assert "- Mode: `bounded`" in report_text
     assert "- Provenance status: `not_required`" in report_text
-    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: none" in report_text
+    assert (
+        "- Recommendation indices withheld from `FINAL_ANSWER.*`: none" in report_text
+    )
     assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
     assert '"rendered_in_report_section": true' in report_text
     assert '"bounded_review_summary": {' in report_text
-    assert '"review_stages"' not in report_text.split('"bounded_review_summary": {', 1)[1].split("}", 1)[0]
+    assert (
+        '"review_stages"'
+        not in report_text.split('"bounded_review_summary": {', 1)[1].split("}", 1)[0]
+    )
     assert "- Provenance status: `not_required`" in final_answer_text
     assert "- Provenance status: `bound`" not in final_answer_text
 
@@ -1613,7 +1675,9 @@ def test_analysis_review_runner_legacy_alias_warns_and_normalizes_to_bounded(
     )
 
     monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
-    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: _AcceptingHarnessAdapter())
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider", lambda name: _AcceptingHarnessAdapter()
+    )
 
     runner = HarnessRunner(
         task_path=task_path,
@@ -1667,17 +1731,23 @@ def test_analysis_review_runner_canonicalizes_line_qualified_refs_and_trims_evid
         ".github/workflows/codex-cli-release-watch.yml",
         ".github/workflows/claude-code-update-snapshot.yml",
     ]
-    assert proposer_payload["recommendations"][0]["review_surface"]["must_check_files"] == [
+    assert proposer_payload["recommendations"][0]["review_surface"][
+        "must_check_files"
+    ] == [
         ".github/workflows/claude-code-release-watch.yml",
         ".github/workflows/codex-cli-release-watch.yml",
         ".github/workflows/claude-code-update-snapshot.yml",
     ]
-    proposer_semantic = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
+    proposer_semantic = load_structured_file(
+        Path(proposer_stage["semantic_validation_path"])
+    )
     assert proposer_semantic["ok"] is True
     assert proposer_semantic["warnings"] == [
         "recommendations[1].evidence exceeded the bounded-review cap of 3; trimmed dropped refs: .github/workflows/codex-cli-update-snapshot.yml"
     ]
-    assert proposer_stage["semantic_validation_warnings"] == proposer_semantic["warnings"]
+    assert (
+        proposer_stage["semantic_validation_warnings"] == proposer_semantic["warnings"]
+    )
     assert any(
         "proposer: recommendations[1].evidence exceeded the bounded-review cap of 3; trimmed dropped refs: .github/workflows/codex-cli-update-snapshot.yml"
         == warning
@@ -1712,7 +1782,8 @@ def test_analysis_review_runner_strict_evidence_cap_still_fails_fast(
     assert summary["verdict"] == "harness_error"
     proposer_stage = summary["agent_stages"][0]
     assert any(
-        "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)." in error
+        "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)."
+        in error
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert proposer_stage.get("semantic_validation_warnings") in (None, [])
@@ -1783,8 +1854,15 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert summary["analysis_review_contract"]["mode"] == "trust"
     assert summary["analysis_review_status"]["mode"] == "trust"
     assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
-    assert summary["analysis_review_status"]["provenance"]["uncovered_recommendation_indices"] == []
-    assert summary["analysis_review_status"]["accepted_recommendations_with_inferred_grounding"] == [2]
+    assert (
+        summary["analysis_review_status"]["provenance"][
+            "uncovered_recommendation_indices"
+        ]
+        == []
+    )
+    assert summary["analysis_review_status"][
+        "accepted_recommendations_with_inferred_grounding"
+    ] == [2]
     assert summary["analysis_review_status"]["recommendation_admissibility"] == {
         "final_answer_recommendation_indices": [1],
         "partial_only_recommendation_indices": [2],
@@ -1800,18 +1878,38 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert summary["artifacts"]["final_artifact_kind"] == "partial_answer"
 
     proposer_stage = summary["agent_stages"][0]
-    critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
-    auditor_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "auditor")
-    semantic_payload = load_structured_file(Path(proposer_stage["semantic_validation_path"]))
+    critic_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "critic"
+    )
+    auditor_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "auditor"
+    )
+    semantic_payload = load_structured_file(
+        Path(proposer_stage["semantic_validation_path"])
+    )
     assert semantic_payload["payload_provenance"]["status"] == "bound"
-    assert semantic_payload["payload_provenance"]["policy_mode"] == "payload_hash_and_refs"
-    assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] > 0
-    assert auditor_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] > 0
+    assert (
+        semantic_payload["payload_provenance"]["policy_mode"] == "payload_hash_and_refs"
+    )
+    assert (
+        critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"]
+        > 0
+    )
+    assert (
+        auditor_stage["semantic_validation_payload_provenance"]["normalized_ref_count"]
+        > 0
+    )
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    partial_answer_text = Path(summary["artifacts"]["partial_answer_md"]).read_text(encoding="utf-8")
-    recommendation_two_section = partial_answer_text.split("### 2. Align timeout handling", 1)[1]
+    partial_answer_text = Path(summary["artifacts"]["partial_answer_md"]).read_text(
+        encoding="utf-8"
+    )
+    recommendation_two_section = partial_answer_text.split(
+        "### 2. Align timeout handling", 1
+    )[1]
     recommendation_two_section = recommendation_two_section.split("### ", 1)[0]
-    recommendation_one_section = partial_answer_text.split("### 1. Add concurrency controls", 1)[1]
+    recommendation_one_section = partial_answer_text.split(
+        "### 1. Add concurrency controls", 1
+    )[1]
     recommendation_one_section = recommendation_one_section.split("### ", 1)[0]
     assert "## Review Scope" in report_text
     assert "## Bounded Review" not in report_text
@@ -1828,7 +1926,9 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
         "This recommendation relies on inference-only grounding rather than direct verified evidence."
         in recommendation_two_section
     )
-    assert "This recommendation carries review caveats:" not in recommendation_one_section
+    assert (
+        "This recommendation carries review caveats:" not in recommendation_one_section
+    )
 
 
 def test_analysis_review_runner_does_not_render_successful_cli_stderr_as_stage_error(
@@ -1898,11 +1998,13 @@ def test_analysis_review_runner_trust_review_normalization_binds_structured_revi
         out_root=tmp_path / "runs",
     )
     payload = _TrustInferenceHarnessAdapter()._payload_for_role("critic")
-    normalized, payload_provenance, warnings = runner._normalize_analysis_review_payload(
-        payload,
-        role_name="critic",
-        payload_provenance_mode="payload_hash_and_refs",
-        contract=runner._analysis_contract(),
+    normalized, payload_provenance, warnings = (
+        runner._normalize_analysis_review_payload(
+            payload,
+            role_name="critic",
+            payload_provenance_mode="payload_hash_and_refs",
+            contract=runner._analysis_contract(),
+        )
     )
 
     assert warnings == []
@@ -1966,11 +2068,13 @@ def test_analysis_review_runner_trust_review_backfills_missing_closure_review_ar
     payload.pop("issue_closure_reviews", None)
     payload.pop("topic_closure_reviews", None)
 
-    normalized, payload_provenance, warnings = runner._normalize_analysis_review_payload(
-        payload,
-        role_name="critic",
-        payload_provenance_mode="payload_hash_and_refs",
-        contract=runner._analysis_contract(),
+    normalized, payload_provenance, warnings = (
+        runner._normalize_analysis_review_payload(
+            payload,
+            role_name="critic",
+            payload_provenance_mode="payload_hash_and_refs",
+            contract=runner._analysis_contract(),
+        )
     )
     schema_errors = _soft_validate_schema(normalized, analysis_review_schema())
 
@@ -2006,18 +2110,31 @@ def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insuff
     summary = runner.run()
 
     assert summary["verdict"] == "harness_error"
-    critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
+    critic_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "critic"
+    )
     assert critic_stage["failure_kind"] == "semantic_validation_error"
-    assert critic_stage["semantic_validation_payload_provenance"]["status"] == "insufficient"
-    assert critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"] == 2
-    assert critic_stage["semantic_validation_payload_provenance"][
-        "recommendation_review_ref_count"
-    ] == 0
+    assert (
+        critic_stage["semantic_validation_payload_provenance"]["status"]
+        == "insufficient"
+    )
+    assert (
+        critic_stage["semantic_validation_payload_provenance"]["normalized_ref_count"]
+        == 2
+    )
+    assert (
+        critic_stage["semantic_validation_payload_provenance"][
+            "recommendation_review_ref_count"
+        ]
+        == 0
+    )
     assert critic_stage["semantic_validation_payload_provenance"][
         "uncovered_recommendation_indices"
     ] == [1, 2]
     assert (
-        critic_stage["semantic_validation_payload_provenance"]["closure_provenance_satisfied"]
+        critic_stage["semantic_validation_payload_provenance"][
+            "closure_provenance_satisfied"
+        ]
         is False
     )
     assert (
@@ -2049,8 +2166,12 @@ def test_analysis_review_runner_status_surfaces_uncovered_recommendation_indices
         out_root=tmp_path / "runs",
     )
     contract = runner._analysis_contract()
-    final_analysis_payload = _TrustTopLevelOnlyRefReviewHarnessAdapter()._payload_for_role("proposer")
-    final_review_payload = _TrustTopLevelOnlyRefReviewHarnessAdapter()._payload_for_role("critic")
+    final_analysis_payload = (
+        _TrustTopLevelOnlyRefReviewHarnessAdapter()._payload_for_role("proposer")
+    )
+    final_review_payload = (
+        _TrustTopLevelOnlyRefReviewHarnessAdapter()._payload_for_role("critic")
+    )
     _, review_provenance, warnings = runner._normalize_analysis_review_payload(
         final_review_payload,
         role_name="critic",
@@ -2086,7 +2207,9 @@ def test_analysis_review_runner_status_surfaces_uncovered_recommendation_indices
     }
 
 
-def test_analysis_review_status_publishability_blocks_open_topics_in_sorted_order(tmp_path):
+def test_analysis_review_status_publishability_blocks_open_topics_in_sorted_order(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _AcceptingHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
@@ -2156,7 +2279,9 @@ def test_analysis_review_status_publishability_blocks_carried_forward_topics_in_
     }
 
 
-def test_analysis_review_status_publishability_blocks_semantic_warnings_in_record_order(tmp_path):
+def test_analysis_review_status_publishability_blocks_semantic_warnings_in_record_order(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _TrustInferenceHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
@@ -2190,17 +2315,15 @@ def test_analysis_review_status_publishability_blocks_semantic_warnings_in_recor
     }
 
 
-def test_analysis_review_status_publishability_ignores_advisory_section_warnings(tmp_path):
+def test_analysis_review_status_publishability_ignores_advisory_section_warnings(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _TrustInferenceHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
     final_review_payload = adapter._payload_for_role("auditor")
-    advisory_strengths_warning = (
-        "strengths contains both concrete items and none_reason; prefer one or the other."
-    )
-    advisory_uncertainties_warning = (
-        "uncertainties contains both concrete items and none_reason; prefer one or the other."
-    )
+    advisory_strengths_warning = "strengths contains both concrete items and none_reason; prefer one or the other."
+    advisory_uncertainties_warning = "uncertainties contains both concrete items and none_reason; prefer one or the other."
     runner.agent_stages = [
         _stage_with_provenance(
             stage_index=1,
@@ -2278,11 +2401,15 @@ def test_analysis_review_status_publishability_blocks_only_non_advisory_semantic
     assert status["semantic_warning_count"] == 4
     assert status["publishability"] == {
         "final_answer_publishable": False,
-        "blocking_causes": ["semantic validation warnings remain: analysis warning; review warning"],
+        "blocking_causes": [
+            "semantic validation warnings remain: analysis warning; review warning"
+        ],
     }
 
 
-def test_analysis_review_status_publishability_blocks_non_accepted_partial_verdicts(tmp_path):
+def test_analysis_review_status_publishability_blocks_non_accepted_partial_verdicts(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _AcceptingHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
@@ -2314,11 +2441,13 @@ def test_analysis_review_status_publishability_blocks_best_effort_verdicts(tmp_p
 
     assert status["publishability"] == {
         "final_answer_publishable": False,
-        "blocking_causes": ["content verdict is not fully accepted: best_effort_exhausted"],
+        "blocking_causes": [
+            "content verdict is not fully accepted: best_effort_exhausted"
+        ],
     }
 
 
-def test_analysis_review_status_publishability_allows_advisory_only_trust_warnings(
+def test_analysis_review_status_publishability_keeps_advisory_trust_warnings_out_of_blockers(
     tmp_path,
     monkeypatch,
 ):
@@ -2356,13 +2485,18 @@ def test_analysis_review_status_publishability_allows_advisory_only_trust_warnin
         in cause
         for cause in summary["analysis_review_status"]["downgrade_causes"]
     )
+    assert summary["artifacts"]["final_artifact_kind"] == "partial_answer"
     assert summary["analysis_review_status"]["publishability"] == {
-        "final_answer_publishable": True,
-        "blocking_causes": [],
+        "final_answer_publishable": False,
+        "blocking_causes": [
+            "final answer payload includes recommendation indices withheld from FINAL_ANSWER.*: 2"
+        ],
     }
 
 
-def test_analysis_review_status_marks_trust_accept_with_direct_grounding_as_final(tmp_path):
+def test_analysis_review_status_marks_trust_accept_with_direct_grounding_as_final(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _TrustInferenceHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
@@ -2376,15 +2510,26 @@ def test_analysis_review_status_marks_trust_accept_with_direct_grounding_as_fina
         content_verdict="accepted_partial",
     )
 
-    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == [1]
-    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [2]
-    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+    assert status["recommendation_admissibility"][
+        "final_answer_recommendation_indices"
+    ] == [1]
+    assert (
+        status["recommendation_admissibility"]["partial_only_recommendation_indices"]
+        == []
+    )
+    assert status["recommendation_admissibility"][
+        "excluded_recommendation_indices"
+    ] == [2]
+    assert status["recommendation_admissibility"][
+        "reasons_by_recommendation_index"
+    ] == {
         "2": ["not_accepted"],
     }
 
 
-def test_analysis_review_status_marks_trust_accept_with_caveat_as_partial_only(tmp_path):
+def test_analysis_review_status_marks_trust_accept_with_caveat_as_partial_only(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _TrustInferenceHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
@@ -2399,16 +2544,27 @@ def test_analysis_review_status_marks_trust_accept_with_caveat_as_partial_only(t
         content_verdict="accepted_partial",
     )
 
-    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == [1]
-    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [2]
-    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+    assert (
+        status["recommendation_admissibility"]["final_answer_recommendation_indices"]
+        == []
+    )
+    assert status["recommendation_admissibility"][
+        "partial_only_recommendation_indices"
+    ] == [1]
+    assert status["recommendation_admissibility"][
+        "excluded_recommendation_indices"
+    ] == [2]
+    assert status["recommendation_admissibility"][
+        "reasons_by_recommendation_index"
+    ] == {
         "1": ["accepted_with_caveat"],
         "2": ["not_accepted"],
     }
 
 
-def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(tmp_path):
+def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(
+    tmp_path,
+):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _TrustInferenceHarnessAdapter()
     final_analysis_payload = adapter._base_analysis(revised=True)
@@ -2422,10 +2578,19 @@ def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(
         content_verdict="accepted_partial",
     )
 
-    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == [2]
-    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [1]
-    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+    assert (
+        status["recommendation_admissibility"]["final_answer_recommendation_indices"]
+        == []
+    )
+    assert status["recommendation_admissibility"][
+        "partial_only_recommendation_indices"
+    ] == [2]
+    assert status["recommendation_admissibility"][
+        "excluded_recommendation_indices"
+    ] == [1]
+    assert status["recommendation_admissibility"][
+        "reasons_by_recommendation_index"
+    ] == {
         "1": ["not_accepted"],
         "2": ["inferred_grounding"],
     }
@@ -2526,10 +2691,20 @@ def test_analysis_review_status_excludes_non_accepted_recommendations(tmp_path):
         content_verdict="best_effort_exhausted",
     )
 
-    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [1, 2]
-    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+    assert (
+        status["recommendation_admissibility"]["final_answer_recommendation_indices"]
+        == []
+    )
+    assert (
+        status["recommendation_admissibility"]["partial_only_recommendation_indices"]
+        == []
+    )
+    assert status["recommendation_admissibility"][
+        "excluded_recommendation_indices"
+    ] == [1, 2]
+    assert status["recommendation_admissibility"][
+        "reasons_by_recommendation_index"
+    ] == {
         "1": ["not_accepted"],
         "2": ["not_accepted"],
     }
@@ -2558,10 +2733,20 @@ def test_analysis_review_status_excludes_topic_blocked_recommendations_from_fina
         content_verdict="accepted_partial",
     )
 
-    assert status["recommendation_admissibility"]["final_answer_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["partial_only_recommendation_indices"] == []
-    assert status["recommendation_admissibility"]["excluded_recommendation_indices"] == [1, 2]
-    assert status["recommendation_admissibility"]["reasons_by_recommendation_index"] == {
+    assert (
+        status["recommendation_admissibility"]["final_answer_recommendation_indices"]
+        == []
+    )
+    assert (
+        status["recommendation_admissibility"]["partial_only_recommendation_indices"]
+        == []
+    )
+    assert status["recommendation_admissibility"][
+        "excluded_recommendation_indices"
+    ] == [1, 2]
+    assert status["recommendation_admissibility"][
+        "reasons_by_recommendation_index"
+    ] == {
         "1": ["topic_blocked"],
         "2": ["not_accepted"],
     }
@@ -2705,7 +2890,9 @@ def test_analysis_review_runner_trust_review_marks_scoped_global_topic_closure_a
         {
             "topic_id": "TOPIC-001",
             "checked_files": [".github/workflows/claude-code-release-watch.yml"],
-            "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [
+                ".github/workflows/claude-code-release-watch.yml"
+            ],
             "summary": "The carried-forward global topic was re-checked directly.",
         }
     ]
@@ -2864,9 +3051,14 @@ def test_analysis_review_runner_trust_mode_rejects_concrete_verdicts_without_per
     summary = runner.run()
 
     assert summary["verdict"] == "harness_error"
-    critic_stage = next(stage for stage in summary["agent_stages"] if stage["role_name"] == "critic")
+    critic_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "critic"
+    )
     assert critic_stage["failure_kind"] == "semantic_validation_error"
-    assert critic_stage["semantic_validation_payload_provenance"]["status"] == "insufficient"
+    assert (
+        critic_stage["semantic_validation_payload_provenance"]["status"]
+        == "insufficient"
+    )
     assert critic_stage["semantic_validation_payload_provenance"][
         "uncovered_recommendation_indices"
     ] == [1, 2]
@@ -2978,7 +3170,9 @@ def test_analysis_review_runner_excludes_topic_blocked_recommendations_from_part
 
     assert summary["verdict"] == "accepted_partial"
     assert summary["artifacts"]["final_artifact_kind"] == "partial_answer"
-    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == [
+        "TOPIC-001"
+    ]
     partial_answer = summary["partial_answer"]
     assert partial_answer["included_recommendation_indices"] == [1, 4]
     assert partial_answer["excluded_recommendation_indices"] == [2, 3]
@@ -2987,7 +3181,8 @@ def test_analysis_review_runner_excludes_topic_blocked_recommendations_from_part
         "Document alert routing ownership",
     ]
     assert [
-        item["recommendation_index"] for item in partial_answer["recommendation_reviews"]
+        item["recommendation_index"]
+        for item in partial_answer["recommendation_reviews"]
     ] == [1, 4]
 
 
@@ -3020,7 +3215,9 @@ def test_analysis_review_runner_blocks_partial_accept_when_unresolved_topic_is_g
     assert summary["verdicts"]["content_verdict"] == "best_effort_exhausted"
     assert summary["artifacts"]["final_artifact_kind"] != "partial_answer"
     assert "partial_answer" not in summary
-    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == [
+        "TOPIC-001"
+    ]
 
 
 def test_analysis_review_runner_partial_accept_allows_localized_medium_non_correctness_when_enabled(
@@ -3191,17 +3388,28 @@ def test_analysis_review_runner_preserves_topic_lifecycle_in_summary_report_and_
     ]
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(
+        encoding="utf-8"
+    )
     assert "## Topic Lifecycle" in report_text
     assert "- Topic ledger entries: `1`" in report_text
     assert "- Resolved topics: `1` (`TOPIC-001`)" in report_text
-    assert "| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |" in report_text
+    assert (
+        "| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |"
+        in report_text
+    )
     assert (
         "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `2` | addressed \\| Added the fallback classification note to recommendation 2. |"
         in report_text
     )
-    assert "Topic lifecycle: new `1`, resolved `0`, carried forward `0`, waived `0`, open `1`" in report_text
-    assert "Topic lifecycle: new `0`, resolved `1`, carried forward `0`, waived `0`, open `0`" in report_text
+    assert (
+        "Topic lifecycle: new `1`, resolved `0`, carried forward `0`, waived `0`, open `1`"
+        in report_text
+    )
+    assert (
+        "Topic lifecycle: new `0`, resolved `1`, carried forward `0`, waived `0`, open `0`"
+        in report_text
+    )
 
     assert "## Topic Lifecycle" in final_answer_text
     assert (
@@ -3239,7 +3447,9 @@ def test_analysis_review_runner_preserves_disagreed_topic_lifecycle_in_rollups(
     assert summary["analysis_review_status"]["waived_topic_ids"] == []
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(encoding="utf-8")
+    final_answer_text = Path(summary["artifacts"]["final_answer_md"]).read_text(
+        encoding="utf-8"
+    )
     assert "- Disagreed topic IDs: `TOPIC-001`" in report_text
     assert "- Disagreed topics: `1` (`TOPIC-001`)" in report_text
     assert (
@@ -3289,7 +3499,9 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
         }
     ]
     assert summary["analysis_review_status"]["open_topic_ids"] == []
-    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == ["TOPIC-001"]
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == [
+        "TOPIC-001"
+    ]
     assert summary["analysis_review_status"]["recommendation_admissibility"] == {
         "final_answer_recommendation_indices": [1],
         "partial_only_recommendation_indices": [],
@@ -3414,7 +3626,10 @@ def test_analysis_review_runner_persists_addressed_topic_recommendation_index_fr
     assert summary["topic_ledger"][0]["recommendation_index"] == 2
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    assert "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `2` | addressed \\| Added the fallback classification note to recommendation 2. |" in report_text
+    assert (
+        "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `addressed` | `2` | addressed \\| Added the fallback classification note to recommendation 2. |"
+        in report_text
+    )
 
 
 def test_analysis_review_runner_trust_relinked_topic_closes_on_recommendation_proof(
@@ -3482,14 +3697,20 @@ def test_analysis_review_runner_normalizes_legacy_missing_topics_into_topics(
         contract=runner._analysis_contract(),
     )
 
-    assert "Normalized legacy missing_topics into topics with stable topic IDs." in warnings
+    assert (
+        "Normalized legacy missing_topics into topics with stable topic IDs."
+        in warnings
+    )
     assert "missing_topics" not in normalized
     assert normalized["resolved_topic_ids"] == []
     assert normalized["carried_forward_topic_ids"] == []
     assert normalized["waived_topic_ids"] == []
     assert len(normalized["topics"]) == 1
     assert normalized["topics"][0]["topic_id"].startswith("AT-")
-    assert normalized["topics"][0]["title"] == "Recommendation 2 still needs a concrete fallback classification."
+    assert (
+        normalized["topics"][0]["title"]
+        == "Recommendation 2 still needs a concrete fallback classification."
+    )
 
 
 def test_analysis_review_runner_allows_legacy_missing_topics_full_run_after_normalization(
@@ -3524,7 +3745,9 @@ def test_analysis_review_runner_allows_legacy_missing_topics_full_run_after_norm
         "Normalized legacy missing_topics into topics with stable topic IDs."
     ]
 
-    semantic_payload = load_structured_file(Path(critic_stage["semantic_validation_path"]))
+    semantic_payload = load_structured_file(
+        Path(critic_stage["semantic_validation_path"])
+    )
     assert semantic_payload["ok"] is True
     assert semantic_payload["skipped"] is False
     assert semantic_payload["errors"] == []
@@ -3613,11 +3836,13 @@ def test_analysis_review_runner_surfaces_semantic_validation_failures(
     proposer_stage = summary["agent_stages"][0]
     assert proposer_stage["ok"] is False
     assert any(
-            "strengths must contain at least one concrete item or a non-empty none_reason" in error
-            for error in proposer_stage["semantic_validation_errors"]
-        )
+        "strengths must contain at least one concrete item or a non-empty none_reason"
+        in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
     assert any(
-        "uncertainties must contain at least one concrete item or a non-empty none_reason" in error
+        "uncertainties must contain at least one concrete item or a non-empty none_reason"
+        in error
         for error in proposer_stage["semantic_validation_errors"]
     )
     assert Path(proposer_stage["semantic_validation_path"]).exists()
@@ -3745,7 +3970,9 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
     critic_stage = summary["agent_stages"][1]
     assert critic_stage["failure_kind"] == "quota_exhausted"
     assert "$.verdict: missing required field" not in critic_stage["error"]
-    semantic_payload = load_structured_file(Path(critic_stage["semantic_validation_path"]))
+    semantic_payload = load_structured_file(
+        Path(critic_stage["semantic_validation_path"])
+    )
     assert semantic_payload["skipped"] is True
     assert semantic_payload["skipped_reason"] == "provider_failure:quota_exhausted"
 
@@ -3758,7 +3985,9 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
     assert "Review loop exercised: `False`" in report_text
     assert "Review issue counts: `not evaluated`" in report_text
     assert "Review surfaces declared: `2` / `2` recommendations" in report_text
-    best_draft_text = Path(summary["artifacts"]["best_draft_md"]).read_text(encoding="utf-8")
+    best_draft_text = Path(summary["artifacts"]["best_draft_md"]).read_text(
+        encoding="utf-8"
+    )
     assert "not evaluated by a successful critic/auditor stage" in best_draft_text
 
 
@@ -3796,7 +4025,9 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3
     assert len(summary["bounded_review_summary"]["review_stages"]) == 1
-    assert summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+    assert (
+        summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+    )
 
 
 def test_analysis_review_runner_preserves_reviser_payload_when_auditor_fails(
@@ -3824,12 +4055,17 @@ def test_analysis_review_runner_preserves_reviser_payload_when_auditor_fails(
     assert summary["run_details"]["stage"] == "auditor"
     assert summary["run_details"]["review_loop_exercised"] is True
     assert summary["run_details"]["final_analysis"]["status"] == "revised"
-    assert summary["run_details"]["final_analysis"]["issue_resolution_map"][0]["issue_id"] == "AR-001"
+    assert (
+        summary["run_details"]["final_analysis"]["issue_resolution_map"][0]["issue_id"]
+        == "AR-001"
+    )
     assert summary["run_details"]["issue_ledger"][0]["issue_id"] == "AR-001"
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3
     assert len(summary["bounded_review_summary"]["review_stages"]) == 1
-    assert summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+    assert (
+        summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+    )
 
 
 def test_analysis_review_runner_preserves_late_auditor_issue_attribution_in_ledger_and_report(
@@ -3994,6 +4230,8 @@ def test_bounded_review_summary_ignores_empty_final_analysis_and_recovers_from_s
     assert bounded_review_summary is not None
     assert bounded_review_summary["recommendation_count"] == 3
     assert bounded_review_summary["recommendations_with_review_surface"] == 3
-    resolved_analysis = runner._resolve_bounded_review_analysis_payload({"final_analysis": {}})
+    resolved_analysis = runner._resolve_bounded_review_analysis_payload(
+        {"final_analysis": {}}
+    )
     assert resolved_analysis["status"] == "revised"
     assert resolved_analysis["issue_resolution_map"][0]["issue_id"] == "AR-001"

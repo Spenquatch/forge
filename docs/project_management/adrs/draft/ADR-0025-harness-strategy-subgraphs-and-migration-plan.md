@@ -110,6 +110,7 @@ Responsibilities:
 - write `REPORT.md` and `summary.json`
 - write `FINAL_ANSWER.*` only when the selected primary deliverable is a publishable final answer
 - when trust final publication is blocked, fall through partial-answer eligibility before writing `BEST_DRAFT.*`
+- finalize `analysis_review_status.publishability` after artifact projection so it agrees with `final_artifact_kind`
 - keep `REPORT.md` wording runner-owned: `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`
 - keep `PARTIAL_ANSWER.*` scope wording exact when that state is rendered: `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`
 - keep topic lifecycle wording split as `Open topics:` and `Carried-forward topics:` rather than collapsing them into one unresolved label

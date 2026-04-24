@@ -11,7 +11,9 @@ from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 
-def _task(min_recommendations: int = 2, evidence_cap_policy: str = "trim_to_cap") -> TaskSpec:
+def _task(
+    min_recommendations: int = 2, evidence_cap_policy: str = "trim_to_cap"
+) -> TaskSpec:
     return TaskSpec.from_dict(
         {
             "id": "recommend_automation_improvements",
@@ -36,17 +38,32 @@ def _task(min_recommendations: int = 2, evidence_cap_policy: str = "trim_to_cap"
     )
 
 
-
 def _strategy() -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
             "kind": "analysis_review_bounded_v1",
             "roles": {
-                "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
-                "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
-                "reviser": {"provider": "codex_cli", "effort": "high", "access": "read"},
-                "auditor": {"provider": "claude_code", "effort": "high", "access": "read"},
+                "proposer": {
+                    "provider": "codex_cli",
+                    "effort": "medium",
+                    "access": "read",
+                },
+                "critic": {
+                    "provider": "claude_code",
+                    "effort": "high",
+                    "access": "read",
+                },
+                "reviser": {
+                    "provider": "codex_cli",
+                    "effort": "high",
+                    "access": "read",
+                },
+                "auditor": {
+                    "provider": "claude_code",
+                    "effort": "high",
+                    "access": "read",
+                },
             },
             "review_loops": {
                 "min_loops": 1,
@@ -64,7 +81,6 @@ def _strategy() -> StrategyConfig:
     )
 
 
-
 def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
@@ -76,7 +92,10 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.stop_policy.min_grounding_score == 0.8
     assert contract.partial_acceptance.enabled is True
     assert contract.partial_acceptance.min_accepted_recommendations == 3
-    assert contract.partial_acceptance.forbid_correctness_blockers_on_accepted_recommendations is True
+    assert (
+        contract.partial_acceptance.forbid_correctness_blockers_on_accepted_recommendations
+        is True
+    )
     assert contract.require_issue_ledger is True
     assert contract.require_recommendation_reviews is True
     assert contract.required_sections.strengths_required is True
@@ -89,7 +108,9 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.bounded_review.evidence_cap_policy == "trim_to_cap"
     assert contract.bounded_review.critic_issue_cap == 5
     assert contract.bounded_review.critic_new_topic_cap == 2
-    assert contract.bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0 == 1
+    assert (
+        contract.bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0 == 1
+    )
     assert contract.bounded_review.require_scope_escape_justification is True
     assert contract.trust_review.require_taxonomy_override_reason is False
     assert contract.trust_review.max_evidence_refs_per_recommendation == 3
@@ -130,11 +151,15 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
 
     legacy = build_analysis_review_contract(
         task,
-        StrategyConfig.from_dict({**_strategy().to_dict(), "kind": "analysis_review_v1"}),
+        StrategyConfig.from_dict(
+            {**_strategy().to_dict(), "kind": "analysis_review_v1"}
+        ),
     )
     trust = build_analysis_review_contract(
         task,
-        StrategyConfig.from_dict({**_strategy().to_dict(), "kind": "analysis_review_trust_v1"}),
+        StrategyConfig.from_dict(
+            {**_strategy().to_dict(), "kind": "analysis_review_trust_v1"}
+        ),
     )
 
     assert legacy.mode == "bounded"
@@ -154,7 +179,9 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
     assert trust.trust_review.downgrade_on_semantic_warnings is True
     assert trust.trust_review.downgrade_on_inferred_acceptance is True
     assert trust.trust_review.late_auditor_medium_or_higher_policy == "warn"
-    assert trust.to_dict()["trust_review"]["max_evidence_refs_per_recommendation"] is None
+    assert (
+        trust.to_dict()["trust_review"]["max_evidence_refs_per_recommendation"] is None
+    )
     assert trust.to_dict()["effective_strategy"] == {
         "kind": "analysis_review_trust_v1",
         "mode": "trust",
@@ -198,17 +225,30 @@ def test_analysis_review_schema_requires_files_reviewed_and_closure_review_array
 
 def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():
     assert default_blocking_class_for_kind("confidence_calibration") == "presentation"
-    assert default_blocking_class_for_kind("insufficient_specificity") == "actionability"
+    assert (
+        default_blocking_class_for_kind("insufficient_specificity") == "actionability"
+    )
     assert default_blocking_class_for_kind("factual_error") == "correctness"
     assert default_blocking_class_for_kind("missing_priority") == "completeness"
     assert default_blocking_class_for_kind("unknown-kind") == "presentation"
 
 
-
 def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2():
-    assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_v1").max_loops == 3
-    assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_bounded_v1").max_loops == 3
-    assert ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_trust_v1").max_loops == 3
+    assert (
+        ReviewLoopPolicy.defaults_for_strategy_kind("analysis_review_v1").max_loops == 3
+    )
+    assert (
+        ReviewLoopPolicy.defaults_for_strategy_kind(
+            "analysis_review_bounded_v1"
+        ).max_loops
+        == 3
+    )
+    assert (
+        ReviewLoopPolicy.defaults_for_strategy_kind(
+            "analysis_review_trust_v1"
+        ).max_loops
+        == 3
+    )
 
     bounded_example = load_structured_file(
         Path("examples/harness/strategies/analysis_review_bounded_codex_claude.yaml")
@@ -227,7 +267,10 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
 def test_readme_documents_trust_recommendation_admissibility_and_preview_only_markdown():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable" in readme
+    assert (
+        "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable"
+        in readme
+    )
     assert "analysis_review_status.recommendation_admissibility" in readme
     assert "Across bounded and trust modes" in readme
     assert "FINAL_ANSWER.*` is all-or-nothing" in readme
@@ -235,18 +278,40 @@ def test_readme_documents_trust_recommendation_admissibility_and_preview_only_ma
     assert "partial_only_recommendation_indices" in readme
     assert "excluded_recommendation_indices" in readme
     assert "reasons_by_recommendation_index" in readme
-    assert "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`" in readme
-    assert "accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices`" in readme
-    assert "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode" in readme
-    assert "candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations" in readme
+    assert (
+        "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`"
+        in readme
+    )
+    assert (
+        "accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices`"
+        in readme
+    )
+    assert (
+        "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode"
+        in readme
+    )
+    assert (
+        "candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations"
+        in readme
+    )
     assert "Recommendation indices included in `PARTIAL_ANSWER.*`: `1`, `2`" in readme
     assert "Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in readme
     assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`: none" in readme
     assert "Those partial-scope lines are frozen only for `PARTIAL_ANSWER.*`." in readme
-    assert "`REPORT.md` keeps only final-publication / final-withholding wording" in readme
+    assert (
+        "`REPORT.md` keeps only final-publication / final-withholding wording" in readme
+    )
     assert "analysis_review_status.publishability" in readme
     assert "final_answer_publishable" in readme
     assert "blocking_causes" in readme
+    assert (
+        "Artifact selection finalizes that publishability outcome after artifact projection"
+        in readme
+    )
+    assert "`final_answer_publishable` must agree with `final_artifact_kind`" in readme
+    assert (
+        'summary.json["artifacts"]["final_artifact_kind"] == "final_answer"' in readme
+    )
     assert "reviewer prose does not decide artifact eligibility" in readme
     assert "advisory carveout is limited to the exact warning strings" in readme
     assert "final_artifact`, `final_artifact_json`, `final_artifact_kind`" in readme
@@ -268,50 +333,125 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     assert "partial_only_recommendation_indices" in contract_doc
     assert "excluded_recommendation_indices" in contract_doc
     assert "reasons_by_recommendation_index" in contract_doc
-    assert "In bounded mode, accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices`" in contract_doc
-    assert "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*`" in contract_doc
-    assert "`accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`" in contract_doc
-    assert "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`" in contract_doc
-    assert "candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`" in contract_doc
-    assert "Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules." in contract_doc
+    assert (
+        "In bounded mode, accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices`"
+        in contract_doc
+    )
+    assert (
+        "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*`"
+        in contract_doc
+    )
+    assert (
+        "`accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`"
+        in contract_doc
+    )
+    assert (
+        "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`"
+        in contract_doc
+    )
+    assert (
+        "candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`"
+        in contract_doc
+    )
+    assert (
+        "Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules."
+        in contract_doc
+    )
     assert "Recommendation indices included in PARTIAL_ANSWER.*: 1, 2" in contract_doc
     assert "Recommendation indices withheld from FINAL_ANSWER.*: 2" in contract_doc
     assert "Recommendation indices excluded from PARTIAL_ANSWER.*: none" in contract_doc
     assert "final_answer_publishable" in contract_doc
     assert "blocking_causes" in contract_doc
+    assert (
+        "`analysis_review_status.publishability` is the canonical final publication outcome."
+        in contract_doc
+    )
     assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in contract_doc
-    assert "strengths contains both concrete items and none_reason; prefer one or the other." in contract_doc
-    assert "uncertainties contains both concrete items and none_reason; prefer one or the other." in contract_doc
-    assert "`Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`" in contract_doc
-    assert "`REPORT.md` freezes only final-publication / final-withholding wording" in contract_doc
-    assert "does not render `Recommendation indices included in PARTIAL_ANSWER.*` or `Recommendation indices excluded from PARTIAL_ANSWER.*`" in contract_doc
-    assert "only runner-owned `analysis_review_status.publishability`, `analysis_review_status.recommendation_admissibility`, and `summary.json[\"artifacts\"]` decide artifact eligibility and publication state" in contract_doc
+    assert (
+        "strengths contains both concrete items and none_reason; prefer one or the other."
+        in contract_doc
+    )
+    assert (
+        "uncertainties contains both concrete items and none_reason; prefer one or the other."
+        in contract_doc
+    )
+    assert (
+        'Artifact projection finalizes `publishability`; `final_answer_publishable` is `true` exactly when `summary.json["artifacts"]["final_artifact_kind"] == "final_answer"`.'
+        in contract_doc
+    )
+    assert (
+        "`Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`"
+        in contract_doc
+    )
+    assert (
+        "`REPORT.md` freezes only final-publication / final-withholding wording"
+        in contract_doc
+    )
+    assert (
+        "does not render `Recommendation indices included in PARTIAL_ANSWER.*` or `Recommendation indices excluded from PARTIAL_ANSWER.*`"
+        in contract_doc
+    )
+    assert (
+        'only runner-owned `analysis_review_status.publishability`, `analysis_review_status.recommendation_admissibility`, and `summary.json["artifacts"]` decide artifact eligibility and publication state'
+        in contract_doc
+    )
     assert "content verdict is not fully accepted: <verdict>" in contract_doc
-    assert "For fully accepted trust runs, `blocking_causes` is deterministic." in contract_doc
+    assert (
+        "For fully accepted trust runs, `blocking_causes` is deterministic."
+        in contract_doc
+    )
     assert "1. provenance blocker first, when present" in contract_doc
     assert "2. open topic IDs in sorted order" in contract_doc
     assert "3. carried-forward topic IDs in sorted order" in contract_doc
     assert "4. one semantic-warning blocker" in contract_doc
-    assert "deliverable markdown previews at most the first `3` recommendation evidence refs" in contract_doc
-    assert "`REPORT.md` previews at most the first `2` `checked_files` values" in contract_doc
-    assert "`Open topics:` and `Carried-forward topics:` as separate labels" in contract_doc
+    assert (
+        "deliverable markdown previews at most the first `3` recommendation evidence refs"
+        in contract_doc
+    )
+    assert (
+        "`REPORT.md` previews at most the first `2` `checked_files` values"
+        in contract_doc
+    )
+    assert (
+        "`Open topics:` and `Carried-forward topics:` as separate labels"
+        in contract_doc
+    )
 
 
 def test_surface_update_notes_document_primary_deliverable_artifacts():
     notes = Path("FORGE_HARNESS_SURFACE_UPDATE_NOTES.md").read_text(encoding="utf-8")
 
     assert "Primary deliverable artifacts for harness runs" in notes
-    assert "FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer" in notes
-    assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable" in notes
-    assert "BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed" in notes
+    assert (
+        "FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer"
+        in notes
+    )
+    assert (
+        "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable"
+        in notes
+    )
+    assert (
+        "BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed"
+        in notes
+    )
     assert "`Final publication: publishable|blocked`" in notes
     assert "`Publication blockers:`" in notes
     assert "`Recommendation indices withheld from FINAL_ANSWER.*:`" in notes
-    assert "`REPORT.md` keeps `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`" in notes
+    assert (
+        "`analysis_review_status.publishability` is finalized after artifact projection and must agree with `final_artifact_kind`."
+        in notes
+    )
+    assert (
+        "`REPORT.md` keeps `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`"
+        in notes
+    )
     assert "`Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`" in notes
     assert "`Recommendation indices withheld from FINAL_ANSWER.*: 2`" in notes
     assert "`Recommendation indices excluded from PARTIAL_ANSWER.*: none`" in notes
-    assert "`PARTIAL_ANSWER.*` keeps `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`" in notes
+    assert (
+        "`PARTIAL_ANSWER.*` keeps `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`"
+        in notes
+    )
     assert "`Open topics:`" in notes
     assert "`Carried-forward topics:`" in notes
 
@@ -326,13 +466,22 @@ def test_draft_adr_0024_documents_slice_c_artifact_contract_without_old_two_stat
     assert "publishability" in adr
     assert "accepted_with_warnings" in adr
     assert "does not guarantee `FINAL_ANSWER.*`" in adr
-    assert "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`" in adr
+    assert (
+        "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`"
+        in adr
+    )
     assert "reviewer prose does not decide artifact eligibility" in adr
+    assert (
+        "Artifact projection finalizes `analysis_review_status.publishability`, and `final_answer_publishable` must agree with `final_artifact_kind`."
+        in adr
+    )
     assert "`Recommendation indices withheld from FINAL_ANSWER.*:`" in adr
     assert "Recommendation indices included in PARTIAL_ANSWER.*: 1, 2" in adr
     assert "Recommendation indices withheld from FINAL_ANSWER.*: 2" in adr
     assert "Recommendation indices excluded from PARTIAL_ANSWER.*: none" in adr
-    assert "`REPORT.md` freezes only final-publication / final-withholding wording" in adr
+    assert (
+        "`REPORT.md` freezes only final-publication / final-withholding wording" in adr
+    )
     assert "`Open topics:` and `Carried-forward topics:` separate" in adr
     assert 'summary.json["artifacts"]["final_artifact"]' in adr
     assert "Accepted / accepted_with_warnings runs" not in adr
@@ -347,8 +496,17 @@ def test_draft_adr_0025_documents_slice_c_artifact_fallback_without_old_two_stat
     assert "PARTIAL_ANSWER.*" in adr
     assert "publishable final answer" in adr
     assert "trust final publication is blocked" in adr
-    assert "fall through partial-answer eligibility before writing `BEST_DRAFT.*`" in adr
-    assert "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`" in adr
+    assert (
+        "fall through partial-answer eligibility before writing `BEST_DRAFT.*`" in adr
+    )
+    assert (
+        "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`"
+        in adr
+    )
+    assert (
+        "finalize `analysis_review_status.publishability` after artifact projection so it agrees with `final_artifact_kind`"
+        in adr
+    )
     assert "`Final publication: publishable|blocked`" in adr
     assert "`Recommendation indices withheld from FINAL_ANSWER.*:`" in adr
     assert "`REPORT.md` wording runner-owned" in adr

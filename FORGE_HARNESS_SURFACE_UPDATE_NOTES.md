@@ -30,6 +30,7 @@ This update adds a new task/strategy execution surface to Forge without removing
   - `PARTIAL_ANSWER.*` keeps `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`
   - `Open topics:`
   - `Carried-forward topics:`
+- `analysis_review_status.publishability` is finalized after artifact projection and must agree with `final_artifact_kind`.
 - The advisory carveout is limited to the exact warning strings `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.`; reviewer prose does not decide artifact eligibility.
 - New targeted tests for:
   - harness runner flow

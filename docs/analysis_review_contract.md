@@ -159,11 +159,13 @@ Slice C also keeps an explicit publishability layer under `analysis_review_statu
 Rules:
 
 - `final_answer_publishable` and `blocking_causes` are the frozen field names.
+- `analysis_review_status.publishability` is the canonical final publication outcome.
 - In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
 - Trust-mode final publication is allowed only when the content verdict is `accepted` or `accepted_with_warnings`, provenance is fully bound, no topic IDs remain `open`, no topic IDs remain `carried_forward`, and no final semantic warnings remain.
 - Only the exact warning strings `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.` are advisory carveouts. They remain visible warnings, but by themselves they do not add a publishability blocker.
 - If the content verdict is not fully accepted, `blocking_causes` must contain exactly one verdict blocker: `content verdict is not fully accepted: <verdict>`.
 - `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` remain the source of truth for what actually shipped.
+- Artifact projection finalizes `publishability`; `final_answer_publishable` is `true` exactly when `summary.json["artifacts"]["final_artifact_kind"] == "final_answer"`.
 - If trust mode is content-accepted but not final-publishable, artifact selection skips `FINAL_ANSWER.*` and falls through to the existing partial-answer path when eligible, otherwise `BEST_DRAFT.*`.
 - Reports and fallback deliverables freeze their wording to `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`.
 - Partial-answer scope lines are frozen only for `PARTIAL_ANSWER.*`: `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`.
@@ -178,7 +180,7 @@ For fully accepted trust runs, `blocking_causes` is deterministic. The list is e
 3. carried-forward topic IDs in sorted order
 4. one semantic-warning blocker whose summaries preserve `_final_semantic_warning_records()` order and are joined with `; `
 
-This separation is intentional: `content_verdict` classifies the review outcome, `recommendation_admissibility` records which indices remain publishable in `FINAL_ANSWER.*` versus withheld to fallback subsets, and `publishability` decides whether `FINAL_ANSWER.*` may ship for trust-mode runs.
+This separation is intentional: `content_verdict` classifies the review outcome, `recommendation_admissibility` records which indices remain publishable in `FINAL_ANSWER.*` versus withheld to fallback subsets, and `publishability` is finalized after artifact projection to record whether `FINAL_ANSWER.*` actually ships.
 
 ## Bounded-review policy
 
