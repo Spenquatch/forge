@@ -199,6 +199,16 @@ Current defaults:
 
 Trust-mode recommendation evidence is intentionally uncapped. Trust runs should preserve every concrete workspace ref needed to support auditability; they do not trim or reject a recommendation solely for carrying more than three evidence refs.
 
+Bounded-mode discovery is still expected to stay repo-local and complete:
+
+- bounded mode is discovery-bounded, not workflow-file-only
+- `files_hint` is a starting slice, not a hard boundary on repo-local inspection
+- bounded mode may inspect one-hop repo-local corroboration outside `files_hint`
+- requirement or spec claims should cite the nearest governing repo-local doc or manifest when one exists
+- parity or symmetry claims should cite the sibling implementation or workflow that establishes the baseline when one exists
+- corroboration must still stay inside the current caps: evidence max `3`, `review_surface.must_check_files` max `3`, `review_surface.optional_check_files` max `2`
+- trust mode remains stricter because of provenance and publication rules, not because bounded mode is expected to tolerate repo-local discovery blind spots
+
 Markdown compaction is renderer-owned and preview-only:
 
 - deliverable markdown previews at most the first `3` recommendation evidence refs

@@ -268,6 +268,16 @@ def test_readme_documents_trust_recommendation_admissibility_and_preview_only_ma
     readme = Path("README.md").read_text(encoding="utf-8")
 
     assert (
+        "Bounded and trust should differ in audit depth and publication rules, not in core repo understanding."
+        in readme
+    )
+    assert (
+        "`files_hint` is a starting slice rather than a hard discovery boundary"
+        in readme
+    )
+    assert "one-hop repo-local corroboration" in readme
+    assert "nearest governing spec/manifest or sibling workflow" in readme
+    assert (
         "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable"
         in readme
     )
@@ -323,6 +333,22 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
     assert "analysis_review_v1_contract_v7" in contract_doc
+    assert "bounded mode is discovery-bounded, not workflow-file-only" in contract_doc
+    assert "`files_hint` is a starting slice, not a hard boundary" in contract_doc
+    assert "one-hop repo-local corroboration outside `files_hint`" in contract_doc
+    assert "nearest governing repo-local doc or manifest" in contract_doc
+    assert (
+        "sibling implementation or workflow that establishes the baseline"
+        in contract_doc
+    )
+    assert (
+        "corroboration must still stay inside the current caps: evidence max `3`"
+        in contract_doc
+    )
+    assert (
+        "trust mode remains stricter because of provenance and publication rules"
+        in contract_doc
+    )
     assert "recommendation withholding ledger" in contract_doc
     assert "recommendation_admissibility" in contract_doc
     assert "runner-owned status, not a model-authored payload field" in contract_doc

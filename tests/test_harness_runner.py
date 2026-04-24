@@ -206,6 +206,162 @@ class _AcceptingHarnessAdapter:
         raise AssertionError(f"Unexpected role: {role_name}")
 
 
+class _BoundedCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
+    @staticmethod
+    def _analysis_files_reviewed() -> list[str]:
+        return [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/claude-code-update-snapshot.yml",
+            ".github/workflows/codex-cli-update-snapshot.yml",
+            "docs/project_management/next/codex-cli-parity/C1-spec.md",
+        ]
+
+    @staticmethod
+    def _review_files_reviewed() -> list[str]:
+        return _BoundedCorroborationHarnessAdapter._analysis_files_reviewed()
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = {
+            "status": "revised" if revised else "done",
+            "summary": "Review the automation seam and keep bounded recommendations repo-local and complete.",
+            "workspace_write_intent": "none",
+            "recommendations": [
+                {
+                    "classification": "recommendation",
+                    "priority": "high",
+                    "title": "Track release-watch issues against the parity spec",
+                    "rationale": "The release-watch workflow should carry issue-tracking guidance that matches the nearest governing parity spec.",
+                    "evidence": [
+                        ".github/workflows/codex-cli-release-watch.yml",
+                        "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                    ],
+                    "proposed_change": "Add release-watch issue-tracking guidance that points operators back to the parity spec expectations.",
+                    "confidence": 0.9,
+                    "review_surface": self._review_surface(
+                        must_check_files=[
+                            ".github/workflows/codex-cli-release-watch.yml",
+                            "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                        ],
+                        optional_check_files=[
+                            ".github/workflows/claude-code-release-watch.yml"
+                        ],
+                        scope_note="Start from the prioritized release-watch workflow, then corroborate the governing requirement against the nearest repo-local parity spec.",
+                    ),
+                },
+                {
+                    "classification": "risk",
+                    "priority": "high",
+                    "title": "Add concurrency controls",
+                    "rationale": "Overlapping release-watch runs can duplicate work.",
+                    "evidence": [".github/workflows/codex-cli-release-watch.yml"],
+                    "proposed_change": "Add a workflow-level concurrency group keyed by workflow and ref.",
+                    "confidence": 0.91,
+                    "review_surface": self._review_surface(
+                        must_check_files=[
+                            ".github/workflows/codex-cli-release-watch.yml"
+                        ],
+                        optional_check_files=[
+                            ".github/workflows/claude-code-release-watch.yml"
+                        ],
+                        scope_note="Limit review to the release-watch workflow concurrency behavior.",
+                    ),
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "high",
+                    "title": "Align timeout handling across the full snapshot parity seam",
+                    "rationale": "Timeout recommendations should compare the release path to the sibling snapshot workflows so the prepare seam stays aligned too.",
+                    "evidence": [
+                        ".github/workflows/claude-code-release-watch.yml",
+                        ".github/workflows/claude-code-update-snapshot.yml",
+                        ".github/workflows/codex-cli-update-snapshot.yml",
+                    ],
+                    "proposed_change": "Compare timeout-minutes and prepare-stage behavior across the sibling snapshot workflows, then align the release-watch timeout guidance to that broader parity seam.",
+                    "confidence": 0.87,
+                    "review_surface": self._review_surface(
+                        must_check_files=[
+                            ".github/workflows/claude-code-release-watch.yml",
+                            ".github/workflows/claude-code-update-snapshot.yml",
+                            ".github/workflows/codex-cli-update-snapshot.yml",
+                        ],
+                        optional_check_files=[
+                            ".github/workflows/codex-cli-release-watch.yml"
+                        ],
+                        scope_note="Compare the release-watch timeout guidance against the sibling snapshot pair so the like-for-like parity seam includes the prepare path.",
+                    ),
+                },
+                {
+                    "classification": "recommendation",
+                    "priority": "medium",
+                    "title": "Document alert routing ownership",
+                    "rationale": "Operators need a clear escalation target when release automation fails.",
+                    "evidence": [".github/workflows/codex-cli-release-watch.yml"],
+                    "proposed_change": "Add the alert-routing owner and escalation path to the release-watch documentation.",
+                    "confidence": 0.76,
+                    "review_surface": self._review_surface(
+                        must_check_files=[
+                            ".github/workflows/codex-cli-release-watch.yml"
+                        ],
+                        optional_check_files=[],
+                        scope_note="Keep the review bounded to the existing release-watch escalation path.",
+                    ),
+                },
+            ],
+            "strengths": {
+                "items": [
+                    "Bounded recommendations include their nearby repo-local corroboration."
+                ],
+                "none_reason": "",
+            },
+            "uncertainties": {
+                "items": [],
+                "none_reason": "No material uncertainties remained after checking the governing spec and sibling workflow seam.",
+            },
+            "files_reviewed": self._analysis_files_reviewed(),
+            "confidence": 0.89,
+        }
+        if revised:
+            payload["issue_resolution_map"] = []
+        return payload
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "proposer":
+            return self._base_analysis(revised=False)
+        if role_name == "reviser_round_1":
+            return self._base_analysis(revised=True)
+        if role_name in {"critic", "auditor"}:
+            recommendations = self._base_analysis(revised=False)["recommendations"]
+            payload = {
+                "verdict": "accept",
+                "summary": "The bounded draft keeps the fuller recommendation set grounded inside the declared caps.",
+                "workspace_write_intent": "none",
+                "files_reviewed": self._review_files_reviewed(),
+                "issues": [],
+                "resolved_issue_ids": [],
+                "carried_forward_issue_ids": [],
+                "waived_issue_ids": [],
+                "recommendation_reviews": [
+                    {
+                        "recommendation_index": index,
+                        "verdict": "accept",
+                        "open_issue_ids": [],
+                        "summary": f"Recommendation {index} is adequately corroborated for bounded mode.",
+                        "confidence_assessment": "well_calibrated",
+                    }
+                    for index, _ in enumerate(recommendations, start=1)
+                ],
+                "grounding_score": 0.95,
+                "actionability_score": 0.9,
+                "scope_compliance_score": 0.95,
+                "confidence": 0.9,
+                "scope_escapes": [],
+            }
+            payload.update(self._empty_topic_state())
+            return payload
+        raise AssertionError(f"Unexpected role: {role_name}")
+
+
 class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
@@ -1425,6 +1581,9 @@ def _prepare_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (workspace / "docs" / "project_management" / "next" / "codex-cli-parity").mkdir(
+        parents=True, exist_ok=True
+    )
     (workspace / ".github" / "workflows" / "codex-cli-release-watch.yml").write_text(
         "name: codex\n",
         encoding="utf-8",
@@ -1441,6 +1600,17 @@ def _prepare_workspace(tmp_path: Path) -> Path:
     )
     (workspace / ".github" / "workflows" / "codex-cli-update-snapshot.yml").write_text(
         "name: codex-update\n",
+        encoding="utf-8",
+    )
+    (
+        workspace
+        / "docs"
+        / "project_management"
+        / "next"
+        / "codex-cli-parity"
+        / "C1-spec.md"
+    ).write_text(
+        "# Codex CLI parity spec\n",
         encoding="utf-8",
     )
     return workspace
@@ -1662,6 +1832,78 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     )
     assert "- Provenance status: `not_required`" in final_answer_text
     assert "- Provenance status: `bound`" not in final_answer_text
+
+
+def test_analysis_review_runner_bounded_mode_can_ship_fuller_repo_local_recommendation_set(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _BoundedCorroborationHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    assert summary["analysis_review_contract"]["mode"] == "bounded"
+    assert summary["artifacts"]["final_artifact_kind"] == "final_answer"
+
+    final_recommendations = summary["final_answer"]["recommendations"]
+    assert len(final_recommendations) == 4
+    assert [recommendation["title"] for recommendation in final_recommendations] == [
+        "Track release-watch issues against the parity spec",
+        "Add concurrency controls",
+        "Align timeout handling across the full snapshot parity seam",
+        "Document alert routing ownership",
+    ]
+
+    spec_backed = final_recommendations[0]
+    assert spec_backed["evidence"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        "docs/project_management/next/codex-cli-parity/C1-spec.md",
+    ]
+    assert spec_backed["review_surface"]["must_check_files"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        "docs/project_management/next/codex-cli-parity/C1-spec.md",
+    ]
+
+    parity = final_recommendations[2]
+    assert parity["evidence"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+    ]
+    assert parity["review_surface"]["must_check_files"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+    ]
+    assert parity["review_surface"]["optional_check_files"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+
+    for recommendation in final_recommendations:
+        assert len(recommendation["evidence"]) <= 3
+        assert len(recommendation["review_surface"]["must_check_files"]) <= 3
+        assert len(recommendation["review_surface"]["optional_check_files"]) <= 2
+
+    bounded_review_summary = summary["bounded_review_summary"]
+    assert bounded_review_summary["mode"] == "recommendation_review_surface"
+    assert bounded_review_summary["recommendation_count"] == 4
+    assert bounded_review_summary["recommendations_with_review_surface"] == 4
+    assert bounded_review_summary["scope_escape_count"] == 0
+    assert bounded_review_summary["scope_escapes"] == []
 
 
 def test_analysis_review_runner_legacy_alias_warns_and_normalizes_to_bounded(

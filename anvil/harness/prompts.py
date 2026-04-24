@@ -306,6 +306,80 @@ def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
     )
 
 
+def _bounded_corroboration_guidance_block(
+    contract: AnalysisReviewContract, *, role: str
+) -> str:
+    if contract.mode != "bounded":
+        return ""
+
+    bounded = contract.bounded_review
+    role_line_by_role = {
+        "proposer": (
+            "- In the proposer draft, do not leave governing or sibling "
+            "corroboration for later stages; pull the needed repo-local file into "
+            "`files_reviewed`, `evidence`, and `review_surface` now."
+        ),
+        "critic": (
+            "- In the critic stage, flag missing repo-local corroboration when a "
+            "requirement/spec or parity claim lacks its governing or sibling file "
+            "in `files_reviewed`, `evidence`, or `review_surface`."
+        ),
+        "reviser": (
+            "- In the reviser stage, repair missing corroboration by widening "
+            "`review_surface` within cap before inventing new recommendations."
+        ),
+        "auditor": (
+            "- In the auditor stage, do not call the draft cleanly closed while a "
+            "spec-backed or parity-backed claim still lacks the needed governing "
+            "or sibling corroborating file."
+        ),
+    }
+    return "\n".join(
+        [
+            "Bounded corroboration guidance:",
+            (
+                "- Treat `files_hint`, when provided, as a starting slice, not the "
+                "total review universe."
+            ),
+            (
+                "- In bounded mode, one-hop repo-local corroboration outside "
+                "`files_hint` is allowed when it is needed to support a "
+                "recommendation."
+            ),
+            (
+                "- For requirement, policy, or spec claims, inspect and cite the "
+                "nearest governing repo-local doc or manifest."
+            ),
+            (
+                "- For parity, symmetry, or sibling-workflow claims, inspect and "
+                "cite the sibling implementation that establishes the baseline, and "
+                "compare the full like-for-like seam rather than one convenient "
+                "step."
+            ),
+            "- Include corroborating files in `files_reviewed`, `evidence`, and `review_surface`.",
+            (
+                "- Keep corroboration inside the current bounded caps: evidence <= "
+                f"{bounded.max_evidence_refs_per_recommendation} refs, "
+                "review_surface.must_check_files <= "
+                f"{bounded.max_must_check_files_per_recommendation}, "
+                "review_surface.optional_check_files <= "
+                f"{bounded.max_optional_check_files_per_recommendation}."
+            ),
+            (
+                "- Use `review_surface.must_check_files` for directly governing "
+                "corroboration and `review_surface.optional_check_files` for "
+                "supporting corroboration."
+            ),
+            (
+                "- Reserve `scope_escapes` for later review work that truly leaves "
+                "the declared `review_surface`, not for missing nearby repo-local "
+                "corroboration that the proposer should have included."
+            ),
+            role_line_by_role[role],
+        ]
+    )
+
+
 def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
     grounding_modes = ", ".join(GROUNDING_MODE_VALUES)
     trust = contract.trust_review
@@ -613,6 +687,7 @@ Your job:
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
 {_trust_review_policy_block(contract)}
+{_bounded_corroboration_guidance_block(contract, role="proposer")}
 {_recommendation_payload_block(contract)}
 {_confidence_rubric_block(contract)}
 
@@ -663,6 +738,7 @@ Decision guidance:
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
 {_trust_review_policy_block(contract)}
+{_bounded_corroboration_guidance_block(contract, role="critic")}
 {_review_payload_ref_block(contract)}
 {_issue_taxonomy_block(contract)}
 {_mode_acceptance_guidance_block(contract)}
@@ -731,6 +807,7 @@ Audit round: {round_index}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
 {_trust_review_policy_block(contract)}
+{_bounded_corroboration_guidance_block(contract, role="auditor")}
 {_review_payload_ref_block(contract)}
 {_issue_taxonomy_block(contract)}
 {_mode_acceptance_guidance_block(contract)}
@@ -797,6 +874,7 @@ Revision round: {revision_round}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
 {_trust_review_policy_block(contract)}
+{_bounded_corroboration_guidance_block(contract, role="reviser")}
 {_recommendation_payload_block(contract)}
 {_review_policy_block(contract.stop_policy)}
 {_confidence_rubric_block(contract)}

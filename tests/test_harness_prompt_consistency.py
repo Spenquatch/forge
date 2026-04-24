@@ -249,6 +249,24 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert line in auditor
         assert line in reviser
 
+    bounded_corroboration_lines = [
+        "Bounded corroboration guidance:",
+        "Treat `files_hint`, when provided, as a starting slice, not the total review universe.",
+        "In bounded mode, one-hop repo-local corroboration outside `files_hint` is allowed when it is needed to support a recommendation.",
+        "For requirement, policy, or spec claims, inspect and cite the nearest governing repo-local doc or manifest.",
+        "For parity, symmetry, or sibling-workflow claims, inspect and cite the sibling implementation that establishes the baseline, and compare the full like-for-like seam rather than one convenient step.",
+        "Include corroborating files in `files_reviewed`, `evidence`, and `review_surface`.",
+        "Keep corroboration inside the current bounded caps: evidence <= 3 refs, review_surface.must_check_files <= 3, review_surface.optional_check_files <= 2.",
+        "Use `review_surface.must_check_files` for directly governing corroboration and `review_surface.optional_check_files` for supporting corroboration.",
+        "Reserve `scope_escapes` for later review work that truly leaves the declared `review_surface`, not for missing nearby repo-local corroboration that the proposer should have included.",
+    ]
+    bounded_role_lines = {
+        "proposer": "In the proposer draft, do not leave governing or sibling corroboration for later stages; pull the needed repo-local file into `files_reviewed`, `evidence`, and `review_surface` now.",
+        "critic": "In the critic stage, flag missing repo-local corroboration when a requirement/spec or parity claim lacks its governing or sibling file in `files_reviewed`, `evidence`, or `review_surface`.",
+        "reviser": "In the reviser stage, repair missing corroboration by widening `review_surface` within cap before inventing new recommendations.",
+        "auditor": "In the auditor stage, do not call the draft cleanly closed while a spec-backed or parity-backed claim still lacks the needed governing or sibling corroborating file.",
+    }
+
     if mode == "trust":
         for line in final_artifact_lines:
             assert line in proposer
@@ -266,6 +284,27 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert "partial-only considerations" not in critic
         assert "partial-only considerations" not in auditor
         assert "partial-only considerations" not in reviser
+
+    if mode == "bounded":
+        for line in bounded_corroboration_lines:
+            assert line in proposer
+            assert line in critic
+            assert line in auditor
+            assert line in reviser
+        assert bounded_role_lines["proposer"] in proposer
+        assert bounded_role_lines["critic"] in critic
+        assert bounded_role_lines["reviser"] in reviser
+        assert bounded_role_lines["auditor"] in auditor
+    else:
+        assert "Bounded corroboration guidance:" not in proposer
+        assert "Bounded corroboration guidance:" not in critic
+        assert "Bounded corroboration guidance:" not in auditor
+        assert "Bounded corroboration guidance:" not in reviser
+        for line in bounded_role_lines.values():
+            assert line not in proposer
+            assert line not in critic
+            assert line not in auditor
+            assert line not in reviser
 
     assert "Minimum accepted recommendations for partial acceptance: 2" in critic
     assert "Create stable issue IDs such as AR-001" in critic
