@@ -70,6 +70,10 @@ from .validation import preflight_validators, run_validators
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
+_TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST = {
+    "strengths contains both concrete items and none_reason; prefer one or the other.",
+    "uncertainties contains both concrete items and none_reason; prefer one or the other.",
+}
 
 
 class HarnessError(RuntimeError):
@@ -1564,17 +1568,27 @@ class HarnessRunner:
                 "review topics are carried forward: " + ", ".join(carried_forward_topic_ids)
             )
 
-        semantic_warning_records = self._final_semantic_warning_records()
-        if semantic_warning_records:
+        blocking_semantic_warning_records = self._final_publication_blocking_semantic_warning_records()
+        if blocking_semantic_warning_records:
             blocking_causes.append(
                 "semantic validation warnings remain: "
-                + "; ".join(str(record.get("warning") or "") for record in semantic_warning_records)
+                + "; ".join(
+                    str(record.get("warning") or "") for record in blocking_semantic_warning_records
+                )
             )
 
         return {
             "final_answer_publishable": not blocking_causes,
             "blocking_causes": blocking_causes,
         }
+
+    def _final_publication_blocking_semantic_warning_records(self) -> list[dict[str, Any]]:
+        return [
+            record
+            for record in self._final_semantic_warning_records()
+            if str(record.get("warning") or "")
+            not in _TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST
+        ]
 
     def _analysis_contract(self) -> AnalysisReviewContract:
         if self.analysis_review_contract is None:

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from anvil.harness.contracts import build_analysis_review_contract, confidence_rubric_lines
+from anvil.harness.contracts import (
+    build_analysis_review_contract,
+    confidence_rubric_lines,
+)
 from anvil.harness.prompts import (
     build_analysis_auditor_prompt,
     build_analysis_critic_prompt,
@@ -16,7 +19,6 @@ _GIT_SNAPSHOT = {
     "is_git": False,
     "ignored_rel_paths": [],
 }
-
 
 
 def _task() -> TaskSpec:
@@ -43,17 +45,32 @@ def _task() -> TaskSpec:
     )
 
 
-
 def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
             "kind": kind,
             "roles": {
-                "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
-                "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
-                "reviser": {"provider": "codex_cli", "effort": "high", "access": "read"},
-                "auditor": {"provider": "claude_code", "effort": "high", "access": "read"},
+                "proposer": {
+                    "provider": "codex_cli",
+                    "effort": "medium",
+                    "access": "read",
+                },
+                "critic": {
+                    "provider": "claude_code",
+                    "effort": "high",
+                    "access": "read",
+                },
+                "reviser": {
+                    "provider": "codex_cli",
+                    "effort": "high",
+                    "access": "read",
+                },
+                "auditor": {
+                    "provider": "claude_code",
+                    "effort": "high",
+                    "access": "read",
+                },
             },
             "review_loops": {
                 "min_loops": 1,
@@ -142,7 +159,9 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     strategy = _strategy(strategy_kind)
     contract = build_analysis_review_contract(task, strategy)
 
-    proposer = build_analysis_proposer_prompt(task, strategy.prompt_preamble, _GIT_SNAPSHOT, contract)
+    proposer = build_analysis_proposer_prompt(
+        task, strategy.prompt_preamble, _GIT_SNAPSHOT, contract
+    )
     prior_analysis = {
         "status": "done",
         "recommendations": [
@@ -169,8 +188,20 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         git_snapshot=_GIT_SNAPSHOT,
         review_policy=strategy.review_loops,
         contract=contract,
-        issue_ledger=[{"issue_id": "AR-001", "title": "Example issue", "resolution_status": "open"}],
-        topic_ledger=[{"topic_id": "TOPIC-001", "title": "Example topic", "resolution_status": "open"}],
+        issue_ledger=[
+            {
+                "issue_id": "AR-001",
+                "title": "Example issue",
+                "resolution_status": "open",
+            }
+        ],
+        topic_ledger=[
+            {
+                "topic_id": "TOPIC-001",
+                "title": "Example topic",
+                "resolution_status": "open",
+            }
+        ],
         round_index=1,
     )
     reviser = build_analysis_reviser_prompt(
@@ -182,8 +213,12 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         git_snapshot=_GIT_SNAPSHOT,
         revision_round=1,
         contract=contract,
-        open_issues=[{"issue_id": "AR-001", "severity": "medium", "title": "Example issue"}],
-        open_topics=[{"topic_id": "TOPIC-001", "severity": "medium", "title": "Example topic"}],
+        open_issues=[
+            {"issue_id": "AR-001", "severity": "medium", "title": "Example issue"}
+        ],
+        open_topics=[
+            {"topic_id": "TOPIC-001", "severity": "medium", "title": "Example topic"}
+        ],
     )
 
     common_bounded_lines = [
@@ -221,7 +256,9 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
             assert line in auditor
             assert line in reviser
     else:
-        assert "Final-artifact eligibility is runner-owned in trust mode" not in proposer
+        assert (
+            "Final-artifact eligibility is runner-owned in trust mode" not in proposer
+        )
         assert "Final-artifact eligibility is runner-owned in trust mode" not in critic
         assert "Final-artifact eligibility is runner-owned in trust mode" not in auditor
         assert "Final-artifact eligibility is runner-owned in trust mode" not in reviser
@@ -233,9 +270,15 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "Minimum accepted recommendations for partial acceptance: 2" in critic
     assert "Create stable issue IDs such as AR-001" in critic
     assert "Validate each recommendation's cited evidence first" in critic
-    assert "Record `scope_escapes` whenever you inspect files outside the declared review_surface" in critic
+    assert (
+        "Record `scope_escapes` whenever you inspect files outside the declared review_surface"
+        in critic
+    )
     assert "Recommendation review coverage:" in critic
-    assert "Use `topics` only for genuinely new bounded-review topics introduced by this review stage" in critic
+    assert (
+        "Use `topics` only for genuinely new bounded-review topics introduced by this review stage"
+        in critic
+    )
     assert (
         "Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`."
         in critic
@@ -244,7 +287,10 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         "Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics."
         in critic
     )
-    assert "Populate `files_reviewed` with the concrete workspace files you inspected during this review stage." in critic
+    assert (
+        "Populate `files_reviewed` with the concrete workspace files you inspected during this review stage."
+        in critic
+    )
     assert (
         "recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict."
         in critic
@@ -261,25 +307,49 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "You are not starting from scratch" in auditor
     assert "Open issue ledger entering this audit" in auditor
     assert "Open topic ledger entering this audit" in auditor
-    assert "For every previously open topic, you must explicitly classify it as resolved, carried_forward, or waived" in auditor
+    assert (
+        "For every previously open topic, you must explicitly classify it as resolved, carried_forward, or waived"
+        in auditor
+    )
     assert "Preserve topic IDs for carried-forward or waived prior topics" in auditor
-    assert "Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage." in auditor
-    assert "If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`." in auditor
+    assert (
+        "Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage."
+        in auditor
+    )
+    assert (
+        "If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`."
+        in auditor
+    )
     assert "Recommendation review coverage:" in auditor
     assert "The prior analysis contains 3 recommendation(s)." in auditor
     assert "3. Document operator rollback" in auditor
     assert "close all open medium-or-higher blockers" in reviser
     assert "Return an `issue_resolution_map` entry for every open issue ID" in reviser
     assert "return a `topic_resolution_map` entry for every open topic ID" in reviser
-    assert "Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage." in reviser
-    assert "Populate strengths and uncertainties as objects with `items` and `none_reason`" in proposer
+    assert (
+        "Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage."
+        in reviser
+    )
+    assert (
+        "Populate strengths and uncertainties as objects with `items` and `none_reason`"
+        in proposer
+    )
+    assert (
+        'For strengths/uncertainties: when you have concrete items, put them in `items` and set `none_reason` to `""`; use a non-empty `none_reason` only when `items` is empty.'
+        in proposer
+    )
     assert (
         "Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed."
         in proposer
     )
     assert "Do not cite evidence as `path:line-range`" in proposer
-    assert "If multiple excerpts come from one file, cite the file once and put line-specific detail in rationale or scope_note." in proposer
-    assert "Every recommendation uses the same payload family in both modes." in proposer
+    assert (
+        "If multiple excerpts come from one file, cite the file once and put line-specific detail in rationale or scope_note."
+        in proposer
+    )
+    assert (
+        "Every recommendation uses the same payload family in both modes." in proposer
+    )
     assert "Every recommendation uses the same payload family in both modes." in reviser
     if mode == "trust":
         assert (
@@ -296,7 +366,10 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
             in proposer
         )
         assert "keep recommendation evidence within the bounded-review cap." in proposer
-    assert "Update strengths and uncertainties using the same `items` plus `none_reason` section shape" in reviser
+    assert (
+        'Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema: when a section has concrete items, put them in `items` and set `none_reason` to `""`; use a non-empty `none_reason` only when `items` is empty.'
+        in reviser
+    )
     if mode == "trust":
         assert (
             "Preserve each recommendation's evidence list and review_surface unless an open issue or open topic requires changing them; do not drop concrete evidence refs just to match a bounded cap."
@@ -317,12 +390,23 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
             "Keep each recommendation's evidence list complete for trust-mode auditability; do not trim concrete evidence refs to the bounded-review cap."
             in reviser
         )
-        assert "within the bounded-review cap unless the contract explicitly allows more" not in reviser
+        assert (
+            "within the bounded-review cap unless the contract explicitly allows more"
+            not in reviser
+        )
     else:
-        assert "Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more." in reviser
+        assert (
+            "Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more."
+            in reviser
+        )
     assert payload_line in proposer
     assert payload_line in reviser
     assert issue_line in critic
+    for prompt in (proposer, critic, auditor, reviser):
+        assert "FINAL_ANSWER" not in prompt
+        assert "publication-ready" not in prompt
+        assert "ready to publish" not in prompt
+        assert "final artifact" not in prompt.lower()
 
     if mode == "trust":
         assert (
@@ -349,17 +433,17 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
             "Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null."
             in auditor
         )
+        assert "files_reviewed is review context, not proof by itself." in critic
+        assert "files_reviewed is review context, not proof by itself." in auditor
+    else:
         assert (
-            "files_reviewed is review context, not proof by itself."
+            "In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support."
             in critic
         )
         assert (
-            "files_reviewed is review context, not proof by itself."
+            "In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support."
             in auditor
         )
-    else:
-        assert "In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support." in critic
-        assert "In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support." in auditor
     assert issue_line in auditor
     for line in acceptance_lines:
         assert line in critic

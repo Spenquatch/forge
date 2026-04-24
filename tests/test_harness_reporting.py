@@ -2143,8 +2143,7 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     assert "> - `3`: `topic_blocked`" in partial_markdown
     assert "> Blocking causes:" not in partial_markdown
     assert "- Included recommendation indices: `1`, `2`" in partial_markdown
-    assert "- Final-answer admissible indices: `1`" in partial_markdown
-    assert "- Partial-only admissible indices: `2`" in partial_markdown
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`" in partial_markdown
     assert "  - `3`: `topic_blocked`" in partial_markdown
     assert (
         summary_json["analysis_review_status"]["recommendation_admissibility"][
@@ -2152,7 +2151,7 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
         ]["3"]
         == ["topic_blocked"]
     )
-    assert "- Excluded recommendation indices: `3`" in report_markdown
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`" in report_markdown
     assert "  - `3`: `topic_blocked`" in report_markdown
 
 

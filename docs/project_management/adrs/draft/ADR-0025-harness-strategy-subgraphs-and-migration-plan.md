@@ -110,6 +110,8 @@ Responsibilities:
 - write `REPORT.md` and `summary.json`
 - write `FINAL_ANSWER.*` only when the selected primary deliverable is a publishable final answer
 - when trust final publication is blocked, fall through partial-answer eligibility before writing `BEST_DRAFT.*`
+- keep publication wording runner-owned: `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`
+- treat only `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.` as advisory carveouts rather than model-authored publication authority
 
 ### 7) `finalize`
 Responsibilities:

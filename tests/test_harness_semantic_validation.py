@@ -15,7 +15,6 @@ from anvil.harness.types import StrategyConfig, TaskSpec
 _FIXTURE_PATH = Path("tests/fixtures/harness/analysis_review_semantic_cases.json")
 
 
-
 def _task(min_recommendations: int = 2) -> TaskSpec:
     return TaskSpec.from_dict(
         {
@@ -40,22 +39,36 @@ def _task(min_recommendations: int = 2) -> TaskSpec:
     )
 
 
-
 def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
             "kind": kind,
             "roles": {
-                "proposer": {"provider": "codex_cli", "effort": "medium", "access": "read"},
-                "critic": {"provider": "claude_code", "effort": "high", "access": "read"},
-                "reviser": {"provider": "codex_cli", "effort": "high", "access": "read"},
-                "auditor": {"provider": "claude_code", "effort": "high", "access": "read"},
+                "proposer": {
+                    "provider": "codex_cli",
+                    "effort": "medium",
+                    "access": "read",
+                },
+                "critic": {
+                    "provider": "claude_code",
+                    "effort": "high",
+                    "access": "read",
+                },
+                "reviser": {
+                    "provider": "codex_cli",
+                    "effort": "high",
+                    "access": "read",
+                },
+                "auditor": {
+                    "provider": "claude_code",
+                    "effort": "high",
+                    "access": "read",
+                },
             },
             "validators": [],
         }
     )
-
 
 
 def _fixture() -> dict:
@@ -69,7 +82,6 @@ def _workspace_paths() -> set[str]:
         ".github/workflows/release.yml",
         ".github/workflows/nightly.yml",
     }
-
 
 
 def test_analysis_output_semantic_validation_accepts_valid_payload():
@@ -90,6 +102,28 @@ def test_analysis_output_semantic_validation_accepts_valid_payload():
     assert result.errors == []
 
 
+def test_analysis_output_semantic_validation_accepts_empty_none_reason_when_items_exist():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["uncertainties"] = {
+        "items": ["Edge cases remain around rollback sequencing."],
+        "none_reason": "",
+    }
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+    assert result.warnings == []
+
 
 def test_analysis_output_semantic_validation_rejects_missing_sections_and_files():
     task = _task(min_recommendations=2)
@@ -106,11 +140,46 @@ def test_analysis_output_semantic_validation_rejects_missing_sections_and_files(
     )
 
     assert result.ok is False
-    assert "recommendations must contain at least 2 item(s) for this task." in result.errors
-    assert "strengths must contain at least one concrete item or a non-empty none_reason." in result.errors
-    assert "uncertainties must contain at least one concrete item or a non-empty none_reason." in result.errors
+    assert (
+        "recommendations must contain at least 2 item(s) for this task."
+        in result.errors
+    )
+    assert (
+        "strengths must contain at least one concrete item or a non-empty none_reason."
+        in result.errors
+    )
+    assert (
+        "uncertainties must contain at least one concrete item or a non-empty none_reason."
+        in result.errors
+    )
     assert "files_reviewed must contain at least 1 non-empty path(s)." in result.errors
 
+
+def test_analysis_output_semantic_validation_preserves_exact_section_redundancy_warnings():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload["strengths"]["none_reason"] = "Already covered above."
+    payload["uncertainties"] = {
+        "items": ["Manual rollback verification was not re-run."],
+        "none_reason": "A caveat was already recorded.",
+    }
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+    assert result.warnings == [
+        "strengths contains both concrete items and none_reason; prefer one or the other.",
+        "uncertainties contains both concrete items and none_reason; prefer one or the other.",
+    ]
 
 
 def test_reviser_semantic_validation_requires_full_issue_resolution_map_coverage():
@@ -168,8 +237,9 @@ def test_reviser_semantic_validation_rejects_unknown_topic_resolution_ids():
     )
 
     assert result.ok is False
-    assert "topic_resolution_map references unknown topic IDs: TOPIC-999" in result.errors
-
+    assert (
+        "topic_resolution_map references unknown topic IDs: TOPIC-999" in result.errors
+    )
 
 
 def test_review_semantic_validation_requires_recommendation_and_issue_coverage():
@@ -188,7 +258,9 @@ def test_review_semantic_validation_requires_recommendation_and_issue_coverage()
     )
 
     assert result.ok is False
-    assert "recommendation_reviews is missing recommendation indices: 2" in result.errors
+    assert (
+        "recommendation_reviews is missing recommendation indices: 2" in result.errors
+    )
     assert (
         "prior open issue IDs are missing from resolved/carried_forward/waived arrays: AR-001"
         in result.errors
@@ -230,12 +302,17 @@ def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
     )
 
     assert result.ok is False
-    assert "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)." in result.errors
+    assert (
+        "recommendations[1].evidence exceeds the bounded-review cap of 3 item(s)."
+        in result.errors
+    )
 
 
 def test_trust_analysis_output_semantic_validation_allows_more_than_three_evidence_refs():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["analysis_output_trust_surface_valid"])
     payload["recommendations"][0]["evidence"] = [
         ".github/workflows/codex-cli-release-watch.yml",
@@ -425,7 +502,9 @@ def test_analysis_output_semantic_validation_rejects_must_check_files_outside_wo
     contract = build_analysis_review_contract(task, _strategy())
     payload = copy.deepcopy(_fixture()["analysis_output_valid"])
     payload["files_reviewed"].append("does/not/exist.py")
-    payload["recommendations"][0]["review_surface"]["must_check_files"] = ["does/not/exist.py"]
+    payload["recommendations"][0]["review_surface"]["must_check_files"] = [
+        "does/not/exist.py"
+    ]
 
     result = validate_analysis_output_payload(
         payload,
@@ -447,7 +526,9 @@ def test_analysis_output_semantic_validation_rejects_optional_check_files_outsid
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
     payload = copy.deepcopy(_fixture()["analysis_output_valid"])
-    payload["recommendations"][0]["review_surface"]["optional_check_files"] = ["does/not/exist.py"]
+    payload["recommendations"][0]["review_surface"]["optional_check_files"] = [
+        "does/not/exist.py"
+    ]
 
     result = validate_analysis_output_payload(
         payload,
@@ -481,7 +562,10 @@ def test_critic_semantic_validation_rejects_issue_cap_overflow():
     )
 
     assert result.ok is False
-    assert "issues exceeds the bounded-review cap of 5 item(s) for critic." in result.errors
+    assert (
+        "issues exceeds the bounded-review cap of 5 item(s) for critic."
+        in result.errors
+    )
 
 
 def test_critic_semantic_validation_rejects_new_topic_cap_overflow():
@@ -500,7 +584,10 @@ def test_critic_semantic_validation_rejects_new_topic_cap_overflow():
     )
 
     assert result.ok is False
-    assert "topics exceeds the bounded-review cap of 2 item(s) for critic." in result.errors
+    assert (
+        "topics exceeds the bounded-review cap of 2 item(s) for critic."
+        in result.errors
+    )
 
 
 def test_review_semantic_validation_requires_topic_classification_for_every_open_topic():
@@ -657,7 +744,9 @@ def test_review_semantic_validation_accepts_scope_escape_with_reason():
 
 def test_trust_analysis_output_semantic_validation_accepts_valid_trust_metadata():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["analysis_output_trust_surface_valid"]
 
     result = validate_analysis_output_payload(
@@ -675,7 +764,9 @@ def test_trust_analysis_output_semantic_validation_accepts_valid_trust_metadata(
 
 def test_trust_analysis_output_semantic_validation_rejects_verified_evidence_not_subset():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["analysis_output_verified_evidence_not_subset"]
 
     result = validate_analysis_output_payload(
@@ -696,7 +787,9 @@ def test_trust_analysis_output_semantic_validation_rejects_verified_evidence_not
 
 def test_trust_analysis_output_semantic_validation_rejects_uncovered_affected_files():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["analysis_output_uncovered_affected_files"]
 
     result = validate_analysis_output_payload(
@@ -717,7 +810,9 @@ def test_trust_analysis_output_semantic_validation_rejects_uncovered_affected_fi
 
 def test_trust_review_semantic_validation_requires_blocking_class_override_reason():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["review_payload_override_reason_missing"]
 
     result = validate_analysis_review_payload(
@@ -751,7 +846,9 @@ def test_trust_review_semantic_validation_requires_blocking_class_override_reaso
 
 def test_trust_review_semantic_validation_accepts_override_reason_and_warns_on_late_auditor_overflow():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_override_reason_valid"])
     payload["issues"].extend(
         [
@@ -815,7 +912,9 @@ def test_trust_review_semantic_validation_accepts_override_reason_and_warns_on_l
 
 def test_trust_review_semantic_validation_accepts_structured_review_refs_for_topic_classification():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["review_payload_trust_structured_refs_valid"]
 
     result = validate_analysis_review_payload(
@@ -847,7 +946,9 @@ def test_trust_review_semantic_validation_accepts_structured_review_refs_for_top
 
 def test_trust_review_semantic_validation_accepts_structured_review_refs_for_global_issue_classification():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["review_payload_trust_issue_closure_valid"]
 
     result = validate_analysis_review_payload(
@@ -861,7 +962,9 @@ def test_trust_review_semantic_validation_accepts_structured_review_refs_for_glo
             {
                 "issue_id": "AR-001",
                 "recommendation_index": None,
-                "_prior_surfaced_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                "_prior_surfaced_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
             }
         ],
         prior_open_topic_ids=[],
@@ -887,7 +990,9 @@ def test_trust_review_semantic_validation_accepts_structured_review_refs_for_glo
 
 def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["review_payload_trust_topic_closure_zero_refs"]
 
     result = validate_analysis_review_payload(
@@ -923,7 +1028,9 @@ def test_trust_review_semantic_validation_rejects_zero_ref_topic_classification(
 
 def test_trust_review_semantic_validation_rejects_issue_closure_verified_refs_that_overclaim_prior_surfaced_refs():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = _fixture()["review_payload_trust_issue_closure_overclaim"]
 
     result = validate_analysis_review_payload(
@@ -937,7 +1044,9 @@ def test_trust_review_semantic_validation_rejects_issue_closure_verified_refs_th
             {
                 "issue_id": "AR-001",
                 "recommendation_index": None,
-                "_prior_surfaced_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                "_prior_surfaced_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
             }
         ],
         prior_open_topic_ids=[],
@@ -966,7 +1075,9 @@ def test_trust_review_semantic_validation_rejects_issue_closure_verified_refs_th
 
 def test_trust_review_semantic_validation_rejects_global_topic_without_recommendation_level_refs():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_trust_topic_closure_zero_refs"])
     payload["topics"] = [
         {
@@ -1013,7 +1124,9 @@ def test_trust_review_semantic_validation_rejects_global_topic_without_recommend
 
 def test_trust_review_semantic_validation_rejects_global_topic_when_recommendations_are_covered():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
     payload["topics"] = [
         {
@@ -1061,7 +1174,9 @@ def test_trust_review_semantic_validation_rejects_global_topic_when_recommendati
 
 def test_trust_review_semantic_validation_allows_relinked_topic_to_close_on_recommendation_proof():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
     payload["resolved_topic_ids"] = ["TOPIC-001"]
     payload["carried_forward_topic_ids"] = []
@@ -1098,7 +1213,9 @@ def test_trust_review_semantic_validation_allows_relinked_topic_to_close_on_reco
 
 def test_trust_review_semantic_validation_rejects_global_issue_when_recommendations_are_covered():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
     payload["issues"] = [
         {
@@ -1150,19 +1267,25 @@ def test_trust_review_semantic_validation_rejects_global_issue_when_recommendati
 
 def test_trust_review_semantic_validation_rejects_duplicate_topic_closure_review_ids():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
     payload["topic_closure_reviews"] = [
         {
             "topic_id": "TOPIC-001",
             "checked_files": [".github/workflows/claude-code-release-watch.yml"],
-            "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [
+                ".github/workflows/claude-code-release-watch.yml"
+            ],
             "summary": "First proof entry.",
         },
         {
             "topic_id": "TOPIC-001",
             "checked_files": [".github/workflows/claude-code-release-watch.yml"],
-            "verified_evidence_refs": [".github/workflows/claude-code-release-watch.yml"],
+            "verified_evidence_refs": [
+                ".github/workflows/claude-code-release-watch.yml"
+            ],
             "summary": "Duplicate proof entry.",
         },
     ]
@@ -1192,12 +1315,16 @@ def test_trust_review_semantic_validation_rejects_duplicate_topic_closure_review
     )
 
     assert result.ok is False
-    assert "topic_closure_reviews contains duplicate topic_ids: TOPIC-001" in result.errors
+    assert (
+        "topic_closure_reviews contains duplicate topic_ids: TOPIC-001" in result.errors
+    )
 
 
 def test_trust_review_semantic_validation_rejects_topic_closure_verified_refs_outside_checked_files():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
     payload["topic_closure_reviews"] = [
         {
@@ -1241,7 +1368,9 @@ def test_trust_review_semantic_validation_rejects_topic_closure_verified_refs_ou
 
 def test_trust_review_semantic_validation_requires_per_verdict_structured_refs():
     task = _task(min_recommendations=2)
-    contract = build_analysis_review_contract(task, _strategy("analysis_review_trust_v1"))
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
     payload = copy.deepcopy(_fixture()["review_payload_override_reason_valid"])
     for item in payload["recommendation_reviews"]:
         item.pop("checked_files", None)

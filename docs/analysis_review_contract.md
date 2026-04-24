@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v7` keeps the bounded-review rules from v6, keeps trust-mode recommendation evidence explicitly uncapped, and adds runner-owned recommendation admissibility for trust-mode final vs partial artifact selection without changing the model-authored payload shape.
+`analysis_review_v1_contract_v7` keeps the bounded-review rules from v6, keeps trust-mode recommendation evidence explicitly uncapped, and adds runner-owned recommendation withholding for trust-mode final vs partial artifact selection without changing the model-authored payload shape.
 
 ## What the contract governs
 
@@ -103,9 +103,9 @@ For `accepted_partial`, the shipped subset must also be topic-clean:
 
 `REPORT.md` renders the same ledger in a row-shaped `## Topic Lifecycle` table, while `FINAL_ANSWER.md` keeps a compact bullet summary of the same canonical records.
 
-## Recommendation admissibility and artifact selection
+## Recommendation withholding and artifact selection
 
-Slice D adds a runner-owned recommendation admissibility layer under `analysis_review_status`:
+Slice D adds a runner-owned recommendation withholding ledger under `analysis_review_status.recommendation_admissibility`:
 
 ```json
 {
@@ -127,13 +127,13 @@ Rules:
 
 - `final_answer_recommendation_indices`, `partial_only_recommendation_indices`, `excluded_recommendation_indices`, and `reasons_by_recommendation_index` are the frozen field names.
 - `recommendation_admissibility` is runner-owned status, not a model-authored payload field. The payload shape remains unchanged.
-- In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Only recommendations in `final_answer_recommendation_indices` are clean final-answer candidates.
-- A recommendation is final-admissible only when its review verdict is `accept`, its grounding is not `inferred`, and no runner-known per-index topic blocker applies.
-- `accept_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`; they are not final-admissible in trust mode.
+- In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*`.
+- A recommendation stays in `final_answer_recommendation_indices` only when its review verdict is `accept`, its grounding is not `inferred`, and no runner-known per-index topic blocker applies.
+- `accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`; they are withheld from `FINAL_ANSWER.*` in trust mode.
 - Non-accepted recommendations and per-index topic-blocked recommendations move to `excluded_recommendation_indices`.
 - `reasons_by_recommendation_index` uses only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`.
 - The candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`, but publishing `PARTIAL_ANSWER.*` still reuses the existing partial gates.
-- Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules. Recommendation admissibility does not replace them.
+- Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules. This withholding ledger does not replace them.
 
 Slice C also keeps an explicit publishability layer under `analysis_review_status`:
 
@@ -156,9 +156,12 @@ Rules:
 - `final_answer_publishable` and `blocking_causes` are the frozen field names.
 - In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
 - Trust-mode final publication is allowed only when the content verdict is `accepted` or `accepted_with_warnings`, provenance is fully bound, no topic IDs remain `open`, no topic IDs remain `carried_forward`, and no final semantic warnings remain.
+- Only the exact warning strings `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.` are advisory carveouts. They remain visible warnings, but by themselves they do not add a publishability blocker.
 - If the content verdict is not fully accepted, `blocking_causes` must contain exactly one verdict blocker: `content verdict is not fully accepted: <verdict>`.
 - `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` remain the source of truth for what actually shipped.
 - If trust mode is content-accepted but not final-publishable, artifact selection skips `FINAL_ANSWER.*` and falls through to the existing partial-answer path when eligible, otherwise `BEST_DRAFT.*`.
+- Reports and fallback deliverables freeze their wording to `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`.
+- Reviewer or model-authored prose may describe quality, caveats, or evidence gaps, but only runner-owned `analysis_review_status.publishability`, `analysis_review_status.recommendation_admissibility`, and `summary.json["artifacts"]` decide artifact eligibility and publication state.
 
 For fully accepted trust runs, `blocking_causes` is deterministic. The list is emitted in this order:
 
@@ -167,7 +170,7 @@ For fully accepted trust runs, `blocking_causes` is deterministic. The list is e
 3. carried-forward topic IDs in sorted order
 4. one semantic-warning blocker whose summaries preserve `_final_semantic_warning_records()` order and are joined with `; `
 
-This separation is intentional: `content_verdict` classifies the review outcome, `recommendation_admissibility` classifies per-index final vs partial eligibility, and `publishability` decides whether `FINAL_ANSWER.*` may ship for trust-mode runs.
+This separation is intentional: `content_verdict` classifies the review outcome, `recommendation_admissibility` records which indices remain publishable in `FINAL_ANSWER.*` versus withheld to fallback subsets, and `publishability` decides whether `FINAL_ANSWER.*` may ship for trust-mode runs.
 
 ## Bounded-review policy
 

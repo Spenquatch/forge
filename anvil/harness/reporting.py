@@ -111,6 +111,35 @@ def _recommendation_admissibility(summary: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _recommendation_withholding_entries(
+    recommendation_admissibility: dict[str, Any],
+) -> list[dict[str, Any]]:
+    reasons_by_index = (
+        recommendation_admissibility.get("reasons_by_recommendation_index") or {}
+    )
+    withheld_indices = sorted(
+        set(
+            recommendation_admissibility.get("partial_only_recommendation_indices") or []
+        ).union(recommendation_admissibility.get("excluded_recommendation_indices") or [])
+    )
+    entries: list[dict[str, Any]] = []
+    for recommendation_index in withheld_indices:
+        reasons = [
+            str(reason).strip()
+            for reason in (reasons_by_index.get(str(recommendation_index)) or [])
+            if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
+        ]
+        if not reasons:
+            continue
+        entries.append(
+            {
+                "recommendation_index": recommendation_index,
+                "reasons": reasons,
+            }
+        )
+    return entries
+
+
 def _partial_acceptance_min_accepted_recommendations(summary: dict[str, Any]) -> int:
     contract = summary.get("analysis_review_contract") or {}
     partial_acceptance = contract.get("partial_acceptance") or {}
@@ -558,30 +587,25 @@ def _append_partial_admissibility_section(
             included_recommendation_indices=included_indices,
         )
 
-    lines.extend(["## Recommendation Admissibility", ""])
+    lines.extend(["## Recommendation Withholding", ""])
     lines.append(
         "- Included recommendation indices: "
         + _render_recommendation_index_list(included_indices)
     )
     if admissibility:
+        withholding_entries = _recommendation_withholding_entries(admissibility)
         lines.append(
-            "- Final-answer admissible indices: "
+            "- Recommendation indices withheld from `FINAL_ANSWER.*`: "
             + _render_recommendation_index_list(
-                admissibility.get("final_answer_recommendation_indices") or []
+                [item["recommendation_index"] for item in withholding_entries]
             )
         )
+    else:
         lines.append(
-            "- Partial-only admissible indices: "
-            + _render_recommendation_index_list(
-                admissibility.get("partial_only_recommendation_indices") or []
-            )
+            "- Recommendation indices withheld from `FINAL_ANSWER.*`: "
+            + _render_recommendation_index_list(excluded_indices)
         )
-    lines.append(
-        "- Excluded recommendation indices: "
-        + _render_recommendation_index_list(excluded_indices)
-    )
     if reasons_by_index:
-        lines.append("- Exclusion reasons:")
         for raw_index in sorted(reasons_by_index, key=lambda item: int(item)):
             reasons = [
                 str(reason).strip()
@@ -746,29 +770,7 @@ def _final_artifact_withholding_note_inputs(summary: dict[str, Any]) -> dict[str
 
     _, blocking_causes = _final_answer_publication_state(summary)
     admissibility = _recommendation_admissibility(summary)
-    final_indices = set(admissibility.get("final_answer_recommendation_indices") or [])
-    withheld_indices = sorted(
-        set(admissibility.get("partial_only_recommendation_indices") or []).union(
-            admissibility.get("excluded_recommendation_indices") or []
-        )
-        - final_indices
-    )
-    reasons_by_index = admissibility.get("reasons_by_recommendation_index") or {}
-    admissibility_withheld_entries: list[dict[str, Any]] = []
-    for recommendation_index in withheld_indices:
-        reasons = [
-            str(reason).strip()
-            for reason in (reasons_by_index.get(str(recommendation_index)) or [])
-            if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
-        ]
-        if not reasons:
-            continue
-        admissibility_withheld_entries.append(
-            {
-                "recommendation_index": recommendation_index,
-                "reasons": reasons,
-            }
-        )
+    admissibility_withheld_entries = _recommendation_withholding_entries(admissibility)
 
     return {
         "blocking_causes": list(blocking_causes),

@@ -344,7 +344,9 @@ Rules:
 - `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` are the source of truth for what actually shipped.
 - In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
 - `analysis_review_status.publishability.final_answer_publishable` and `blocking_causes` decide whether `FINAL_ANSWER.*` may ship for trust-mode runs.
+- Only the exact warning strings `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.` are advisory carveouts for trust publication; reviewer prose does not decide artifact eligibility.
 - When trust final publication is blocked, artifact selection falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`.
+- User-visible surfaces freeze their wording to `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`.
 - Markdown deliverables that are not the publishable final answer must carry a prominent banner explaining the artifact status.
 
 ## Best-draft selection contract

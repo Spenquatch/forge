@@ -140,7 +140,9 @@ def _recommendation_review_coverage_block(prior_output: dict | None) -> str:
     if isinstance(prior_output, dict):
         raw_recommendations = prior_output.get("recommendations")
         if isinstance(raw_recommendations, list):
-            recommendations = [item for item in raw_recommendations if isinstance(item, dict)]
+            recommendations = [
+                item for item in raw_recommendations if isinstance(item, dict)
+            ]
     if not recommendations:
         return (
             "Recommendation review coverage:\n"
@@ -362,19 +364,13 @@ def _reviser_preservation_line(contract: AnalysisReviewContract) -> str:
             "7. Preserve each recommendation's evidence list and review_surface unless an open issue or open topic requires changing them; "
             "do not drop concrete evidence refs just to match a bounded cap."
         )
-    return (
-        "7. Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
-    )
+    return "7. Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
 
 
 def _reviser_evidence_guidance_line(contract: AnalysisReviewContract) -> str:
     if contract.mode == "trust":
-        return (
-            "11. Keep each recommendation's evidence list complete for trust-mode auditability; do not trim concrete evidence refs to the bounded-review cap."
-        )
-    return (
-        "11. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more."
-    )
+        return "11. Keep each recommendation's evidence list complete for trust-mode auditability; do not trim concrete evidence refs to the bounded-review cap."
+    return "11. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more."
 
 
 def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
@@ -450,7 +446,9 @@ def _mode_acceptance_guidance_block(contract: AnalysisReviewContract) -> str:
     return "\n".join(lines)
 
 
-def build_single_pass_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
+def build_single_pass_prompt(
+    task: TaskSpec, prompt_preamble: str, git_snapshot: dict
+) -> str:
     return f"""
 You are the SOLVER stage in an external evaluation harness.
 
@@ -471,7 +469,9 @@ Current workspace snapshot:
 """.strip()
 
 
-def build_proposer_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
+def build_proposer_prompt(
+    task: TaskSpec, prompt_preamble: str, git_snapshot: dict
+) -> str:
     return f"""
 You are the PROPOSER stage in a proposer/falsifier/patcher harness.
 
@@ -602,7 +602,7 @@ Your job:
 4. Distinguish carefully among confirmed_issue, risk, and recommendation.
 5. Use the shared confidence rubric below. High confidence is appropriate for direct workspace evidence; lower confidence is appropriate for partial inference.
 6. Populate strengths and uncertainties as objects with `items` and `none_reason`.
-7. For strengths/uncertainties: include concrete items when you have them; otherwise leave `items` empty and explain why in `none_reason`.
+7. For strengths/uncertainties: when you have concrete items, put them in `items` and set `none_reason` to `""`; use a non-empty `none_reason` only when `items` is empty.
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
 9. Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
 10. Do not cite evidence as `path:line-range`; if line detail matters, put it in rationale or scope_note while citing the file path once.
@@ -783,7 +783,7 @@ Your job:
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
 4. If prior open topics exist in the review context, return a `topic_resolution_map` entry for every open topic ID, even if you disagree with it.
 5. Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage.
-6. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
+6. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema: when a section has concrete items, put them in `items` and set `none_reason` to `""`; use a non-empty `none_reason` only when `items` is empty.
 {_reviser_preservation_line(contract)}
 8. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
 9. Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.

@@ -1784,8 +1784,8 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert "## Analysis Review Status" in report_text
     assert "- Mode: `trust`" in report_text
     assert "- Provenance status: `bound`" in report_text
-    assert "- Final-answer admissible recommendation indices: `1`" in report_text
-    assert "- Partial-only admissible recommendation indices: `2`" in report_text
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in report_text
+    assert "  - `2`: `inferred_grounding`" in report_text
     assert "Accepted recommendations with inference-only grounding: 2" in report_text
     assert "This recommendation carries review caveats:" in recommendation_two_section
     assert (
@@ -2110,6 +2110,98 @@ def test_analysis_review_status_publishability_blocks_semantic_warnings_in_recor
     }
 
 
+def test_analysis_review_status_publishability_ignores_advisory_section_warnings(tmp_path):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    advisory_strengths_warning = (
+        "strengths contains both concrete items and none_reason; prefer one or the other."
+    )
+    advisory_uncertainties_warning = (
+        "uncertainties contains both concrete items and none_reason; prefer one or the other."
+    )
+    runner.agent_stages = [
+        _stage_with_provenance(
+            stage_index=1,
+            role_name="reviser_round_1",
+            payload=final_analysis_payload,
+            semantic_validation_warnings=[advisory_strengths_warning],
+        ),
+        _stage_with_provenance(
+            stage_index=2,
+            role_name="auditor",
+            payload=final_review_payload,
+            semantic_validation_warnings=[advisory_uncertainties_warning],
+        ),
+    ]
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["semantic_warning_count"] == 2
+    assert status["semantic_warnings"] == [
+        {
+            "stage_index": 1,
+            "role_name": "reviser_round_1",
+            "warning": advisory_strengths_warning,
+        },
+        {
+            "stage_index": 2,
+            "role_name": "auditor",
+            "warning": advisory_uncertainties_warning,
+        },
+    ]
+    assert status["publishability"] == {
+        "final_answer_publishable": True,
+        "blocking_causes": [],
+    }
+
+
+def test_analysis_review_status_publishability_blocks_only_non_advisory_semantic_warnings(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_review_payload = adapter._payload_for_role("auditor")
+    runner.agent_stages = [
+        _stage_with_provenance(
+            stage_index=1,
+            role_name="reviser_round_1",
+            payload=final_analysis_payload,
+            semantic_validation_warnings=[
+                "strengths contains both concrete items and none_reason; prefer one or the other.",
+                "analysis warning",
+            ],
+        ),
+        _stage_with_provenance(
+            stage_index=2,
+            role_name="auditor",
+            payload=final_review_payload,
+            semantic_validation_warnings=[
+                "uncertainties contains both concrete items and none_reason; prefer one or the other.",
+                "review warning",
+            ],
+        ),
+    ]
+
+    status = runner._build_analysis_review_status(
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert status["semantic_warning_count"] == 4
+    assert status["publishability"] == {
+        "final_answer_publishable": False,
+        "blocking_causes": ["semantic validation warnings remain: analysis warning; review warning"],
+    }
+
+
 def test_analysis_review_status_publishability_blocks_non_accepted_partial_verdicts(tmp_path):
     runner = _make_analysis_status_runner(tmp_path)
     adapter = _AcceptingHarnessAdapter()
@@ -2159,7 +2251,7 @@ def test_analysis_review_status_publishability_allows_advisory_only_trust_warnin
     monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
     monkeypatch.setattr(
         "anvil.harness.runner.get_provider",
-        lambda name: _TrustInferenceHarnessAdapter(),
+        lambda name: _TrustSemanticWarningHarnessAdapter(),
     )
 
     runner = HarnessRunner(
@@ -2171,6 +2263,19 @@ def test_analysis_review_status_publishability_allows_advisory_only_trust_warnin
     summary = runner.run()
 
     assert summary["verdict"] == "accepted_with_warnings"
+    assert summary["analysis_review_status"]["semantic_warning_count"] == 1
+    assert summary["analysis_review_status"]["semantic_warnings"] == [
+        {
+            "stage_index": 3,
+            "role_name": "reviser_round_1",
+            "warning": "strengths contains both concrete items and none_reason; prefer one or the other.",
+        }
+    ]
+    assert any(
+        "semantic validation warnings remain: strengths contains both concrete items and none_reason; prefer one or the other."
+        in cause
+        for cause in summary["analysis_review_status"]["downgrade_causes"]
+    )
     assert summary["analysis_review_status"]["publishability"] == {
         "final_answer_publishable": True,
         "blocking_causes": [],

@@ -235,11 +235,13 @@ def test_readme_documents_trust_recommendation_admissibility_and_preview_only_ma
     assert "excluded_recommendation_indices" in readme
     assert "reasons_by_recommendation_index" in readme
     assert "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`" in readme
-    assert "accepted-but-inferred recommendations are not final-admissible in trust mode" in readme
-    assert "candidate subset comes from the final-admissible plus partial-only recommendations" in readme
+    assert "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode" in readme
+    assert "candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations" in readme
     assert "analysis_review_status.publishability" in readme
     assert "final_answer_publishable" in readme
     assert "blocking_causes" in readme
+    assert "reviewer prose does not decide artifact eligibility" in readme
+    assert "advisory carveout is limited to the exact warning strings" in readme
     assert "final_artifact`, `final_artifact_json`, `final_artifact_kind`" in readme
     assert "Markdown compaction is preview-only and renderer-owned." in readme
 
@@ -248,7 +250,7 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
     assert "analysis_review_v1_contract_v7" in contract_doc
-    assert "recommendation admissibility layer" in contract_doc
+    assert "recommendation withholding ledger" in contract_doc
     assert "recommendation_admissibility" in contract_doc
     assert "runner-owned status, not a model-authored payload field" in contract_doc
     assert "payload shape remains unchanged" in contract_doc
@@ -257,13 +259,18 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     assert "partial_only_recommendation_indices" in contract_doc
     assert "excluded_recommendation_indices" in contract_doc
     assert "reasons_by_recommendation_index" in contract_doc
-    assert "`accept_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`" in contract_doc
+    assert "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*`" in contract_doc
+    assert "`accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`" in contract_doc
     assert "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`" in contract_doc
     assert "candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`" in contract_doc
     assert "Global topic blockers, provenance gating, and minimum-threshold fallout remain whole-artifact promotion rules." in contract_doc
     assert "final_answer_publishable" in contract_doc
     assert "blocking_causes" in contract_doc
     assert "accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`" in contract_doc
+    assert "strengths contains both concrete items and none_reason; prefer one or the other." in contract_doc
+    assert "uncertainties contains both concrete items and none_reason; prefer one or the other." in contract_doc
+    assert "`Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`" in contract_doc
+    assert "only runner-owned `analysis_review_status.publishability`, `analysis_review_status.recommendation_admissibility`, and `summary.json[\"artifacts\"]` decide artifact eligibility and publication state" in contract_doc
     assert "content verdict is not fully accepted: <verdict>" in contract_doc
     assert "For fully accepted trust runs, `blocking_causes` is deterministic." in contract_doc
     assert "1. provenance blocker first, when present" in contract_doc
@@ -281,6 +288,9 @@ def test_surface_update_notes_document_primary_deliverable_artifacts():
     assert "FINAL_ANSWER.json` / `FINAL_ANSWER.md` only when the selected primary deliverable is a publishable final answer" in notes
     assert "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable" in notes
     assert "BEST_DRAFT.json` / `BEST_DRAFT.md` when no shippable final or partial artifact is allowed" in notes
+    assert "`Final publication: publishable|blocked`" in notes
+    assert "`Publication blockers:`" in notes
+    assert "`Recommendation indices withheld from FINAL_ANSWER.*:`" in notes
 
 
 def test_draft_adr_0024_documents_slice_c_artifact_contract_without_old_two_state_wording():
@@ -294,6 +304,8 @@ def test_draft_adr_0024_documents_slice_c_artifact_contract_without_old_two_stat
     assert "accepted_with_warnings" in adr
     assert "does not guarantee `FINAL_ANSWER.*`" in adr
     assert "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`" in adr
+    assert "reviewer prose does not decide artifact eligibility" in adr
+    assert "`Recommendation indices withheld from FINAL_ANSWER.*:`" in adr
     assert 'summary.json["artifacts"]["final_artifact"]' in adr
     assert "Accepted / accepted_with_warnings runs" not in adr
     assert "### Non-accepted runs" not in adr
@@ -309,6 +321,8 @@ def test_draft_adr_0025_documents_slice_c_artifact_fallback_without_old_two_stat
     assert "trust final publication is blocked" in adr
     assert "fall through partial-answer eligibility before writing `BEST_DRAFT.*`" in adr
     assert "falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`" in adr
+    assert "`Final publication: publishable|blocked`" in adr
+    assert "`Recommendation indices withheld from FINAL_ANSWER.*:`" in adr
     assert "write `FINAL_ANSWER.*` only for accepted runs" not in adr
     assert "otherwise write `BEST_DRAFT.*`" not in adr
     assert "Non-accepted runs produce `BEST_DRAFT.*` artifacts" not in adr

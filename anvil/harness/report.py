@@ -148,6 +148,41 @@ def _render_publishability_fallback(status: dict[str, Any]) -> str:
     return "withheld due to non-publishable run state"
 
 
+def _recommendation_withholding_entries(
+    recommendation_admissibility: dict[str, Any],
+) -> list[dict[str, Any]]:
+    reasons_by_index = (
+        recommendation_admissibility.get("reasons_by_recommendation_index") or {}
+    )
+    withheld_indices = sorted(
+        set(
+            _normalized_recommendation_indices(
+                recommendation_admissibility.get("partial_only_recommendation_indices")
+            )
+        ).union(
+            _normalized_recommendation_indices(
+                recommendation_admissibility.get("excluded_recommendation_indices")
+            )
+        )
+    )
+    entries: list[dict[str, Any]] = []
+    for recommendation_index in withheld_indices:
+        reasons = [
+            str(reason).strip()
+            for reason in (reasons_by_index.get(str(recommendation_index)) or [])
+            if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
+        ]
+        if not reasons:
+            continue
+        entries.append(
+            {
+                "recommendation_index": recommendation_index,
+                "reasons": reasons,
+            }
+        )
+    return entries
+
+
 def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> None:
     bounded_review = _bounded_review_summary(summary)
     if not bounded_review:
@@ -294,43 +329,21 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
         )
     recommendation_admissibility = status.get("recommendation_admissibility") or {}
     if isinstance(recommendation_admissibility, dict) and recommendation_admissibility:
-        final_indices = _normalized_recommendation_indices(
-            recommendation_admissibility.get("final_answer_recommendation_indices")
-        )
-        partial_only_indices = _normalized_recommendation_indices(
-            recommendation_admissibility.get("partial_only_recommendation_indices")
-        )
-        excluded_indices = _normalized_recommendation_indices(
-            recommendation_admissibility.get("excluded_recommendation_indices")
-        )
-        reasons_by_index = recommendation_admissibility.get("reasons_by_recommendation_index") or {}
-        lines.append(
-            "- Final-answer admissible recommendation indices: "
-            + _render_recommendation_index_list(final_indices)
+        withholding_entries = _recommendation_withholding_entries(
+            recommendation_admissibility
         )
         lines.append(
-            "- Partial-only admissible recommendation indices: "
-            + _render_recommendation_index_list(partial_only_indices)
-        )
-        lines.append(
-            "- Excluded recommendation indices: "
-            + _render_recommendation_index_list(excluded_indices)
-        )
-        rendered_reason_lines: list[str] = []
-        for raw_index in sorted(reasons_by_index, key=lambda item: int(item)):
-            normalized_reasons = [
-                str(reason).strip()
-                for reason in (reasons_by_index.get(raw_index) or [])
-                if str(reason).strip() in _CANONICAL_ADMISSIBILITY_REASONS
-            ]
-            if not normalized_reasons:
-                continue
-            rendered_reason_lines.append(
-                f"  - `{raw_index}`: " + ", ".join(f"`{reason}`" for reason in normalized_reasons)
+            "- Recommendation indices withheld from `FINAL_ANSWER.*`: "
+            + _render_recommendation_index_list(
+                [item["recommendation_index"] for item in withholding_entries]
             )
-        if rendered_reason_lines:
-            lines.append("- Recommendation admissibility reasons:")
-            lines.extend(rendered_reason_lines)
+        )
+        if withholding_entries:
+            for item in withholding_entries:
+                lines.append(
+                    f"  - `{item['recommendation_index']}`: "
+                    + ", ".join(f"`{reason}`" for reason in item["reasons"])
+                )
 
     semantic_warnings = status.get("semantic_warnings") or []
     if semantic_warnings:
