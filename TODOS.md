@@ -24,6 +24,8 @@ These are intentionally **not** the first implementation slice for the current b
 - Consider a separate audit artifact for review-surface evidence summaries if `summary.json` and `REPORT.md` become too crowded.
 - Add cross-run comparison tooling for bounded vs trust replay deltas so changes in honesty posture are visible without hand-reading artifacts.
 - Revisit whether scoped closure proof should eventually match recommendation-evidence strength instead of staying review-attested metadata.
+- Consider deprecating `accepted_recommendation_count` once downstream consumers fully migrate to `analysis_review_status.recommendation_admissibility` as the canonical published-subset truth.
+- Add a saved-run consistency checker that compares `summary.json`, `REPORT.md`, and emitted artifact payloads for canonical recommendation-index parity before a replay is accepted.
 
 ### Reporting and UX polish
 
