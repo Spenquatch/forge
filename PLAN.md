@@ -51,32 +51,33 @@ Historical Slice A through Slice E review material remains below for provenance.
 
 ## Slice F, Canonical Analysis Status and Closure Integrity
 
-Slice E fixed publication hygiene. Slice F fixes canonical truth.
+Slice E fixed publication hygiene. Slice F makes the machine-readable truth canonical.
 
 After this slice:
 
-- bounded and trust will both serialize one runner-owned published final subset under `analysis_review_status.recommendation_admissibility`
-- topic recommendation association and topic closure proof binding will stop being conflated
-- `summary.json`, `REPORT.md`, and final artifacts will all describe the same runner-owned truth
+- bounded and trust both serialize one runner-owned published final subset under `analysis_review_status.recommendation_admissibility`
+- topic recommendation association and topic closure proof binding stop sharing the same field by accident
+- `summary.json`, `REPORT.md`, and emitted final artifacts all project the same canonical status instead of re-deriving it
 
 ### Why this slice now
 
-This is the next real user-facing and tool-facing gap:
+This is the next real tool-facing gap on the branch:
 
-1. recommendation publication semantics already exist, but bounded leaves the canonical field empty
-2. topic closure proof already exists, but recommendation-scoped topic closures still bind proof to a reviser-owned hint instead of reviewer-owned verification
-3. once those two truths drift, reports and saved run artifacts stop being safe to consume programmatically
-4. broader attestation or second-runner work is still real, but it is not the highest-leverage move from the current repo truth
+1. bounded can still publish `FINAL_ANSWER.*` while `analysis_review_status.recommendation_admissibility.final_answer_recommendation_indices` stays empty
+2. recommendation-scoped topic closure can still serialize proof from a reviser-owned hint instead of reviewer-owned verification
+3. once those two truths drift, downstream consumers have to reverse-engineer reality from artifacts instead of reading one canonical contract
+4. bigger attestation work is still real, but it is not the highest-leverage move from the current repo state
 
 ### Slice F objective
 
 Freeze one canonical machine-readable truth for published recommendations and one reviewer-owned proof binding for topic closure.
 
-This slice does exactly three things:
+This slice does exactly four things:
 
 1. populate `analysis_review_status.recommendation_admissibility.final_answer_recommendation_indices` for bounded runs from the actually published `FINAL_ANSWER.*` subset
-2. add one narrow reviewer-owned structured binding for recommendation-scoped topic closure proof, instead of treating `topic_resolution_map.recommendation_index` as the proof anchor
-3. make `summary.json`, `REPORT.md`, and deliverable projection consume that runner-owned truth without fallback reinterpretation
+2. extend `topic_closure_reviews[*]` with one narrow optional `recommendation_index` so recommendation-scoped topic closure can bind to reviewer-owned proof instead of a reviser hint
+3. make runner provenance, `summary.json`, `REPORT.md`, and artifact projection consume that runner-owned truth without fallback reinterpretation
+4. update prompt, contract, and regression surfaces in the same slice so the harness can actually emit and defend the new contract
 
 It does **not** reopen publication taxonomy, trust architecture, `PARTIAL_ANSWER.*` semantics, or artifact-family design.
 
@@ -90,11 +91,11 @@ Reason:
 
 - the current branch already has the right publication seam
 - the remaining failures are canonical-truth drift inside that seam, not missing orchestration
-- widening this into attestation redesign would spend time away from the exact bugs that just showed up in real harness runs
+- widening this into attestation redesign would spend time away from the exact bugs the April 24 runs exposed
 
 #### Premises
 
-These are the premises this plan accepts:
+These are the premises this slice accepts:
 
 1. Slice E landed far enough that publication hygiene is no longer the active next slice.
 2. `analysis_review_status.recommendation_admissibility` is the correct runner-owned field for the published final subset in **all** analysis-review modes, not trust only.
@@ -103,16 +104,18 @@ These are the premises this plan accepts:
 
 #### What already exists
 
-Reuse the existing runner seam instead of inventing a new one:
+Reuse the existing harness seam instead of inventing a new subsystem:
 
 | Sub-problem | Existing code to extend | Why this is enough |
 |---|---|---|
-| bounded published final subset | `_build_recommendation_admissibility()` and `_build_analysis_review_status()` in `anvil/harness/runner.py` | the correct canonical field already exists, bounded just does not populate it |
-| raw reviewer acceptance counts | `accepted_recommendation_count` in `anvil/harness/runner.py` plus `_accepted_recommendation_count()` in `anvil/harness/selection.py` | these are compatibility counts, but they are not safe as canonical publication truth |
-| topic recommendation association | `_auditor_prior_open_topic_records()` and topic-ledger mutation in `_ingest_review_payload()` in `anvil/harness/runner.py` | the runner already carries topic recommendation linkage, it just gives the wrong owner too much authority |
+| bounded published final subset | `_build_recommendation_admissibility()` and `_build_analysis_review_status()` in `anvil/harness/runner.py` | the correct canonical field already exists, bounded just does not populate it yet |
+| raw reviewer acceptance counts | `accepted_recommendation_count` in `anvil/harness/runner.py` plus `_accepted_recommendation_count()` in `anvil/harness/selection.py` | these can stay for compatibility, but they are not safe as canonical publication truth |
+| topic recommendation association | `_auditor_prior_open_topic_records()` plus topic-ledger mutation in `_ingest_review_payload()` in `anvil/harness/runner.py` | the runner already carries topic recommendation linkage, it just gives the wrong owner too much authority |
 | topic closure proof serialization | `_review_payload_ref_coverage()` in `anvil/harness/runner.py` | `closure_proof_by_id` already exists and only needs a better proof-binding source |
-| recommendation-scoped topic proof contract | `REVIEW_TOPIC_CLOSURE_SCHEMA` in `anvil/harness/schemas.py` and scoped-closure validation in `anvil/harness/semantic_validation.py` | global topic closure already has a structured proof seam, so the minimal fix is extending that seam rather than inventing a parallel map |
-| artifact/report projection | `_final_answer_admissible()` in `anvil/harness/reporting.py` plus report rendering in `anvil/harness/report.py` | once runner-owned truth is canonical, projection code can stay thin and deterministic |
+| recommendation-scoped topic proof contract | `REVIEW_TOPIC_CLOSURE_SCHEMA` in `anvil/harness/schemas.py` plus scoped-closure validation in `anvil/harness/semantic_validation.py` | global topic closure already has a structured proof seam, so the minimal fix is extending that seam rather than inventing a parallel map |
+| prompt guidance | `anvil/harness/prompts.py` and `tests/test_harness_prompt_consistency.py` | if the prompt surface stays global-only, the model cannot emit the new structured proof field reliably |
+| artifact/report projection | `_final_answer_admissible()` and `apply_final_artifacts()` in `anvil/harness/reporting.py`, plus report rendering in `anvil/harness/report.py` | once runner-owned truth is canonical, projection code can stay thin and deterministic |
+| contract docs and contract tests | `docs/analysis_review_contract.md`, `README.md`, and `tests/test_harness_analysis_contract.py` | downstream consumers already rely on these files as the frozen contract source |
 
 #### Implementation alternatives
 
@@ -120,75 +123,62 @@ Reuse the existing runner seam instead of inventing a new one:
 |---|---|---|---|---|
 | Patch reports only so they stop surfacing the inconsistency | low | smallest diff | cosmetic, leaves `summary.json` and provenance non-canonical | reject |
 | Fix bounded admissibility only and defer topic proof relinking | low | addresses one visible failure fast | leaves the more dangerous wrong-proof bug in place | reject |
-| Unify bounded publication truth and add one reviewer-owned topic-closure proof binding | medium | fixes both observed failures at the runner seam, preserves current architecture, gives reports one truth to project | requires a narrow schema and validation update | recommended |
+| Unify bounded publication truth and add one reviewer-owned topic-closure proof binding | medium | fixes both observed failures at the runner seam, preserves current architecture, gives every renderer one truth to project | requires a narrow schema, prompt, validation, and regression update | recommended |
 | Build a new proof framework or attestation layer | high | cleaner long-term story | wrong horizon, bigger than the actual bug | defer |
 
 #### Complexity check
 
-Slice F should stay inside one harness seam. Expect roughly 9 to 11 touched files:
+Slice F should stay inside one harness seam. Expect roughly 12 to 15 touched files:
 
-- runtime: `anvil/harness/runner.py`, `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py`, `anvil/harness/reporting.py`, `anvil/harness/report.py`
-- tests/docs: `tests/test_harness_runner.py`, `tests/test_harness_reporting.py`, `tests/test_harness_semantic_validation.py`, `docs/analysis_review_contract.md`, `README.md`
+- runtime: `anvil/harness/runner.py`, `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py`, `anvil/harness/prompts.py`, `anvil/harness/reporting.py`, `anvil/harness/report.py`
+- tests: `tests/test_harness_runner.py`, `tests/test_harness_reporting.py`, `tests/test_harness_semantic_validation.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_analysis_contract.py`, and any fixture payload cases needed under `tests/fixtures/harness/`
+- docs: `docs/analysis_review_contract.md`, `README.md`
 
-That is acceptable because the work stays inside one seam, canonical analysis status and closure integrity. If the implementation spills into providers, orchestration graph code, or a new provenance subsystem, it is overbuilt.
+That is acceptable because the work still stays inside one seam, canonical analysis status and closure integrity. If the implementation spills into providers, orchestration graph code, or a new provenance subsystem, it is overbuilt.
+
+#### TODOS cross-reference
+
+`TODOS.md` already carries the right deferred follow-ups for this seam. None of them block Slice F:
+
+- keep `accepted_recommendation_count` deprecation deferred until downstream consumers finish moving to `analysis_review_status.recommendation_admissibility`
+- keep the saved-run consistency checker deferred until the canonical status contract is trustworthy enough to compare against artifacts
+
+Do not pull those into this slice. Slice F is the prerequisite work that makes both of those TODOs meaningful.
+
+#### Completeness check
+
+Take the complete version. The incremental cost of updating prompt, docs, and contract tests in the same slice is minutes, not a second project. Shipping only runtime changes would leave the harness able to consume a contract it never tells the reviewer to emit.
+
+#### Distribution check
+
+No new artifact type is introduced. Distribution work is unchanged. This slice only changes the truth contract behind existing `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, `BEST_DRAFT.*`, and `summary.json` outputs.
 
 #### Search check
 
 - **[Layer 1]** Reuse `analysis_review_status.recommendation_admissibility` instead of creating a second bounded-only published-subset field
 - **[Layer 1]** Reuse `topic_closure_reviews[]` instead of creating a new top-level proof map
+- **[Layer 1]** Reuse existing contract and prompt test surfaces instead of creating bespoke one-off docs/tests
 - **[Layer 3]** Stop treating a reviser linkage hint as if it were reviewer-owned proof
 
 No external search was needed. The seam is repo-local and the failures are already reproduced in saved run artifacts and current tests.
 
-### CEO review
+### What problem this slice actually solves
 
-#### What problem is actually worth solving
+The real gap is not trust tone or publication wording anymore.
 
-The real gap is not trust tone or even trust strictness.
-
-The real gap is canonical truth. Right now the harness can tell three different stories:
+The real gap is canonical truth. Right now the harness can still tell three different stories:
 
 - raw reviewer acceptance counts
 - runner-owned recommendation admissibility
 - final published artifact contents
 
-When those disagree, users can still read the markdown and cope. Machines cannot. That is the real product risk.
+When those disagree, a human can still read the markdown and cope. Machines cannot. That is the actual product and tooling risk.
 
 More specifically, Slice F must close the exact holes the April 24 runs exposed:
 
 - bounded publishes a final artifact but leaves the canonical admissibility field empty
 - topic closure proof can point at the wrong recommendation evidence because the proof anchor is owned by the wrong stage
 - once those happen, downstream consumers have to infer truth from artifacts instead of reading one canonical status object
-
-If this slice only cleans up rendering, it will make the artifacts look better while leaving the underlying contract permanently ambiguous.
-
-#### Primary review
-
-- **High:** `analysis_review_status.recommendation_admissibility` has to become canonical for bounded too. A trust-only canonical field is not a canonical field.
-- **High:** the harness needs one reviewer-owned structured proof binding for recommendation-scoped topic closure. Without it, `closure_proof_by_id` cannot be trusted when the reviser guessed wrong.
-- **Medium:** `accepted_recommendation_count` can stay for compatibility, but the plan must stop treating it as if it described the published final subset.
-
-#### CODEX SAYS (CEO, codex-only outside voice)
-
-- **High:** the active framing in `PLAN.md` is stale. The real problem is canonical truth, not publication wording.
-- **High:** this should not stay payload-neutral. One narrow structured topic-closure proof binding is the smallest complete fix.
-- **High:** the biggest 6-month regret is shipping a cosmetic patch that leaves `summary.json` and provenance permanently non-canonical.
-
-#### CEO consensus table
-
-```text
-CEO CONSENSUS TABLE (primary + codex)
-═══════════════════════════════════════════════════════════════
-  Dimension                           Primary  Codex  Consensus
-  ──────────────────────────────────── ───────  ─────  ─────────
-  1. Real problem is canonical truth?  yes      yes    CONFIRMED
-  2. Hold scope on the current seam?   yes      yes    CONFIRMED
-  3. Payload-neutral fix is enough?    no       no     CONFIRMED
-  4. Minimal schema growth justified?  yes      yes    CONFIRMED
-  5. Attestation redesign in scope?    no       no     CONFIRMED
-  6. User-visible risk is machine drift? yes    yes    CONFIRMED
-═══════════════════════════════════════════════════════════════
-```
 
 #### Dream-state delta
 
@@ -197,7 +187,7 @@ This iteration still does not make trust a separate attestation product.
 It should make one visible difference to a human reviewer and one critical difference to downstream tooling:
 
 - before: a bounded run can ship a final artifact while the canonical admissibility field is empty, and a topic can claim proof from the wrong recommendation
-- after: final artifact projection, `summary.json`, and provenance records all agree on one runner-owned published subset and one reviewer-owned proof anchor
+- after: final artifact projection, `summary.json`, `REPORT.md`, and provenance records all agree on one runner-owned published subset and one reviewer-owned proof anchor
 
 #### NOT in scope
 
@@ -208,8 +198,10 @@ It should make one visible difference to a human reviewer and one critical diffe
 - evidence-cap redesign
 - line-level provenance
 - deriving machine truth from markdown artifacts
+- deprecating `accepted_recommendation_count`
+- building a saved-run parity checker across historical artifacts
 
-### Eng review
+### Architecture review
 
 #### Architectural direction
 
@@ -223,6 +215,12 @@ analysis payload
     ├── recommendation_reviews[]
     ├── topic_resolution_map[]
     └── topic_closure_reviews[]{topic_id, checked_files, verified_evidence_refs, summary, recommendation_index?}
+    │
+    ▼
+semantic validation + prompt contract
+    ├── accept reviewer-owned optional recommendation_index
+    ├── reject malformed or out-of-range proof bindings
+    └── tell the reviewer model when to emit the field
     │
     ▼
 runner normalization
@@ -271,22 +269,26 @@ Freeze these rules for Slice F:
 | File | Required change | Notes |
 |---|---|---|
 | `anvil/harness/schemas.py` | extend `REVIEW_TOPIC_CLOSURE_SCHEMA` with optional `recommendation_index` | narrowest structured proof-binding change |
-| `anvil/harness/semantic_validation.py` | validate `topic_closure_reviews[*].recommendation_index` bounds and canonical usage | reject malformed proof bindings, not reviewer corrections |
+| `anvil/harness/semantic_validation.py` | validate `topic_closure_reviews[*].recommendation_index` bounds, duplicate use, and clean failure messages | reject malformed proof bindings, not reviewer corrections |
+| `anvil/harness/prompts.py` | teach the reviewer prompt when recommendation-scoped topic closure must emit the optional proof-binding field | otherwise the new schema exists but the harness never asks for it |
 | `anvil/harness/runner.py` | populate bounded `final_answer_recommendation_indices`, canonicalize reviewer-owned topic proof binding, and serialize `closure_proof_by_id` from that binding | this is the primary seam |
 | `anvil/harness/reporting.py` | treat bounded admissibility as populated canonical truth instead of empty/no-gating fallback | projection change only |
 | `anvil/harness/report.py` | render the canonical bounded/trust admissibility and corrected proof records without custom interpretation | no duplicate classification logic |
 | `tests/test_harness_runner.py` | add bounded canonical-subset tests and topic-proof relink tests | core behavior lock |
 | `tests/test_harness_reporting.py` | assert `summary.json`, `FINAL_ANSWER.*`, and `REPORT.md` all agree on published recommendation indices | user-visible parity guard |
 | `tests/test_harness_semantic_validation.py` | validate the new optional topic-closure `recommendation_index` contract | contract guard |
+| `tests/test_harness_prompt_consistency.py` | keep generated prompt instructions aligned with the schema and contract wording | prompt drift guard |
+| `tests/test_harness_analysis_contract.py` | update doc and README contract assertions | frozen consumer contract guard |
+| `tests/fixtures/harness/analysis_review_semantic_cases.json` | add positive and negative payload cases for recommendation-scoped topic closure proof | avoid one-off inline fixtures for contract-level behavior |
 | `README.md` + `docs/analysis_review_contract.md` | document canonical bounded admissibility and reviewer-owned topic proof binding | downstream consumer contract |
 
 #### Implementation sequence
 
 Execute Slice F in four concrete steps:
 
-1. **F1. Contract freeze**
-   - touch `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py`, `README.md`, `docs/analysis_review_contract.md`
-   - freeze the canonical meanings of bounded admissibility and reviewer-owned topic proof binding
+1. **F1. Contract and prompt freeze**
+   - touch `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py`, `anvil/harness/prompts.py`, `README.md`, `docs/analysis_review_contract.md`, contract fixtures, and contract/prompt tests
+   - freeze the canonical meaning of bounded admissibility and reviewer-owned topic proof binding
 
 2. **F2. Runner canonicalization**
    - touch `anvil/harness/runner.py`
@@ -299,10 +301,28 @@ Execute Slice F in four concrete steps:
    - make artifact and report projection consume the populated canonical fields, not empty-fallback behavior
 
 4. **F4. Regression lock**
-   - add the bounded/trust regression matrix
+   - add the bounded/trust regression matrix across runner, reporting, validation, prompt-consistency, and contract tests
    - rerun the targeted pytest suite as the final gate
 
-The sequencing rule is simple: freeze the contract first, make runner truth canonical second, then let reports project that truth, then lock the whole seam with tests.
+The sequencing rule is simple: freeze the contract first, make runner truth canonical second, let reports project that truth third, then lock the seam with tests.
+
+### Code quality review
+
+Keep the implementation boring and explicit:
+
+- one owner for canonical truth, `anvil/harness/runner.py`
+- one owner for rejecting malformed proof bindings, `anvil/harness/semantic_validation.py`
+- zero duplicate classification logic in `anvil/harness/reporting.py` or `anvil/harness/report.py`
+
+Concrete guardrails:
+
+1. do not add a second bounded-only publication field
+2. do not add a second top-level proof map beside `topic_closure_reviews[]`
+3. do not duplicate proof-binding heuristics in both validation and runner code
+4. do not let reporting infer truth from markdown, report rows, or artifact payload text
+5. update prompt and contract docs in the same commit range as the schema change, because stale instructions are worse than no instructions
+
+The minimal-diff shape is one narrow schema extension, one runner canonicalization path, thin projection updates, and regression tests around the seam. Anything beyond that is accidental complexity.
 
 ### Test review
 
@@ -315,7 +335,8 @@ CODE PATH COVERAGE
     │
     ├── [REQUIRED] bounded FINAL_ANSWER publishes recommendations 1..N
     ├── [REQUIRED] summary.json final_answer_recommendation_indices matches the published subset
-    └── [REQUIRED] partial_only / excluded arrays stay empty for a clean bounded final
+    ├── [REQUIRED] partial_only / excluded arrays stay empty for a clean bounded final
+    └── [REQUIRED] accepted_recommendation_count can differ in role, but not in observable contradiction
 
 [+] Recommendation-scoped topic proof binding
     │
@@ -323,6 +344,12 @@ CODE PATH COVERAGE
     ├── [REQUIRED] topic_closure_reviews[*].recommendation_index can override proof binding canonically
     ├── [REQUIRED] closure_proof_by_id uses the reviewer-owned proof anchor
     └── [REQUIRED] topic ledger and report surfaces stop serializing stale proof refs
+
+[+] Prompt and contract surface
+    │
+    ├── [REQUIRED] reviewer instructions tell the model when to emit recommendation-scoped topic closure proof
+    ├── [REQUIRED] contract docs describe the new optional field accurately
+    └── [REQUIRED] prompt/contract tests fail if wording drifts from the schema
 
 [+] Projection parity
     │
@@ -353,13 +380,25 @@ CODE PATH COVERAGE
 3. `tests/test_harness_semantic_validation.py`
    Add coverage for:
    - valid optional `topic_closure_reviews[*].recommendation_index`
-   - out-of-range or malformed recommendation indices rejecting cleanly
+   - out-of-range, zero, non-integer, or malformed recommendation indices rejecting cleanly
    - duplicate or contradictory proof-binding entries rejecting cleanly
 
-4. Keep existing trust admissibility and publication tests green
+4. `tests/test_harness_prompt_consistency.py` and `tests/test_harness_analysis_contract.py`
+   Add coverage for:
+   - prompt text instructing recommendation-scoped topic proof binding correctly
+   - docs and README describing the same rule the schema now enforces
+
+5. `tests/fixtures/harness/analysis_review_semantic_cases.json`
+   Add:
+   - one valid recommendation-scoped topic closure case
+   - one invalid out-of-range case
+   - one duplicate-topic proof-binding case
+
+6. Keep existing trust admissibility and publication tests green
    - `accept_with_caveat`
    - `inferred_grounding`
    - `topic_blocked`
+   - trust final/partial/best-draft artifact routing
    - global issue/topic closure proof
 
 #### Test plan artifact
@@ -374,8 +413,27 @@ The concrete test plan for this slice is written to:
 poetry run pytest -q \
   tests/test_harness_semantic_validation.py \
   tests/test_harness_runner.py \
-  tests/test_harness_reporting.py
+  tests/test_harness_reporting.py \
+  tests/test_harness_prompt_consistency.py \
+  tests/test_harness_analysis_contract.py
 ```
+
+### Performance review
+
+This slice should stay computationally boring. The performance risk is not raw runtime cost, it is accidentally adding duplicate scans and duplicate truth-building paths.
+
+Performance rules:
+
+1. build the reviewer-owned topic proof binding map once in the runner, keyed by `topic_id`
+2. keep admissibility and proof canonicalization linear in recommendation/topic count, not nested re-scans in reporting
+3. do not parse emitted markdown or artifact payloads to reconstruct truth
+4. keep report and artifact projection read-only over already-normalized status objects
+
+Expected impact:
+
+- no new network calls
+- no new persistence layer
+- no meaningful change to harness asymptotics beyond one extra optional field check per topic closure review
 
 ### Failure modes for Slice F
 
@@ -383,19 +441,57 @@ poetry run pytest -q \
 |---|---|---|---|---|
 | bounded final subset stays empty in `analysis_review_status` | runner + reporting | bounded runner and reporting parity tests | machines see no final subset even though a final artifact shipped | yes |
 | topic proof still binds to stale reviser recommendation index | runner provenance | topic relink runner test | `closure_proof_by_id` names the wrong evidence and users audit the wrong files | yes |
+| prompt instructions stay global-only while the schema grows | prompt surface | prompt consistency and contract tests | the model keeps emitting old payloads and the new contract never becomes reliable | yes |
 | report surfaces paper over runner inconsistency with fallback behavior | reporting | summary/final/report parity tests | reports look clean while machine truth stays wrong | yes |
 | malformed topic proof bindings silently pass | semantic validation | negative validation tests | future replays drift unpredictably instead of failing fast | yes |
 | trust admissibility semantics regress while fixing bounded canonicalization | runner | existing trust admissibility tests stay green | partial-only and excluded recommendations become dishonest again | yes |
 
+### Worktree parallelization strategy for Slice F
+
+Slice F has one real parallel split once the contract is frozen. Do not pretend `runner.py` itself can be split across multiple worktrees. That is fake parallelism and guaranteed merge pain.
+
+#### Dependency table
+
+| Step | Modules touched | Depends on |
+|---|---|---|
+| F1. Contract and prompt freeze | `anvil/harness/`, `tests/fixtures/harness/`, `tests/`, `docs/` | — |
+| F2. Runner canonicalization | `anvil/harness/` | F1 |
+| F3. Projection parity | `anvil/harness/` | F1 |
+| F4. Regression lock | `tests/` | F2, F3 |
+
+#### Parallel lanes
+
+- `Lane A`: F1, sequential contract freeze across schema, validation, prompts, docs, and contract fixtures/tests
+- `Lane B`: F2, runner canonicalization after `Lane A` lands
+- `Lane C`: F3, projection parity after `Lane A` lands
+- `Lane D`: F4, regression lock after `Lane B` and `Lane C` land
+
+`Lane B` and `Lane C` are the only real parallel lanes. They share the frozen contract, but they do not need to touch the same primary implementation files.
+
+#### Execution order
+
+1. Land `Lane A` first. Freeze the contract before anyone writes runtime behavior against it.
+2. Launch `Lane B` and `Lane C` in parallel worktrees after `Lane A` lands.
+3. Merge both runtime lanes.
+4. Run `Lane D` last as the regression lock across runner, reporting, prompt, and contract surfaces.
+
+#### Conflict flags
+
+- `Lane B` and `Lane C` both conceptually depend on `anvil/harness/` semantics. Keep ownership strict: `Lane B` owns `runner.py`, `Lane C` owns `reporting.py` and `report.py`.
+- keep all test-file ownership in `Lane D` if possible. Parallel lanes touching `tests/` is where fake speed turns into merge cleanup.
+- do not split `anvil/harness/prompts.py` away from contract docs and validation in `Lane A`. Those surfaces define the contract together.
+
 ### Completion summary
 
 - Step 0: Scope Challenge, scope held
-- CEO Review: canonical machine truth, not publication tone, is the active next seam
-- Eng Review: bounded admissibility and topic proof binding are the concrete runtime fixes
-- Test Review: code path coverage produced, 10 required behaviors pinned
+- Architecture Review: one seam, runner-owned canonical truth, prompt/contract surfaces included
+- Code Quality Review: duplicate truth builders and fallback interpretation explicitly banned
+- Test Review: code path coverage produced, 15 required behaviors pinned across runtime, prompt, and contract surfaces
+- Performance Review: no new infra, linear canonicalization only, no artifact re-parsing
 - NOT in scope: written
 - What already exists: written
-- Failure modes: 5 critical gaps pinned with guards
+- Failure modes: 6 critical gaps pinned with guards
+- Parallelization: 4 steps, 2 middle lanes run in parallel after the contract freeze, regression lock last
 - Design Review: skipped, no UI scope
 - Lake Score: complete option chosen, cosmetic patch rejected
 
@@ -405,6 +501,7 @@ Slice F is done only when all of these are true:
 
 - bounded `FINAL_ANSWER.*` publication and `analysis_review_status.recommendation_admissibility.final_answer_recommendation_indices` always agree
 - `closure_proof_by_id` for recommendation-scoped topics binds to reviewer-owned structured proof, not stale reviser linkage
+- prompt text, docs, and schema all agree on when `topic_closure_reviews[*].recommendation_index` is used
 - `summary.json`, `REPORT.md`, and final artifacts describe the same published recommendation subset
 - existing trust admissibility semantics remain unchanged
 - the targeted pytest suite above passes
