@@ -144,12 +144,29 @@ class TrustReviewPolicy:
 
 
 @dataclass
+class DiscoveryPolicy:
+    prioritize_files_hint: bool = True
+    require_primary_seam: bool = True
+    require_primary_seam_exhaustion_before_expansion: bool = True
+    require_nearest_governing_source_for_spec_claims: bool = True
+    require_sibling_baseline_for_parity_claims: bool = True
+    prefer_nearer_sources_over_plan_prose: bool = True
+    allow_secondary_seams_only_with_reason: bool = True
+    require_recommendation_seam_binding: bool = True
+    max_secondary_seams_considered_bounded: int = 2
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass
 class AnalysisReviewContract:
     contract_version: str
     strategy_kind: str
     mode: AnalysisReviewMode
     stop_policy: ReviewLoopPolicy
     reviser_goal: Literal["close_all_open_blockers"] = "close_all_open_blockers"
+    discovery_policy: DiscoveryPolicy = field(default_factory=DiscoveryPolicy)
     partial_acceptance: PartialAcceptancePolicy = field(default_factory=PartialAcceptancePolicy)
     required_sections: RequiredSectionPolicy = field(default_factory=RequiredSectionPolicy)
     bounded_review: BoundedReviewPolicy = field(default_factory=BoundedReviewPolicy)
@@ -170,6 +187,7 @@ class AnalysisReviewContract:
             },
             "stop_policy": self.stop_policy.to_dict(),
             "reviser_goal": self.reviser_goal,
+            "discovery_policy": self.discovery_policy.to_dict(),
             "partial_acceptance": self.partial_acceptance.to_dict(),
             "required_sections": self.required_sections.to_dict(),
             "bounded_review": self.bounded_review.to_dict(),
@@ -190,10 +208,11 @@ def build_analysis_review_contract(
     mode = derive_analysis_review_mode(strategy.kind)
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v7",
+        contract_version="analysis_review_v1_contract_v9",
         strategy_kind=str(strategy.kind),
         mode=mode,
         stop_policy=strategy.review_loops,
+        discovery_policy=DiscoveryPolicy(),
         partial_acceptance=PartialAcceptancePolicy(
             enabled=True,
             min_accepted_recommendations=min_accepted_recommendations,

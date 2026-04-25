@@ -391,6 +391,54 @@ def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
     )
 
 
+def _seam_selection_guidance_block(
+    contract: AnalysisReviewContract, *, role: str
+) -> str:
+    discovery = contract.discovery_policy
+    role_specific_lines = {
+        "proposer": (
+            "- In the proposer draft, you may declare or inspect a third bounded "
+            "secondary seam only when `scope_escapes` records every third-seam "
+            "path with a non-empty reason."
+        ),
+        "reviser": (
+            "- In the reviser stage, you may retain or introduce a third bounded "
+            "secondary seam only when `scope_escapes` records every third-seam "
+            "path with a non-empty reason."
+        ),
+        "critic": (
+            "- In the critic stage, treat a third bounded secondary seam without "
+            "matching `scope_escapes` as a bounded-mode scope violation."
+        ),
+        "auditor": (
+            "- In the auditor stage, do not call the draft cleanly closed when a "
+            "third bounded secondary seam lacks matching `scope_escapes`."
+        ),
+    }
+    lines = [
+        "Seam selection guidance:",
+        "- Use `primary_seam` as the canonical run-context seam.",
+        (
+            "- Exhaust the primary seam before expanding; use "
+            "`secondary_seams_considered` only for seams you actually declared "
+            "or inspected beyond the primary seam."
+        ),
+        (
+            "- Bind every recommendation with `recommendations[*].seam_id`; when "
+            "that seam expands beyond the primary seam, populate "
+            "`recommendations[*].seam_expansion_reason`."
+        ),
+        (
+            f"- default bounded cap is "
+            f"{discovery.max_secondary_seams_considered_bounded}; declaring or "
+            "inspecting a third secondary seam requires a recorded "
+            "scope_escape; overflow is never silently normalized away."
+        ),
+        role_specific_lines[role],
+    ]
+    return "\n".join(lines)
+
+
 def _repo_local_discovery_guidance_block(
     contract: AnalysisReviewContract, *, role: str
 ) -> str:
@@ -480,10 +528,10 @@ def _repo_local_discovery_guidance_block(
                     "corroboration."
                 ),
                 (
-                    "- Reserve `scope_escapes` for later review work that truly "
-                    "leaves the declared `review_surface`, not for missing nearby "
-                    "repo-local corroboration that the proposer should have "
-                    "included."
+                    "- Use analysis-stage `scope_escapes` only for the exact "
+                    "third-secondary-seam overflow path in bounded mode; "
+                    "otherwise reserve `scope_escapes` for later review work "
+                    "that truly leaves the declared `review_surface`."
                 ),
                 bounded_role_lines[role],
             ]
@@ -817,6 +865,7 @@ Your job:
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_seam_selection_guidance_block(contract, role="proposer")}
 {_repo_local_discovery_guidance_block(contract, role="proposer")}
 {_trust_review_policy_block(contract)}
 {_trust_recommendation_atomicity_block(contract, role="proposer")}
@@ -869,6 +918,7 @@ Decision guidance:
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_seam_selection_guidance_block(contract, role="critic")}
 {_repo_local_discovery_guidance_block(contract, role="critic")}
 {_trust_review_policy_block(contract)}
 {_trust_recommendation_atomicity_block(contract, role="critic")}
@@ -939,6 +989,7 @@ Decision guidance:
 Audit round: {round_index}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_seam_selection_guidance_block(contract, role="auditor")}
 {_repo_local_discovery_guidance_block(contract, role="auditor")}
 {_trust_review_policy_block(contract)}
 {_trust_recommendation_atomicity_block(contract, role="auditor")}
@@ -1007,6 +1058,7 @@ Your job:
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_seam_selection_guidance_block(contract, role="reviser")}
 {_repo_local_discovery_guidance_block(contract, role="reviser")}
 {_trust_review_policy_block(contract)}
 {_trust_recommendation_atomicity_block(contract, role="reviser")}

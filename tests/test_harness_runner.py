@@ -14,6 +14,10 @@ from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.types import ProviderRun
 
+_PRIMARY_SEAM_ID = "release-watch-governing"
+_SECONDARY_RELEASE_WATCH_SEAM_ID = "release-watch-sibling-parity"
+_SECONDARY_SNAPSHOT_SEAM_ID = "snapshot-prepare-parity"
+
 
 def _failed_provider_run(
     request, *, message: str, failure_kind: str = "provider_unavailable"
@@ -45,6 +49,52 @@ def _failed_provider_run(
     )
 
 
+def _load_run_summary_json(runner: HarnessRunner) -> dict[str, object]:
+    return json.loads((runner.run_dir / "summary.json").read_text(encoding="utf-8"))
+
+
+def _assert_canonical_analysis_review_status(
+    summary: dict[str, object],
+    *,
+    expected_primary_seam_id: str,
+    expected_secondary_seam_ids: list[str],
+    expected_binding_seam_ids: list[str],
+    expected_scope_escape_paths: list[str] | None = None,
+) -> None:
+    status = summary["analysis_review_status"]
+    assert "primary_seam_projection_status" not in status
+    assert set(status["primary_seam"]) == {"seam_id", "summary", "why_primary", "paths"}
+    assert status["primary_seam"]["seam_id"] == expected_primary_seam_id
+    assert [item["seam_id"] for item in status["secondary_seams_considered"]] == (
+        expected_secondary_seam_ids
+    )
+    bindings = status["recommendation_seam_bindings"]
+    assert [item["recommendation_index"] for item in bindings] == list(
+        range(1, len(expected_binding_seam_ids) + 1)
+    )
+    assert [item["seam_id"] for item in bindings] == expected_binding_seam_ids
+    assert all(
+        set(item) == {"recommendation_index", "seam_id", "seam_expansion_reason"}
+        for item in bindings
+    )
+    expected_scope_escape_paths = expected_scope_escape_paths or []
+    assert [item["path"] for item in status["scope_escapes"]] == expected_scope_escape_paths
+    nested_status = summary["run_details"].get("analysis_review_status")
+    if isinstance(nested_status, dict):
+        assert nested_status == status
+
+
+def _assert_summary_json_mirrors_analysis_review_status(
+    runner: HarnessRunner,
+    summary: dict[str, object],
+) -> None:
+    summary_json = _load_run_summary_json(runner)
+    assert summary_json["analysis_review_status"] == summary["analysis_review_status"]
+    nested_status = summary_json["run_details"].get("analysis_review_status")
+    if isinstance(nested_status, dict):
+        assert nested_status == summary_json["analysis_review_status"]
+
+
 class _AcceptingHarnessAdapter:
     @staticmethod
     def _empty_topic_state() -> dict:
@@ -73,6 +123,64 @@ class _AcceptingHarnessAdapter:
             "optional_check_files": optional_check_files,
             "scope_note": scope_note,
         }
+
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "seam_id": _PRIMARY_SEAM_ID,
+            "summary": "The governing release-watch workflow seam for this task.",
+            "why_primary": "It is the nearest governing workflow surface for the requested review.",
+            "paths": [".github/workflows/codex-cli-release-watch.yml"],
+        }
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "seam_id": _SECONDARY_RELEASE_WATCH_SEAM_ID,
+                "summary": "The sibling release-watch workflow used for parity checks.",
+                "why_not_primary": "It is corroborating parity context rather than the governing seam.",
+                "paths": [".github/workflows/claude-code-release-watch.yml"],
+            }
+        ]
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        if recommendation_index == 2:
+            return (
+                _SECONDARY_RELEASE_WATCH_SEAM_ID,
+                "Cross-check the sibling release-watch workflow before widening this recommendation.",
+            )
+        return (_PRIMARY_SEAM_ID, "")
+
+    def _analysis_scope_escapes(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return []
+
+    def _apply_analysis_seams(self, payload: dict[str, object]) -> dict[str, object]:
+        payload["primary_seam"] = self._primary_seam(payload=payload)
+        payload["secondary_seams_considered"] = self._secondary_seams_considered(
+            payload=payload
+        )
+        payload["scope_escapes"] = self._analysis_scope_escapes(payload=payload)
+        for recommendation_index, item in enumerate(
+            payload.get("recommendations") or [],
+            start=1,
+        ):
+            if not isinstance(item, dict):
+                continue
+            seam_id, seam_expansion_reason = self._recommendation_seam_binding(
+                recommendation_index=recommendation_index,
+                payload=payload,
+            )
+            item["seam_id"] = seam_id
+            item["seam_expansion_reason"] = seam_expansion_reason
+        return payload
 
     def run(self, request):
         out_dir = Path(request.out_dir)
@@ -162,7 +270,7 @@ class _AcceptingHarnessAdapter:
         }
         if revised:
             payload["issue_resolution_map"] = []
-        return payload
+        return self._apply_analysis_seams(payload)
 
     def _payload_for_role(self, role_name: str):
         if role_name == "proposer":
@@ -220,6 +328,52 @@ class _BoundedCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
     @staticmethod
     def _review_files_reviewed() -> list[str]:
         return _BoundedCorroborationHarnessAdapter._analysis_files_reviewed()
+
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "seam_id": _PRIMARY_SEAM_ID,
+            "summary": "The governing release-watch seam anchored to the nearest parity spec.",
+            "why_primary": "The release-watch workflow plus its nearest governing parity spec are the primary review surface for this task.",
+            "paths": [
+                ".github/workflows/codex-cli-release-watch.yml",
+                "docs/project_management/next/codex-cli-parity/C1-spec.md",
+            ],
+        }
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "seam_id": _SECONDARY_RELEASE_WATCH_SEAM_ID,
+                "summary": "The sibling release-watch workflow used for parity corroboration.",
+                "why_not_primary": "It corroborates the governing release-watch seam but does not set the governing requirement.",
+                "paths": [".github/workflows/claude-code-release-watch.yml"],
+            },
+            {
+                "seam_id": _SECONDARY_SNAPSHOT_SEAM_ID,
+                "summary": "The sibling snapshot and prepare-path parity seam.",
+                "why_not_primary": "It broadens the review beyond the governing release-watch seam and therefore remains secondary.",
+                "paths": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+            },
+        ]
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        if recommendation_index == 3:
+            return (
+                _SECONDARY_SNAPSHOT_SEAM_ID,
+                "Compare the sibling snapshot prepare seam before broadening the timeout recommendation.",
+            )
+        return (_PRIMARY_SEAM_ID, "")
 
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = {
@@ -323,7 +477,7 @@ class _BoundedCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
         }
         if revised:
             payload["issue_resolution_map"] = []
-        return payload
+        return self._apply_analysis_seams(payload)
 
     def _payload_for_role(self, role_name: str):
         if role_name == "proposer":
@@ -471,7 +625,7 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
                 ),
             }
         )
-        return payload
+        return self._apply_analysis_seams(payload)
 
     def _payload_for_role(self, role_name: str):
         if role_name == "proposer":
@@ -721,6 +875,96 @@ class _ScopeEscapeHarnessAdapter(_AcceptingHarnessAdapter):
                 }
             ]
         return payload
+
+
+class _SecondarySeamOverflowHarnessAdapter(_AcceptingHarnessAdapter):
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        secondary_seams = super()._secondary_seams_considered(payload=payload)
+        secondary_seams.append(
+            {
+                "seam_id": "release-watch-owner-overflow",
+                "summary": "A second overflow seam that broadens the bounded review past the default cap.",
+                "why_not_primary": "It introduces another secondary branch beyond the bounded default seam cap.",
+                "paths": [".github/workflows/codex-cli-release-watch.yml"],
+            }
+        )
+        secondary_seams.append(
+            {
+                "seam_id": "release-watch-spec-overflow",
+                "summary": "An extra declared seam that exceeds the bounded secondary seam cap.",
+                "why_not_primary": "It broadens the bounded review beyond the allowed default secondary seam cap.",
+                "paths": ["docs/project_management/next/codex-cli-parity/C1-spec.md"],
+            }
+        )
+        return secondary_seams
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["files_reviewed"] = [
+            *payload["files_reviewed"],
+            "docs/project_management/next/codex-cli-parity/C1-spec.md",
+        ]
+        return self._apply_analysis_seams(payload)
+
+
+class _ScopedSecondarySeamOverflowHarnessAdapter(_SecondarySeamOverflowHarnessAdapter):
+    def _analysis_scope_escapes(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "path": "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                "reason": "The bounded run needs exactly one third secondary seam to compare the parity spec against the governing workflow seam.",
+            }
+        ]
+
+
+class _ReviserOnlyScopedOverflowHarnessAdapter(_AcceptingHarnessAdapter):
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        secondary_seams = super()._secondary_seams_considered(payload=payload)
+        if str(payload.get("status") or "").strip() == "revised":
+            secondary_seams.append(
+                {
+                    "seam_id": "release-watch-owner-overflow",
+                    "summary": "A second bounded secondary seam for ownership corroboration.",
+                    "why_not_primary": "It broadens the bounded review but remains secondary.",
+                    "paths": [".github/workflows/codex-cli-release-watch.yml"],
+                }
+            )
+            secondary_seams.append(
+                {
+                    "seam_id": "release-watch-spec-overflow",
+                    "summary": "A third bounded secondary seam anchored to the parity spec.",
+                    "why_not_primary": "It is only needed after the revision expands the corroboration seam to the governing parity spec.",
+                    "paths": ["docs/project_management/next/codex-cli-parity/C1-spec.md"],
+                }
+            )
+        return secondary_seams
+
+    def _analysis_scope_escapes(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        if str(payload.get("status") or "").strip() != "revised":
+            return []
+        return [
+            {
+                "path": "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                "reason": "The revision needs exactly one third secondary seam to compare the governing parity spec against the widened bounded seam.",
+            }
+        ]
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        if revised:
+            payload["files_reviewed"] = [
+                *payload["files_reviewed"],
+                "docs/project_management/next/codex-cli-parity/C1-spec.md",
+            ]
+        return self._apply_analysis_seams(payload)
 
 
 class _LateAuditorIssueHarnessAdapter(_PartialAcceptanceHarnessAdapter):
@@ -1090,7 +1334,7 @@ class _PartialAcceptanceWithTopicDebtHarnessAdapter(_PartialAcceptanceHarnessAda
                 ),
             }
         )
-        return payload
+        return self._apply_analysis_seams(payload)
 
     def _payload_for_role(self, role_name: str):
         if role_name == "critic":
@@ -1802,7 +2046,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
     assert (
         summary["analysis_review_contract"]["contract_version"]
-        == "analysis_review_v1_contract_v7"
+        == "analysis_review_v1_contract_v9"
     )
     assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert (
@@ -1832,6 +2076,16 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert summary["analysis_review_status"]["resolved_topic_ids"] == []
     assert summary["analysis_review_status"]["carried_forward_topic_ids"] == []
     assert summary["analysis_review_status"]["waived_topic_ids"] == []
+    _assert_canonical_analysis_review_status(
+        summary,
+        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_secondary_seam_ids=[_SECONDARY_RELEASE_WATCH_SEAM_ID],
+        expected_binding_seam_ids=[
+            _PRIMARY_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+        ],
+    )
+    _assert_summary_json_mirrors_analysis_review_status(runner, summary)
     assert summary["analysis_review_status"]["recommendation_admissibility"] == {
         "final_answer_recommendation_indices": [1, 2],
         "partial_only_recommendation_indices": [],
@@ -1946,6 +2200,21 @@ def test_analysis_review_runner_bounded_mode_can_ship_fuller_repo_local_recommen
     assert summary["verdict"] == "accepted"
     assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert summary["artifacts"]["final_artifact_kind"] == "final_answer"
+    _assert_canonical_analysis_review_status(
+        summary,
+        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_secondary_seam_ids=[
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            _SECONDARY_SNAPSHOT_SEAM_ID,
+        ],
+        expected_binding_seam_ids=[
+            _PRIMARY_SEAM_ID,
+            _PRIMARY_SEAM_ID,
+            _SECONDARY_SNAPSHOT_SEAM_ID,
+            _PRIMARY_SEAM_ID,
+        ],
+    )
+    _assert_summary_json_mirrors_analysis_review_status(runner, summary)
 
     final_recommendations = summary["final_answer"]["recommendations"]
     assert len(final_recommendations) == 4
@@ -1994,6 +2263,71 @@ def test_analysis_review_runner_bounded_mode_can_ship_fuller_repo_local_recommen
     assert bounded_review_summary["scope_escapes"] == []
 
 
+def test_analysis_review_runner_bounded_and_trust_modes_keep_canonical_seam_context_in_parity(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+
+    bounded_specs = tmp_path / "bounded_specs"
+    bounded_specs.mkdir()
+    bounded_task_path, bounded_strategy_path = _write_task_and_strategy(bounded_specs)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _BoundedCorroborationHarnessAdapter(),
+    )
+    bounded_runner = HarnessRunner(
+        task_path=bounded_task_path,
+        strategy_path=bounded_strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "bounded_runs",
+    )
+    bounded_summary = bounded_runner.run()
+
+    trust_specs = tmp_path / "trust_specs"
+    trust_specs.mkdir()
+    trust_task_path, trust_strategy_path = _write_task_and_strategy(
+        trust_specs,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustCorroborationHarnessAdapter(),
+    )
+    trust_runner = HarnessRunner(
+        task_path=trust_task_path,
+        strategy_path=trust_strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "trust_runs",
+    )
+    trust_summary = trust_runner.run()
+
+    assert (
+        bounded_summary["analysis_review_status"]["primary_seam"]["seam_id"]
+        == trust_summary["analysis_review_status"]["primary_seam"]["seam_id"]
+        == _PRIMARY_SEAM_ID
+    )
+    assert (
+        bounded_summary["analysis_review_status"]["secondary_seams_considered"]
+        == trust_summary["analysis_review_status"]["secondary_seams_considered"]
+    )
+    assert (
+        bounded_summary["analysis_review_status"]["recommendation_seam_bindings"]
+        == trust_summary["analysis_review_status"]["recommendation_seam_bindings"]
+    )
+    assert bounded_summary["analysis_review_status"]["recommendation_admissibility"] != (
+        trust_summary["analysis_review_status"]["recommendation_admissibility"]
+    )
+    assert bounded_summary["analysis_review_status"]["publishability"] != (
+        trust_summary["analysis_review_status"]["publishability"]
+    )
+    assert bounded_summary["artifacts"]["final_artifact_kind"] == "final_answer"
+    assert trust_summary["artifacts"]["final_artifact_kind"] == "partial_answer"
+
+
 def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_downgrades_only_inferred_grounding(
     tmp_path,
     monkeypatch,
@@ -2028,6 +2362,21 @@ def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_
     assert summary["verdict"] == "accepted_with_warnings"
     assert summary["analysis_review_contract"]["mode"] == "trust"
     assert summary["analysis_review_status"]["mode"] == "trust"
+    _assert_canonical_analysis_review_status(
+        summary,
+        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_secondary_seam_ids=[
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            _SECONDARY_SNAPSHOT_SEAM_ID,
+        ],
+        expected_binding_seam_ids=[
+            _PRIMARY_SEAM_ID,
+            _PRIMARY_SEAM_ID,
+            _SECONDARY_SNAPSHOT_SEAM_ID,
+            _PRIMARY_SEAM_ID,
+        ],
+    )
+    _assert_summary_json_mirrors_analysis_review_status(runner, summary)
     assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
     assert (
         summary["analysis_review_status"]["provenance"][
@@ -4295,6 +4644,157 @@ def test_analysis_review_runner_reports_non_zero_scope_escapes(
     ) in report_text
 
 
+def test_analysis_review_runner_rejects_bounded_secondary_seam_overflow_without_silent_normalization(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _SecondarySeamOverflowHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    proposer_stage = summary["agent_stages"][0]
+    assert len(proposer_stage["structured_output"]["secondary_seams_considered"]) == 2 + 1
+    assert any(
+        error
+        == "secondary_seams_considered[3] requires scope_escapes coverage for every declared third-seam path: docs/project_management/next/codex-cli-parity/C1-spec.md"
+        for error in proposer_stage["semantic_validation_errors"]
+    )
+    semantic_payload = load_structured_file(
+        Path(proposer_stage["semantic_validation_path"])
+    )
+    assert semantic_payload["ok"] is False
+    assert (
+        "secondary_seams_considered[3] requires scope_escapes coverage for every declared third-seam path: docs/project_management/next/codex-cli-parity/C1-spec.md"
+        in semantic_payload["errors"]
+    )
+
+
+def test_analysis_review_runner_accepts_bounded_third_secondary_seam_with_analysis_scope_escapes(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _ScopedSecondarySeamOverflowHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    _assert_canonical_analysis_review_status(
+        summary,
+        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_secondary_seam_ids=[
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            "release-watch-owner-overflow",
+            "release-watch-spec-overflow",
+        ],
+        expected_binding_seam_ids=[
+            _PRIMARY_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+        ],
+        expected_scope_escape_paths=[
+            "docs/project_management/next/codex-cli-parity/C1-spec.md"
+        ],
+    )
+    bounded_review_summary = summary["bounded_review_summary"]
+    assert bounded_review_summary["scope_escape_count"] == 1
+    assert bounded_review_summary["review_stages"][0]["role_name"] == "critic"
+    assert bounded_review_summary["review_stages"][1]["role_name"] == "auditor"
+    assert bounded_review_summary["scope_escapes"][0]["role_name"] == "reviser_round_1"
+    assert (
+        bounded_review_summary["scope_escapes"][0]["path"]
+        == "docs/project_management/next/codex-cli-parity/C1-spec.md"
+    )
+
+
+def test_analysis_review_runner_uses_final_reviser_scope_escapes_as_canonical_source(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _ReviserOnlyScopedOverflowHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    _assert_canonical_analysis_review_status(
+        summary,
+        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_secondary_seam_ids=[
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            "release-watch-owner-overflow",
+            "release-watch-spec-overflow",
+        ],
+        expected_binding_seam_ids=[
+            _PRIMARY_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+        ],
+        expected_scope_escape_paths=[
+            "docs/project_management/next/codex-cli-parity/C1-spec.md"
+        ],
+    )
+    proposer_payload = summary["agent_stages"][0]["structured_output"]
+    assert proposer_payload["scope_escapes"] == []
+    assert len(proposer_payload["secondary_seams_considered"]) == 1
+    reviser_payload = next(
+        stage["structured_output"]
+        for stage in summary["agent_stages"]
+        if stage["role_name"] == "reviser_round_1"
+    )
+    assert reviser_payload["scope_escapes"] == [
+        {
+            "path": "docs/project_management/next/codex-cli-parity/C1-spec.md",
+            "reason": "The revision needs exactly one third secondary seam to compare the governing parity spec against the widened bounded seam.",
+        }
+    ]
+    final_answer = json.loads(
+        Path(summary["artifacts"]["final_answer_json"]).read_text(encoding="utf-8")
+    )
+    assert final_answer["scope_escapes"] == reviser_payload["scope_escapes"]
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert (
+        "- `reviser` analysis stage `1` — `docs/project_management/next/codex-cli-parity/C1-spec.md`: "
+        "The revision needs exactly one third secondary seam to compare the governing parity spec against the widened bounded seam."
+    ) in report_text
+
+
 def test_analysis_review_runner_surfaces_semantic_validation_failures(
     tmp_path,
     monkeypatch,
@@ -4505,7 +5005,7 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
         "Add release failure categorization"
     )
     assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
-        "analysis_review_v1_contract_v7"
+        "analysis_review_v1_contract_v9"
     )
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3

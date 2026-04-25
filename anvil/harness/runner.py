@@ -1295,6 +1295,8 @@ class HarnessRunner:
         recommendations = final_analysis.get("recommendations") if isinstance(final_analysis, dict) else []
         if not isinstance(recommendations, list):
             recommendations = []
+        final_analysis_scope_escapes = self._canonical_analysis_scope_escapes(final_analysis)
+        final_analysis_stage = self._resolve_final_analysis_stage()
 
         issue_ledger = run_details.get("issue_ledger")
         if not isinstance(issue_ledger, list):
@@ -1306,6 +1308,19 @@ class HarnessRunner:
         review_stages: list[dict[str, Any]] = []
         scope_escapes: list[dict[str, Any]] = []
         next_auditor_round = 1
+
+        if final_analysis_scope_escapes:
+            role_name = str((final_analysis_stage or {}).get("role_name") or "proposer")
+            round_index = self._analysis_stage_round_index(role_name)
+            for escape in final_analysis_scope_escapes:
+                scope_escapes.append(
+                    {
+                        "role_name": role_name,
+                        "round_index": round_index,
+                        "path": str(escape.get("path") or "").strip(),
+                        "reason": str(escape.get("reason") or "").strip(),
+                    }
+                )
 
         for stage in self.agent_stages:
             if not isinstance(stage, dict):
@@ -2403,9 +2418,21 @@ class HarnessRunner:
             final_analysis_payload=final_analysis_payload,
             final_review_payload=final_review_payload,
         )
+        primary_seam = self._canonical_primary_seam(final_analysis_payload)
+        secondary_seams_considered = self._canonical_secondary_seams_considered(
+            final_analysis_payload
+        )
+        recommendation_seam_bindings = self._canonical_recommendation_seam_bindings(
+            final_analysis_payload
+        )
+        scope_escapes = self._canonical_analysis_scope_escapes(final_analysis_payload)
         return {
             "mode": contract.mode,
             "content_verdict": content_verdict,
+            "primary_seam": primary_seam,
+            "secondary_seams_considered": secondary_seams_considered,
+            "recommendation_seam_bindings": recommendation_seam_bindings,
+            "scope_escapes": scope_escapes,
             "semantic_warning_count": len(semantic_warning_records),
             "semantic_warnings": semantic_warning_records,
             "provenance": {
@@ -2450,6 +2477,77 @@ class HarnessRunner:
             "recommendation_admissibility": recommendation_admissibility,
             "publishability": publishability,
         }
+
+    @staticmethod
+    def _canonical_primary_seam(final_analysis_payload: dict[str, Any]) -> dict[str, Any] | None:
+        primary_seam = final_analysis_payload.get("primary_seam")
+        if not isinstance(primary_seam, dict):
+            return None
+        return json.loads(json.dumps(primary_seam))
+
+    @staticmethod
+    def _canonical_secondary_seams_considered(
+        final_analysis_payload: dict[str, Any],
+    ) -> list[Any]:
+        secondary_seams_considered = final_analysis_payload.get("secondary_seams_considered")
+        if not isinstance(secondary_seams_considered, list):
+            return []
+        return json.loads(json.dumps(secondary_seams_considered))
+
+    @staticmethod
+    def _canonical_recommendation_seam_bindings(
+        final_analysis_payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        recommendations = final_analysis_payload.get("recommendations")
+        if not isinstance(recommendations, list):
+            return []
+        bindings: list[dict[str, Any]] = []
+        for recommendation_index, item in enumerate(recommendations, start=1):
+            if not isinstance(item, dict):
+                continue
+            bindings.append(
+                {
+                    "recommendation_index": recommendation_index,
+                    "seam_id": item.get("seam_id"),
+                    "seam_expansion_reason": item.get("seam_expansion_reason"),
+                }
+            )
+        return bindings
+
+    @staticmethod
+    def _canonical_analysis_scope_escapes(
+        final_analysis_payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        scope_escapes = final_analysis_payload.get("scope_escapes")
+        if not isinstance(scope_escapes, list):
+            return []
+        return json.loads(
+            json.dumps([item for item in scope_escapes if isinstance(item, dict)])
+        )
+
+    def _resolve_final_analysis_stage(self) -> dict[str, Any] | None:
+        for stage in reversed(self.agent_stages):
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if role_name == "proposer" or role_name.startswith("reviser_round_"):
+                payload = stage.get("structured_output")
+                if stage.get("ok") and isinstance(payload, dict) and payload:
+                    return stage
+        return None
+
+    @staticmethod
+    def _analysis_stage_round_index(role_name: str) -> int:
+        normalized = str(role_name or "").strip()
+        if normalized == "proposer":
+            return 0
+        if normalized.startswith("reviser_round_"):
+            suffix = normalized.removeprefix("reviser_round_")
+            try:
+                return int(suffix)
+            except ValueError:
+                return 0
+        return 0
 
     def _blocking_issues(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:
         blocking: list[dict[str, Any]] = []

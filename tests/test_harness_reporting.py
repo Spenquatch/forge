@@ -2296,6 +2296,58 @@ def _recommendation_payload(*titles: str) -> dict[str, object]:
     }
 
 
+def _canonical_seam_fields() -> dict[str, object]:
+    return {
+        "primary_seam": {
+            "seam_id": "seam-primary",
+            "summary": "The runner determines canonical review status.",
+            "why_primary": "It is the narrowest governing seam for review-state derivation.",
+            "paths": ["anvil/harness/runner.py"],
+        },
+        "secondary_seams_considered": [
+            {
+                "seam_id": "seam-reporting",
+                "summary": "Reporting projects the canonical seam state into artifacts.",
+                "why_not_primary": "It consumes runner state rather than establishing it.",
+                "paths": ["anvil/harness/reporting.py"],
+            },
+            {
+                "seam_id": "seam-report",
+                "summary": "The report renders run-canonical seam context.",
+                "why_not_primary": "It is presentation-only.",
+                "paths": ["anvil/harness/report.py"],
+            },
+        ],
+        "scope_escapes": [
+            {
+                "path": "anvil/harness/reporting.py",
+                "reason": "The reporting seam is retained in the bounded overflow projection.",
+            },
+            {
+                "path": "anvil/harness/report.py",
+                "reason": "The report seam is retained only when the full final artifact is emitted.",
+            },
+        ],
+        "recommendation_seam_bindings": [
+            {
+                "recommendation_index": 1,
+                "seam_id": "seam-primary",
+                "seam_expansion_reason": "",
+            },
+            {
+                "recommendation_index": 2,
+                "seam_id": "seam-reporting",
+                "seam_expansion_reason": "Artifact projection requires the reporting seam.",
+            },
+            {
+                "recommendation_index": 3,
+                "seam_id": "seam-report",
+                "seam_expansion_reason": "Canonical seam rendering requires the report seam.",
+            },
+        ],
+    }
+
+
 def _trust_status(
     *,
     final_indices: list[int],
@@ -2304,8 +2356,9 @@ def _trust_status(
     reasons_by_index: dict[str, list[str]] | None = None,
     provenance_status: str = "bound",
     final_answer_publishable: bool = True,
+    seam_fields: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    status: dict[str, object] = {
         "mode": "trust",
         "content_verdict": "accepted_with_warnings",
         "semantic_warning_count": 0,
@@ -2332,6 +2385,9 @@ def _trust_status(
             "reasons_by_recommendation_index": reasons_by_index or {},
         },
     }
+    if seam_fields:
+        status.update(copy.deepcopy(seam_fields))
+    return status
 
 
 def _bounded_status(
@@ -2341,8 +2397,9 @@ def _bounded_status(
     excluded_indices: list[int],
     reasons_by_index: dict[str, list[str]] | None = None,
     content_verdict: str = "accepted_with_warnings",
+    seam_fields: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    status: dict[str, object] = {
         "mode": "bounded",
         "content_verdict": content_verdict,
         "semantic_warning_count": 0,
@@ -2369,6 +2426,122 @@ def _bounded_status(
             "reasons_by_recommendation_index": reasons_by_index or {},
         },
     }
+    if seam_fields:
+        status.update(copy.deepcopy(seam_fields))
+    return status
+
+
+def test_apply_final_artifacts_partial_answer_projects_canonical_seam_state(
+    tmp_path,
+):
+    payload = _recommendation_payload("First", "Second", "Third")
+    payload["primary_seam"] = {
+        "seam_id": "payload-primary",
+        "summary": "This payload seam should be ignored for projection.",
+        "why_primary": "Incorrect source.",
+        "paths": ["payload.py"],
+    }
+    payload["secondary_seams_considered"] = [
+        {
+            "seam_id": "payload-secondary",
+            "summary": "This payload secondary seam should be ignored for projection.",
+            "why_not_primary": "Incorrect source.",
+            "paths": ["payload.py"],
+        }
+    ]
+    seam_fields = _canonical_seam_fields()
+    summary = {
+        "task": {"id": "task-partial-seam-projection"},
+        "verdict": "accepted_partial",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v9",
+            "mode": "trust",
+            "partial_acceptance": {"min_accepted_recommendations": 1},
+        },
+        "analysis_review_status": _trust_status(
+            final_indices=[2],
+            partial_only_indices=[],
+            excluded_indices=[1, 3],
+            reasons_by_index={
+                "1": ["not_accepted"],
+                "3": ["not_accepted"],
+            },
+            seam_fields=seam_fields,
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    partial_json = json.loads(
+        (tmp_path / "PARTIAL_ANSWER.json").read_text(encoding="utf-8")
+    )
+    partial_markdown = (tmp_path / "PARTIAL_ANSWER.md").read_text(encoding="utf-8")
+    report_markdown = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+
+    assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert partial_json["primary_seam"]["seam_id"] == "seam-primary"
+    assert partial_json["primary_seam"]["summary"] == seam_fields["primary_seam"]["summary"]
+    assert partial_json["secondary_seams_considered"] == [
+        seam_fields["secondary_seams_considered"][0]
+    ]
+    assert partial_json["scope_escapes"] == [seam_fields["scope_escapes"][0]]
+    assert (
+        partial_json["primary_seam_projection_status"]
+        == "retained_without_included_recommendations"
+    )
+    assert "payload-primary" not in json.dumps(partial_json, sort_keys=True)
+    assert "payload-secondary" not in json.dumps(partial_json, sort_keys=True)
+    assert (
+        "Canonical primary seam retained for run context; no included recommendation in this artifact binds to it."
+        in partial_markdown
+    )
+    assert "`seam-reporting`" in partial_markdown
+    assert "`seam-report`" not in partial_markdown
+    assert "`payload-primary`" not in partial_markdown
+    assert "- Primary seam: `seam-primary`" in report_markdown
+    assert "- Secondary seams considered: `seam-reporting`, `seam-report`" in report_markdown
+    assert "primary_seam_projection_status" not in report_markdown
+    assert "`payload-primary`" not in report_markdown
+
+
+def test_apply_final_artifacts_final_answer_preserves_analysis_scope_escapes_unchanged(
+    tmp_path,
+):
+    seam_fields = _canonical_seam_fields()
+    payload = _recommendation_payload("First", "Second", "Third")
+    payload.update(copy.deepcopy(seam_fields))
+    summary = {
+        "task": {"id": "task-final-scope-escapes"},
+        "verdict": "accepted",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "analysis_review_contract": {
+            "contract_version": "analysis_review_v1_contract_v9",
+            "mode": "bounded",
+            "partial_acceptance": {"min_accepted_recommendations": 1},
+        },
+        "analysis_review_status": _bounded_status(
+            final_indices=[1, 2, 3],
+            partial_only_indices=[],
+            excluded_indices=[],
+            seam_fields=seam_fields,
+        ),
+        "final_answer": payload,
+        "drafts": [_best_draft_record(payload)],
+        "topic_ledger": [],
+        "issue_ledger": [],
+    }
+
+    updated = apply_final_artifacts(summary)
+    final_json = json.loads(
+        (tmp_path / "FINAL_ANSWER.json").read_text(encoding="utf-8")
+    )
+
+    assert updated["artifacts"]["final_artifact_kind"] == "final_answer"
+    assert final_json["scope_escapes"] == seam_fields["scope_escapes"]
 
 
 def test_apply_final_artifacts_bounded_accepted_emits_final_answer_and_report_shows_no_withheld_indices(
@@ -2381,7 +2554,7 @@ def test_apply_final_artifacts_bounded_accepted_emits_final_answer_and_report_sh
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v7",
+                "contract_version": "analysis_review_v1_contract_v9",
                 "mode": "bounded",
                 "partial_acceptance": {"min_accepted_recommendations": 1},
             },
@@ -2442,7 +2615,7 @@ def test_apply_final_artifacts_emits_final_answer_when_all_accepted_recommendati
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
         "analysis_review_status": _trust_status(
@@ -2474,7 +2647,7 @@ def test_apply_final_artifacts_uses_one_sanitized_payload_copy_per_final_answer_
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
         "analysis_review_status": _trust_status(
@@ -2520,7 +2693,7 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v7",
+                "contract_version": "analysis_review_v1_contract_v9",
                 "partial_acceptance": {"min_accepted_recommendations": 2},
             },
             "analysis_review_status": _trust_status(
@@ -2625,7 +2798,7 @@ def test_apply_final_artifacts_preserves_partial_acceptance_suffix_when_sanitizi
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -2694,7 +2867,7 @@ def test_apply_final_artifacts_writes_partial_answer_with_original_indices_in_ma
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -2739,7 +2912,7 @@ def test_apply_final_artifacts_falls_back_to_best_draft_when_global_topic_blocke
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
         "analysis_review_status": _trust_status(
@@ -2780,7 +2953,7 @@ def test_apply_final_artifacts_falls_back_to_best_draft_when_partial_subset_drop
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -2831,7 +3004,7 @@ def test_apply_final_artifacts_never_emits_final_answer_when_source_payload_omit
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v7",
+                "contract_version": "analysis_review_v1_contract_v9",
                 "partial_acceptance": {"min_accepted_recommendations": 2},
             },
             "analysis_review_status": _trust_status(
@@ -2898,7 +3071,7 @@ def test_apply_final_artifacts_enforces_publishability_parity_invariant_across_a
                 "verdict": "accepted_with_warnings",
                 "artifacts": {"run_dir": str(tmp_path / "final")},
                 "analysis_review_contract": {
-                    "contract_version": "analysis_review_v1_contract_v7",
+                    "contract_version": "analysis_review_v1_contract_v9",
                     "mode": "bounded",
                     "partial_acceptance": {"min_accepted_recommendations": 1},
                 },
@@ -2919,7 +3092,7 @@ def test_apply_final_artifacts_enforces_publishability_parity_invariant_across_a
                 "verdict": "accepted_with_warnings",
                 "artifacts": {"run_dir": str(tmp_path / "partial")},
                 "analysis_review_contract": {
-                    "contract_version": "analysis_review_v1_contract_v7",
+                    "contract_version": "analysis_review_v1_contract_v9",
                     "partial_acceptance": {"min_accepted_recommendations": 2},
                 },
                 "analysis_review_status": _trust_status(
@@ -2943,7 +3116,7 @@ def test_apply_final_artifacts_enforces_publishability_parity_invariant_across_a
                 "verdict": "accepted_with_warnings",
                 "artifacts": {"run_dir": str(tmp_path / "best-draft")},
                 "analysis_review_contract": {
-                    "contract_version": "analysis_review_v1_contract_v7",
+                    "contract_version": "analysis_review_v1_contract_v9",
                     "partial_acceptance": {"min_accepted_recommendations": 2},
                 },
                 "analysis_review_status": _trust_status(
@@ -3007,7 +3180,7 @@ def test_apply_final_artifacts_is_idempotent_for_finalized_trust_fallback_report
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v7",
+                "contract_version": "analysis_review_v1_contract_v9",
                 "partial_acceptance": {"min_accepted_recommendations": 2},
             },
             "analysis_review_status": _trust_status(
@@ -3063,7 +3236,7 @@ def test_build_partial_answer_payload_preserves_original_indices_and_canonical_e
     payload = _recommendation_payload("First", "Second", "Third")
     summary = {
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -3109,7 +3282,7 @@ def test_apply_final_artifacts_bounded_partial_emits_partial_answer_without_part
         "verdict": "accepted_partial",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v7",
+            "contract_version": "analysis_review_v1_contract_v9",
             "mode": "bounded",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },

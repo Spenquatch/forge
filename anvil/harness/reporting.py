@@ -287,6 +287,112 @@ def _analysis_publishability(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _canonical_primary_seam(analysis_status: dict[str, Any]) -> dict[str, Any] | None:
+    primary_seam = analysis_status.get("primary_seam")
+    if not isinstance(primary_seam, dict):
+        return None
+    return copy.deepcopy(primary_seam)
+
+
+def _canonical_secondary_seams_considered(
+    analysis_status: dict[str, Any],
+) -> list[dict[str, Any]]:
+    secondary_seams = analysis_status.get("secondary_seams_considered")
+    if not isinstance(secondary_seams, list):
+        return []
+    return [copy.deepcopy(item) for item in secondary_seams if isinstance(item, dict)]
+
+
+def _canonical_recommendation_seam_bindings(
+    analysis_status: dict[str, Any],
+) -> list[dict[str, Any]]:
+    recommendation_seam_bindings = analysis_status.get("recommendation_seam_bindings")
+    if not isinstance(recommendation_seam_bindings, list):
+        return []
+    return [
+        copy.deepcopy(item)
+        for item in recommendation_seam_bindings
+        if isinstance(item, dict)
+    ]
+
+
+def _canonical_analysis_scope_escapes(
+    analysis_status: dict[str, Any],
+) -> list[dict[str, Any]]:
+    scope_escapes = analysis_status.get("scope_escapes")
+    if not isinstance(scope_escapes, list):
+        return []
+    return [copy.deepcopy(item) for item in scope_escapes if isinstance(item, dict)]
+
+
+def _normalized_seam_id(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def _projected_partial_seam_state(
+    summary: dict[str, Any],
+    *,
+    included_recommendation_indices: list[int],
+) -> dict[str, Any]:
+    analysis_status = _analysis_review_status(summary)
+    if not analysis_status:
+        return {}
+
+    primary_seam = _canonical_primary_seam(analysis_status)
+    secondary_seams = _canonical_secondary_seams_considered(analysis_status)
+    recommendation_seam_bindings = _canonical_recommendation_seam_bindings(
+        analysis_status
+    )
+    analysis_scope_escapes = _canonical_analysis_scope_escapes(analysis_status)
+    included_index_set = set(included_recommendation_indices)
+    included_seam_ids: set[str] = set()
+    for item in recommendation_seam_bindings:
+        try:
+            recommendation_index = int(item.get("recommendation_index"))
+        except (TypeError, ValueError):
+            continue
+        if recommendation_index not in included_index_set:
+            continue
+        seam_id = _normalized_seam_id(item.get("seam_id"))
+        if seam_id:
+            included_seam_ids.add(seam_id)
+
+    projected_state: dict[str, Any] = {}
+    if primary_seam is not None:
+        projected_state["primary_seam"] = primary_seam
+        primary_seam_id = _normalized_seam_id(primary_seam.get("seam_id"))
+        if primary_seam_id and primary_seam_id not in included_seam_ids:
+            projected_state["primary_seam_projection_status"] = (
+                "retained_without_included_recommendations"
+            )
+    if secondary_seams or "secondary_seams_considered" in analysis_status:
+        retained_secondary_seams = [
+            seam
+            for seam in secondary_seams
+            if _normalized_seam_id(seam.get("seam_id")) in included_seam_ids
+        ]
+        projected_state["secondary_seams_considered"] = retained_secondary_seams
+        retained_seam_paths: set[str] = set()
+        if primary_seam is not None:
+            retained_seam_paths.update(
+                _non_empty_path_values(primary_seam.get("paths"))
+            )
+        for seam in retained_secondary_seams:
+            retained_seam_paths.update(_non_empty_path_values(seam.get("paths")))
+        projected_state["scope_escapes"] = [
+            escape
+            for escape in analysis_scope_escapes
+            if str(escape.get("path") or "").strip() in retained_seam_paths
+        ]
+    elif analysis_scope_escapes:
+        projected_state["scope_escapes"] = []
+    return projected_state
+
+
+def _non_empty_path_values(paths: Any) -> list[str]:
+    return [str(item).strip() for item in (paths or []) if str(item).strip()]
+
+
 def _set_analysis_review_status(
     summary: dict[str, Any],
     analysis_status: dict[str, Any],
@@ -439,6 +545,85 @@ def _topic_summary_text(topic: dict[str, Any]) -> str:
     if repair_hint:
         return repair_hint
     return title or "Topic"
+
+
+def _render_seam_paths(paths: Any) -> str:
+    values = [str(item).strip() for item in (paths or []) if str(item).strip()]
+    return ", ".join(f"`{item}`" for item in values) if values else "none"
+
+
+def _append_seam_context_section(
+    lines: list[str],
+    *,
+    artifact_kind: str,
+    payload: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    analysis_status = _analysis_review_status(summary)
+    if artifact_kind == "partial_answer":
+        primary_seam = payload.get("primary_seam")
+        secondary_seams = payload.get("secondary_seams_considered")
+        projection_status = str(payload.get("primary_seam_projection_status") or "").strip()
+    else:
+        primary_seam = analysis_status.get("primary_seam")
+        secondary_seams = analysis_status.get("secondary_seams_considered")
+        projection_status = ""
+        if not isinstance(primary_seam, dict):
+            primary_seam = payload.get("primary_seam")
+        if not isinstance(secondary_seams, list):
+            secondary_seams = payload.get("secondary_seams_considered")
+
+    primary_seam = primary_seam if isinstance(primary_seam, dict) else None
+    secondary_seams = (
+        [item for item in secondary_seams if isinstance(item, dict)]
+        if isinstance(secondary_seams, list)
+        else []
+    )
+    if primary_seam is None and not secondary_seams and not projection_status:
+        return
+
+    lines.extend(["## Seam Context", ""])
+    if primary_seam is not None:
+        lines.append(
+            "- Primary seam: "
+            + f"`{_normalized_seam_id(primary_seam.get('seam_id')) or 'unknown'}`"
+        )
+        summary_text = str(primary_seam.get("summary") or "").strip()
+        if summary_text:
+            lines.append(f"  - Summary: {summary_text}")
+        why_primary = str(primary_seam.get("why_primary") or "").strip()
+        if why_primary:
+            lines.append(f"  - Why primary: {why_primary}")
+        lines.append(
+            "  - Paths: " + _render_seam_paths(primary_seam.get("paths"))
+        )
+    else:
+        lines.append("- Primary seam: none")
+    if projection_status == "retained_without_included_recommendations":
+        lines.append(
+            "Canonical primary seam retained for run context; no included recommendation in this artifact binds to it."
+        )
+    if secondary_seams:
+        lines.append(
+            "- Secondary seams considered: "
+            + ", ".join(
+                f"`{_normalized_seam_id(item.get('seam_id')) or 'unknown'}`"
+                for item in secondary_seams
+            )
+        )
+        for item in secondary_seams:
+            lines.append(
+                "  - "
+                + f"`{_normalized_seam_id(item.get('seam_id')) or 'unknown'}`"
+                + ": "
+                + (
+                    str(item.get("summary") or "").strip()
+                    or "No summary provided."
+                )
+            )
+    else:
+        lines.append("- Secondary seams considered: none")
+    lines.append("")
 
 
 def _append_topic_lifecycle(lines: list[str], summary: dict[str, Any]) -> None:
@@ -840,6 +1025,16 @@ def build_partial_answer_payload(
         partial_payload["recommendation_admissibility"] = copy.deepcopy(
             recommendation_admissibility
         )
+    partial_payload.pop("primary_seam", None)
+    partial_payload.pop("secondary_seams_considered", None)
+    partial_payload.pop("scope_escapes", None)
+    partial_payload.pop("primary_seam_projection_status", None)
+    partial_payload.update(
+        _projected_partial_seam_state(
+            summary,
+            included_recommendation_indices=recommendation_indices,
+        )
+    )
     filtered_reviews: list[dict[str, Any]] = []
     for item in summary.get("recommendation_reviews") or []:
         if not isinstance(item, dict):
@@ -1157,6 +1352,12 @@ def render_deliverable_markdown(
             )
         lines.append("")
 
+    _append_seam_context_section(
+        lines,
+        artifact_kind=artifact_kind,
+        payload=payload,
+        summary=summary or {},
+    )
     _append_topic_lifecycle(lines, summary or {})
 
     summary_text = str(payload.get("summary", "") or "").strip()

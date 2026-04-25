@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v7` keeps the bounded-review rules from v6, keeps trust-mode recommendation evidence explicitly uncapped, and adds runner-owned recommendation admissibility for bounded and trust artifact selection without changing the model-authored payload shape.
+`analysis_review_v1_contract_v9` keeps the seam-selection contract from v8 and extends the analysis payload family so proposer/reviser outputs may record bounded third-seam overflow through analysis-stage `scope_escapes`.
 
 ## What the contract governs
 
@@ -27,7 +27,7 @@ The contract now serializes:
 
 ```json
 {
-  "contract_version": "analysis_review_v1_contract_v7",
+  "contract_version": "analysis_review_v1_contract_v9",
   "strategy_kind": "analysis_review_v1",
   "mode": "bounded",
   "effective_strategy": {
@@ -41,7 +41,7 @@ Today the legacy `analysis_review_v1` surface still resolves to bounded behavior
 
 ## Unified policy model
 
-The v7 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
+The v9 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
 
 Why this is preferable to mode-specific contract classes:
 
@@ -226,6 +226,49 @@ Markdown compaction is renderer-owned and preview-only:
 - omitted items render as deterministic `(+N more)` previews
 - JSON artifacts, including the selected deliverable JSON and `summary.json`, remain full fidelity and must not gain parallel `display_*` or `audit_*` field families
 
+## Seam-selection contract
+
+The seam-selection contract is additive to the shared payload family and does not introduce review-schema changes.
+
+Analysis/proposer/reviser payload fields are frozen to:
+
+- `primary_seam`
+- `secondary_seams_considered`
+- `scope_escapes`
+- `recommendations[*].seam_id`
+- `recommendations[*].seam_expansion_reason`
+
+Canonical status fields are frozen to:
+
+- `analysis_review_status.primary_seam`
+- `analysis_review_status.secondary_seams_considered`
+- `analysis_review_status.scope_escapes`
+- `analysis_review_status.recommendation_seam_bindings`
+
+Canonical `analysis_review_status.recommendation_seam_bindings[*]` objects are frozen to:
+
+- `recommendation_index`
+- `seam_id`
+- `seam_expansion_reason`
+
+Seam-selection rules:
+
+- `primary_seam` remains the canonical run-context seam.
+- `secondary_seams_considered` records only seams actually declared or inspected beyond the primary seam.
+- analysis/proposer/reviser payloads now include `scope_escapes`.
+- `recommendations[*].seam_id` binds each recommendation to its seam, and `recommendations[*].seam_expansion_reason` explains why that recommendation expands beyond the primary seam when it does.
+- in bounded analysis outputs, `scope_escapes` may justify exactly one third secondary seam and nothing beyond that.
+- review-stage `scope_escapes` semantics remain separate: critic/auditor still use them for later review-surface escapes rather than analysis-stage seam declaration.
+- default bounded cap is 2; declaring or inspecting a third secondary seam requires a recorded scope_escape; overflow beyond that third seam is never silently normalized away.
+
+Projection-only retained-primary status is frozen to:
+
+- `primary_seam_projection_status: "retained_without_included_recommendations"`
+
+When projection retains the canonical primary seam even though no included recommendation binds to it, the retained-primary note sentence is frozen exactly to:
+
+`Canonical primary seam retained for run context; no included recommendation in this artifact binds to it.`
+
 ## Shared payload family
 
 Do not split bounded and trust mode into separate JSON payload families.
@@ -346,6 +389,7 @@ Examples of the existing and intended v4 semantic checks:
 - auditors must explicitly classify every prior open issue as resolved, carried forward, or waived
 - new medium-or-higher auditor issues after round 0 must include `why_not_raised_earlier`
 - every `scope_escapes[].reason` must be non-empty
+- in bounded analysis outputs, `secondary_seams_considered[3].paths` must be fully covered by `scope_escapes[*].path`, and extraneous overflow escape paths are invalid
 - in trust mode, `verified_evidence_refs` should stay a subset of `evidence`
 - in trust mode, non-inferred `affected_files` should be covered by evidence or checked files
 - in trust mode, `blocking_class_override_reason` should explain intentional taxonomy overrides

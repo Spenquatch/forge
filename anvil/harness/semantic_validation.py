@@ -138,6 +138,22 @@ def validate_analysis_output_payload(
             + ", ".join(unknown_files_reviewed)
         )
 
+    scope_escapes = _validate_scope_escapes(
+        result,
+        scope_escapes=payload.get("scope_escapes"),
+        require_reason=bounded_review.require_scope_escape_justification,
+    )
+    primary_seam_id, declared_secondary_seam_ids = _validate_declared_seams(
+        result,
+        payload=payload,
+        files_reviewed=files_reviewed_set,
+        workspace_paths=workspace_path_set,
+        contract=contract,
+        scope_escapes=scope_escapes,
+    )
+    declared_seam_ids = ({primary_seam_id} if primary_seam_id else set()) | declared_secondary_seam_ids
+    primary_bound_recommendation_count = 0
+
     for index, item in enumerate(recommendations, start=1):
         if not isinstance(item, dict):
             result.errors.append(f"recommendations[{index}] must be an object.")
@@ -168,6 +184,14 @@ def validate_analysis_output_payload(
                 files_reviewed=files_reviewed_set,
                 workspace_paths=workspace_path_set,
             )
+        if _validate_recommendation_seam_binding(
+            result,
+            recommendation=item,
+            recommendation_index=index,
+            primary_seam_id=primary_seam_id,
+            declared_seam_ids=declared_seam_ids,
+        ):
+            primary_bound_recommendation_count += 1
         _validate_review_surface(
             result,
             review_surface=item.get("review_surface"),
@@ -185,6 +209,11 @@ def validate_analysis_output_payload(
                 workspace_paths=workspace_path_set,
                 contract=contract,
             )
+
+    if recommendations and primary_seam_id and primary_bound_recommendation_count < 1:
+        result.errors.append(
+            "At least one recommendation must remain bound to primary_seam.seam_id."
+        )
 
     required_sections = contract.required_sections
     _validate_section(
@@ -601,19 +630,11 @@ def validate_analysis_review_payload(
         workspace_paths=workspace_path_set,
     )
 
-    scope_escapes = payload.get("scope_escapes") or []
-    if not isinstance(scope_escapes, list):
-        result.errors.append("scope_escapes must be a list.")
-        scope_escapes = []
-    if bounded_review.require_scope_escape_justification:
-        for index, item in enumerate(scope_escapes, start=1):
-            if not isinstance(item, dict):
-                result.errors.append(f"scope_escapes[{index}] must be an object.")
-                continue
-            if not str(item.get("reason") or "").strip():
-                result.errors.append(
-                    f"scope_escapes[{index}].reason must be non-empty when scope escapes are recorded."
-                )
+    _validate_scope_escapes(
+        result,
+        scope_escapes=payload.get("scope_escapes"),
+        require_reason=bounded_review.require_scope_escape_justification,
+    )
 
     if _review_payload_requires_structured_refs(payload):
         _validate_review_payload_provenance(
@@ -740,6 +761,218 @@ def _validate_recommendation_evidence(
             f"recommendations[{recommendation_index}].evidence contains path(s) not present in the workspace snapshot: "
             + ", ".join(unknown_files)
         )
+
+
+def _validate_declared_seams(
+    result: SemanticValidationResult,
+    *,
+    payload: dict[str, Any],
+    files_reviewed: set[str],
+    workspace_paths: set[str],
+    contract: AnalysisReviewContract,
+    scope_escapes: list[dict[str, str]],
+) -> tuple[str | None, set[str]]:
+    primary_seam_id = _validate_seam_entry(
+        result,
+        seam=payload.get("primary_seam"),
+        field_name="primary_seam",
+        reason_field="why_primary",
+        files_reviewed=files_reviewed,
+        workspace_paths=workspace_paths,
+    )
+    secondary_seams = payload.get("secondary_seams_considered")
+    if not isinstance(secondary_seams, list):
+        result.errors.append("secondary_seams_considered must be a list.")
+        return primary_seam_id, set()
+
+    secondary_seam_ids: set[str] = set()
+    for index, item in enumerate(secondary_seams, start=1):
+        seam_id = _validate_seam_entry(
+            result,
+            seam=item,
+            field_name=f"secondary_seams_considered[{index}]",
+            reason_field="why_not_primary",
+            files_reviewed=files_reviewed,
+            workspace_paths=workspace_paths,
+        )
+        if not seam_id:
+            continue
+        if primary_seam_id and seam_id == primary_seam_id:
+            result.errors.append(
+                f"secondary_seams_considered[{index}].seam_id must not duplicate primary_seam.seam_id={primary_seam_id}."
+            )
+            continue
+        if seam_id in secondary_seam_ids:
+            result.errors.append(
+                f"secondary_seams_considered[{index}].seam_id duplicates an earlier secondary seam ID: {seam_id}."
+            )
+            continue
+        secondary_seam_ids.add(seam_id)
+
+    _validate_bounded_secondary_seam_overflow(
+        result,
+        secondary_seams=secondary_seams,
+        contract=contract,
+        scope_escapes=scope_escapes,
+    )
+
+    return primary_seam_id, secondary_seam_ids
+
+
+def _validate_scope_escapes(
+    result: SemanticValidationResult,
+    *,
+    scope_escapes: Any,
+    require_reason: bool,
+) -> list[dict[str, str]]:
+    if scope_escapes is None:
+        return []
+    if not isinstance(scope_escapes, list):
+        result.errors.append("scope_escapes must be a list.")
+        return []
+
+    validated: list[dict[str, str]] = []
+    for index, item in enumerate(scope_escapes, start=1):
+        if not isinstance(item, dict):
+            result.errors.append(f"scope_escapes[{index}] must be an object.")
+            continue
+        path = str(item.get("path") or "").strip()
+        reason = str(item.get("reason") or "").strip()
+        if require_reason and not reason:
+            result.errors.append(
+                f"scope_escapes[{index}].reason must be non-empty when scope escapes are recorded."
+            )
+        validated.append({"path": path, "reason": reason})
+    return validated
+
+
+def _validate_bounded_secondary_seam_overflow(
+    result: SemanticValidationResult,
+    *,
+    secondary_seams: list[Any],
+    contract: AnalysisReviewContract,
+    scope_escapes: list[dict[str, str]],
+) -> None:
+    if contract.mode != "bounded":
+        return
+
+    seam_count = len(secondary_seams)
+    default_cap = contract.discovery_policy.max_secondary_seams_considered_bounded
+    if seam_count <= default_cap:
+        if scope_escapes:
+            result.errors.append(
+                "analysis-stage scope_escapes are only allowed when justifying a third secondary seam in bounded mode."
+            )
+        return
+    if seam_count > default_cap + 1:
+        result.errors.append(
+            "secondary_seams_considered overflow: bounded mode allows at most one third secondary seam when scope_escapes explicitly justify it."
+        )
+        return
+
+    third_seam = secondary_seams[default_cap]
+    third_seam_paths = set()
+    if isinstance(third_seam, dict):
+        third_seam_paths = set(
+            _non_empty_strings(
+                third_seam.get("paths") if isinstance(third_seam.get("paths"), list) else []
+            )
+        )
+    escape_paths = {
+        str(item.get("path") or "").strip()
+        for item in scope_escapes
+        if str(item.get("path") or "").strip()
+    }
+
+    missing_paths = sorted(third_seam_paths - escape_paths)
+    if missing_paths:
+        result.errors.append(
+            "secondary_seams_considered[3] requires scope_escapes coverage for every declared third-seam path: "
+            + ", ".join(missing_paths)
+        )
+
+    extra_paths = sorted(escape_paths - third_seam_paths)
+    if extra_paths:
+        result.errors.append(
+            "analysis-stage scope_escapes used for bounded third-seam overflow must stay within secondary_seams_considered[3].paths: "
+            + ", ".join(extra_paths)
+        )
+
+
+def _validate_seam_entry(
+    result: SemanticValidationResult,
+    *,
+    seam: Any,
+    field_name: str,
+    reason_field: str,
+    files_reviewed: set[str],
+    workspace_paths: set[str],
+) -> str | None:
+    if not isinstance(seam, dict):
+        result.errors.append(f"{field_name} must be an object.")
+        return None
+
+    seam_id = str(seam.get("seam_id") or "").strip()
+    if not seam_id:
+        result.errors.append(f"{field_name}.seam_id must be non-empty.")
+    if not str(seam.get("summary") or "").strip():
+        result.errors.append(f"{field_name}.summary must be non-empty.")
+    if not str(seam.get(reason_field) or "").strip():
+        result.errors.append(f"{field_name}.{reason_field} must be non-empty.")
+
+    paths = seam.get("paths")
+    if not isinstance(paths, list):
+        result.errors.append(f"{field_name}.paths must be a list.")
+        return seam_id or None
+    path_items = _non_empty_strings(paths)
+    if not path_items:
+        result.errors.append(f"{field_name}.paths must contain at least one non-empty path.")
+        return seam_id or None
+    missing_files = sorted(set(path_items) - files_reviewed)
+    if missing_files:
+        result.errors.append(
+            f"{field_name}.paths must be a subset of files_reviewed: " + ", ".join(missing_files)
+        )
+    unknown_files = sorted(set(path_items) - workspace_paths)
+    if unknown_files:
+        result.errors.append(
+            f"{field_name}.paths contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_files)
+        )
+    return seam_id or None
+
+
+def _validate_recommendation_seam_binding(
+    result: SemanticValidationResult,
+    *,
+    recommendation: dict[str, Any],
+    recommendation_index: int,
+    primary_seam_id: str | None,
+    declared_seam_ids: set[str],
+) -> bool:
+    seam_id = str(recommendation.get("seam_id") or "").strip()
+    if not seam_id:
+        result.errors.append(f"recommendations[{recommendation_index}].seam_id must be non-empty.")
+        return False
+    if seam_id not in declared_seam_ids:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].seam_id must bind to primary_seam.seam_id or a declared secondary_seams_considered seam_id: {seam_id}"
+        )
+        return False
+
+    seam_expansion_reason = str(recommendation.get("seam_expansion_reason") or "").strip()
+    if primary_seam_id and seam_id == primary_seam_id:
+        if seam_expansion_reason:
+            result.errors.append(
+                f"recommendations[{recommendation_index}].seam_expansion_reason must be empty when bound to primary_seam."
+            )
+        return True
+
+    if not seam_expansion_reason:
+        result.errors.append(
+            f"recommendations[{recommendation_index}].seam_expansion_reason must be non-empty for non-primary seams."
+        )
+    return False
 
 
 def _validate_trust_recommendation_metadata(

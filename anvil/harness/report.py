@@ -90,6 +90,79 @@ def _render_recommendation_index_list(items: list[int]) -> str:
     return ", ".join(f"`{item}`" for item in items)
 
 
+def _normalized_seam_id(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def _render_seam_paths(paths: Any) -> str:
+    values = [str(item).strip() for item in (paths or []) if str(item).strip()]
+    return ", ".join(f"`{item}`" for item in values) if values else "none"
+
+
+def _append_seam_status_lines(lines: list[str], status: dict[str, Any]) -> None:
+    primary_seam = status.get("primary_seam")
+    secondary_seams = status.get("secondary_seams_considered")
+    primary_seam = primary_seam if isinstance(primary_seam, dict) else None
+    secondary_seams = (
+        [item for item in secondary_seams if isinstance(item, dict)]
+        if isinstance(secondary_seams, list)
+        else []
+    )
+    if primary_seam is None and "secondary_seams_considered" not in status:
+        return
+
+    if primary_seam is not None:
+        lines.append(
+            "- Primary seam: "
+            + f"`{_normalized_seam_id(primary_seam.get('seam_id')) or 'unknown'}`"
+        )
+        summary_text = str(primary_seam.get("summary") or "").strip()
+        if summary_text:
+            lines.append(f"  - Summary: {summary_text}")
+        why_primary = str(primary_seam.get("why_primary") or "").strip()
+        if why_primary:
+            lines.append(f"  - Why primary: {why_primary}")
+        lines.append(
+            "  - Paths: " + _render_seam_paths(primary_seam.get("paths"))
+        )
+    else:
+        lines.append("- Primary seam: none")
+
+    if secondary_seams:
+        lines.append(
+            "- Secondary seams considered: "
+            + ", ".join(
+                f"`{_normalized_seam_id(item.get('seam_id')) or 'unknown'}`"
+                for item in secondary_seams
+            )
+        )
+        for item in secondary_seams:
+            lines.append(
+                "  - "
+                + f"`{_normalized_seam_id(item.get('seam_id')) or 'unknown'}`"
+                + ": "
+                + (
+                    str(item.get("summary") or "").strip()
+                    or "No summary provided."
+                )
+            )
+    else:
+        lines.append("- Secondary seams considered: none")
+
+
+def _format_scope_escape_label(item: dict[str, Any]) -> str:
+    role_name = str(item.get("role_name") or "reviewer").strip() or "reviewer"
+    round_index = item.get("round_index", 0)
+    if role_name in {"critic", "auditor"}:
+        return f"`{role_name}` round `{round_index}`"
+    if role_name.startswith("reviser_round_"):
+        suffix = role_name.removeprefix("reviser_round_") or "0"
+        return f"`reviser` analysis stage `{suffix}`"
+    if role_name == "proposer":
+        return "`proposer` analysis stage"
+    return f"`{role_name}` stage"
+
+
 def _topic_status_ids(summary: dict[str, Any], *, status_name: str) -> list[str]:
     status = _analysis_review_status(summary)
     field_name = topic_status_field_name(status_name)
@@ -238,11 +311,9 @@ def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> N
         lines.append("### Scope Escapes")
         lines.append("")
         for item in scope_escapes:
-            role_name = item.get("role_name") or "reviewer"
-            round_index = item.get("round_index", 0)
             path = item.get("path") or "workspace"
             reason = item.get("reason") or "No reason provided."
-            lines.append(f"- `{role_name}` round `{round_index}` — `{path}`: {reason}")
+            lines.append(f"- {_format_scope_escape_label(item)} — `{path}`: {reason}")
         lines.append("")
 
 
@@ -345,6 +416,7 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
                     f"  - `{item['recommendation_index']}`: "
                     + ", ".join(f"`{reason}`" for reason in item["reasons"])
                 )
+    _append_seam_status_lines(lines, status)
 
     semantic_warnings = status.get("semantic_warnings") or []
     if semantic_warnings:

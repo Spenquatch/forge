@@ -14,7 +14,6 @@ from anvil.harness.prompts import (
 )
 from anvil.harness.types import StrategyConfig, TaskSpec
 
-
 _GIT_SNAPSHOT = {
     "is_git": False,
     "ignored_rel_paths": [],
@@ -222,7 +221,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     )
 
     common_bounded_lines = [
-        "Analysis-review contract: analysis_review_v1_contract_v7",
+        "Analysis-review contract: analysis_review_v1_contract_v9",
         f"Effective strategy kind: {strategy_kind}",
         f"Mode: {mode}",
         "Bounded review policy:",
@@ -236,12 +235,42 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         "Auditor new medium-or-higher issue cap after round 0: 1",
         "Scope escapes require non-empty reasons: True",
     ]
+    shared_seam_lines = [
+        "Seam selection guidance:",
+        "Use `primary_seam` as the canonical run-context seam.",
+        "Exhaust the primary seam before expanding; use `secondary_seams_considered` only for seams you actually declared or inspected beyond the primary seam.",
+        "Bind every recommendation with `recommendations[*].seam_id`; when that seam expands beyond the primary seam, populate `recommendations[*].seam_expansion_reason`.",
+        "default bounded cap is 2; declaring or inspecting a third secondary seam requires a recorded scope_escape; overflow is never silently normalized away.",
+    ]
+    seam_role_lines = {
+        "proposer": "In the proposer draft, you may declare or inspect a third bounded secondary seam only when `scope_escapes` records every third-seam path with a non-empty reason.",
+        "reviser": "In the reviser stage, you may retain or introduce a third bounded secondary seam only when `scope_escapes` records every third-seam path with a non-empty reason.",
+        "critic": "In the critic stage, treat a third bounded secondary seam without matching `scope_escapes` as a bounded-mode scope violation.",
+        "auditor": "In the auditor stage, do not call the draft cleanly closed when a third bounded secondary seam lacks matching `scope_escapes`.",
+    }
 
     for line in common_bounded_lines:
         assert line in proposer
         assert line in critic
         assert line in auditor
         assert line in reviser
+
+    for line in shared_seam_lines:
+        assert line in proposer
+        assert line in critic
+        assert line in auditor
+        assert line in reviser
+    assert seam_role_lines["proposer"] in proposer
+    assert seam_role_lines["reviser"] in reviser
+    assert seam_role_lines["critic"] in critic
+    assert seam_role_lines["auditor"] in auditor
+
+    for prompt in (proposer, critic, auditor, reviser):
+        assert (
+            prompt.index("Bounded review policy:")
+            < prompt.index("Seam selection guidance:")
+            < prompt.index("Repo-local discovery guidance:")
+        )
 
     for line in trust_lines:
         assert line in proposer
@@ -260,7 +289,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         "In bounded mode, one-hop repo-local corroboration outside `files_hint` is allowed when it is needed to support a recommendation.",
         "Keep corroboration inside the current bounded caps: evidence <= 3 refs, review_surface.must_check_files <= 3, review_surface.optional_check_files <= 2.",
         "Use `review_surface.must_check_files` for directly governing corroboration and `review_surface.optional_check_files` for supporting corroboration.",
-        "Reserve `scope_escapes` for later review work that truly leaves the declared `review_surface`, not for missing nearby repo-local corroboration that the proposer should have included.",
+        "Use analysis-stage `scope_escapes` only for the exact third-secondary-seam overflow path in bounded mode; otherwise reserve `scope_escapes` for later review work that truly leaves the declared `review_surface`.",
     ]
     bounded_role_lines = {
         "proposer": "In the proposer draft, do not leave governing or sibling corroboration for later stages; pull the needed repo-local file into `files_reviewed`, `evidence`, and `review_surface` now.",

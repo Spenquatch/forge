@@ -11,7 +11,6 @@ from anvil.harness.semantic_validation import (
 )
 from anvil.harness.types import StrategyConfig, TaskSpec
 
-
 _FIXTURE_PATH = Path("tests/fixtures/harness/analysis_review_semantic_cases.json")
 
 
@@ -84,10 +83,64 @@ def _workspace_paths() -> set[str]:
     }
 
 
+def _with_default_seams(payload: dict) -> dict:
+    normalized = copy.deepcopy(payload)
+    files_reviewed = list(normalized.get("files_reviewed") or [])
+
+    primary_path = (
+        files_reviewed[0]
+        if files_reviewed
+        else ".github/workflows/codex-cli-release-watch.yml"
+    )
+    secondary_path = files_reviewed[1] if len(files_reviewed) > 1 else primary_path
+    normalized.setdefault(
+        "primary_seam",
+        {
+            "seam_id": "release-watch-primary",
+            "summary": "Primary release-watch workflow seam.",
+            "why_primary": "It is the nearest governing surface for the review.",
+            "paths": [primary_path],
+        },
+    )
+    normalized.setdefault(
+        "secondary_seams_considered",
+        [
+            {
+                "seam_id": "release-watch-secondary",
+                "summary": "Sibling workflow parity seam.",
+                "why_not_primary": "It is relevant for parity but not the governing seam.",
+                "paths": [secondary_path],
+            }
+        ],
+    )
+    normalized.setdefault("scope_escapes", [])
+
+    recommendations = normalized.get("recommendations") or []
+    for index, recommendation in enumerate(recommendations, start=1):
+        if not isinstance(recommendation, dict):
+            continue
+        if "seam_id" in recommendation:
+            recommendation.setdefault("seam_expansion_reason", "")
+            continue
+        if index == 1:
+            recommendation["seam_id"] = normalized["primary_seam"]["seam_id"]
+            recommendation["seam_expansion_reason"] = ""
+        else:
+            recommendation["seam_id"] = normalized["secondary_seams_considered"][0]["seam_id"]
+            recommendation["seam_expansion_reason"] = (
+                "Cross-check sibling workflow behavior before broadening the review."
+            )
+    return normalized
+
+
+def _analysis_output_payload(name: str) -> dict:
+    return _with_default_seams(_fixture()[name])
+
+
 def test_analysis_output_semantic_validation_accepts_valid_payload():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_valid"]
+    payload = _analysis_output_payload("analysis_output_valid")
 
     result = validate_analysis_output_payload(
         payload,
@@ -105,7 +158,7 @@ def test_analysis_output_semantic_validation_accepts_valid_payload():
 def test_analysis_output_semantic_validation_accepts_empty_none_reason_when_items_exist():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["uncertainties"] = {
         "items": ["Edge cases remain around rollback sequencing."],
         "none_reason": "",
@@ -128,7 +181,7 @@ def test_analysis_output_semantic_validation_accepts_empty_none_reason_when_item
 def test_analysis_output_semantic_validation_rejects_missing_sections_and_files():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_missing_sections"]
+    payload = _analysis_output_payload("analysis_output_missing_sections")
 
     result = validate_analysis_output_payload(
         payload,
@@ -158,7 +211,7 @@ def test_analysis_output_semantic_validation_rejects_missing_sections_and_files(
 def test_analysis_output_semantic_validation_preserves_exact_section_redundancy_warnings():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["strengths"]["none_reason"] = "Already covered above."
     payload["uncertainties"] = {
         "items": ["Manual rollback verification was not re-run."],
@@ -185,7 +238,7 @@ def test_analysis_output_semantic_validation_preserves_exact_section_redundancy_
 def test_reviser_semantic_validation_requires_full_issue_resolution_map_coverage():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_missing_issue_resolution"]
+    payload = _analysis_output_payload("analysis_output_missing_issue_resolution")
 
     result = validate_analysis_output_payload(
         payload,
@@ -203,7 +256,7 @@ def test_reviser_semantic_validation_requires_full_issue_resolution_map_coverage
 def test_reviser_semantic_validation_requires_full_topic_resolution_map_coverage():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_missing_topic_resolution"]
+    payload = _analysis_output_payload("analysis_output_missing_topic_resolution")
 
     result = validate_analysis_output_payload(
         payload,
@@ -223,7 +276,7 @@ def test_reviser_semantic_validation_requires_full_topic_resolution_map_coverage
 def test_reviser_semantic_validation_rejects_unknown_topic_resolution_ids():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_unknown_topic_resolution"]
+    payload = _analysis_output_payload("analysis_output_unknown_topic_resolution")
 
     result = validate_analysis_output_payload(
         payload,
@@ -290,7 +343,7 @@ def test_review_semantic_validation_accepts_valid_topic_lifecycle():
 def test_analysis_output_semantic_validation_rejects_too_many_evidence_refs():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_too_many_evidence"]
+    payload = _analysis_output_payload("analysis_output_too_many_evidence")
 
     result = validate_analysis_output_payload(
         payload,
@@ -313,7 +366,7 @@ def test_trust_analysis_output_semantic_validation_allows_more_than_three_eviden
     contract = build_analysis_review_contract(
         task, _strategy("analysis_review_trust_v1")
     )
-    payload = copy.deepcopy(_fixture()["analysis_output_trust_surface_valid"])
+    payload = _analysis_output_payload("analysis_output_trust_surface_valid")
     payload["recommendations"][0]["evidence"] = [
         ".github/workflows/codex-cli-release-watch.yml",
         ".github/workflows/claude-code-release-watch.yml",
@@ -353,7 +406,7 @@ def test_trust_analysis_output_semantic_validation_allows_more_than_three_eviden
 def test_analysis_output_semantic_validation_rejects_evidence_outside_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["recommendations"][0]["evidence"] = [".github/workflows/release.yml"]
 
     result = validate_analysis_output_payload(
@@ -375,7 +428,7 @@ def test_analysis_output_semantic_validation_rejects_evidence_outside_files_revi
 def test_analysis_output_semantic_validation_rejects_evidence_outside_workspace_snapshot():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["recommendations"][0]["evidence"] = ["does/not/exist.py"]
 
     result = validate_analysis_output_payload(
@@ -397,7 +450,7 @@ def test_analysis_output_semantic_validation_rejects_evidence_outside_workspace_
 def test_analysis_output_semantic_validation_accepts_evidence_present_in_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
 
     result = validate_analysis_output_payload(
         payload,
@@ -415,7 +468,7 @@ def test_analysis_output_semantic_validation_accepts_evidence_present_in_files_r
 def test_analysis_output_semantic_validation_rejects_too_many_must_check_files():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_too_many_must_check_files"]
+    payload = _analysis_output_payload("analysis_output_too_many_must_check_files")
 
     result = validate_analysis_output_payload(
         payload,
@@ -436,7 +489,7 @@ def test_analysis_output_semantic_validation_rejects_too_many_must_check_files()
 def test_analysis_output_semantic_validation_rejects_too_many_optional_check_files():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_too_many_optional_check_files"]
+    payload = _analysis_output_payload("analysis_output_too_many_optional_check_files")
 
     result = validate_analysis_output_payload(
         payload,
@@ -457,7 +510,7 @@ def test_analysis_output_semantic_validation_rejects_too_many_optional_check_fil
 def test_analysis_output_semantic_validation_rejects_must_check_files_outside_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _fixture()["analysis_output_must_check_not_in_files_reviewed"]
+    payload = _analysis_output_payload("analysis_output_must_check_not_in_files_reviewed")
 
     result = validate_analysis_output_payload(
         payload,
@@ -478,7 +531,7 @@ def test_analysis_output_semantic_validation_rejects_must_check_files_outside_fi
 def test_analysis_output_semantic_validation_rejects_files_reviewed_outside_workspace_snapshot():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["files_reviewed"].append("does/not/exist.py")
 
     result = validate_analysis_output_payload(
@@ -500,7 +553,7 @@ def test_analysis_output_semantic_validation_rejects_files_reviewed_outside_work
 def test_analysis_output_semantic_validation_rejects_must_check_files_outside_workspace_snapshot():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["files_reviewed"].append("does/not/exist.py")
     payload["recommendations"][0]["review_surface"]["must_check_files"] = [
         "does/not/exist.py"
@@ -525,7 +578,7 @@ def test_analysis_output_semantic_validation_rejects_must_check_files_outside_wo
 def test_analysis_output_semantic_validation_rejects_optional_check_files_outside_workspace_snapshot():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = copy.deepcopy(_fixture()["analysis_output_valid"])
+    payload = _analysis_output_payload("analysis_output_valid")
     payload["recommendations"][0]["review_surface"]["optional_check_files"] = [
         "does/not/exist.py"
     ]
@@ -544,6 +597,407 @@ def test_analysis_output_semantic_validation_rejects_optional_check_files_outsid
         "recommendations[1].review_surface.optional_check_files contains path(s) not present in the workspace snapshot: "
         "does/not/exist.py"
     ) in result.errors
+
+
+def test_analysis_output_semantic_validation_requires_primary_seam_structure():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["primary_seam"] = {
+        "seam_id": "",
+        "summary": "",
+        "why_primary": "",
+        "paths": [],
+    }
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert "primary_seam.seam_id must be non-empty." in result.errors
+    assert "primary_seam.summary must be non-empty." in result.errors
+    assert "primary_seam.why_primary must be non-empty." in result.errors
+    assert "primary_seam.paths must contain at least one non-empty path." in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_seam_paths_outside_files_reviewed():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["secondary_seams_considered"][0]["paths"] = [".github/workflows/release.yml"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "secondary_seams_considered[1].paths must be a subset of files_reviewed: "
+        ".github/workflows/release.yml"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_seam_paths_outside_workspace_snapshot():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["primary_seam"]["paths"] = ["does/not/exist.py"]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "primary_seam.paths contains path(s) not present in the workspace snapshot: "
+        "does/not/exist.py"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_recommendation_binding_to_undeclared_seam():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["recommendations"][1]["seam_id"] = "undeclared-seam"
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[2].seam_id must bind to primary_seam.seam_id or a declared "
+        "secondary_seams_considered seam_id: undeclared-seam"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_requires_non_primary_seam_expansion_reason():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["recommendations"][1]["seam_expansion_reason"] = ""
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[2].seam_expansion_reason must be non-empty for non-primary seams."
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_rejects_primary_seam_expansion_reason():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["recommendations"][0]["seam_expansion_reason"] = "Should not be expanded."
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendations[1].seam_expansion_reason must be empty when bound to primary_seam."
+        in result.errors
+    )
+
+
+def test_analysis_output_semantic_validation_requires_primary_seam_binding_retention():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["recommendations"][0]["seam_id"] = payload["secondary_seams_considered"][0]["seam_id"]
+    payload["recommendations"][0]["seam_expansion_reason"] = (
+        "Shifted entirely to the sibling seam."
+    )
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert "At least one recommendation must remain bound to primary_seam.seam_id." in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_bounded_secondary_seam_overflow():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["secondary_seams_considered"] = [
+        {
+            "seam_id": "secondary-a",
+            "summary": "Secondary seam A.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/claude-code-release-watch.yml"],
+        },
+        {
+            "seam_id": "secondary-b",
+            "summary": "Secondary seam B.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/release.yml"],
+        },
+        {
+            "seam_id": "secondary-c",
+            "summary": "Secondary seam C.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/nightly.yml"],
+        },
+    ]
+    payload["files_reviewed"] = list(_workspace_paths())
+    payload["scope_escapes"] = []
+    payload["recommendations"][1]["seam_id"] = "secondary-a"
+    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "secondary_seams_considered[3] requires scope_escapes coverage for every declared third-seam path: "
+        ".github/workflows/nightly.yml"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_accepts_bounded_third_secondary_seam_with_matching_scope_escapes():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["secondary_seams_considered"] = [
+        {
+            "seam_id": "secondary-a",
+            "summary": "Secondary seam A.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/claude-code-release-watch.yml"],
+        },
+        {
+            "seam_id": "secondary-b",
+            "summary": "Secondary seam B.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/release.yml"],
+        },
+        {
+            "seam_id": "secondary-c",
+            "summary": "Secondary seam C.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/nightly.yml"],
+        },
+    ]
+    payload["files_reviewed"] = list(_workspace_paths())
+    payload["scope_escapes"] = [
+        {
+            "path": ".github/workflows/nightly.yml",
+            "reason": "The third seam is required to check the final sibling workflow in the bounded parity slice.",
+        }
+    ]
+    payload["recommendations"][1]["seam_id"] = "secondary-a"
+    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_analysis_output_semantic_validation_rejects_bounded_third_secondary_seam_with_extraneous_scope_escape_path():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["secondary_seams_considered"] = [
+        {
+            "seam_id": "secondary-a",
+            "summary": "Secondary seam A.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/claude-code-release-watch.yml"],
+        },
+        {
+            "seam_id": "secondary-b",
+            "summary": "Secondary seam B.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/release.yml"],
+        },
+        {
+            "seam_id": "secondary-c",
+            "summary": "Secondary seam C.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/nightly.yml"],
+        },
+    ]
+    payload["files_reviewed"] = list(_workspace_paths())
+    payload["scope_escapes"] = [
+        {
+            "path": ".github/workflows/nightly.yml",
+            "reason": "The third seam is required to check the final sibling workflow in the bounded parity slice.",
+        },
+        {
+            "path": ".github/workflows/release.yml",
+            "reason": "This unrelated escape path should not authorize the overflow.",
+        },
+    ]
+    payload["recommendations"][1]["seam_id"] = "secondary-a"
+    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "analysis-stage scope_escapes used for bounded third-seam overflow must stay within secondary_seams_considered[3].paths: "
+        ".github/workflows/release.yml"
+    ) in result.errors
+
+
+def test_analysis_output_semantic_validation_rejects_more_than_three_secondary_seams_in_bounded_mode():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    payload["secondary_seams_considered"] = [
+        {
+            "seam_id": "secondary-a",
+            "summary": "Secondary seam A.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/claude-code-release-watch.yml"],
+        },
+        {
+            "seam_id": "secondary-b",
+            "summary": "Secondary seam B.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/release.yml"],
+        },
+        {
+            "seam_id": "secondary-c",
+            "summary": "Secondary seam C.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/nightly.yml"],
+        },
+        {
+            "seam_id": "secondary-d",
+            "summary": "Secondary seam D.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/codex-cli-release-watch.yml"],
+        },
+    ]
+    payload["files_reviewed"] = list(_workspace_paths())
+    payload["scope_escapes"] = [
+        {
+            "path": ".github/workflows/nightly.yml",
+            "reason": "The third seam is required to check the final sibling workflow in the bounded parity slice.",
+        }
+    ]
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is False
+    assert (
+        "secondary_seams_considered overflow: bounded mode allows at most one third secondary seam when scope_escapes explicitly justify it."
+    ) in result.errors
+
+
+def test_trust_analysis_output_semantic_validation_allows_more_than_two_secondary_seams():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
+    payload = _analysis_output_payload("analysis_output_trust_surface_valid")
+    payload["files_reviewed"] = list(_workspace_paths())
+    payload["secondary_seams_considered"] = [
+        {
+            "seam_id": "secondary-a",
+            "summary": "Secondary seam A.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/claude-code-release-watch.yml"],
+        },
+        {
+            "seam_id": "secondary-b",
+            "summary": "Secondary seam B.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/release.yml"],
+        },
+        {
+            "seam_id": "secondary-c",
+            "summary": "Secondary seam C.",
+            "why_not_primary": "Additional corroboration only.",
+            "paths": [".github/workflows/nightly.yml"],
+        },
+    ]
+    payload["recommendations"][1]["seam_id"] = "secondary-a"
+    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+
+    result = validate_analysis_output_payload(
+        payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_open_issue_ids=[],
+        require_issue_resolution_map=False,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
 
 
 def test_critic_semantic_validation_rejects_issue_cap_overflow():
@@ -747,7 +1201,7 @@ def test_trust_analysis_output_semantic_validation_accepts_valid_trust_metadata(
     contract = build_analysis_review_contract(
         task, _strategy("analysis_review_trust_v1")
     )
-    payload = _fixture()["analysis_output_trust_surface_valid"]
+    payload = _analysis_output_payload("analysis_output_trust_surface_valid")
 
     result = validate_analysis_output_payload(
         payload,
@@ -767,7 +1221,7 @@ def test_trust_analysis_output_semantic_validation_rejects_verified_evidence_not
     contract = build_analysis_review_contract(
         task, _strategy("analysis_review_trust_v1")
     )
-    payload = _fixture()["analysis_output_verified_evidence_not_subset"]
+    payload = _analysis_output_payload("analysis_output_verified_evidence_not_subset")
 
     result = validate_analysis_output_payload(
         payload,
@@ -790,7 +1244,7 @@ def test_trust_analysis_output_semantic_validation_rejects_uncovered_affected_fi
     contract = build_analysis_review_contract(
         task, _strategy("analysis_review_trust_v1")
     )
-    payload = _fixture()["analysis_output_uncovered_affected_files"]
+    payload = _analysis_output_payload("analysis_output_uncovered_affected_files")
 
     result = validate_analysis_output_payload(
         payload,

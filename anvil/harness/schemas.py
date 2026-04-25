@@ -306,6 +306,24 @@ SECTION_SCHEMA: dict[str, Any] = {
 }
 
 
+def _seam_schema(*, reason_field: str) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "seam_id": {"type": "string"},
+            "summary": {"type": "string"},
+            reason_field: {"type": "string"},
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+        },
+        "required": ["seam_id", "summary", reason_field, "paths"],
+        "additionalProperties": False,
+    }
+
+
 COMMON_PROPS: dict[str, Any] = {
     "summary": {"type": "string"},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -392,13 +410,22 @@ def analysis_output_schema(
     require_issue_resolution_map: bool = False,
     require_topic_resolution_map: bool = False,
 ) -> dict[str, Any]:
+    primary_seam_schema = _seam_schema(reason_field="why_primary")
+    secondary_seam_schema = _seam_schema(reason_field="why_not_primary")
     recommendation_schema = {
         "type": "object",
         "properties": {
             **RECOMMENDATION_SCHEMA["properties"],
+            "seam_id": {"type": "string"},
+            "seam_expansion_reason": {"type": "string"},
             "review_surface": REVIEW_SURFACE_SCHEMA,
         },
-        "required": [*RECOMMENDATION_SCHEMA["required"], "review_surface"],
+        "required": [
+            *RECOMMENDATION_SCHEMA["required"],
+            "seam_id",
+            "seam_expansion_reason",
+            "review_surface",
+        ],
         "additionalProperties": False,
     }
     properties: dict[str, Any] = {
@@ -407,6 +434,12 @@ def analysis_output_schema(
             "enum": ["done", "partial", "blocked", "revised", "no_change_needed"],
         },
         **COMMON_PROPS,
+        "primary_seam": primary_seam_schema,
+        "secondary_seams_considered": {
+            "type": "array",
+            "items": secondary_seam_schema,
+        },
+        "scope_escapes": {"type": "array", "items": SCOPE_ESCAPE_SCHEMA},
         "recommendations": {
             "type": "array",
             "items": recommendation_schema,
@@ -424,6 +457,9 @@ def analysis_output_schema(
         "status",
         "summary",
         "workspace_write_intent",
+        "primary_seam",
+        "secondary_seams_considered",
+        "scope_escapes",
         "recommendations",
         "strengths",
         "uncertainties",

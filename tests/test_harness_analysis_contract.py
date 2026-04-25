@@ -85,7 +85,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v7"
+    assert contract.contract_version == "analysis_review_v1_contract_v9"
     assert contract.mode == "bounded"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
@@ -354,10 +354,10 @@ def test_readme_documents_trust_recommendation_admissibility_and_preview_only_ma
     assert "Markdown compaction is preview-only and renderer-owned." in readme
 
 
-def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_and_preview_budgets():
+def test_analysis_review_contract_docs_freeze_v9_admissibility_publishability_and_preview_budgets():
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
-    assert "analysis_review_v1_contract_v7" in contract_doc
+    assert "analysis_review_v1_contract_v9" in contract_doc
     shared_discovery_phrase = (
         "Shared repo-local discovery applies to both bounded mode and trust mode:"
     )
@@ -496,6 +496,58 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     )
     assert (
         "`Open topics:` and `Carried-forward topics:` as separate labels"
+        in contract_doc
+    )
+    assert "The seam-selection contract is additive to the shared payload family" in contract_doc
+    assert "- `primary_seam`" in contract_doc
+    assert "- `secondary_seams_considered`" in contract_doc
+    assert "- `scope_escapes`" in contract_doc
+    assert "- `recommendations[*].seam_id`" in contract_doc
+    assert "- `recommendations[*].seam_expansion_reason`" in contract_doc
+    assert "- `analysis_review_status.primary_seam`" in contract_doc
+    assert "- `analysis_review_status.secondary_seams_considered`" in contract_doc
+    assert "- `analysis_review_status.scope_escapes`" in contract_doc
+    assert "- `analysis_review_status.recommendation_seam_bindings`" in contract_doc
+    assert (
+        "Canonical `analysis_review_status.recommendation_seam_bindings[*]` objects are frozen to:"
+        in contract_doc
+    )
+    assert "- `recommendation_index`" in contract_doc
+    assert "- `seam_id`" in contract_doc
+    assert "- `seam_expansion_reason`" in contract_doc
+    assert (
+        "`primary_seam` remains the canonical run-context seam." in contract_doc
+    )
+    assert (
+        "`secondary_seams_considered` records only seams actually declared or inspected beyond the primary seam."
+        in contract_doc
+    )
+    assert (
+        "analysis/proposer/reviser payloads now include `scope_escapes`."
+        in contract_doc
+    )
+    assert (
+        "`recommendations[*].seam_id` binds each recommendation to its seam, and `recommendations[*].seam_expansion_reason` explains why that recommendation expands beyond the primary seam when it does."
+        in contract_doc
+    )
+    assert (
+        "in bounded analysis outputs, `scope_escapes` may justify exactly one third secondary seam and nothing beyond that."
+        in contract_doc
+    )
+    assert (
+        "review-stage `scope_escapes` semantics remain separate: critic/auditor still use them for later review-surface escapes rather than analysis-stage seam declaration."
+        in contract_doc
+    )
+    assert (
+        "default bounded cap is 2; declaring or inspecting a third secondary seam requires a recorded scope_escape; overflow beyond that third seam is never silently normalized away."
+        in contract_doc
+    )
+    assert (
+        '- `primary_seam_projection_status: "retained_without_included_recommendations"`'
+        in contract_doc
+    )
+    assert (
+        "Canonical primary seam retained for run context; no included recommendation in this artifact binds to it."
         in contract_doc
     )
 
