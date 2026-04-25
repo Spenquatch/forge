@@ -362,6 +362,94 @@ class _BoundedCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
         raise AssertionError(f"Unexpected role: {role_name}")
 
 
+class _TrustCorroborationHarnessAdapter(_BoundedCorroborationHarnessAdapter):
+    @staticmethod
+    def _trust_recommendation_metadata():
+        return {
+            1: {
+                "verified_evidence_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml",
+                    "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                ],
+                "checked_files": [
+                    ".github/workflows/codex-cli-release-watch.yml",
+                    "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                ],
+                "affected_files": [
+                    ".github/workflows/codex-cli-release-watch.yml",
+                    "docs/project_management/next/codex-cli-parity/C1-spec.md",
+                ],
+                "grounding_mode": "direct",
+            },
+            2: {
+                "verified_evidence_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
+                "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "affected_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "grounding_mode": "direct",
+            },
+            3: {
+                "verified_evidence_refs": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+                "checked_files": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+                "affected_files": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "grounding_mode": "inferred",
+            },
+            4: {
+                "verified_evidence_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
+                "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "affected_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "grounding_mode": "direct",
+            },
+        }
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        for index, metadata in self._trust_recommendation_metadata().items():
+            recommendation = payload["recommendations"][index - 1]
+            recommendation["verified_evidence_refs"] = list(
+                metadata["verified_evidence_refs"]
+            )
+            recommendation["checked_files"] = list(metadata["checked_files"])
+            recommendation["affected_files"] = list(metadata["affected_files"])
+            recommendation["grounding_mode"] = metadata["grounding_mode"]
+        return payload
+
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"}:
+            payload["summary"] = (
+                "The trust draft keeps the same repo-local recommendation seam; "
+                "only recommendation 3 remains inference-backed."
+            )
+            payload["files_reviewed"] = self._review_files_reviewed()
+            for item in payload["recommendation_reviews"]:
+                metadata = self._trust_recommendation_metadata()[
+                    int(item["recommendation_index"])
+                ]
+                item["verdict"] = "accept"
+                item["checked_files"] = list(metadata["checked_files"])
+                item["verified_evidence_refs"] = list(
+                    metadata["verified_evidence_refs"]
+                )
+        return payload
+
+
 class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
@@ -1906,6 +1994,114 @@ def test_analysis_review_runner_bounded_mode_can_ship_fuller_repo_local_recommen
     assert bounded_review_summary["scope_escapes"] == []
 
 
+def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_downgrades_only_inferred_grounding(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustCorroborationHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    expected_titles = [
+        "Track release-watch issues against the parity spec",
+        "Add concurrency controls",
+        "Align timeout handling across the full snapshot parity seam",
+        "Document alert routing ownership",
+    ]
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    assert summary["analysis_review_contract"]["mode"] == "trust"
+    assert summary["analysis_review_status"]["mode"] == "trust"
+    assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
+    assert (
+        summary["analysis_review_status"]["provenance"][
+            "uncovered_recommendation_indices"
+        ]
+        == []
+    )
+    assert summary["analysis_review_status"][
+        "accepted_recommendations_with_inferred_grounding"
+    ] == [3]
+    assert summary["analysis_review_status"][
+        "accepted_recommendations_with_caveats"
+    ] == []
+    assert summary["analysis_review_status"]["recommendation_admissibility"] == {
+        "final_answer_recommendation_indices": [1, 2, 4],
+        "partial_only_recommendation_indices": [3],
+        "excluded_recommendation_indices": [],
+        "reasons_by_recommendation_index": {
+            "3": ["inferred_grounding"],
+        },
+    }
+    assert summary["analysis_review_status"]["open_topic_ids"] == []
+    assert summary["analysis_review_status"]["carried_forward_topic_ids"] == []
+    assert summary["analysis_review_status"]["downgrade_causes"] == [
+        "accepted recommendations rely on inference-only grounding: 3"
+    ]
+    assert summary["artifacts"]["final_artifact_kind"] == "partial_answer"
+    assert summary["partial_answer"]["included_recommendation_indices"] == [
+        1,
+        2,
+        3,
+        4,
+    ]
+    assert [item["title"] for item in summary["partial_answer"]["recommendations"]] == (
+        expected_titles
+    )
+    assert summary["issue_ledger"] == []
+    assert summary["topic_ledger"] == []
+    assert all(
+        item["verdict"] == "accept" for item in summary["recommendation_reviews"]
+    )
+
+    final_analysis_stage = next(
+        stage
+        for stage in reversed(summary["agent_stages"])
+        if str(stage.get("role_name") or "") == "proposer"
+        or str(stage.get("role_name") or "").startswith("reviser_round_")
+    )
+    final_analysis_payload = final_analysis_stage["structured_output"]
+    assert [item["title"] for item in final_analysis_payload["recommendations"]] == (
+        expected_titles
+    )
+    assert [
+        item["grounding_mode"] for item in final_analysis_payload["recommendations"]
+    ] == ["direct", "direct", "inferred", "direct"]
+
+    review_stages = [
+        stage
+        for stage in summary["agent_stages"]
+        if stage["role_name"] in {"critic", "auditor"}
+    ]
+    for stage in review_stages:
+        recommendation_reviews = stage["structured_output"]["recommendation_reviews"]
+        assert all(item["verdict"] == "accept" for item in recommendation_reviews)
+        assert not any(
+            item["verdict"] == "accept_with_caveat"
+            for item in recommendation_reviews
+        )
+
+    report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `3`" in report_text
+    assert "  - `3`: `inferred_grounding`" in report_text
+
+
 def test_analysis_review_runner_legacy_alias_warns_and_normalizes_to_bounded(
     tmp_path,
     monkeypatch,
@@ -2835,6 +3031,53 @@ def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(
     ] == {
         "1": ["not_accepted"],
         "2": ["inferred_grounding"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("grounding_mode", "verdict", "expected_reasons"),
+    [
+        ("mixed", "accept_with_caveat", ["accepted_with_caveat"]),
+        ("inferred", "accept_with_caveat", ["accepted_with_caveat", "inferred_grounding"]),
+    ],
+)
+def test_analysis_review_status_marks_split_trust_sibling_recommendation_as_partial_only(
+    tmp_path,
+    grounding_mode,
+    verdict,
+    expected_reasons,
+):
+    runner = _make_analysis_status_runner(tmp_path)
+    adapter = _TrustInferenceHarnessAdapter()
+    final_analysis_payload = adapter._base_analysis(revised=True)
+    final_analysis_payload["recommendations"][1]["grounding_mode"] = grounding_mode
+    final_analysis_payload["recommendations"][1]["verified_evidence_refs"] = []
+    final_analysis_payload["recommendations"][1]["checked_files"] = []
+    final_review_payload = adapter._payload_for_role("auditor")
+    final_review_payload["recommendation_reviews"][0]["verdict"] = "accept"
+    final_review_payload["recommendation_reviews"][1]["verdict"] = verdict
+
+    status = _build_recommendation_admissibility_status(
+        runner,
+        final_analysis_payload=final_analysis_payload,
+        final_review_payload=final_review_payload,
+        content_verdict="accepted_with_warnings",
+    )
+
+    assert (
+        status["recommendation_admissibility"]["final_answer_recommendation_indices"]
+        == [1]
+    )
+    assert status["recommendation_admissibility"][
+        "partial_only_recommendation_indices"
+    ] == [2]
+    assert status["recommendation_admissibility"][
+        "excluded_recommendation_indices"
+    ] == []
+    assert status["recommendation_admissibility"][
+        "reasons_by_recommendation_index"
+    ] == {
+        "2": expected_reasons,
     }
 
 

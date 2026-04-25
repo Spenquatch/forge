@@ -249,13 +249,15 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert line in auditor
         assert line in reviser
 
-    bounded_corroboration_lines = [
-        "Bounded corroboration guidance:",
+    shared_discovery_lines = [
+        "Repo-local discovery guidance:",
         "Treat `files_hint`, when provided, as a starting slice, not the total review universe.",
-        "In bounded mode, one-hop repo-local corroboration outside `files_hint` is allowed when it is needed to support a recommendation.",
         "For requirement, policy, or spec claims, inspect and cite the nearest governing repo-local doc or manifest.",
-        "For parity, symmetry, or sibling-workflow claims, inspect and cite the sibling implementation that establishes the baseline, and compare the full like-for-like seam rather than one convenient step.",
+        "For parity, symmetry, or sibling-workflow claims, inspect and cite the sibling implementation or workflow that establishes the baseline, and compare the full like-for-like seam rather than one convenient step.",
         "Include corroborating files in `files_reviewed`, `evidence`, and `review_surface`.",
+    ]
+    bounded_discovery_tail_lines = [
+        "In bounded mode, one-hop repo-local corroboration outside `files_hint` is allowed when it is needed to support a recommendation.",
         "Keep corroboration inside the current bounded caps: evidence <= 3 refs, review_surface.must_check_files <= 3, review_surface.optional_check_files <= 2.",
         "Use `review_surface.must_check_files` for directly governing corroboration and `review_surface.optional_check_files` for supporting corroboration.",
         "Reserve `scope_escapes` for later review work that truly leaves the declared `review_surface`, not for missing nearby repo-local corroboration that the proposer should have included.",
@@ -266,13 +268,79 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         "reviser": "In the reviser stage, repair missing corroboration by widening `review_surface` within cap before inventing new recommendations.",
         "auditor": "In the auditor stage, do not call the draft cleanly closed while a spec-backed or parity-backed claim still lacks the needed governing or sibling corroborating file.",
     }
+    trust_discovery_tail_lines = [
+        "In trust mode, repo-local discovery still starts from the same governing or sibling seam before any downstream admissibility or publication split.",
+        "Keep trust corroboration uncapped and complete; record every corroborating file in `files_reviewed`, `evidence`, and `review_surface`.",
+        "When both exist, prefer nearer governing/spec/workflow evidence over farther plan/runbook prose.",
+    ]
+    trust_discovery_role_lines = {
+        "proposer": "In the proposer draft, start from the nearer governing or sibling repo-local seam and do not lean on farther plan/runbook prose when the governing spec, manifest, or workflow already exists in-repo.",
+        "critic": "In the critic stage, flag recommendations that cite farther plan/runbook prose while skipping nearer governing or sibling repo-local evidence.",
+        "reviser": "In the reviser stage, repair discovery gaps by adding the nearer governing or sibling repo-local seam before preserving broader plan/runbook prose.",
+        "auditor": "In the auditor stage, do not call the draft cleanly closed while nearer governing/spec/workflow evidence is missing or replaced by farther plan/runbook prose.",
+    }
+    trust_atomicity_lines = [
+        "Trust recommendation atomicity:",
+        "In trust mode, recommendations must be atomic by admissibility boundary.",
+        "emit it as its own recommendation instead of bundling it with weaker optional hardening.",
+        'Reserve `grounding_mode="mixed"` for truly inseparable single-action recommendations, not convenient bundling of a direct half and an inferred half.',
+    ]
+
+    for line in shared_discovery_lines:
+        assert line in proposer
+        assert line in critic
+        assert line in auditor
+        assert line in reviser
 
     if mode == "trust":
+        for line in trust_discovery_tail_lines:
+            assert line in proposer
+            assert line in critic
+            assert line in auditor
+            assert line in reviser
+        assert trust_discovery_role_lines["proposer"] in proposer
+        assert trust_discovery_role_lines["critic"] in critic
+        assert trust_discovery_role_lines["reviser"] in reviser
+        assert trust_discovery_role_lines["auditor"] in auditor
+
         for line in final_artifact_lines:
             assert line in proposer
             assert line in critic
             assert line in auditor
             assert line in reviser
+        for line in trust_atomicity_lines:
+            assert line in proposer
+            assert line in critic
+            assert line in auditor
+            assert line in reviser
+        assert (
+            "Split a directly grounded or spec-backed action from optional inference-backed or parity hardening when they are independently actionable."
+            in proposer
+        )
+        assert (
+            "raise `kind=insufficient_specificity` with `blocking_class=actionability` and require a split."
+            in critic
+        )
+        assert (
+            "Do not use `missing_evidence` for bundling unless the problem is actually absent corroboration."
+            in critic
+        )
+        assert (
+            "When splitting one recommendation into two, keep the directly grounded action in the original recommendation slot when possible."
+            in reviser
+        )
+        assert (
+            "Make the weaker hardening guidance the new adjacent recommendation rather than reshuffling unrelated recommendation order."
+            in reviser
+        )
+        assert (
+            "Do not return clean acceptance while an avoidable mixed-grounding bundle remains."
+            in auditor
+        )
+        assert (
+            "If the bundle is still present, leave that recommendation unresolved and force revision rather than treating a caveat as sufficient closure."
+            in auditor
+        )
     else:
         assert (
             "Final-artifact eligibility is runner-owned in trust mode" not in proposer
@@ -284,9 +352,23 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert "partial-only considerations" not in critic
         assert "partial-only considerations" not in auditor
         assert "partial-only considerations" not in reviser
+        for line in trust_discovery_tail_lines:
+            assert line not in proposer
+            assert line not in critic
+            assert line not in auditor
+            assert line not in reviser
+        for line in trust_discovery_role_lines.values():
+            assert line not in proposer
+            assert line not in critic
+            assert line not in auditor
+            assert line not in reviser
+        assert "Trust recommendation atomicity:" not in proposer
+        assert "Trust recommendation atomicity:" not in critic
+        assert "Trust recommendation atomicity:" not in auditor
+        assert "Trust recommendation atomicity:" not in reviser
 
     if mode == "bounded":
-        for line in bounded_corroboration_lines:
+        for line in bounded_discovery_tail_lines:
             assert line in proposer
             assert line in critic
             assert line in auditor
@@ -296,10 +378,11 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert bounded_role_lines["reviser"] in reviser
         assert bounded_role_lines["auditor"] in auditor
     else:
-        assert "Bounded corroboration guidance:" not in proposer
-        assert "Bounded corroboration guidance:" not in critic
-        assert "Bounded corroboration guidance:" not in auditor
-        assert "Bounded corroboration guidance:" not in reviser
+        for line in bounded_discovery_tail_lines:
+            assert line not in proposer
+            assert line not in critic
+            assert line not in auditor
+            assert line not in reviser
         for line in bounded_role_lines.values():
             assert line not in proposer
             assert line not in critic

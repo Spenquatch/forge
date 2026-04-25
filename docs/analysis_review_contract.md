@@ -134,6 +134,9 @@ Rules:
 - In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*`.
 - A recommendation stays in `final_answer_recommendation_indices` only when its review verdict is `accept`, its grounding is not `inferred`, and no runner-known per-index topic blocker applies.
 - `accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`; they are withheld from `FINAL_ANSWER.*` in trust mode.
+- Trust admissibility remains recommendation-level, so independently actionable direct or spec-backed guidance should be split from weaker inferred or optional hardening before review.
+- Reserve `grounding_mode = mixed` for genuinely inseparable single-action recommendations, not bundles that could be split cleanly.
+- Avoidable mixed-grounding bundles are an authoring and review defect, not a runner-state feature.
 - Non-accepted recommendations and per-index topic-blocked recommendations move to `excluded_recommendation_indices`.
 - `reasons_by_recommendation_index` uses only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`.
 - The candidate partial subset comes from `final_answer_recommendation_indices + partial_only_recommendation_indices`, but publishing `PARTIAL_ANSWER.*` still reuses the existing partial gates.
@@ -197,16 +200,23 @@ Current defaults:
 - auditor new medium-or-higher issue cap after round 0: `1`
 - scope escapes require non-empty reasons
 
-Trust-mode recommendation evidence is intentionally uncapped. Trust runs should preserve every concrete workspace ref needed to support auditability; they do not trim or reject a recommendation solely for carrying more than three evidence refs.
+Shared repo-local discovery applies to both bounded mode and trust mode:
 
-Bounded-mode discovery is still expected to stay repo-local and complete:
-
-- bounded mode is discovery-bounded, not workflow-file-only
 - `files_hint` is a starting slice, not a hard boundary on repo-local inspection
-- bounded mode may inspect one-hop repo-local corroboration outside `files_hint`
 - requirement or spec claims should cite the nearest governing repo-local doc or manifest when one exists
 - parity or symmetry claims should cite the sibling implementation or workflow that establishes the baseline when one exists
+- corroborating files should land in `files_reviewed`, `evidence`, and `review_surface`
+
+Bounded differs by caps and scope discipline:
+
+- bounded mode is discovery-bounded, not workflow-file-only
+- bounded mode may inspect one-hop repo-local corroboration outside `files_hint`
 - corroboration must still stay inside the current caps: evidence max `3`, `review_surface.must_check_files` max `3`, `review_surface.optional_check_files` max `2`
+
+Trust differs by provenance completeness, evidence completeness, atomicity, and publication:
+
+- trust-mode recommendation evidence is intentionally uncapped; trust runs should preserve every concrete workspace ref needed to support auditability and should not trim or reject a recommendation solely for carrying more than three evidence refs
+- when both exist, prefer nearer governing/spec/workflow evidence over farther plan/runbook prose
 - trust mode remains stricter because of provenance and publication rules, not because bounded mode is expected to tolerate repo-local discovery blind spots
 
 Markdown compaction is renderer-owned and preview-only:

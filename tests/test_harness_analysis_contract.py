@@ -267,16 +267,32 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
 def test_readme_documents_trust_recommendation_admissibility_and_preview_only_markdown():
     readme = Path("README.md").read_text(encoding="utf-8")
 
+    shared_discovery_phrase = (
+        "Shared repo-local discovery applies to both bounded and trust."
+    )
+    bounded_difference_phrase = "Bounded differs by caps and scope discipline."
+    trust_difference_phrase = (
+        "Trust differs by provenance completeness, evidence completeness, atomicity, and publication."
+    )
+    assert shared_discovery_phrase in readme
+    assert bounded_difference_phrase in readme
+    assert trust_difference_phrase in readme
     assert (
-        "Bounded and trust should differ in audit depth and publication rules, not in core repo understanding."
-        in readme
+        readme.index(shared_discovery_phrase)
+        < readme.index(bounded_difference_phrase)
+        < readme.index(trust_difference_phrase)
     )
     assert (
         "`files_hint` is a starting slice rather than a hard discovery boundary"
         in readme
     )
+    assert "same nearest governing spec/manifest or sibling workflow" in readme
     assert "one-hop repo-local corroboration" in readme
-    assert "nearest governing spec/manifest or sibling workflow" in readme
+    assert "existing bounded caps" in readme
+    assert (
+        "prefer nearer governing/spec/workflow evidence over farther plan/runbook prose"
+        in readme
+    )
     assert (
         "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable"
         in readme
@@ -298,6 +314,15 @@ def test_readme_documents_trust_recommendation_admissibility_and_preview_only_ma
     )
     assert (
         "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode"
+        in readme
+    )
+    assert (
+        "split independently actionable direct or spec-backed guidance from weaker inferred or optional hardening before review"
+        in readme
+    )
+    assert "Reserve `grounding_mode = mixed` for inseparable single actions." in readme
+    assert (
+        "Avoidable mixed-grounding bundles are a prompt/review defect, not a runner-owned admissibility state."
         in readme
     )
     assert (
@@ -333,6 +358,21 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
     assert "analysis_review_v1_contract_v7" in contract_doc
+    shared_discovery_phrase = (
+        "Shared repo-local discovery applies to both bounded mode and trust mode:"
+    )
+    bounded_difference_phrase = "Bounded differs by caps and scope discipline:"
+    trust_difference_phrase = (
+        "Trust differs by provenance completeness, evidence completeness, atomicity, and publication:"
+    )
+    assert shared_discovery_phrase in contract_doc
+    assert bounded_difference_phrase in contract_doc
+    assert trust_difference_phrase in contract_doc
+    assert (
+        contract_doc.index(shared_discovery_phrase)
+        < contract_doc.index(bounded_difference_phrase)
+        < contract_doc.index(trust_difference_phrase)
+    )
     assert "bounded mode is discovery-bounded, not workflow-file-only" in contract_doc
     assert "`files_hint` is a starting slice, not a hard boundary" in contract_doc
     assert "one-hop repo-local corroboration outside `files_hint`" in contract_doc
@@ -347,6 +387,10 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     )
     assert (
         "trust mode remains stricter because of provenance and publication rules"
+        in contract_doc
+    )
+    assert (
+        "prefer nearer governing/spec/workflow evidence over farther plan/runbook prose"
         in contract_doc
     )
     assert "recommendation withholding ledger" in contract_doc
@@ -369,6 +413,18 @@ def test_analysis_review_contract_docs_freeze_v7_admissibility_publishability_an
     )
     assert (
         "`accepted_with_caveat` and accepted recommendations with `grounding_mode = inferred` move to `partial_only_recommendation_indices`"
+        in contract_doc
+    )
+    assert (
+        "Trust admissibility remains recommendation-level, so independently actionable direct or spec-backed guidance should be split from weaker inferred or optional hardening before review."
+        in contract_doc
+    )
+    assert (
+        "Reserve `grounding_mode = mixed` for genuinely inseparable single-action recommendations, not bundles that could be split cleanly."
+        in contract_doc
+    )
+    assert (
+        "Avoidable mixed-grounding bundles are an authoring and review defect, not a runner-state feature."
         in contract_doc
     )
     assert (

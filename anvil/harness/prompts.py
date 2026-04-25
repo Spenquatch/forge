@@ -273,6 +273,91 @@ def _trust_review_policy_block(contract: AnalysisReviewContract) -> str:
     )
 
 
+def _trust_recommendation_atomicity_block(
+    contract: AnalysisReviewContract, *, role: str
+) -> str:
+    if contract.mode != "trust":
+        return ""
+
+    role_lines = {
+        "proposer": [
+            (
+                "- Split a directly grounded or spec-backed action from optional "
+                "inference-backed or parity hardening when they are independently "
+                "actionable."
+            ),
+        ],
+        "critic": [
+            (
+                "- When a recommendation bundles a direct half that could stand "
+                "alone with weaker optional hardening, raise "
+                "`kind=insufficient_specificity` with "
+                "`blocking_class=actionability` and require a split."
+            ),
+            (
+                "- Do not use `missing_evidence` for bundling unless the problem "
+                "is actually absent corroboration."
+            ),
+        ],
+        "reviser": [
+            (
+                "- When splitting one recommendation into two, keep the directly "
+                "grounded action in the original recommendation slot when possible."
+            ),
+            (
+                "- Make the weaker hardening guidance the new adjacent "
+                "recommendation rather than reshuffling unrelated recommendation "
+                "order."
+            ),
+            (
+                "- Preserve issue/topic linkage unless it clearly belongs to the "
+                "new child recommendation."
+            ),
+            (
+                "- Give each split recommendation its own grounding_mode, "
+                "evidence, review_surface, and trust metadata."
+            ),
+        ],
+        "auditor": [
+            (
+                "- When a recommendation bundles a direct half that could stand "
+                "alone with weaker optional hardening, raise "
+                "`kind=insufficient_specificity` with "
+                "`blocking_class=actionability` and require a split."
+            ),
+            (
+                "- Do not use `missing_evidence` for bundling unless the problem "
+                "is actually absent corroboration."
+            ),
+            (
+                "- Do not return clean acceptance while an avoidable "
+                "mixed-grounding bundle remains."
+            ),
+            (
+                "- If the bundle is still present, leave that recommendation "
+                "unresolved and force revision rather than treating a caveat as "
+                "sufficient closure."
+            ),
+        ],
+    }
+    lines = [
+        "Trust recommendation atomicity:",
+        "- In trust mode, recommendations must be atomic by admissibility boundary.",
+        (
+            "- If a directly grounded or spec-backed action is independently "
+            "actionable, emit it as its own recommendation instead of bundling it "
+            "with weaker optional hardening."
+        ),
+        (
+            "- Reserve `grounding_mode=\"mixed\"` for truly inseparable "
+            "single-action recommendations, not convenient bundling of a direct "
+            "half and an inferred half."
+        ),
+        *role_lines[role],
+    ]
+    return "\n".join(lines)
+
+
 def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
     bounded = contract.bounded_review
     return "\n".join(
@@ -306,14 +391,11 @@ def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
     )
 
 
-def _bounded_corroboration_guidance_block(
+def _repo_local_discovery_guidance_block(
     contract: AnalysisReviewContract, *, role: str
 ) -> str:
-    if contract.mode != "bounded":
-        return ""
-
     bounded = contract.bounded_review
-    role_line_by_role = {
+    bounded_role_lines = {
         "proposer": (
             "- In the proposer draft, do not leave governing or sibling "
             "corroboration for later stages; pull the needed repo-local file into "
@@ -334,50 +416,99 @@ def _bounded_corroboration_guidance_block(
             "or sibling corroborating file."
         ),
     }
-    return "\n".join(
-        [
-            "Bounded corroboration guidance:",
-            (
-                "- Treat `files_hint`, when provided, as a starting slice, not the "
-                "total review universe."
-            ),
-            (
-                "- In bounded mode, one-hop repo-local corroboration outside "
-                "`files_hint` is allowed when it is needed to support a "
-                "recommendation."
-            ),
-            (
-                "- For requirement, policy, or spec claims, inspect and cite the "
-                "nearest governing repo-local doc or manifest."
-            ),
-            (
-                "- For parity, symmetry, or sibling-workflow claims, inspect and "
-                "cite the sibling implementation that establishes the baseline, and "
-                "compare the full like-for-like seam rather than one convenient "
-                "step."
-            ),
-            "- Include corroborating files in `files_reviewed`, `evidence`, and `review_surface`.",
-            (
-                "- Keep corroboration inside the current bounded caps: evidence <= "
-                f"{bounded.max_evidence_refs_per_recommendation} refs, "
-                "review_surface.must_check_files <= "
-                f"{bounded.max_must_check_files_per_recommendation}, "
-                "review_surface.optional_check_files <= "
-                f"{bounded.max_optional_check_files_per_recommendation}."
-            ),
-            (
-                "- Use `review_surface.must_check_files` for directly governing "
-                "corroboration and `review_surface.optional_check_files` for "
-                "supporting corroboration."
-            ),
-            (
-                "- Reserve `scope_escapes` for later review work that truly leaves "
-                "the declared `review_surface`, not for missing nearby repo-local "
-                "corroboration that the proposer should have included."
-            ),
-            role_line_by_role[role],
-        ]
-    )
+    trust_role_lines = {
+        "proposer": (
+            "- In the proposer draft, start from the nearer governing or sibling "
+            "repo-local seam and do not lean on farther plan/runbook prose when "
+            "the governing spec, manifest, or workflow already exists in-repo."
+        ),
+        "critic": (
+            "- In the critic stage, flag recommendations that cite farther "
+            "plan/runbook prose while skipping nearer governing or sibling "
+            "repo-local evidence."
+        ),
+        "reviser": (
+            "- In the reviser stage, repair discovery gaps by adding the nearer "
+            "governing or sibling repo-local seam before preserving broader "
+            "plan/runbook prose."
+        ),
+        "auditor": (
+            "- In the auditor stage, do not call the draft cleanly closed while "
+            "nearer governing/spec/workflow evidence is missing or replaced by "
+            "farther plan/runbook prose."
+        ),
+    }
+    lines = [
+        "Repo-local discovery guidance:",
+        (
+            "- Treat `files_hint`, when provided, as a starting slice, not the "
+            "total review universe."
+        ),
+        (
+            "- For requirement, policy, or spec claims, inspect and cite the "
+            "nearest governing repo-local doc or manifest."
+        ),
+        (
+            "- For parity, symmetry, or sibling-workflow claims, inspect and "
+            "cite the sibling implementation or workflow that establishes the "
+            "baseline, and compare the full like-for-like seam rather than one "
+            "convenient step."
+        ),
+        "- Include corroborating files in `files_reviewed`, `evidence`, and `review_surface`.",
+    ]
+    if contract.mode == "bounded":
+        lines.extend(
+            [
+                (
+                    "- In bounded mode, one-hop repo-local corroboration outside "
+                    "`files_hint` is allowed when it is needed to support a "
+                    "recommendation."
+                ),
+                (
+                    "- Keep corroboration inside the current bounded caps: "
+                    "evidence <= "
+                    f"{bounded.max_evidence_refs_per_recommendation} refs, "
+                    "review_surface.must_check_files <= "
+                    f"{bounded.max_must_check_files_per_recommendation}, "
+                    "review_surface.optional_check_files <= "
+                    f"{bounded.max_optional_check_files_per_recommendation}."
+                ),
+                (
+                    "- Use `review_surface.must_check_files` for directly "
+                    "governing corroboration and "
+                    "`review_surface.optional_check_files` for supporting "
+                    "corroboration."
+                ),
+                (
+                    "- Reserve `scope_escapes` for later review work that truly "
+                    "leaves the declared `review_surface`, not for missing nearby "
+                    "repo-local corroboration that the proposer should have "
+                    "included."
+                ),
+                bounded_role_lines[role],
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                (
+                    "- In trust mode, repo-local discovery still starts from the "
+                    "same governing or sibling seam before any downstream "
+                    "admissibility or publication split."
+                ),
+                (
+                    "- Keep trust corroboration uncapped and complete; record "
+                    "every corroborating file in `files_reviewed`, `evidence`, "
+                    "and `review_surface`."
+                ),
+                (
+                    "- When both exist, prefer nearer governing/spec/workflow "
+                    "evidence over farther plan/runbook prose."
+                ),
+                trust_role_lines[role],
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
@@ -686,8 +817,9 @@ Your job:
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_repo_local_discovery_guidance_block(contract, role="proposer")}
 {_trust_review_policy_block(contract)}
-{_bounded_corroboration_guidance_block(contract, role="proposer")}
+{_trust_recommendation_atomicity_block(contract, role="proposer")}
 {_recommendation_payload_block(contract)}
 {_confidence_rubric_block(contract)}
 
@@ -737,8 +869,9 @@ Decision guidance:
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_repo_local_discovery_guidance_block(contract, role="critic")}
 {_trust_review_policy_block(contract)}
-{_bounded_corroboration_guidance_block(contract, role="critic")}
+{_trust_recommendation_atomicity_block(contract, role="critic")}
 {_review_payload_ref_block(contract)}
 {_issue_taxonomy_block(contract)}
 {_mode_acceptance_guidance_block(contract)}
@@ -806,8 +939,9 @@ Decision guidance:
 Audit round: {round_index}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_repo_local_discovery_guidance_block(contract, role="auditor")}
 {_trust_review_policy_block(contract)}
-{_bounded_corroboration_guidance_block(contract, role="auditor")}
+{_trust_recommendation_atomicity_block(contract, role="auditor")}
 {_review_payload_ref_block(contract)}
 {_issue_taxonomy_block(contract)}
 {_mode_acceptance_guidance_block(contract)}
@@ -873,8 +1007,9 @@ Your job:
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
+{_repo_local_discovery_guidance_block(contract, role="reviser")}
 {_trust_review_policy_block(contract)}
-{_bounded_corroboration_guidance_block(contract, role="reviser")}
+{_trust_recommendation_atomicity_block(contract, role="reviser")}
 {_recommendation_payload_block(contract)}
 {_review_policy_block(contract.stop_policy)}
 {_confidence_rubric_block(contract)}
