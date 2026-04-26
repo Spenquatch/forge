@@ -20,6 +20,10 @@ _GIT_SNAPSHOT = {
 }
 
 
+def _section_between(text: str, start_marker: str, end_marker: str) -> str:
+    return text.split(start_marker, 1)[1].split(end_marker, 1)[0]
+
+
 def _task() -> TaskSpec:
     return TaskSpec.from_dict(
         {
@@ -242,12 +246,30 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         "Bind every recommendation with `recommendations[*].seam_id`; when that seam expands beyond the primary seam, populate `recommendations[*].seam_expansion_reason`.",
         "default bounded cap is 2; declaring or inspecting a third secondary seam requires a recorded scope_escape; overflow is never silently normalized away.",
     ]
-    seam_role_lines = {
-        "proposer": "In the proposer draft, you may declare or inspect a third bounded secondary seam only when `scope_escapes` records every third-seam path with a non-empty reason.",
-        "reviser": "In the reviser stage, you may retain or introduce a third bounded secondary seam only when `scope_escapes` records every third-seam path with a non-empty reason.",
-        "critic": "In the critic stage, treat a third bounded secondary seam without matching `scope_escapes` as a bounded-mode scope violation.",
-        "auditor": "In the auditor stage, do not call the draft cleanly closed when a third bounded secondary seam lacks matching `scope_escapes`.",
-    }
+    critic_seam_lines = [
+        "Role-specific seam-review guidance:",
+        "In the critic stage, challenge seam choice before recommendation polish.",
+        "In the critic stage, when a recommendation relies on farther plan/runbook prose while a nearer governing spec/manifest or sibling workflow exists, raise the seam defect before polishing wording.",
+        "In the critic stage, in bounded mode, flag secondary-seam exploration that silently widened review beyond bounded discipline, even if the recommendation text looks reasonable.",
+        "In the critic stage, use `kind=scope_drift` for wrong seam selection, unjustified off-primary expansion, and bounded widening abuse.",
+        "In the critic stage, use `kind=missing_evidence` only when corroboration is actually absent.",
+    ]
+    auditor_seam_lines = [
+        "Role-specific seam-review guidance:",
+        "In the auditor stage, do not return clean acceptance while the wrong seam remains primary.",
+        "In the auditor stage, do not accept off-primary recommendations without justified seam expansion.",
+        "In the auditor stage, do not return clean acceptance when seam metadata was used to bypass bounded corroboration limits.",
+        "In the auditor stage, use `kind=scope_drift` for wrong seam selection, unjustified off-primary expansion, and bounded widening abuse.",
+        "In the auditor stage, use `kind=missing_evidence` only when corroboration is actually absent.",
+    ]
+    reviser_seam_lines = [
+        "Role-specific seam-review guidance:",
+        "In the reviser stage, return to the higher-ranked seam first.",
+        "In the reviser stage, when an open issue shows the current seam choice is wrong, update `primary_seam`, `secondary_seams_considered`, `recommendations[*].seam_id`, `recommendations[*].seam_expansion_reason`, `review_surface`, and evidence together.",
+        "In the reviser stage, preserve recommendation order where possible while rebinding to the higher-ranked seam.",
+        "In the reviser stage, collapse gratuitous secondary seams after rebinding instead of carrying stale seam declarations forward.",
+        "In the reviser stage, keep at least one recommendation bound to `primary_seam` after rebinding.",
+    ]
 
     for line in common_bounded_lines:
         assert line in proposer
@@ -260,17 +282,51 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert line in critic
         assert line in auditor
         assert line in reviser
-    assert seam_role_lines["proposer"] in proposer
-    assert seam_role_lines["reviser"] in reviser
-    assert seam_role_lines["critic"] in critic
-    assert seam_role_lines["auditor"] in auditor
 
-    for prompt in (proposer, critic, auditor, reviser):
+    assert "Role-specific seam-review guidance:" not in proposer
+    for line in critic_seam_lines:
+        assert line in critic
+    for line in auditor_seam_lines:
+        assert line in auditor
+    for line in reviser_seam_lines:
+        assert line in reviser
+
+    assert (
+        proposer.index("Bounded review policy:")
+        < proposer.index("Seam selection guidance:")
+        < proposer.index("Repo-local discovery guidance:")
+    )
+    for prompt in (critic, auditor, reviser):
         assert (
             prompt.index("Bounded review policy:")
             < prompt.index("Seam selection guidance:")
+            < prompt.index("Role-specific seam-review guidance:")
             < prompt.index("Repo-local discovery guidance:")
         )
+
+    proposer_shared_seam_section = _section_between(
+        proposer,
+        "Seam selection guidance:\n",
+        "\nRepo-local discovery guidance:",
+    )
+    critic_shared_seam_section = _section_between(
+        critic,
+        "Seam selection guidance:\n",
+        "\nRole-specific seam-review guidance:",
+    )
+    auditor_shared_seam_section = _section_between(
+        auditor,
+        "Seam selection guidance:\n",
+        "\nRole-specific seam-review guidance:",
+    )
+    reviser_shared_seam_section = _section_between(
+        reviser,
+        "Seam selection guidance:\n",
+        "\nRole-specific seam-review guidance:",
+    )
+    assert critic_shared_seam_section == proposer_shared_seam_section
+    assert auditor_shared_seam_section == proposer_shared_seam_section
+    assert reviser_shared_seam_section == proposer_shared_seam_section
 
     for line in trust_lines:
         assert line in proposer

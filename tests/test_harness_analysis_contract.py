@@ -550,6 +550,73 @@ def test_analysis_review_contract_docs_freeze_v9_admissibility_publishability_an
         "Canonical primary seam retained for run context; no included recommendation in this artifact binds to it."
         in contract_doc
     )
+    assert (
+        "Role-specific seam-review duties are separate from the shared seam-selection rules and do not apply to proposer."
+        in contract_doc
+    )
+    assert "Critic seam-review duties:" in contract_doc
+    assert (
+        "In the critic stage, challenge seam choice before recommendation polish."
+        in contract_doc
+    )
+    assert (
+        "In the critic stage, when a recommendation relies on farther plan/runbook prose while a nearer governing spec/manifest or sibling workflow exists, raise the seam defect before polishing wording."
+        in contract_doc
+    )
+    assert (
+        "In the critic stage, in bounded mode, flag secondary-seam exploration that silently widened review beyond bounded discipline, even if the recommendation text looks reasonable."
+        in contract_doc
+    )
+    assert (
+        "In the critic stage, use `kind=scope_drift` for wrong seam selection, unjustified off-primary expansion, and bounded widening abuse."
+        in contract_doc
+    )
+    assert (
+        "In the critic stage, use `kind=missing_evidence` only when corroboration is actually absent."
+        in contract_doc
+    )
+    assert "Auditor seam-review duties:" in contract_doc
+    assert (
+        "In the auditor stage, do not return clean acceptance while the wrong seam remains primary."
+        in contract_doc
+    )
+    assert (
+        "In the auditor stage, do not accept off-primary recommendations without justified seam expansion."
+        in contract_doc
+    )
+    assert (
+        "In the auditor stage, do not return clean acceptance when seam metadata was used to bypass bounded corroboration limits."
+        in contract_doc
+    )
+    assert (
+        "In the auditor stage, use `kind=scope_drift` for wrong seam selection, unjustified off-primary expansion, and bounded widening abuse."
+        in contract_doc
+    )
+    assert (
+        "In the auditor stage, use `kind=missing_evidence` only when corroboration is actually absent."
+        in contract_doc
+    )
+    assert "Reviser seam-review duties:" in contract_doc
+    assert (
+        "In the reviser stage, return to the higher-ranked seam first."
+        in contract_doc
+    )
+    assert (
+        "In the reviser stage, when an open issue shows the current seam choice is wrong, update `primary_seam`, `secondary_seams_considered`, `recommendations[*].seam_id`, `recommendations[*].seam_expansion_reason`, `review_surface`, and evidence together."
+        in contract_doc
+    )
+    assert (
+        "In the reviser stage, preserve recommendation order where possible while rebinding to the higher-ranked seam."
+        in contract_doc
+    )
+    assert (
+        "In the reviser stage, collapse gratuitous secondary seams after rebinding instead of carrying stale seam declarations forward."
+        in contract_doc
+    )
+    assert (
+        "In the reviser stage, keep at least one recommendation bound to `primary_seam` after rebinding."
+        in contract_doc
+    )
 
 
 def test_surface_update_notes_document_primary_deliverable_artifacts():

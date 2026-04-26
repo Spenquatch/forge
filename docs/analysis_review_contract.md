@@ -261,6 +261,32 @@ Seam-selection rules:
 - review-stage `scope_escapes` semantics remain separate: critic/auditor still use them for later review-surface escapes rather than analysis-stage seam declaration.
 - default bounded cap is 2; declaring or inspecting a third secondary seam requires a recorded scope_escape; overflow beyond that third seam is never silently normalized away.
 
+Role-specific seam-review duties are separate from the shared seam-selection rules and do not apply to proposer.
+
+Critic seam-review duties:
+
+- In the critic stage, challenge seam choice before recommendation polish.
+- In the critic stage, when a recommendation relies on farther plan/runbook prose while a nearer governing spec/manifest or sibling workflow exists, raise the seam defect before polishing wording.
+- In the critic stage, in bounded mode, flag secondary-seam exploration that silently widened review beyond bounded discipline, even if the recommendation text looks reasonable.
+- In the critic stage, use `kind=scope_drift` for wrong seam selection, unjustified off-primary expansion, and bounded widening abuse.
+- In the critic stage, use `kind=missing_evidence` only when corroboration is actually absent.
+
+Auditor seam-review duties:
+
+- In the auditor stage, do not return clean acceptance while the wrong seam remains primary.
+- In the auditor stage, do not accept off-primary recommendations without justified seam expansion.
+- In the auditor stage, do not return clean acceptance when seam metadata was used to bypass bounded corroboration limits.
+- In the auditor stage, use `kind=scope_drift` for wrong seam selection, unjustified off-primary expansion, and bounded widening abuse.
+- In the auditor stage, use `kind=missing_evidence` only when corroboration is actually absent.
+
+Reviser seam-review duties:
+
+- In the reviser stage, return to the higher-ranked seam first.
+- In the reviser stage, when an open issue shows the current seam choice is wrong, update `primary_seam`, `secondary_seams_considered`, `recommendations[*].seam_id`, `recommendations[*].seam_expansion_reason`, `review_surface`, and evidence together.
+- In the reviser stage, preserve recommendation order where possible while rebinding to the higher-ranked seam.
+- In the reviser stage, collapse gratuitous secondary seams after rebinding instead of carrying stale seam declarations forward.
+- In the reviser stage, keep at least one recommendation bound to `primary_seam` after rebinding.
+
 Projection-only retained-primary status is frozen to:
 
 - `primary_seam_projection_status: "retained_without_included_recommendations"`
