@@ -226,6 +226,38 @@ The harness writes a run directory containing:
 
 Use `summary.json` artifact pointers (`final_artifact`, `final_artifact_json`, `final_artifact_kind`) as the source of truth for the primary deliverable instead of inferring artifact type from the run verdict alone.
 
+Seam parity reads canonical seam state from each run's `summary.json`, not from `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, or `BEST_DRAFT.*` payloads.
+
+To reproduce a bounded/trust parity check, capture the two `summary.json` paths and compare them directly:
+
+```bash
+set -euo pipefail
+
+BOUNDED_SUMMARY=$(
+  poetry run python -m anvil.cli harness-run \
+    --task examples/harness/tasks/recommend_automation_improvements.yaml \
+    --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml \
+    --workspace /path/to/repo \
+    --out-root .forge-harness-runs | awk -F= '/^summary=/{print $2}'
+)
+
+TRUST_SUMMARY=$(
+  poetry run python -m anvil.cli harness-run \
+    --task examples/harness/tasks/recommend_automation_improvements.yaml \
+    --strategy examples/harness/strategies/analysis_review_trust_codex_claude.yaml \
+    --workspace /path/to/repo \
+    --out-root .forge-harness-runs | awk -F= '/^summary=/{print $2}'
+)
+
+test -n "$BOUNDED_SUMMARY"
+test -n "$TRUST_SUMMARY"
+
+poetry run python scripts/check_seam_parity.py \
+  --bounded-summary "$BOUNDED_SUMMARY" \
+  --trust-summary "$TRUST_SUMMARY" \
+  --out ./seam_parity_report.json
+```
+
 Across bounded and trust modes, the runner-owned `analysis_review_status.recommendation_admissibility` status records `final_answer_recommendation_indices`, `partial_only_recommendation_indices`, `excluded_recommendation_indices`, and `reasons_by_recommendation_index` using only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`. The field is canonical in both modes and keeps the same shape in both modes. In bounded mode, accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices` unless they are topic-blocked, and bounded mode keeps `partial_only_recommendation_indices` empty. In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode, and `PARTIAL_ANSWER.*` is the explicit scoped fallback: its candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations, while whole-artifact promotion still reuses the existing partial gates together with provenance binding, global topic blockers, and minimum-threshold fallout checks.
 
 In trust mode, recommendation authoring should split independently actionable direct or spec-backed guidance from weaker inferred or optional hardening before review. Reserve `grounding_mode = mixed` for inseparable single actions. Avoidable mixed-grounding bundles are a prompt/review defect, not a runner-owned admissibility state.
