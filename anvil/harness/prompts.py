@@ -14,6 +14,19 @@ from .types import ReviewLoopPolicy, TaskSpec, ValidationRun, WorkspaceWritePoli
 
 MAX_BLOCK_CHARS = 5000
 
+__all__ = [
+    "build_single_pass_prompt",
+    "build_proposer_prompt",
+    "build_falsifier_prompt",
+    "build_patcher_prompt",
+    "build_analysis_proposer_prompt",
+    "build_focus_gate_adjudicate_prompt",
+    "build_focus_gate_deliberate_prompt",
+    "build_analysis_critic_prompt",
+    "build_analysis_auditor_prompt",
+    "build_analysis_reviser_prompt",
+]
+
 
 def _bullets(items: Iterable[str]) -> str:
     values = [str(x).strip() for x in items if str(x).strip()]
@@ -151,26 +164,42 @@ def _focus_gate_output_rules_block() -> str:
                 "`selected`, `clarification_requested`, or `no_viable_focus`."
             ),
             (
+                "- Every `candidates[*]` item must include a non-empty "
+                "`candidate_paths` array built from concrete workspace paths."
+            ),
+            (
+                "- Candidate `focus_id` values must stay aligned with the canonical "
+                "seam identity implied by their `candidate_paths`."
+            ),
+            (
                 "- When `decision_state=selected`, set both "
                 "`selected_focus_id` and `selected_focus_summary`, keep "
-                "`candidates` non-empty, and set "
+                "`candidates` non-empty, copy the selected candidate's exact path "
+                "set into `selected_focus_paths`, and set "
                 "`adapter_plan.primary_focus_id` equal to `selected_focus_id`."
             ),
             (
                 "- When `decision_state=clarification_requested`, keep "
-                "`candidates` non-empty and populate "
+                "`candidates` non-empty, set `selected_focus_id=null`, "
+                "`selected_focus_summary=null`, serialize "
+                "`selected_focus_paths` as `[]`, and populate "
                 "`question.prompt` plus `question.options` with the exact clarification "
                 "you need."
             ),
             (
                 "- When `decision_state=no_viable_focus`, set "
                 "`selected_focus_id=null`, `selected_focus_summary=null`, "
+                "`selected_focus_paths=[]`, "
                 "`adapter_plan.primary_focus_id=null`, and serialize "
                 "`question` exactly as `{ \"prompt\": \"\", \"options\": [] }`."
             ),
             (
                 "- When not `clarification_requested`, serialize `question` exactly "
                 "as `{ \"prompt\": \"\", \"options\": [] }`."
+            ),
+            (
+                "- When not `selected`, serialize `selected_focus_paths` exactly "
+                "as `[]`."
             ),
             (
                 "- Candidate IDs and adapter secondary IDs must stay consistent with "
@@ -188,6 +217,11 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
 
     selected_focus_id = str(focus_decision.get("selected_focus_id") or "").strip()
     selected_focus_summary = str(focus_decision.get("selected_focus_summary") or "").strip()
+    selected_focus_paths = [
+        str(path).strip()
+        for path in (focus_decision.get("selected_focus_paths") or [])
+        if str(path).strip()
+    ]
     candidates = focus_decision.get("candidates")
     candidate_ids: list[str] = []
     if isinstance(candidates, list):
@@ -205,14 +239,48 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
         "Focus Gate Decision:",
         f"- selected_focus_id: {selected_focus_id}",
         f"- selected_focus_summary: {selected_focus_summary or '(missing summary)'}",
+        (
+            "- selected_focus_paths: "
+            + (", ".join(selected_focus_paths) if selected_focus_paths else "(missing paths)")
+        ),
         f"- shortlisted_candidate_ids: {shortlisted_ids}",
         (
-            "- Treat this gate result as authoritative: downstream "
-            "`primary_seam.seam_id` must equal `selected_focus_id` unless you are "
-            "deliberately rejecting invalid gate output."
+            "- Treat `selected_focus_paths` as authoritative seam identity: "
+            "downstream `primary_seam.paths` must match this exact normalized path "
+            "set, and `primary_seam.seam_id` must stay aligned with "
+            "`selected_focus_id` unless you are deliberately rejecting invalid gate "
+            "output."
         ),
     ]
     return "\n".join(lines)
+
+
+def _focus_gate_deliberate_guidance_block() -> str:
+    return "\n".join(
+        [
+            "Gate-path guidance:",
+            "- Use `deliberate` when the task likely needs shortlist comparison or clarification before a seam can be selected confidently.",
+            "- Prefer `clarification_requested` when multiple plausible seams remain and the missing distinction is best answered by the operator.",
+            "- Use `selected` only when the ambiguity collapses after comparing the shortlisted seams against the current repo context.",
+            "- A `Prior focus decision` block, when present, is probe artifact context from an earlier deliberate pass; reuse its shortlist or question only if it still fits the current repo state.",
+            "- A `Focus gate answer` block, when present, is rerun-answer context from the operator.",
+            "- If rerun-answer context arrives without a matching live shortlist or no longer fits the current repo state, treat it as stale-answer context instead of forcing a selection.",
+            "- Keep `candidate_paths` explicit for every shortlisted seam, and when you do select, promote the chosen path set into `selected_focus_paths` unchanged.",
+        ]
+    )
+
+
+def _focus_gate_adjudicate_guidance_block() -> str:
+    return "\n".join(
+        [
+            "Gate-path guidance:",
+            "- Use `adjudicate` when the current task context plus the supplied clarification is sufficient to select one seam cleanly.",
+            "- Prefer `selected` over `clarification_requested` when one seam is clearly dominant from the task, repo context, and supplied answer.",
+            "- Use `clarification_requested` only when the supplied answer still leaves a real unresolved distinction.",
+            "- Use `no_viable_focus` only when the current task context and supplied answer do not support any defensible seam shortlist.",
+            "- Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`.",
+        ]
+    )
 
 
 def _recommendation_review_coverage_block(prior_output: dict | None) -> str:
@@ -1022,7 +1090,7 @@ Current workspace snapshot:
 """.strip()
 
 
-def build_focus_gate_prompt(
+def _build_focus_gate_prompt(
     task: TaskSpec,
     prompt_preamble: str,
     git_snapshot: dict,
@@ -1037,18 +1105,8 @@ def build_focus_gate_prompt(
         raise ValueError("gate_path must be exactly 'adjudicate' or 'deliberate'.")
 
     gate_specific_guidance = {
-        "adjudicate": [
-            "Gate-path guidance:",
-            "- Use `adjudicate` when the current task context is sufficient to select one seam cleanly.",
-            "- Prefer `selected` over `clarification_requested` when one seam is clearly dominant from the task and repo context.",
-            "- Use `no_viable_focus` only when the current task context does not support any defensible seam shortlist.",
-        ],
-        "deliberate": [
-            "Gate-path guidance:",
-            "- Use `deliberate` when the task likely needs shortlist comparison or clarification before a seam can be selected confidently.",
-            "- Prefer `clarification_requested` when multiple plausible seams remain and the missing distinction is best answered by the operator.",
-            "- Use `selected` only when the ambiguity collapses after comparing the shortlisted seams against the current repo context.",
-        ],
+        "adjudicate": _focus_gate_adjudicate_guidance_block(),
+        "deliberate": _focus_gate_deliberate_guidance_block(),
     }[normalized_gate_path]
 
     return f"""
@@ -1067,7 +1125,7 @@ Your job:
 5. Ask for clarification only when the missing distinction is real and operator input is required.
 
 Gate path: {normalized_gate_path}
-{chr(10).join(gate_specific_guidance)}
+{gate_specific_guidance}
 {_focus_gate_output_rules_block()}
 {_analysis_contract_block(contract)}
 
@@ -1080,6 +1138,67 @@ Gate path: {normalized_gate_path}
 Current workspace snapshot:
 {render_git_snapshot(git_snapshot)}
 """.strip()
+
+
+def build_focus_gate_adjudicate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+) -> str:
+    return _build_focus_gate_prompt(
+        task,
+        prompt_preamble,
+        git_snapshot,
+        contract,
+        gate_path="adjudicate",
+        focus_gate_answer=focus_gate_answer,
+        prior_focus_decision=prior_focus_decision,
+    )
+
+
+def build_focus_gate_deliberate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+) -> str:
+    return _build_focus_gate_prompt(
+        task,
+        prompt_preamble,
+        git_snapshot,
+        contract,
+        gate_path="deliberate",
+        focus_gate_answer=focus_gate_answer,
+        prior_focus_decision=prior_focus_decision,
+    )
+
+
+def build_focus_gate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    gate_path: str,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+) -> str:
+    return _build_focus_gate_prompt(
+        task,
+        prompt_preamble,
+        git_snapshot,
+        contract,
+        gate_path=gate_path,
+        focus_gate_answer=focus_gate_answer,
+        prior_focus_decision=prior_focus_decision,
+    )
 
 
 def build_analysis_critic_prompt(

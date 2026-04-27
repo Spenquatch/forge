@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import anvil.harness.prompts as prompt_builders
 from anvil.harness.contracts import (
     build_analysis_review_contract,
     confidence_rubric_lines,
@@ -11,7 +12,8 @@ from anvil.harness.prompts import (
     build_analysis_critic_prompt,
     build_analysis_proposer_prompt,
     build_analysis_reviser_prompt,
-    build_focus_gate_prompt,
+    build_focus_gate_adjudicate_prompt,
+    build_focus_gate_deliberate_prompt,
 )
 from anvil.harness.types import StrategyConfig, TaskSpec
 
@@ -667,39 +669,90 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert rubric_line in reviser
 
 
-def test_focus_gate_prompt_exposes_typed_focus_decision_contract():
+def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
     task = _task()
     strategy = _strategy()
     contract = build_analysis_review_contract(task, strategy)
 
-    prompt = build_focus_gate_prompt(
+    deliberate_prompt = build_focus_gate_deliberate_prompt(
         task,
         strategy.prompt_preamble,
         _GIT_SNAPSHOT,
         contract,
-        gate_path="deliberate",
         focus_gate_answer={
             "question_prompt": "Which seam should this run prioritize?",
             "selected_option": "release-trigger-automation",
             "freeform_answer": "",
         },
+        prior_focus_decision={
+            "decision_state": "clarification_requested",
+            "question": {
+                "prompt": "Which seam should this run prioritize?",
+                "options": ["release-trigger-automation", "nightly-parity"],
+            },
+        },
+    )
+    adjudicate_prompt = build_focus_gate_adjudicate_prompt(
+        task,
+        strategy.prompt_preamble,
+        _GIT_SNAPSHOT,
+        contract,
+        focus_gate_answer={
+            "question_prompt": "Which seam should this run prioritize?",
+            "selected_option": "release-trigger-automation",
+            "freeform_answer": "",
+        },
+        prior_focus_decision={
+            "decision_state": "clarification_requested",
+            "question": {
+                "prompt": "Which seam should this run prioritize?",
+                "options": ["release-trigger-automation", "nightly-parity"],
+            },
+        },
     )
 
-    assert "You are the FOCUS_GATE stage in an analysis-review harness." in prompt
-    assert "Gate path: deliberate" in prompt
-    assert "Focus gate output rules:" in prompt
-    assert "Set `gate_path` to exactly `adjudicate` or `deliberate`." in prompt
-    assert "Set `focus_type` to exactly `seam`." in prompt
+    assert "build_focus_gate_prompt" not in prompt_builders.__all__
+
+    assert "You are the FOCUS_GATE stage in an analysis-review harness." in deliberate_prompt
+    assert "Gate path: deliberate" in deliberate_prompt
+    assert "Focus gate output rules:" in deliberate_prompt
+    assert (
+        "Set `gate_path` to exactly `adjudicate` or `deliberate`."
+        in deliberate_prompt
+    )
+    assert "Set `focus_type` to exactly `seam`." in deliberate_prompt
     assert (
         "When `decision_state=clarification_requested`, keep `candidates` non-empty"
-        in prompt
+        in deliberate_prompt
     )
     assert (
         "When not `clarification_requested`, serialize `question` exactly as `{ \"prompt\": \"\", \"options\": [] }`."
-        in prompt
+        in deliberate_prompt
     )
-    assert "Focus gate answer:" in prompt
-    assert '"selected_option": "release-trigger-automation"' in prompt
+    assert (
+        "Every `candidates[*]` item must include a non-empty `candidate_paths` array"
+        in deliberate_prompt
+    )
+    assert (
+        "copy the selected candidate's exact path set into `selected_focus_paths`"
+        in deliberate_prompt
+    )
+    assert "probe artifact context" in deliberate_prompt
+    assert "rerun-answer context" in deliberate_prompt
+    assert "stale-answer context" in deliberate_prompt
+    assert "Focus gate answer:" in deliberate_prompt
+    assert '"selected_option": "release-trigger-automation"' in deliberate_prompt
+
+    assert "Gate path: adjudicate" in adjudicate_prompt
+    assert "probe artifact context" not in adjudicate_prompt
+    assert "rerun-answer context" not in adjudicate_prompt
+    assert "stale-answer context" not in adjudicate_prompt
+    assert (
+        "Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`."
+        in adjudicate_prompt
+    )
+    assert "Focus gate answer:" in adjudicate_prompt
+    assert '"selected_option": "release-trigger-automation"' in adjudicate_prompt
 
 
 def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prompts():
@@ -712,16 +765,25 @@ def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prom
         "decision_state": "selected",
         "selected_focus_id": "release-trigger-automation",
         "selected_focus_summary": "The release trigger workflows are the governing seam.",
+        "selected_focus_paths": [
+            ".github/workflows/release.yml",
+            ".github/workflows/reusable-release.yml",
+        ],
         "confidence": 0.88,
         "confidence_band": "high",
         "candidates": [
             {
                 "focus_id": "release-trigger-automation",
                 "focus_summary": "Release trigger workflows",
+                "candidate_paths": [
+                    ".github/workflows/release.yml",
+                    ".github/workflows/reusable-release.yml",
+                ],
             },
             {
                 "focus_id": "nightly-parity",
                 "focus_summary": "Nightly workflow parity seam",
+                "candidate_paths": [".github/workflows/nightly.yml"],
             },
         ],
         "question": {"prompt": "", "options": []},
@@ -759,8 +821,10 @@ def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prom
         "Focus Gate Decision:",
         "- selected_focus_id: release-trigger-automation",
         "- selected_focus_summary: The release trigger workflows are the governing seam.",
+        "- selected_focus_paths: .github/workflows/release.yml, .github/workflows/reusable-release.yml",
         "- shortlisted_candidate_ids: release-trigger-automation, nightly-parity",
-        "downstream `primary_seam.seam_id` must equal `selected_focus_id`",
+        "Treat `selected_focus_paths` as authoritative seam identity:",
+        "downstream `primary_seam.paths` must match this exact normalized path set",
     ]
     for line in expected_lines:
         assert line in proposer
@@ -777,12 +841,14 @@ def test_non_selected_focus_gate_decision_is_not_injected_into_analysis_prompts(
         "decision_state": "clarification_requested",
         "selected_focus_id": None,
         "selected_focus_summary": None,
+        "selected_focus_paths": [],
         "confidence": 0.55,
         "confidence_band": "medium",
         "candidates": [
             {
                 "focus_id": "release-trigger-automation",
                 "focus_summary": "Release trigger workflows",
+                "candidate_paths": [".github/workflows/release.yml"],
             }
         ],
         "question": {
