@@ -34,6 +34,7 @@ from .prompts import (
     build_analysis_critic_prompt,
     build_analysis_proposer_prompt,
     build_analysis_reviser_prompt,
+    build_focus_gate_prompt,
     build_falsifier_prompt,
     build_patcher_prompt,
     build_proposer_prompt,
@@ -45,6 +46,7 @@ from .schemas import (
     analysis_output_schema,
     analysis_review_schema,
     falsifier_schema,
+    focus_gate_output_schema,
     patcher_schema,
     proposer_schema,
     single_pass_schema,
@@ -271,6 +273,9 @@ class HarnessRunner:
         analysis_review_status = run_details.get("analysis_review_status")
         if isinstance(analysis_review_status, dict) and analysis_review_status:
             run_details["analysis_review_status"] = analysis_review_status
+        focus_decision = run_details.get("focus_decision")
+        if isinstance(focus_decision, dict) and focus_decision:
+            run_details["focus_decision"] = focus_decision
 
         final_answer_payload = self._derive_final_answer_payload(run_details)
         recommendation_reviews = list(run_details.get("recommendation_reviews") or [])
@@ -316,6 +321,7 @@ class HarnessRunner:
             "changed_files": final_changed_files,
             "analysis_review_contract": analysis_review_contract,
             "analysis_review_status": analysis_review_status,
+            "focus_decision": focus_decision if isinstance(focus_decision, dict) else None,
             "analysis_review_coverage": analysis_review_coverage,
             "issue_ledger": issue_ledger,
             "topic_ledger": topic_ledger,
@@ -530,6 +536,26 @@ class HarnessRunner:
         critic_cfg = self._role_or_fallback("critic", ["falsifier"])
         reviser_cfg = self._role_or_fallback("reviser", ["patcher", "proposer"])
         auditor_cfg = self._role_or_fallback("auditor", ["critic", "falsifier"])
+        focus_gate_cfg = self._focus_gate_role_config()
+
+        focus_decision: dict[str, Any] | None = None
+        if contract.focus_gate.enabled:
+            focus_gate_outcome = self._run_focus_gate(
+                contract=contract,
+                role_cfg=focus_gate_cfg,
+            )
+            if focus_gate_outcome["kind"] == "blocked":
+                return focus_gate_outcome["outcome"]
+            if focus_gate_outcome["kind"] == "failed":
+                return self._analysis_stage_failure_outcome(
+                    stage_label="focus_gate",
+                    run=focus_gate_outcome["run"],
+                    validator_verdict="not_run",
+                    review_loop_exercised=False,
+                    final_analysis=None,
+                    contract=contract,
+                )
+            focus_decision = focus_gate_outcome["focus_decision"]
 
         git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
         proposer_prompt = build_analysis_proposer_prompt(
@@ -537,6 +563,7 @@ class HarnessRunner:
             self.strategy.prompt_preamble,
             git_snapshot,
             contract,
+            focus_decision=focus_decision,
         )
         proposer_run = self._run_agent_stage(
             "proposer",
@@ -544,7 +571,10 @@ class HarnessRunner:
             proposer_prompt,
             analysis_output_schema(),
             proposer_cfg,
-            semantic_context={"contract": contract},
+            semantic_context={
+                "contract": contract,
+                "expected_primary_seam_id": self._selected_focus_id(focus_decision),
+            },
         )
         if not proposer_run.ok:
             return self._analysis_stage_failure_outcome(
@@ -605,6 +635,7 @@ class HarnessRunner:
                 contract=contract,
                 open_issues=self._open_issue_records(),
                 open_topics=self._open_topic_records(),
+                focus_decision=focus_decision,
             )
             prior_analysis_payload = latest_analysis_run.structured_output
             next_analysis_run = self._run_agent_stage(
@@ -628,6 +659,7 @@ class HarnessRunner:
                         for item in self._open_topic_records()
                         if str(item.get("topic_id") or "").strip()
                     ],
+                    "expected_primary_seam_id": self._selected_focus_id(focus_decision),
                 },
             )
             if not next_analysis_run.ok:
@@ -706,6 +738,7 @@ class HarnessRunner:
                 "recommendation_reviews": self._recommendation_reviews(final_review_payload),
                 "accepted_recommendation_count": accepted_recommendation_count,
                 "analysis_review_status": analysis_review_status,
+                "focus_decision": focus_decision,
                 "review_loop_exercised": True,
             },
         }
@@ -825,6 +858,9 @@ class HarnessRunner:
         schema: dict[str, Any],
         role_config: RoleConfig,
         semantic_context: dict[str, Any] | None = None,
+        *,
+        record_stage: bool = True,
+        record_workspace_policy_check: bool = True,
     ) -> ProviderRun:
         self.stage_counter += 1
         stage_dir = self.artifacts_dir / f"{self.stage_counter:02d}_{slugify(role_name)}"
@@ -996,14 +1032,24 @@ class HarnessRunner:
             stage_record[
                 "access_override_reason"
             ] = "Task-level workspace_write_policy forced this stage to run read-only."
-        self.agent_stages.append(stage_record)
-        write_json(stage_dir / "run.envelope.json", stage_record)
+        if role_name == "focus_gate" and isinstance(run.structured_output, dict):
+            stage_record["metadata"] = {
+                "focus_gate": {
+                    "gate_path": run.structured_output.get("gate_path"),
+                    "focus_type": run.structured_output.get("focus_type"),
+                    "decision_state": run.structured_output.get("decision_state"),
+                }
+            }
+        if record_stage:
+            self.agent_stages.append(stage_record)
+            write_json(stage_dir / "run.envelope.json", stage_record)
 
-        self._record_workspace_policy_check(
-            checkpoint=f"after_{role_name}",
-            final=False,
-            raise_on_violation=True,
-        )
+        if record_workspace_policy_check:
+            self._record_workspace_policy_check(
+                checkpoint=f"after_{role_name}",
+                final=False,
+                raise_on_violation=True,
+            )
         return run
 
     def _run_validator_round(self, round_index: int) -> list[ValidationRun]:
@@ -2705,6 +2751,13 @@ class HarnessRunner:
             raise HarnessError(f"Strategy requires role: {role_name}")
         return role
 
+    def _focus_gate_role_config(self) -> RoleConfig:
+        role = self.strategy.roles.get("focus_gate")
+        if role is not None:
+            return replace(role, access="read")
+        proposer = self._require_role("proposer")
+        return replace(proposer, access="read")
+
     def _role_or_fallback(self, preferred: str, fallbacks: list[str]) -> RoleConfig:
         if preferred in self.strategy.roles:
             return self.strategy.roles[preferred]
@@ -3613,12 +3666,231 @@ class HarnessRunner:
 
     def _effective_role_config(self, role_name: str, role_config: RoleConfig) -> RoleConfig:
         effective_access = role_config.access
-        forced_read_roles = {"falsifier", "critic", "auditor"}
+        forced_read_roles = {"falsifier", "critic", "auditor", "focus_gate"}
         if role_name in forced_read_roles:
             effective_access = "read"
         elif not self.task.workspace_write_policy.allows_workspace_writes():
             effective_access = "read"
         return replace(role_config, access=effective_access)
+
+    def _focus_gate_answer_payload(self) -> dict[str, Any] | None:
+        if self.task.focus_gate_answer is None:
+            return None
+        return asdict(self.task.focus_gate_answer)
+
+    @staticmethod
+    def _selected_focus_id(focus_decision: dict[str, Any] | None) -> str | None:
+        if not isinstance(focus_decision, dict):
+            return None
+        value = str(focus_decision.get("selected_focus_id") or "").strip()
+        return value or None
+
+    def _build_focus_gate_blocked_outcome(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        focus_decision: dict[str, Any],
+    ) -> dict[str, Any]:
+        decision_state = str(focus_decision.get("decision_state") or "").strip()
+        if decision_state == "clarification_requested":
+            return {
+                "run_verdict": "blocked_for_clarification",
+                "content_verdict": "blocked_for_clarification",
+                "validator_verdict": "not_run",
+                "final_summary": "Focus gate blocked the run pending clarification.",
+                "failure_details": {
+                    "stage": "focus_gate",
+                    "decision_state": "clarification_requested",
+                    "question": focus_decision.get("question"),
+                    "candidates": focus_decision.get("candidates"),
+                    "warnings": focus_decision.get("warnings"),
+                },
+                "details": {
+                    "focus_decision": focus_decision,
+                    "review_loop_exercised": False,
+                    "analysis_review_contract": contract.to_dict(),
+                },
+            }
+        return {
+            "run_verdict": "no_viable_focus",
+            "content_verdict": "no_viable_focus",
+            "validator_verdict": "not_run",
+            "final_summary": "Focus gate could not identify a viable focus target.",
+            "failure_details": {
+                "stage": "focus_gate",
+                "decision_state": "no_viable_focus",
+                "candidates": focus_decision.get("candidates"),
+                "warnings": focus_decision.get("warnings"),
+            },
+            "details": {
+                "focus_decision": focus_decision,
+                "review_loop_exercised": False,
+                "analysis_review_contract": contract.to_dict(),
+            },
+        }
+
+    def _focus_gate_answer_matches(
+        self,
+        *,
+        probe_decision: dict[str, Any],
+        focus_gate_answer: dict[str, Any],
+    ) -> bool:
+        question = probe_decision.get("question") or {}
+        prior_prompt = str(question.get("prompt") or "").strip()
+        prior_options = {
+            str(item).strip()
+            for item in (question.get("options") or [])
+            if str(item).strip()
+        }
+        answer_prompt = str(focus_gate_answer.get("question_prompt") or "").strip()
+        answer_option = str(focus_gate_answer.get("selected_option") or "").strip()
+        return answer_prompt == prior_prompt and answer_option in prior_options
+
+    def _execute_focus_gate_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        role_cfg: RoleConfig,
+        gate_path: str,
+        focus_gate_answer: dict[str, Any] | None,
+        prior_focus_decision: dict[str, Any] | None,
+        record_stage: bool,
+        record_workspace_policy_check: bool,
+    ) -> ProviderRun:
+        prompt = build_focus_gate_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            capture_git_snapshot(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            ),
+            contract,
+            gate_path=gate_path,
+            focus_gate_answer=focus_gate_answer,
+            prior_focus_decision=prior_focus_decision,
+        )
+        return self._run_agent_stage(
+            "focus_gate",
+            role_cfg.provider,
+            prompt,
+            focus_gate_output_schema(),
+            role_cfg,
+            semantic_context={"contract": contract},
+            record_stage=record_stage,
+            record_workspace_policy_check=record_workspace_policy_check,
+        )
+
+    def _run_focus_gate(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        role_cfg: RoleConfig,
+    ) -> dict[str, Any]:
+        focus_gate_answer = self._focus_gate_answer_payload()
+        if focus_gate_answer is not None:
+            probe_run = self._execute_focus_gate_stage(
+                contract=contract,
+                role_cfg=role_cfg,
+                gate_path="deliberate",
+                focus_gate_answer=None,
+                prior_focus_decision=None,
+                record_stage=False,
+                record_workspace_policy_check=False,
+            )
+            if not probe_run.ok:
+                recorded_probe_run = self._execute_focus_gate_stage(
+                    contract=contract,
+                    role_cfg=role_cfg,
+                    gate_path="deliberate",
+                    focus_gate_answer=None,
+                    prior_focus_decision=None,
+                    record_stage=True,
+                    record_workspace_policy_check=True,
+                )
+                return {"kind": "failed", "run": recorded_probe_run}
+            probe_decision = probe_run.structured_output or {}
+            if (
+                str(probe_decision.get("decision_state") or "").strip()
+                == "clarification_requested"
+                and self._focus_gate_answer_matches(
+                    probe_decision=probe_decision,
+                    focus_gate_answer=focus_gate_answer,
+                )
+            ):
+                adjudicate_run = self._execute_focus_gate_stage(
+                    contract=contract,
+                    role_cfg=role_cfg,
+                    gate_path="adjudicate",
+                    focus_gate_answer=focus_gate_answer,
+                    prior_focus_decision=probe_decision,
+                    record_stage=True,
+                    record_workspace_policy_check=True,
+                )
+                if not adjudicate_run.ok:
+                    return {"kind": "failed", "run": adjudicate_run}
+                adjudicate_decision = adjudicate_run.structured_output or {}
+                if str(adjudicate_decision.get("decision_state") or "").strip() in {
+                    "clarification_requested",
+                    "no_viable_focus",
+                }:
+                    return {
+                        "kind": "blocked",
+                        "outcome": self._build_focus_gate_blocked_outcome(
+                            contract=contract,
+                            focus_decision=adjudicate_decision,
+                        ),
+                    }
+                return {"kind": "selected", "focus_decision": adjudicate_decision}
+
+            deliberate_run = self._execute_focus_gate_stage(
+                contract=contract,
+                role_cfg=role_cfg,
+                gate_path="deliberate",
+                focus_gate_answer=None,
+                prior_focus_decision=None,
+                record_stage=True,
+                record_workspace_policy_check=True,
+            )
+            if not deliberate_run.ok:
+                return {"kind": "failed", "run": deliberate_run}
+            deliberate_decision = deliberate_run.structured_output or {}
+            if str(deliberate_decision.get("decision_state") or "").strip() in {
+                "clarification_requested",
+                "no_viable_focus",
+            }:
+                return {
+                    "kind": "blocked",
+                    "outcome": self._build_focus_gate_blocked_outcome(
+                        contract=contract,
+                        focus_decision=deliberate_decision,
+                    ),
+                }
+            return {"kind": "selected", "focus_decision": deliberate_decision}
+
+        focus_gate_run = self._execute_focus_gate_stage(
+            contract=contract,
+            role_cfg=role_cfg,
+            gate_path=contract.focus_gate.default_path,
+            focus_gate_answer=None,
+            prior_focus_decision=None,
+            record_stage=True,
+            record_workspace_policy_check=True,
+        )
+        if not focus_gate_run.ok:
+            return {"kind": "failed", "run": focus_gate_run}
+        focus_decision = focus_gate_run.structured_output or {}
+        if str(focus_decision.get("decision_state") or "").strip() in {
+            "clarification_requested",
+            "no_viable_focus",
+        }:
+            return {
+                "kind": "blocked",
+                "outcome": self._build_focus_gate_blocked_outcome(
+                    contract=contract,
+                    focus_decision=focus_decision,
+                ),
+            }
+        return {"kind": "selected", "focus_decision": focus_decision}
 
     def _emit_task_strategy_warnings(self) -> None:
         if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
