@@ -160,6 +160,17 @@ class DiscoveryPolicy:
 
 
 @dataclass
+class FocusGatePolicy:
+    enabled: bool = False
+    default_path: Literal["adjudicate", "deliberate"] = "adjudicate"
+    allowed_focus_types: list[Literal["seam"]] = field(default_factory=lambda: ["seam"])
+    clarification_policy: Literal["block_for_clarification"] = "block_for_clarification"
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass
 class AnalysisReviewContract:
     contract_version: str
     strategy_kind: str
@@ -171,6 +182,7 @@ class AnalysisReviewContract:
     required_sections: RequiredSectionPolicy = field(default_factory=RequiredSectionPolicy)
     bounded_review: BoundedReviewPolicy = field(default_factory=BoundedReviewPolicy)
     trust_review: TrustReviewPolicy = field(default_factory=TrustReviewPolicy)
+    focus_gate: FocusGatePolicy = field(default_factory=FocusGatePolicy)
     require_issue_ledger: bool = True
     require_recommendation_reviews: bool = True
     confidence_rubric_version: str = "analysis_review_confidence_v1"
@@ -192,6 +204,7 @@ class AnalysisReviewContract:
             "required_sections": self.required_sections.to_dict(),
             "bounded_review": self.bounded_review.to_dict(),
             "trust_review": self.trust_review.to_dict(),
+            "focus_gate": self.focus_gate.to_dict(),
             "require_issue_ledger": self.require_issue_ledger,
             "require_recommendation_reviews": self.require_recommendation_reviews,
             "confidence_rubric_version": self.confidence_rubric_version,
@@ -207,6 +220,19 @@ def build_analysis_review_contract(
 ) -> AnalysisReviewContract:
     mode = derive_analysis_review_mode(strategy.kind)
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
+    focus_gate = FocusGatePolicy()
+    if strategy.focus_gate is not None:
+        if strategy.focus_gate.enabled is not None:
+            focus_gate.enabled = strategy.focus_gate.enabled
+        if strategy.focus_gate.default_path is not None:
+            focus_gate.default_path = strategy.focus_gate.default_path
+    if task.focus_gate is not None:
+        if task.focus_gate.enabled is not None:
+            focus_gate.enabled = task.focus_gate.enabled
+        if task.focus_gate.allowed_focus_types is not None:
+            focus_gate.allowed_focus_types = list(task.focus_gate.allowed_focus_types)
+        if task.focus_gate.clarification_policy is not None:
+            focus_gate.clarification_policy = task.focus_gate.clarification_policy
     return AnalysisReviewContract(
         contract_version="analysis_review_v1_contract_v9",
         strategy_kind=str(strategy.kind),
@@ -243,6 +269,7 @@ def build_analysis_review_contract(
             downgrade_on_inferred_acceptance=(mode == "trust"),
             late_auditor_medium_or_higher_policy=("warn" if mode == "trust" else "error"),
         ),
+        focus_gate=focus_gate,
         require_issue_ledger=True,
         require_recommendation_reviews=True,
     )
