@@ -329,8 +329,13 @@ FOCUS_GATE_CANDIDATE_SCHEMA: dict[str, Any] = {
     "properties": {
         "focus_id": {"type": "string"},
         "focus_summary": {"type": "string"},
+        "candidate_paths": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
     },
-    "required": ["focus_id", "focus_summary"],
+    "required": ["focus_id", "focus_summary", "candidate_paths"],
     "additionalProperties": False,
 }
 
@@ -617,6 +622,10 @@ def focus_gate_output_schema() -> dict[str, Any]:
                     {"type": "null"},
                 ]
             },
+            "selected_focus_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "confidence_band": {
                 "type": "string",
@@ -639,6 +648,7 @@ def focus_gate_output_schema() -> dict[str, Any]:
             "decision_state",
             "selected_focus_id",
             "selected_focus_summary",
+            "selected_focus_paths",
             "confidence",
             "confidence_band",
             "candidates",

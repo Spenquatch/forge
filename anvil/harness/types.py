@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import posixpath
+import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Optional
-
 
 VALID_TASK_KINDS = {"patch", "analysis_review"}
 ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
@@ -26,6 +28,9 @@ VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
 VALID_FOCUS_GATE_DEFAULT_PATHS = {"adjudicate", "deliberate"}
 VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {"block_for_clarification"}
 M1_ALLOWED_FOCUS_TYPES = ["seam"]
+_WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(
+    r"^(?P<path>.+?):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
+)
 
 
 def is_analysis_review_strategy_kind(strategy_kind: str) -> bool:
@@ -49,6 +54,80 @@ def _validate_m1_allowed_focus_types(value: Any, *, field_name: str) -> list[str
     if normalized != M1_ALLOWED_FOCUS_TYPES:
         raise ValueError(f"{field_name} must be exactly {M1_ALLOWED_FOCUS_TYPES!r}.")
     return normalized
+
+
+def strip_workspace_ref_location_suffix(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or "://" in text:
+        return text
+    match = _WORKSPACE_REF_LOCATION_SUFFIX_RE.match(text)
+    if not match:
+        return text
+    return match.group("path")
+
+
+def normalize_workspace_ref(value: Any, *, workspace_root: str | Path | None = None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "://" in text:
+        return text
+    normalized = strip_workspace_ref_location_suffix(text).replace("\\", "/")
+    candidate = Path(normalized)
+    if candidate.is_absolute():
+        root = Path(workspace_root or Path.cwd()).resolve(strict=False)
+        try:
+            normalized = candidate.resolve(strict=False).relative_to(root).as_posix()
+        except ValueError:
+            if normalized.startswith("/.") and not normalized.startswith("//"):
+                normalized = posixpath.normpath(normalized.lstrip("/"))
+                if normalized == ".":
+                    return ""
+                while normalized.startswith("./"):
+                    normalized = normalized[2:]
+                return normalized
+            return candidate.as_posix()
+    else:
+        normalized = posixpath.normpath(normalized)
+        if normalized == ".":
+            return ""
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def normalize_workspace_ref_list(
+    values: Any, *, workspace_root: str | Path | None = None
+) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        value = normalize_workspace_ref(item, workspace_root=workspace_root)
+        if value:
+            normalized.append(value)
+    return normalized
+
+
+def dedupe_preserving_order(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def canonical_workspace_ref_list(
+    values: Any, *, workspace_root: str | Path | None = None
+) -> list[str]:
+    return dedupe_preserving_order(
+        normalize_workspace_ref_list(values, workspace_root=workspace_root)
+    )
 
 
 @dataclass

@@ -7,9 +7,12 @@ stage behavior. Changes here should be reviewed in PRs together with the prompt,
 runner, schema, and test updates that enforce the new contract.
 """
 
+import hashlib
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Literal
 
+from .files import slugify
 from .types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 ConfidenceAssessment = Literal["too_low", "well_calibrated", "too_high", "not_assessed"]
@@ -63,6 +66,20 @@ RECOMMENDATION_ADMISSIBILITY_REASON_VALUES: tuple[RecommendationAdmissibilityRea
     "not_accepted",
     "topic_blocked",
 )
+
+
+def canonical_seam_id_for_paths(paths: list[str]) -> str:
+    normalized_paths = sorted({str(path).strip() for path in paths if str(path).strip()})
+    if not normalized_paths:
+        return "seam-empty"
+
+    stem_prefix = slugify("-".join(Path(path).stem for path in normalized_paths))[
+        :48
+    ].strip("-._")
+    digest = hashlib.sha1("\n".join(normalized_paths).encode("utf-8")).hexdigest()[:12]
+    if stem_prefix:
+        return f"{stem_prefix}-{digest}"
+    return f"seam-{digest}"
 
 
 @dataclass
@@ -233,6 +250,16 @@ def build_analysis_review_contract(
             focus_gate.allowed_focus_types = list(task.focus_gate.allowed_focus_types)
         if task.focus_gate.clarification_policy is not None:
             focus_gate.clarification_policy = task.focus_gate.clarification_policy
+    if task.focus_gate_answer is not None:
+        if not focus_gate.enabled:
+            raise ValueError(
+                "focus_gate_answer requires focus_gate.enabled=true in the resolved analysis-review contract."
+            )
+        if focus_gate.default_path != "deliberate":
+            raise ValueError(
+                "focus_gate_answer is only allowed when the resolved focus gate path is deliberate; "
+                f"resolved default_path={focus_gate.default_path}."
+            )
     return AnalysisReviewContract(
         contract_version="analysis_review_v1_contract_v9",
         strategy_kind=str(strategy.kind),

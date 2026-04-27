@@ -4,7 +4,10 @@ import copy
 import json
 from pathlib import Path
 
-from anvil.harness.contracts import build_analysis_review_contract
+from anvil.harness.contracts import (
+    build_analysis_review_contract,
+    canonical_seam_id_for_paths,
+)
 from anvil.harness.schemas import focus_gate_output_schema
 from anvil.harness.semantic_validation import (
     validate_analysis_output_payload,
@@ -12,7 +15,7 @@ from anvil.harness.semantic_validation import (
     validate_focus_decision_payload,
     validate_stage_output,
 )
-from anvil.harness.types import StrategyConfig, TaskSpec
+from anvil.harness.types import StrategyConfig, TaskSpec, canonical_workspace_ref_list
 
 _FIXTURE_PATH = Path("tests/fixtures/harness/analysis_review_semantic_cases.json")
 
@@ -99,17 +102,18 @@ def _with_default_seams(payload: dict) -> dict:
     normalized.setdefault(
         "primary_seam",
         {
-            "seam_id": "release-watch-primary",
+            "seam_id": canonical_seam_id_for_paths([primary_path]),
             "summary": "Primary release-watch workflow seam.",
             "why_primary": "It is the nearest governing surface for the review.",
             "paths": [primary_path],
         },
     )
+    secondary_seam_id = canonical_seam_id_for_paths([secondary_path])
     normalized.setdefault(
         "secondary_seams_considered",
         [
             {
-                "seam_id": "release-watch-secondary",
+                "seam_id": secondary_seam_id,
                 "summary": "Sibling workflow parity seam.",
                 "why_not_primary": "It is relevant for parity but not the governing seam.",
                 "paths": [secondary_path],
@@ -129,7 +133,7 @@ def _with_default_seams(payload: dict) -> dict:
             recommendation["seam_id"] = normalized["primary_seam"]["seam_id"]
             recommendation["seam_expansion_reason"] = ""
         else:
-            recommendation["seam_id"] = normalized["secondary_seams_considered"][0]["seam_id"]
+            recommendation["seam_id"] = secondary_seam_id
             recommendation["seam_expansion_reason"] = (
                 "Cross-check sibling workflow behavior before broadening the review."
             )
@@ -143,49 +147,74 @@ def _analysis_output_payload(name: str) -> dict:
 def _focus_decision_payload(
     decision_state: str = "selected",
 ) -> dict:
+    release_paths = canonical_workspace_ref_list(
+        [
+            "./.github/workflows/release.yml",
+            ".github/workflows/release.yml",
+        ]
+    )
+    nightly_paths = canonical_workspace_ref_list(
+        [
+            ".github/workflows/nightly.yml",
+            "./.github/workflows/nightly.yml",
+        ]
+    )
+    release_focus_id = canonical_seam_id_for_paths(release_paths)
+    nightly_focus_id = canonical_seam_id_for_paths(nightly_paths)
     payload = {
         "gate_path": "adjudicate",
         "focus_type": "seam",
         "decision_state": decision_state,
-        "selected_focus_id": "release-trigger-automation",
+        "selected_focus_id": release_focus_id,
         "selected_focus_summary": "Release trigger workflows are the governing seam.",
+        "selected_focus_paths": [
+            "./.github/workflows/release.yml",
+            ".github/workflows/release.yml",
+        ],
         "confidence": 0.86,
         "confidence_band": "high",
         "candidates": [
             {
-                "focus_id": "release-trigger-automation",
+                "focus_id": release_focus_id,
                 "focus_summary": "Release trigger workflows",
+                "candidate_paths": [
+                    "./.github/workflows/release.yml",
+                    ".github/workflows/release.yml",
+                ],
             },
             {
-                "focus_id": "nightly-parity",
+                "focus_id": nightly_focus_id,
                 "focus_summary": "Nightly workflow parity",
+                "candidate_paths": [
+                    ".github/workflows/nightly.yml",
+                    "./.github/workflows/nightly.yml",
+                ],
             },
         ],
         "question": {"prompt": "", "options": []},
         "warnings": [],
         "adapter_plan": {
-            "primary_focus_id": "release-trigger-automation",
-            "secondary_focus_ids": ["nightly-parity"],
+            "primary_focus_id": release_focus_id,
+            "secondary_focus_ids": [nightly_focus_id],
         },
     }
     if decision_state == "clarification_requested":
         payload["gate_path"] = "deliberate"
         payload["selected_focus_id"] = None
         payload["selected_focus_summary"] = None
+        payload["selected_focus_paths"] = []
         payload["question"] = {
             "prompt": "Which seam should this run prioritize?",
-            "options": ["release-trigger-automation", "nightly-parity"],
+            "options": [release_focus_id, nightly_focus_id],
         }
         payload["adapter_plan"] = {
             "primary_focus_id": None,
-            "secondary_focus_ids": [
-                "release-trigger-automation",
-                "nightly-parity",
-            ],
+            "secondary_focus_ids": [release_focus_id, nightly_focus_id],
         }
     elif decision_state == "no_viable_focus":
         payload["selected_focus_id"] = None
         payload["selected_focus_summary"] = None
+        payload["selected_focus_paths"] = []
         payload["candidates"] = []
         payload["adapter_plan"] = {
             "primary_focus_id": None,
@@ -209,10 +238,15 @@ def test_focus_gate_output_schema_exposes_v9_focus_decision_surface():
     assert "adapter_plan" in schema["required"]
     assert "question" in schema["required"]
     assert "candidates" in schema["required"]
+    assert "selected_focus_paths" in schema["required"]
+    assert "candidate_paths" in schema["properties"]["candidates"]["items"]["required"]
 
 
 def test_focus_decision_semantic_validation_accepts_selected_payload():
-    result = validate_focus_decision_payload(_focus_decision_payload("selected"))
+    result = validate_focus_decision_payload(
+        _focus_decision_payload("selected"),
+        workspace_paths=_workspace_paths(),
+    )
 
     assert result.ok is True
     assert result.errors == []
@@ -223,11 +257,14 @@ def test_focus_decision_semantic_validation_rejects_selected_rule_violations():
     payload["selected_focus_id"] = None
     payload["question"] = {
         "prompt": "Which seam should this run prioritize?",
-        "options": ["release-trigger-automation"],
+        "options": ["mismatched-focus-id"],
     }
     payload["adapter_plan"]["primary_focus_id"] = None
 
-    result = validate_focus_decision_payload(payload)
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
 
     assert result.ok is False
     assert "selected_focus_id is required when decision_state=selected." in result.errors
@@ -243,33 +280,34 @@ def test_focus_decision_semantic_validation_rejects_selected_rule_violations():
 
 def test_focus_decision_semantic_validation_rejects_clarification_rule_violations():
     payload = _focus_decision_payload("clarification_requested")
-    payload["candidates"] = []
-    payload["question"] = {"prompt": "", "options": []}
+    payload["question"] = {"prompt": "", "options": ["unknown-focus"]}
     payload["adapter_plan"]["secondary_focus_ids"] = ["unknown-focus"]
 
-    result = validate_focus_decision_payload(payload)
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
 
     assert result.ok is False
     assert (
-        "candidates must be non-empty when decision_state=clarification_requested."
-        in result.errors
-    )
-    assert (
         "question.prompt is required when decision_state=clarification_requested."
-        in result.errors
-    )
-    assert (
-        "question.options must be non-empty when decision_state=clarification_requested."
         in result.errors
     )
     assert (
         "adapter_plan.secondary_focus_ids must be a subset of candidates: unknown-focus"
         in result.errors
     )
+    assert (
+        "question.options must equal candidate focus IDs in order when decision_state=clarification_requested."
+        in result.errors
+    )
 
 
 def test_focus_decision_semantic_validation_accepts_no_viable_focus_with_empty_candidates():
-    result = validate_focus_decision_payload(_focus_decision_payload("no_viable_focus"))
+    result = validate_focus_decision_payload(
+        _focus_decision_payload("no_viable_focus"),
+        workspace_paths=_workspace_paths(),
+    )
 
     assert result.ok is True
     assert result.errors == []
@@ -284,10 +322,55 @@ def test_validate_stage_output_supports_focus_gate_role():
         payload=_focus_decision_payload("selected"),
         task=task,
         contract=contract,
+        workspace_paths=_workspace_paths(),
     )
 
     assert result.ok is True
     assert result.errors == []
+
+
+def test_focus_decision_semantic_validation_rejects_expected_gate_path_mismatch():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(
+        task,
+        _strategy(
+            kind="analysis_review_bounded_v1",
+        ),
+    )
+    contract.focus_gate.default_path = "deliberate"
+    payload = _focus_decision_payload("selected")
+
+    result = validate_stage_output(
+        role_name="focus_gate",
+        payload=payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "gate_path must match expected_gate_path=deliberate; got adjudicate."
+        in result.errors
+    )
+
+
+def test_focus_decision_semantic_validation_rejects_noncanonical_selected_focus_id():
+    payload = _focus_decision_payload("selected")
+    payload["selected_focus_id"] = "release-trigger-automation"
+
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert any(
+        error.startswith(
+            "selected_focus_id must equal the canonical seam ID derived from selected_focus_paths:"
+        )
+        for error in result.errors
+    )
 
 
 def test_analysis_output_semantic_validation_accepts_valid_payload():
@@ -312,6 +395,7 @@ def test_analysis_output_semantic_validation_rejects_selected_focus_drift():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
     payload = _analysis_output_payload("analysis_output_valid")
+    actual_primary_seam_id = payload["primary_seam"]["seam_id"]
 
     result = validate_stage_output(
         role_name="proposer",
@@ -324,7 +408,7 @@ def test_analysis_output_semantic_validation_rejects_selected_focus_drift():
 
     assert result.ok is False
     assert (
-        "primary_seam.seam_id drifted from the selected focus gate seam: expected gate-selected-seam, got release-watch-primary."
+        f"primary_seam.seam_id drifted from the selected focus gate seam: expected gate-selected-seam, got {actual_primary_seam_id}."
         in result.errors
     )
 
@@ -333,6 +417,7 @@ def test_analysis_output_semantic_validation_accepts_matching_selected_focus_id(
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
     payload = _analysis_output_payload("analysis_output_valid")
+    expected_primary_seam_id = payload["primary_seam"]["seam_id"]
 
     result = validate_stage_output(
         role_name="reviser_round_1",
@@ -340,13 +425,41 @@ def test_analysis_output_semantic_validation_accepts_matching_selected_focus_id(
         task=task,
         contract=contract,
         workspace_paths=_workspace_paths(),
-        expected_primary_seam_id="release-watch-primary",
+        expected_primary_seam_id=expected_primary_seam_id,
+        expected_primary_seam_paths=[
+            "./.github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/codex-cli-release-watch.yml",
+        ],
         open_issue_ids=[],
         expected_open_topic_ids=[],
     )
 
     assert result.ok is True
     assert result.errors == []
+
+
+def test_analysis_output_semantic_validation_rejects_selected_focus_path_drift_after_normalization():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(task, _strategy())
+    payload = _analysis_output_payload("analysis_output_valid")
+    expected_primary_seam_id = payload["primary_seam"]["seam_id"]
+
+    result = validate_stage_output(
+        role_name="proposer",
+        payload=payload,
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        expected_primary_seam_id=expected_primary_seam_id,
+        expected_primary_seam_paths=["./.github/workflows/release.yml"],
+    )
+
+    assert result.ok is False
+    assert (
+        "primary_seam.paths drifted from the selected focus gate paths after normalization: "
+        "expected ['.github/workflows/release.yml'], got ['.github/workflows/codex-cli-release-watch.yml']."
+        in result.errors
+    )
 
 
 def test_analysis_output_semantic_validation_accepts_empty_none_reason_when_items_exist():

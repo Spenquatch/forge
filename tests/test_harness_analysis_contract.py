@@ -301,6 +301,32 @@ def test_task_focus_gate_answer_requires_non_empty_prompt_and_selection(
         _task(focus_gate_answer=payload)
 
 
+def test_build_analysis_review_contract_rejects_adjudicate_focus_gate_answer_before_runner():
+    task = _task(
+        focus_gate={"enabled": True, "allowed_focus_types": ["seam"]},
+        focus_gate_answer={
+            "question_prompt": "Which seam should this run prioritize?",
+            "selected_option": "release-trigger-automation",
+            "freeform_answer": "",
+        },
+    )
+    strategy = _strategy(
+        focus_gate={
+            "enabled": True,
+            "default_path": "adjudicate",
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "focus_gate_answer is only allowed when the resolved focus gate path is deliberate; "
+            "resolved default_path=adjudicate\\."
+        ),
+    ):
+        build_analysis_review_contract(task, strategy)
+
+
 @pytest.mark.parametrize(
     ("task_focus_gate", "strategy_focus_gate", "message"),
     [

@@ -10,8 +10,12 @@ per-stage issue-ledger coverage, and required analysis sections.
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .contracts import AnalysisReviewContract, default_blocking_class_for_kind
-from .types import TaskSpec
+from .contracts import (
+    AnalysisReviewContract,
+    canonical_seam_id_for_paths,
+    default_blocking_class_for_kind,
+)
+from .types import TaskSpec, canonical_workspace_ref_list
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
 
@@ -55,6 +59,8 @@ def validate_stage_output(
     historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
     expected_primary_seam_id: str | None = None,
+    expected_primary_seam_paths: Iterable[str] | None = None,
+    expected_gate_path: str | None = None,
     payload_provenance: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
@@ -66,7 +72,13 @@ def validate_stage_output(
 
     role = canonical_stage_role(role_name)
     if role == "focus_gate":
-        result.extend(validate_focus_decision_payload(payload))
+        result.extend(
+            validate_focus_decision_payload(
+                payload,
+                workspace_paths=workspace_paths,
+                expected_gate_path=expected_gate_path or contract.focus_gate.default_path,
+            )
+        )
     elif role in {"proposer", "reviser"}:
         result.extend(
             validate_analysis_output_payload(
@@ -79,6 +91,7 @@ def validate_stage_output(
                 require_issue_resolution_map=(role == "reviser"),
                 require_topic_resolution_map=(role == "reviser"),
                 expected_primary_seam_id=expected_primary_seam_id,
+                expected_primary_seam_paths=expected_primary_seam_paths,
             )
         )
     elif role in {"critic", "auditor"}:
@@ -112,13 +125,12 @@ def validate_analysis_output_payload(
     require_issue_resolution_map: bool = False,
     require_topic_resolution_map: bool = False,
     expected_primary_seam_id: str | None = None,
+    expected_primary_seam_paths: Iterable[str] | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     review_requirements = task.review_requirements
     bounded_review = contract.bounded_review
-    workspace_path_set = {
-        str(item).strip() for item in (workspace_paths or []) if str(item).strip()
-    }
+    workspace_path_set = _workspace_path_set(workspace_paths)
     recommendations = payload.get("recommendations") or []
     if not isinstance(recommendations, list):
         result.errors.append("recommendations must be a list.")
@@ -130,7 +142,9 @@ def validate_analysis_output_payload(
         )
 
     files_reviewed = payload.get("files_reviewed") or []
-    file_items = _non_empty_strings(files_reviewed if isinstance(files_reviewed, list) else [])
+    file_items = _canonical_workspace_paths(
+        files_reviewed if isinstance(files_reviewed, list) else []
+    )
     if len(file_items) < int(contract.required_sections.minimum_files_reviewed or 0):
         result.errors.append(
             f"files_reviewed must contain at least {contract.required_sections.minimum_files_reviewed} non-empty path(s)."
@@ -148,7 +162,7 @@ def validate_analysis_output_payload(
         scope_escapes=payload.get("scope_escapes"),
         require_reason=bounded_review.require_scope_escape_justification,
     )
-    primary_seam_id, declared_secondary_seam_ids = _validate_declared_seams(
+    primary_seam_id, primary_seam_paths, declared_secondary_seam_ids = _validate_declared_seams(
         result,
         payload=payload,
         files_reviewed=files_reviewed_set,
@@ -156,11 +170,13 @@ def validate_analysis_output_payload(
         contract=contract,
         scope_escapes=scope_escapes,
     )
-    if expected_primary_seam_id is not None:
+    if expected_primary_seam_id is not None or expected_primary_seam_paths is not None:
         _validate_expected_primary_seam_id(
             result,
             actual_primary_seam_id=primary_seam_id,
             expected_primary_seam_id=expected_primary_seam_id,
+            actual_primary_seam_paths=primary_seam_paths,
+            expected_primary_seam_paths=expected_primary_seam_paths,
         )
     declared_seam_ids = ({primary_seam_id} if primary_seam_id else set()) | declared_secondary_seam_ids
     primary_bound_recommendation_count = 0
@@ -174,7 +190,9 @@ def validate_analysis_output_payload(
         if review_requirements.require_priority and not str(item.get("priority") or "").strip():
             result.errors.append(f"recommendations[{index}] is missing priority.")
         evidence = item.get("evidence") or []
-        evidence_items = _non_empty_strings(evidence if isinstance(evidence, list) else [])
+        evidence_items = _canonical_workspace_paths(
+            evidence if isinstance(evidence, list) else []
+        )
         if review_requirements.require_evidence_per_recommendation:
             if not evidence_items:
                 result.errors.append(
@@ -290,15 +308,29 @@ def validate_analysis_output_payload(
 
 def validate_focus_decision_payload(
     payload: dict[str, Any] | None,
+    *,
+    workspace_paths: Iterable[str] | None = None,
+    expected_gate_path: str | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     if not isinstance(payload, dict) or not payload:
         result.errors.append("Structured output is empty, so semantic validation could not run.")
         return result
 
+    workspace_path_set = _workspace_path_set(workspace_paths)
     gate_path = str(payload.get("gate_path") or "").strip()
     if gate_path not in {"adjudicate", "deliberate"}:
         result.errors.append("gate_path must be exactly 'adjudicate' or 'deliberate'.")
+    normalized_expected_gate_path = str(expected_gate_path or "").strip().lower()
+    if normalized_expected_gate_path:
+        if normalized_expected_gate_path not in {"adjudicate", "deliberate"}:
+            result.errors.append(
+                "expected_gate_path must be exactly 'adjudicate' or 'deliberate' when provided."
+            )
+        elif gate_path and gate_path != normalized_expected_gate_path:
+            result.errors.append(
+                f"gate_path must match expected_gate_path={normalized_expected_gate_path}; got {gate_path or '(missing)'}."
+            )
 
     focus_type = str(payload.get("focus_type") or "").strip()
     if focus_type != "seam":
@@ -315,12 +347,23 @@ def validate_focus_decision_payload(
     selected_focus_summary = payload.get("selected_focus_summary")
     selected_focus_id_text = _nullable_non_empty_string(selected_focus_id)
     selected_focus_summary_text = _nullable_non_empty_string(selected_focus_summary)
+    selected_focus_paths = _canonical_workspace_paths(payload.get("selected_focus_paths"))
+    unknown_selected_focus_paths = sorted(set(selected_focus_paths) - workspace_path_set)
+    if unknown_selected_focus_paths:
+        result.errors.append(
+            "selected_focus_paths contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_selected_focus_paths)
+        )
 
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):
         result.errors.append("candidates must be a list.")
         candidates = []
-    candidate_ids = _validated_focus_candidate_ids(result, candidates=candidates)
+    candidate_ids, candidate_paths_by_id = _validated_focus_candidates(
+        result,
+        candidates=candidates,
+        workspace_paths=workspace_path_set,
+    )
 
     question = payload.get("question")
     question_is_canonical_empty = (
@@ -348,6 +391,10 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "selected_focus_summary is required when decision_state=selected."
             )
+        if not selected_focus_paths:
+            result.errors.append(
+                "selected_focus_paths must be non-empty when decision_state=selected."
+            )
         if not candidate_ids:
             result.errors.append(
                 "candidates must be non-empty when decision_state=selected."
@@ -355,6 +402,25 @@ def validate_focus_decision_payload(
         if selected_focus_id_text and selected_focus_id_text not in candidate_ids:
             result.errors.append(
                 "selected_focus_id must appear in candidates when decision_state=selected."
+            )
+        expected_selected_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
+        if (
+            selected_focus_id_text
+            and selected_focus_paths
+            and selected_focus_id_text != expected_selected_focus_id
+        ):
+            result.errors.append(
+                "selected_focus_id must equal the canonical seam ID derived from selected_focus_paths: "
+                f"expected {expected_selected_focus_id}, got {selected_focus_id_text}."
+            )
+        selected_candidate_paths = candidate_paths_by_id.get(selected_focus_id_text or "")
+        if (
+            selected_focus_id_text
+            and selected_candidate_paths is not None
+            and selected_focus_paths != selected_candidate_paths
+        ):
+            result.errors.append(
+                "selected_focus_paths must equal the selected candidate's candidate_paths after normalization."
             )
         if not adapter_primary_focus_id or adapter_primary_focus_id != selected_focus_id_text:
             result.errors.append(
@@ -373,6 +439,10 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "adapter_plan.primary_focus_id must be null when decision_state is not selected."
             )
+        if selected_focus_paths:
+            result.errors.append(
+                "selected_focus_paths must serialize as [] when decision_state is not selected."
+            )
 
     if decision_state == "clarification_requested":
         if not candidate_ids:
@@ -386,6 +456,10 @@ def validate_focus_decision_payload(
         if not question_options:
             result.errors.append(
                 "question.options must be non-empty when decision_state=clarification_requested."
+            )
+        if question_options and question_options != candidate_ids:
+            result.errors.append(
+                "question.options must equal candidate focus IDs in order when decision_state=clarification_requested."
             )
     elif decision_state == "no_viable_focus":
         if candidate_ids:
@@ -428,9 +502,7 @@ def validate_analysis_review_payload(
     result = SemanticValidationResult()
     del task  # reserved for future task-specific review checks
     bounded_review = contract.bounded_review
-    workspace_path_set = {
-        str(item).strip() for item in (workspace_paths or []) if str(item).strip()
-    }
+    workspace_path_set = _workspace_path_set(workspace_paths)
 
     issues = payload.get("issues") or []
     issue_id_order: list[str] = []
@@ -522,7 +594,9 @@ def validate_analysis_review_payload(
             result.errors.append(overflow_message)
 
     files_reviewed = payload.get("files_reviewed") or []
-    review_file_items = _non_empty_strings(files_reviewed if isinstance(files_reviewed, list) else [])
+    review_file_items = _canonical_workspace_paths(
+        files_reviewed if isinstance(files_reviewed, list) else []
+    )
     if len(review_file_items) < int(contract.required_sections.minimum_files_reviewed or 0):
         result.errors.append(
             f"files_reviewed must contain at least {contract.required_sections.minimum_files_reviewed} non-empty path(s)."
@@ -835,8 +909,10 @@ def _validate_review_surface(
     bounded_review = contract.bounded_review
     must_check_files = review_surface.get("must_check_files") or []
     optional_check_files = review_surface.get("optional_check_files") or []
-    must_check_items = _non_empty_strings(must_check_files if isinstance(must_check_files, list) else [])
-    optional_check_items = _non_empty_strings(
+    must_check_items = _canonical_workspace_paths(
+        must_check_files if isinstance(must_check_files, list) else []
+    )
+    optional_check_items = _canonical_workspace_paths(
         optional_check_files if isinstance(optional_check_files, list) else []
     )
 
@@ -904,8 +980,8 @@ def _validate_declared_seams(
     workspace_paths: set[str],
     contract: AnalysisReviewContract,
     scope_escapes: list[dict[str, str]],
-) -> tuple[str | None, set[str]]:
-    primary_seam_id = _validate_seam_entry(
+) -> tuple[str | None, list[str], set[str]]:
+    primary_seam_id, primary_seam_paths = _validate_seam_entry(
         result,
         seam=payload.get("primary_seam"),
         field_name="primary_seam",
@@ -916,11 +992,11 @@ def _validate_declared_seams(
     secondary_seams = payload.get("secondary_seams_considered")
     if not isinstance(secondary_seams, list):
         result.errors.append("secondary_seams_considered must be a list.")
-        return primary_seam_id, set()
+        return primary_seam_id, primary_seam_paths, set()
 
     secondary_seam_ids: set[str] = set()
     for index, item in enumerate(secondary_seams, start=1):
-        seam_id = _validate_seam_entry(
+        seam_id, _ = _validate_seam_entry(
             result,
             seam=item,
             field_name=f"secondary_seams_considered[{index}]",
@@ -949,7 +1025,7 @@ def _validate_declared_seams(
         scope_escapes=scope_escapes,
     )
 
-    return primary_seam_id, secondary_seam_ids
+    return primary_seam_id, primary_seam_paths, secondary_seam_ids
 
 
 def _validate_scope_escapes(
@@ -969,7 +1045,8 @@ def _validate_scope_escapes(
         if not isinstance(item, dict):
             result.errors.append(f"scope_escapes[{index}] must be an object.")
             continue
-        path = str(item.get("path") or "").strip()
+        normalized_paths = _canonical_workspace_paths([item.get("path")])
+        path = normalized_paths[0] if normalized_paths else ""
         reason = str(item.get("reason") or "").strip()
         if require_reason and not reason:
             result.errors.append(
@@ -1007,7 +1084,7 @@ def _validate_bounded_secondary_seam_overflow(
     third_seam_paths = set()
     if isinstance(third_seam, dict):
         third_seam_paths = set(
-            _non_empty_strings(
+            _canonical_workspace_paths(
                 third_seam.get("paths") if isinstance(third_seam.get("paths"), list) else []
             )
         )
@@ -1040,10 +1117,10 @@ def _validate_seam_entry(
     reason_field: str,
     files_reviewed: set[str],
     workspace_paths: set[str],
-) -> str | None:
+) -> tuple[str | None, list[str]]:
     if not isinstance(seam, dict):
         result.errors.append(f"{field_name} must be an object.")
-        return None
+        return None, []
 
     seam_id = str(seam.get("seam_id") or "").strip()
     if not seam_id:
@@ -1056,11 +1133,11 @@ def _validate_seam_entry(
     paths = seam.get("paths")
     if not isinstance(paths, list):
         result.errors.append(f"{field_name}.paths must be a list.")
-        return seam_id or None
-    path_items = _non_empty_strings(paths)
+        return seam_id or None, []
+    path_items = _canonical_workspace_paths(paths)
     if not path_items:
         result.errors.append(f"{field_name}.paths must contain at least one non-empty path.")
-        return seam_id or None
+        return seam_id or None, []
     missing_files = sorted(set(path_items) - files_reviewed)
     if missing_files:
         result.errors.append(
@@ -1072,23 +1149,29 @@ def _validate_seam_entry(
             f"{field_name}.paths contains path(s) not present in the workspace snapshot: "
             + ", ".join(unknown_files)
         )
-    return seam_id or None
+    return seam_id or None, path_items
 
 
 def _validate_expected_primary_seam_id(
     result: SemanticValidationResult,
     *,
     actual_primary_seam_id: str | None,
-    expected_primary_seam_id: str,
+    expected_primary_seam_id: str | None,
+    actual_primary_seam_paths: list[str],
+    expected_primary_seam_paths: Iterable[str] | None,
 ) -> None:
     expected = str(expected_primary_seam_id or "").strip()
-    if not expected:
-        return
     actual = str(actual_primary_seam_id or "").strip()
-    if actual != expected:
+    if expected and actual != expected:
         result.errors.append(
             "primary_seam.seam_id drifted from the selected focus gate seam: "
             f"expected {expected}, got {actual or '(missing)'}."
+        )
+    expected_paths = _canonical_workspace_paths(expected_primary_seam_paths)
+    if expected_paths and actual_primary_seam_paths != expected_paths:
+        result.errors.append(
+            "primary_seam.paths drifted from the selected focus gate paths after normalization: "
+            f"expected {expected_paths}, got {actual_primary_seam_paths}."
         )
 
 
@@ -1125,12 +1208,14 @@ def _validate_recommendation_seam_binding(
     return False
 
 
-def _validated_focus_candidate_ids(
+def _validated_focus_candidates(
     result: SemanticValidationResult,
     *,
     candidates: list[Any],
-) -> list[str]:
+    workspace_paths: set[str],
+) -> tuple[list[str], dict[str, list[str]]]:
     candidate_ids: list[str] = []
+    candidate_paths_by_id: dict[str, list[str]] = {}
     for index, item in enumerate(candidates, start=1):
         if not isinstance(item, dict):
             result.errors.append(f"candidates[{index}] must be an object.")
@@ -1142,7 +1227,25 @@ def _validated_focus_candidate_ids(
             continue
         if not focus_summary:
             result.errors.append(f"candidates[{index}].focus_summary must be non-empty.")
+        candidate_paths = _canonical_workspace_paths(item.get("candidate_paths"))
+        if not candidate_paths:
+            result.errors.append(
+                f"candidates[{index}].candidate_paths must contain at least one non-empty path."
+            )
+        unknown_candidate_paths = sorted(set(candidate_paths) - workspace_paths)
+        if unknown_candidate_paths:
+            result.errors.append(
+                f"candidates[{index}].candidate_paths contains path(s) not present in the workspace snapshot: "
+                + ", ".join(unknown_candidate_paths)
+            )
+        expected_focus_id = canonical_seam_id_for_paths(candidate_paths)
+        if candidate_paths and focus_id != expected_focus_id:
+            result.errors.append(
+                f"candidates[{index}].focus_id must equal the canonical seam ID derived from candidate_paths: "
+                f"expected {expected_focus_id}, got {focus_id}."
+            )
         candidate_ids.append(focus_id)
+        candidate_paths_by_id[focus_id] = candidate_paths
     duplicates = sorted(
         {focus_id for focus_id in candidate_ids if candidate_ids.count(focus_id) > 1}
     )
@@ -1150,7 +1253,7 @@ def _validated_focus_candidate_ids(
         result.errors.append(
             "candidates contains duplicate focus IDs: " + ", ".join(duplicates)
         )
-    return candidate_ids
+    return candidate_ids, candidate_paths_by_id
 
 
 def _validated_focus_question(
@@ -1222,17 +1325,17 @@ def _validate_trust_recommendation_metadata(
     workspace_paths: set[str],
     contract: AnalysisReviewContract,
 ) -> None:
-    verified_items = _non_empty_strings(
+    verified_items = _canonical_workspace_paths(
         (recommendation.get("verified_evidence_refs") or [])
         if isinstance(recommendation.get("verified_evidence_refs"), list)
         else []
     )
-    checked_items = _non_empty_strings(
+    checked_items = _canonical_workspace_paths(
         (recommendation.get("checked_files") or [])
         if isinstance(recommendation.get("checked_files"), list)
         else []
     )
-    affected_items = _non_empty_strings(
+    affected_items = _canonical_workspace_paths(
         (recommendation.get("affected_files") or [])
         if isinstance(recommendation.get("affected_files"), list)
         else []
@@ -1279,12 +1382,12 @@ def _validate_review_recommendation_metadata(
     workspace_paths: set[str],
     contract: AnalysisReviewContract,
 ) -> None:
-    checked_items = _non_empty_strings(
+    checked_items = _canonical_workspace_paths(
         (recommendation_review.get("checked_files") or [])
         if isinstance(recommendation_review.get("checked_files"), list)
         else []
     )
-    verified_items = _non_empty_strings(
+    verified_items = _canonical_workspace_paths(
         (recommendation_review.get("verified_evidence_refs") or [])
         if isinstance(recommendation_review.get("verified_evidence_refs"), list)
         else []
@@ -1419,6 +1522,16 @@ def _validate_review_payload_provenance(
     result.errors.append(
         "trust review payload introduced or classified issues/topics without structured closure proof; files_reviewed alone is not sufficient, so provide recommendation_reviews checked_files/verified_evidence_refs for recommendation-linked closures and issue_closure_reviews/topic_closure_reviews for recommendation_index=null global closures."
     )
+
+
+def _canonical_workspace_paths(values: Any) -> list[str]:
+    if isinstance(values, (set, tuple)):
+        values = list(values)
+    return canonical_workspace_ref_list(values)
+
+
+def _workspace_path_set(values: Iterable[str] | None) -> set[str]:
+    return set(_canonical_workspace_paths(list(values or [])))
 
 
 def _non_empty_strings(values: Iterable[Any]) -> list[str]:
@@ -1562,10 +1675,10 @@ def _validate_scoped_closure_reviews(
             result.errors.append(
                 f"{field_name}[{index}].{id_field} references an unknown prior open ID: {record_id}"
             )
-        checked_items = _non_empty_strings(
+        checked_items = _canonical_workspace_paths(
             item.get("checked_files") if isinstance(item.get("checked_files"), list) else []
         )
-        verified_items = _non_empty_strings(
+        verified_items = _canonical_workspace_paths(
             item.get("verified_evidence_refs")
             if isinstance(item.get("verified_evidence_refs"), list)
             else []
