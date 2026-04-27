@@ -1,527 +1,918 @@
-# Closure Plan: Live Seam Parity Acceptance
+# PLAN: Typed Focus Gate for Analysis Review
 
-## Purpose
+Status: ready for implementation  
+Branch: `feat/bounded-work-redesign`  
+Supersedes: the seam-parity closure plan that was already landed on this branch  
+Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260426-194445.md`
 
-The seam-selection slice is already landed.
+## Plan Summary
 
-The branch no longer needs another plan about how to introduce `primary_seam`, `secondary_seams_considered`, or recommendation seam bindings. Those surfaces already exist in:
+This branch should not try to build the full planner platform from the design doc in one shot.
 
-- [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py)
-- [anvil/harness/semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py)
-- [anvil/harness/report.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/report.py)
-- [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py)
-- [docs/analysis_review_contract.md](/Users/spensermcconnell/__Active_Code/forge/docs/analysis_review_contract.md)
+The implementable slice is **M1 only**:
 
-The branch is blocked by a narrower problem:
+- add a runner-owned front-door focus gate before proposer
+- support `gate_path = adjudicate | deliberate`
+- support `focus_type = seam` only
+- persist a typed `focus_decision` artifact into `summary.json`
+- render a compact focus-decision block in `REPORT.md`
+- fail fast as `blocked_for_clarification` or `no_viable_focus` instead of silently entering the main loop on an ambiguous request
 
-- real bounded and trust runs can still choose different canonical seams
-- both runs can still publish `FINAL_ANSWER.*`
-- the repo has no cross-run acceptance gate that fails on that divergence
-
-This plan replaces the old milestone plan with the closure pass the repo actually needs.
-
-## Current Status
-
-The saved checkpoint for this branch is:
-
-- [20260426-090856-seam-parity-closure-pass.md](/Users/spensermcconnell/.gstack/projects/forge/checkpoints/20260426-090856-seam-parity-closure-pass.md)
-
-The approved design doc for the landed seam-contract milestone is:
-
-- [spensermcconnell-feat-bounded-work-redesign-design-20260425-155529.md](/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260425-155529.md)
-
-The latest live evidence reviewed for this closure pass is:
-
-- bounded: `.forge-harness-runs/20260426T025522Z-recommend_automation_improvements-304a7127`
-- trust: `.forge-harness-runs/20260426T025528Z-recommend_automation_improvements-6aac3032`
-
-Observed live drift:
-
-| Run | `analysis_review_status.primary_seam.seam_id` | `final_artifact_kind` |
-|---|---|---|
-| bounded | `release-automation-workflows` | `final_answer` |
-| trust | `release-trigger-automation` | `final_answer` |
-
-That is the blocker.
-
-## Accepted Premises
-
-1. The seam metadata contract is already shipped. Do not reopen the contract-design slice.
-2. The remaining defect is missing parity enforcement across completed runs, not missing single-run seam structure.
-3. The current offline parity regression is too synthetic because [_TrustCorroborationHarnessAdapter](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py) inherits [_BoundedCorroborationHarnessAdapter](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py).
-4. The next complete fix is a closure pass: independent parity fixtures, paired-summary comparison, and a loud acceptance gate.
-5. The future `adjudicate` or `deliberate` request gate remains a later milestone. It is not part of this closure pass.
-
-## Exact Failure
-
-The repo can now prove a lot about one run.
-
-It still cannot prove that two runs over the same task and workspace agree on the same canonical seam.
-
-What is already true:
-
-1. Each run persists canonical seam state into `summary.json` under `analysis_review_status`.
-2. Single-run semantic validation rejects malformed seam structures.
-3. Reporting and projection preserve canonical seam state inside one run.
-4. The harness CLI prints a `summary=` pointer for each run.
-
-What is still false:
-
-1. There is no checker that compares two `summary.json` files and fails on seam drift.
-2. The main bounded vs trust parity regression shares a seam-selection implementation through inheritance.
-3. A bounded run and a trust run can both exit cleanly even when their canonical seams differ.
+M2 and M3 stay in this plan as explicit follow-ons, not branch scope.
 
 ## Step 0: Scope Challenge
 
-### Recommended review mode
+### Mode Selection
 
-Use **HOLD SCOPE**.
+Use **SELECTIVE EXPANSION**.
 
-This is not another seam-contract milestone.
+The plan needs enough new surface to make the gate real, but it should stay inside the existing `analysis_review_*` runner and contract family. No new strategy kind. No new orchestration subsystem. No pause/resume lifecycle.
 
-This is a closure pass over the acceptance surface.
+### Premise Challenge
 
-### What already exists
-
-| Sub-problem | Existing code | Why it is enough |
+| Premise | Verdict | Why |
 |---|---|---|
-| canonical seam state inside one run | [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py) | already writes `analysis_review_status.primary_seam`, secondaries, and recommendation seam bindings into the run summary |
-| seam structure enforcement | [anvil/harness/semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py) | already rejects malformed single payloads |
-| seam rendering and projection | [anvil/harness/report.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/report.py) and [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py) | already expose canonical seam state for one run |
-| run artifact pointer surface | [anvil/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/cli.py) | already prints the `summary.json` path that a pair checker should consume |
-| offline replay precedent | [scripts/generate_topic_closure_replays.py](/Users/spensermcconnell/__Active_Code/forge/scripts/generate_topic_closure_replays.py) | already shows the repo pattern for a small verification helper living in `scripts/` |
-| bounded/trust fixture family | [tests/test_harness_runner.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py) | good place to harden parity tests, but only after trust stops inheriting bounded seam behavior |
+| The next milestone must decide focus before the expensive review loop starts. | Accept | Today `HarnessRunner._run_analysis_review_v1()` enters proposer immediately, which means the harness can spend a full run on the wrong surface. |
+| `seam` should be the first `focus_type`, but the shape should be typed from day one. | Accept | The repo is still seam-shaped downstream, but hardcoding the artifact shape to seams again would force another rewrite. |
+| `deliberate` should block for clarification rather than silently auto-route. | Accept | Silent fallback is the exact trust failure this milestone is trying to remove. |
+| M1 should include repo probing, multi-type adapters, and pause/resume. | Reject | That is an ocean. M1 only needs request-level adjudication, typed artifacts, and a clean blocked path. |
 
-### Minimum change that achieves the goal
+### What Already Exists
 
-Do not redesign prompts.
+| Sub-problem | Existing code | Reuse decision |
+|---|---|---|
+| task and strategy loading | `anvil/harness/types.py` | Reuse. Extend `TaskSpec` and `StrategyConfig`; do not introduce a new spec family. |
+| effective analysis-review contract | `anvil/harness/contracts.py` | Reuse. Add a typed `focus_gate` policy to the existing contract instead of branching contract types. |
+| main bounded/trust review loop | `anvil/harness/runner.py` | Reuse. Insert the gate before proposer, then keep critic/reviser/auditor flow unchanged. |
+| seam-shaped downstream payload | `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | Reuse. Keep `primary_seam` and recommendation seam bindings as the downstream contract. |
+| report and artifact emission | `anvil/harness/report.py`, `anvil/harness/reporting.py` | Reuse. Add a focus-decision section; do not invent a second artifact writer. |
+| repo-local discovery guidance | `anvil/harness/prompts.py`, `docs/analysis_review_contract.md` | Reuse. The gate should consume the same request context and `files_hint` rules. |
+| bounded/trust examples | `examples/harness/tasks/recommend_automation_improvements.yaml`, strategy examples | Reuse. No new strategy kind is needed for M1. |
 
-Do not redesign schemas.
-
-Do not move seam choice into a new orchestration stage.
+### Minimum Change That Achieves the Goal
 
 The minimum complete fix is:
 
-1. Replace the inherited trust corroboration fixture with an independently authored trust fixture.
-2. Add a paired-summary checker that compares canonical seam context across two persisted `summary.json` files.
-3. Add offline positive and negative tests for that checker.
-4. Add a manual live acceptance loop that reruns bounded and trust on the same task and workspace, then runs the checker.
-5. Update `PLAN.md` and one short user-facing doc surface so closure evidence is reproducible.
+1. Extend task, strategy, and contract surfaces with a `focus_gate` policy and optional `focus_gate_answer`.
+2. Add a dedicated focus-gate prompt/schema pair that can emit `selected`, `clarification_requested`, or `no_viable_focus`.
+3. Run that gate before proposer in `HarnessRunner._run_analysis_review_v1()`.
+4. Persist the runner-owned `focus_decision` artifact even when the run stops before proposer.
+5. Seed proposer with the selected seam and enforce downstream seam agreement against the gate output.
+6. Render the focus decision in `REPORT.md`.
+7. Add unit and runner tests for the happy path, blocked path, warning path, and drift path.
 
-Anything bigger is reopening the solved milestone.
+Anything smaller is a shortcut:
 
-### Complexity check
+- prompt-only seam hints are not enough
+- report-only explanations are not enough
+- allowing the loop to keep silently re-selecting the seam is not enough
 
-Expected touched files:
+### Complexity Check
 
-- `tests/test_harness_runner.py`
-- `scripts/check_seam_parity.py`
-- `tests/test_check_seam_parity.py`
-- `README.md`
-- `PLAN.md`
+Expected touched modules:
 
-That is a small closure slice.
+- `anvil/harness/types.py`
+- `anvil/harness/contracts.py`
+- `anvil/harness/schemas.py`
+- `anvil/harness/semantic_validation.py`
+- `anvil/harness/prompts.py`
+- `anvil/harness/runner.py`
+- `anvil/harness/report.py`
+- `docs/analysis_review_contract.md`
+- harness test files covering contract, prompts, runner, semantic validation, and reporting
 
-No new package surface is required.
+That is more than 8 files, so it is a complexity smell.
 
-No new runtime subsystem is justified.
+The right response is **not** to cut the gate. The right response is to keep the architecture boring:
 
-### Search check
+- no new strategy kind
+- no new graph/subgraph
+- no new distribution artifact
+- at most one new contract dataclass
+- no second focus type in this branch
 
-- **[Layer 1]** reuse persisted `summary.json` as the canonical comparison surface
-- **[Layer 1]** reuse the existing `scripts/` replay-helper pattern
-- **[Layer 3]** treat seam parity as a cross-run invariant, not a single-run validation problem
+### Search Check
 
-No external web search is needed.
+- **[Layer 1]** Reuse the existing task/strategy parsing surface instead of inventing a gate-specific config file.
+- **[Layer 1]** Reuse the current runner entrypoint and report writer instead of adding a second mini-runner for the gate.
+- **[Layer 1]** Reuse seam-shaped downstream payloads and validation rather than widening the whole review loop in M1.
+- **[Layer 3]** The key architectural move is not “pick seams better.” It is “own focus selection before proposer,” because today the seam contract is enforced only after cost has already been spent.
 
-### TODOS cross-reference
+### TODOS Cross-Reference
 
-[TODOS.md](/Users/spensermcconnell/__Active_Code/forge/TODOS.md) does not block this slice.
+`TODOS.md` has no blocker for this slice.
 
-Do not add a new TODO unless implementation exposes a follow-up that is clearly separate from seam parity closure.
+This plan should not bundle unrelated backlog work from `TODOS.md` into the branch. The only future work that should be recorded from this slice is:
 
-### Completeness check
+- second focus-type proof for M3
+- repo-probe enrichment for `deliberate` in M2
+- possible task-authoring ergonomics around `focus_gate_answer`
 
-Take the complete version.
+### Completeness Check
 
-Replacing the synthetic fixture alone is not enough.
+Ship the complete M1, not the shortcut.
 
-Adding a checker without live rerun commands is not enough.
+Complete M1 means:
 
-Running live reruns without a machine-readable checker is not enough.
+- typed policy
+- runner-owned artifact
+- blocked clarification path
+- report + summary surfacing
+- downstream seam-agreement enforcement
+- offline tests for selected, blocked, and no-viable outcomes
 
-This is a lake:
+Shortcut M1 would be:
 
-- independent fixtures
-- paired-summary checker
-- positive and negative regressions
-- live rerun acceptance
+- new prompt prose but no runner-owned artifact
+- a selected seam in proposer context but no persisted decision
+- ambiguity warnings without a blocked outcome
 
-### Distribution check
+Reject the shortcut.
 
-No new artifact type.
+### Distribution Check
 
-The checker can live as a repo script invoked with `poetry run python`.
+No new CLI binary, package, or container image is introduced.
 
-No packaging or release pipeline change is needed.
+This ships through the existing repo workflow:
+
+- Python source changes under `anvil/harness/`
+- pytest coverage
+- repo docs update in `docs/analysis_review_contract.md`
+
+## Dream State
+
+```text
+CURRENT
+task + strategy + files_hint
+    │
+    ▼
+proposer chooses seam inside the review loop
+    │
+    ▼
+critic / reviser / auditor may notice ambiguity only after cost is spent
+    │
+    ▼
+summary.json and REPORT.md explain the seam after the fact
+
+THIS PLAN (M1)
+task + strategy + files_hint + optional focus_gate_answer
+    │
+    ▼
+runner-owned focus gate
+    ├── adjudicate  -> selected
+    ├── deliberate  -> clarification_requested
+    └── adjudicate  -> no_viable_focus
+    │
+    ▼
+focus_decision artifact
+    │
+    ├── persisted into summary.json
+    ├── rendered in REPORT.md
+    └── adapted into downstream seam context
+    │
+    ▼
+existing proposer -> critic -> reviser -> auditor loop
+
+12-MONTH IDEAL
+typed gate core
+    │
+    ├── seam
+    ├── artifact
+    ├── policy_surface
+    └── subsystem
+    │
+    ▼
+focus-specific adapters feeding still-boring downstream review flows
+```
+
+## NOT In Scope
+
+- making the downstream analysis-review loop generic across all future `focus_type` values
+- adding a second real `focus_type` in this branch
+- repo-backed candidate probing in M1
+- any pause, suspend, or resume lifecycle inside the runner
+- changing recommendation admissibility, provenance, publication, or trust atomicity rules beyond what is needed to persist and display `focus_decision`
+- replacing the imperative runner bridge with a new LangGraph-native implementation
+- redesigning bounded/trust role lineups or review-loop stop policies
 
 ## Architecture Review
 
-### Current blind spot
+### Core Architecture Decision
+
+`focus_gate` should be an **extension of the existing analysis-review contract**, not a new strategy kind.
+
+That keeps the public surface boring:
+
+- task still declares the job
+- strategy still declares roles and review loops
+- the contract still resolves the effective behavior
+- the runner still owns execution
+
+### Proposed Dependency Graph
 
 ```text
-bounded run
+TaskSpec + StrategyConfig
     │
-    ├── emits summary.json with canonical seam state
-    └── exits cleanly
-
-trust run
-    │
-    ├── emits summary.json with canonical seam state
-    └── exits cleanly
-
-repo today
-    │
-    └── never compares the two summaries
+    ├── task.focus_gate (optional raw config)
+    ├── task.focus_gate_answer (optional rerun answer)
+    └── strategy.focus_gate (optional raw defaults)
             │
-            └── seam drift survives as a "green" result
-```
-
-### Target closure flow
-
-```text
-same task + same workspace + same commit
-    │
-    ├── bounded run → summary.json
-    ├── trust run   → summary.json
+            ▼
+build_analysis_review_contract()
     │
     ▼
-paired-summary checker
-    │
-    ├── compare primary_seam.seam_id
-    ├── compare normalized primary_seam.paths
-    ├── compare normalized secondary seam IDs
-    ├── compare recommendation seam bindings
-    └── fail hard if canonical seam state is missing
+AnalysisReviewContract.focus_gate
     │
     ▼
-parity verdict
+HarnessRunner._run_focus_gate()
     │
-    ├── PASS: bounded/trust share canonical seam context
-    └── FAIL: branch cannot claim seam parity closure
+    ├── build_focus_gate_*_prompt()
+    ├── focus_gate_output_schema()
+    ├── validate_focus_decision_payload()
+    └── persist focus_decision
+            │
+            ├── selected -> proposer seeded with chosen seam
+            ├── clarification_requested -> blocked run, no main loop
+            └── no_viable_focus -> blocked run, no main loop
+                    │
+                    ▼
+summary.json + REPORT.md
 ```
 
-### Plan slices
+### Exact Contract Shape
 
-#### Slice 1: Independent parity fixtures
+Provenance: **grounded in existing code + new normative decision**
 
-Change [tests/test_harness_runner.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py) so the trust parity surface no longer inherits bounded seam selection behavior.
+- Grounded in existing code:
+  the repo already resolves effective behavior through `TaskSpec`, `StrategyConfig`, and `build_analysis_review_contract()`.
+- New normative decision:
+  `focus_gate` becomes the exact new contract field name and lives on the existing analysis-review contract instead of a new strategy kind or spec family.
 
-Requirements:
+M1 should add one new contract field:
 
-1. Shared helpers are fine.
-2. Shared seam-selection implementation is not.
-3. `_TrustCorroborationHarnessAdapter` must not subclass `_BoundedCorroborationHarnessAdapter`.
-4. If the two fixtures share code, that shared code must live in helper functions that do not choose or mutate seam outputs.
-5. One matched pair must prove that bounded and trust can independently arrive at the same seam.
-6. One divergent pair must prove that the acceptance checker rejects drift even when both runs look otherwise publishable.
-
-#### Slice 2: Paired-summary checker
-
-Add `scripts/check_seam_parity.py`.
-
-It should:
-
-1. accept `--bounded-summary` and `--trust-summary`
-2. load only canonical state from `summary.json`
-3. normalize comparison inputs exactly this way:
-   - `primary_seam.paths`: trim whitespace, require repo-relative strings, de-duplicate, then sort ascending
-   - `secondary_seams_considered[*].seam_id`: trim whitespace, de-duplicate, then sort ascending
-   - `recommendation_seam_bindings[*]`: reduce to `{recommendation_index, seam_id}`, trim `seam_id`, then sort by `recommendation_index`
-4. compare these fields:
-   - `analysis_review_status.primary_seam.seam_id`
-   - normalized `analysis_review_status.primary_seam.paths`
-   - normalized `analysis_review_status.secondary_seams_considered[*].seam_id`
-   - normalized `analysis_review_status.recommendation_seam_bindings[*]`
-5. ignore allowed downstream differences:
-   - `recommendation_admissibility`
-   - `publishability`
-   - `final_artifact_kind`
-6. support `--out`, defaulting to `./seam_parity_report.json`
-7. emit a machine-readable report with this exact top-level shape:
-
-```json
-{
-  "ok": true,
-  "bounded_summary": "/abs/path/to/bounded/summary.json",
-  "trust_summary": "/abs/path/to/trust/summary.json",
-  "checks": {
-    "primary_seam_id": {"ok": true, "bounded": "seam-a", "trust": "seam-a"},
-    "primary_seam_paths": {"ok": true, "bounded": ["a.py"], "trust": ["a.py"]},
-    "secondary_seam_ids": {"ok": true, "bounded": ["seam-b"], "trust": ["seam-b"]},
-    "recommendation_seam_bindings": {
-      "ok": true,
-      "bounded": [{"recommendation_index": 1, "seam_id": "seam-a"}],
-      "trust": [{"recommendation_index": 1, "seam_id": "seam-a"}]
-    }
-  },
-  "mismatches": []
-}
+```yaml
+focus_gate:
+  enabled: true
+  default_path: adjudicate
+  allowed_focus_types: [seam]
+  clarification_policy: block_for_clarification
 ```
-
-8. write one entry to `mismatches` per failed check, using only:
-   - `primary_seam_id`
-   - `primary_seam_paths`
-   - `secondary_seam_ids`
-   - `recommendation_seam_bindings`
-   - `missing_canonical_state`
-9. exit `0` only when `ok == true`; exit non-zero on drift, malformed summaries, or missing canonical seam state
-
-Keep it outside `HarnessRunner`.
-
-This is a cross-run acceptance helper, not a new single-run subsystem.
-
-#### Slice 3: Live closure evidence
-
-Closure is not done when offline tests pass.
-
-Closure is done when fresh bounded and trust runs over the same task and workspace also pass the paired-summary checker.
-
-Required artifacts:
-
-- bounded `summary.json`
-- trust `summary.json`
-- emitted `seam_parity_report.json`
-
-## Code Quality Review
-
-The main code-quality risk is false confidence, not complexity.
-
-The branch already has the habit of proving one-run canonicalization very well. The closure gap is that those proofs are being mistaken for paired-run parity.
-
-The most important DRY call here is negative: do not build a second seam-state contract, a second reporting format, or a second orchestration path just to compare two summaries. The comparison surface already exists in `summary.json`.
-
-## Test Review
-
-### Code path coverage
-
-```text
-SEAM PARITY CLOSURE COVERAGE
-============================
-[+] tests/test_harness_runner.py
-    │
-    ├── [GAP] trust parity fixture is independently authored
-    ├── [GAP] matched bounded/trust pair preserves canonical seam context
-    └── [GAP] intentionally divergent pair still looks individually green but fails pair acceptance
-
-[+] scripts/check_seam_parity.py
-    │
-    ├── [GAP] loads both summary.json files
-    ├── [GAP] fails on missing canonical seam state
-    ├── [GAP] compares primary seam id + paths
-    ├── [GAP] compares secondary seam ids
-    └── [GAP] compares recommendation seam bindings
-
-[+] tests/test_check_seam_parity.py
-    │
-    ├── [GAP] same canonical seam pair passes
-    ├── [GAP] primary seam id drift fails
-    ├── [GAP] primary seam path drift fails
-    ├── [GAP] secondary seam drift fails
-    ├── [GAP] recommendation seam binding drift fails
-    └── [GAP] artifact-kind divergence alone does not fail when canonical seam context matches
-
-[+] live acceptance
-    │
-    ├── [GAP] bounded live rerun captured
-    ├── [GAP] trust live rerun captured
-    └── [GAP] checker passes on the fresh pair
-
----------------------------------
-COVERAGE TARGET: 14/14 paths locked
-QUALITY TARGET: all new assertions ★★★
----------------------------------
-```
-
-### Required test commands
-
-Run exactly these:
-
-```bash
-poetry run pytest -q tests/test_harness_runner.py
-poetry run pytest -q tests/test_check_seam_parity.py
-```
-
-Do not extract or share replay utilities for this closure pass.
-
-`scripts/check_seam_parity.py` is a standalone helper and must not depend on `scripts/generate_topic_closure_replays.py`.
-
-### Manual acceptance
-
-Run bounded and trust over the same repo snapshot and workspace.
 
 Rules:
 
-1. Use the same checked-out commit for both runs.
-2. Do not edit the repo between the bounded and trust runs.
-3. Use the same `--task`, the same `--workspace`, and the same `--out-root`.
-4. Capture the `summary=` line printed by each command. Do not discover runs by globbing `.forge-harness-runs`.
+- runner default: `enabled = false`
+- strategy may set `enabled` and `default_path`
+- task may narrow `allowed_focus_types` and set `clarification_policy`
+- the effective resolved surface lives in `AnalysisReviewContract.focus_gate`
+- M1 only accepts `allowed_focus_types: [seam]`
 
-Exact command flow:
+### Normative M1 Input Shapes
 
-```bash
-set -euo pipefail
+Provenance: **new normative decision**
 
-BOUNDED_SUMMARY=$(
-  poetry run python -m anvil.cli harness-run \
-    --task examples/harness/tasks/recommend_automation_improvements.yaml \
-    --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml \
-    --workspace /path/to/repo \
-    --out-root .forge-harness-runs | awk -F= '/^summary=/{print $2}'
-)
+- Grounded in existing code:
+  task and strategy YAMLs already flow through `TaskSpec.from_dict()` and `StrategyConfig.from_dict()`.
+- New normative decision:
+  these exact YAML field names, allowed keys, and validation rules do not exist yet and are being locked by this plan.
 
-TRUST_SUMMARY=$(
-  poetry run python -m anvil.cli harness-run \
-    --task examples/harness/tasks/recommend_automation_improvements.yaml \
-    --strategy examples/harness/strategies/analysis_review_trust_codex_claude.yaml \
-    --workspace /path/to/repo \
-    --out-root .forge-harness-runs | awk -F= '/^summary=/{print $2}'
-)
+The raw config should live in the existing task and strategy YAMLs with these exact field names.
 
-test -n "$BOUNDED_SUMMARY"
-test -n "$TRUST_SUMMARY"
+Task YAML:
 
-poetry run python scripts/check_seam_parity.py \
-  --bounded-summary "$BOUNDED_SUMMARY" \
-  --trust-summary "$TRUST_SUMMARY" \
-  --out ./seam_parity_report.json
+```yaml
+focus_gate:
+  enabled: true
+  allowed_focus_types: [seam]
+  clarification_policy: block_for_clarification
+
+focus_gate_answer:
+  question_prompt: "Which seam should this run prioritize?"
+  selected_option: "release-trigger-automation"
+  freeform_answer: ""
 ```
 
-Manual acceptance criteria:
+Strategy YAML:
 
-1. bounded and trust expose the same `primary_seam.seam_id`
-2. bounded and trust expose the same normalized `primary_seam.paths`
-3. bounded and trust expose the same canonical secondary seam IDs
-4. bounded and trust expose the same recommendation-to-seam bindings
-5. parity still passes when bounded and trust differ in admissibility or publication
-6. the checker fails hard if either run omits canonical seam state
-7. `./seam_parity_report.json` exists and records `"ok": true`
+```yaml
+focus_gate:
+  enabled: true
+  default_path: adjudicate
+```
 
-## Performance Review
+Parsing rules:
 
-No meaningful runtime risk is expected.
+- `TaskSpec.focus_gate` is optional and may only override `enabled`, `allowed_focus_types`, and `clarification_policy`.
+- `StrategyConfig.focus_gate` is optional and may only override `enabled` and `default_path`.
+- `TaskSpec.focus_gate_answer` is optional and is only meaningful when `focus_gate.enabled = true`.
+- M1 rejects unknown `focus_gate` keys in task or strategy specs.
+- M1 rejects any `allowed_focus_types` value other than exactly `["seam"]`.
+- `freeform_answer` may be empty, but `question_prompt` and `selected_option` must be non-empty when `focus_gate_answer` is present.
 
-The checker is offline and cross-run.
+### Focus Decision Artifact
 
-The only runtime-adjacent cost is reading two `summary.json` files, which is trivial.
+Provenance: **grounded in existing code + new normative decision**
+
+- Grounded in existing code:
+  the repo already persists runner-owned state into `summary.json` and renders runner-owned sections in `REPORT.md`.
+- New normative decision:
+  `focus_decision` becomes the exact top-level field name and this exact artifact shape is new.
+
+Persist a top-level runner-owned `focus_decision` object in `summary.json`.
+
+Do **not** bury it under `analysis_review_status`. It exists before the review loop and must survive runs that never reach proposer.
+
+M1 artifact:
+
+```json
+{
+  "gate_path": "adjudicate | deliberate",
+  "focus_type": "seam",
+  "decision_state": "selected | clarification_requested | no_viable_focus",
+  "selected_focus_id": "string|null",
+  "selected_focus_summary": "string|null",
+  "confidence": 0.0,
+  "confidence_band": "high | medium | low",
+  "candidates": [],
+  "question": {
+    "prompt": "string",
+    "options": ["string"]
+  },
+  "warnings": [],
+  "adapter_plan": {
+    "primary_focus_id": "string|null",
+    "secondary_focus_ids": []
+  }
+}
+```
+
+M1 artifact rules:
+
+- `gate_path` is always `adjudicate` or `deliberate`.
+- `focus_type` is always `seam`.
+- `decision_state` is always one of `selected`, `clarification_requested`, `no_viable_focus`.
+- `selected_focus_id` and `selected_focus_summary` are required when `decision_state = selected` and must be `null` otherwise.
+- `question.prompt` and `question.options` are required when `decision_state = clarification_requested`; otherwise `question` must serialize as `{ "prompt": "", "options": [] }`.
+- `candidates` may be empty only when `decision_state = no_viable_focus`; for `selected` and `clarification_requested`, `candidates` must contain at least the selected or shortlisted seam set.
+- `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise.
+
+### Runner Flow
+
+```text
+_run_analysis_review_v1()
+    │
+    ├── build contract
+    ├── if contract.focus_gate.enabled is false:
+    │       continue with existing proposer path
+    │
+    └── if contract.focus_gate.enabled is true:
+            │
+            ├── run focus gate stage
+            ├── persist focus_decision
+            ├── if decision_state == selected:
+            │       continue into proposer with selected seam context
+            ├── if decision_state == clarification_requested:
+            │       return blocked_for_clarification
+            └── if decision_state == no_viable_focus:
+                    return no_viable_focus
+```
+
+### Exact Verdict Taxonomy
+
+Provenance: **new normative decision**
+
+- Grounded in existing code:
+  the runner already emits terminal `run_verdict`, `content_verdict`, `validator_verdict`, `final_summary`, and `failure_details`.
+- New normative decision:
+  the exact new verdict strings `blocked_for_clarification` and `no_viable_focus`, plus their summary payload rules, are new and are being fixed here.
+
+M1 should add two new terminal review outcomes with these exact summary fields:
+
+For `clarification_requested`:
+
+- `run_verdict = "blocked_for_clarification"`
+- `content_verdict = "blocked_for_clarification"`
+- `validator_verdict = "not_run"`
+- `final_summary = "Focus gate blocked the run pending clarification."`
+- `failure_details = { "stage": "focus_gate", "decision_state": "clarification_requested", "question": ..., "candidates": ..., "warnings": ... }`
+
+For `no_viable_focus`:
+
+- `run_verdict = "no_viable_focus"`
+- `content_verdict = "no_viable_focus"`
+- `validator_verdict = "not_run"`
+- `final_summary = "Focus gate could not identify a viable focus target."`
+- `failure_details = { "stage": "focus_gate", "decision_state": "no_viable_focus", "candidates": ..., "warnings": ... }`
+
+For `selected`:
+
+- the run proceeds normally through proposer and later verdicts
+- `focus_decision` must still be persisted in `run_details`, top-level `summary.json`, and `REPORT.md`
+
+These blocked outcomes are terminal, not intermediate. In both cases:
+
+- no proposer stage runs
+- no validator round runs
+- `analysis_review_status` may be absent
+- `REPORT.md` is still emitted
+
+### Gate Stage Recording
+
+Provenance: **grounded in existing code + new normative decision**
+
+- Grounded in existing code:
+  gate execution will reuse the existing `agent_stages` / `ProviderRun` stage-record model.
+- New normative decision:
+  `role_name = "focus_gate"` and the exact metadata conventions for this stage are new.
+
+The focus gate must appear in `agent_stages` as a normal stage record with these exact conventions:
+
+- `role_name = "focus_gate"`
+- `stage_index` is less than proposer's stage index
+- `round_index = 0`
+- `requested_access = "read"`
+- `effective_access = "read"`
+- `structured_output` is the validated `focus_decision`
+- `metadata.focus_gate.gate_path`, `metadata.focus_gate.focus_type`, and `metadata.focus_gate.decision_state` are copied into the stage record for easy debugging
+
+If a strategy defines `roles.focus_gate`, that role config is used. Otherwise `roles.proposer` is cloned for the gate stage and forced read-only.
+
+### Proposer Handoff Contract
+
+Provenance: **grounded in existing code + new normative decision**
+
+- Grounded in existing code:
+  the current harness hands context to providers through prompt builders and `StageRequest.prompt_text`, not through extra structured provider fields.
+- New normative decision:
+  M1 will seed proposer and reviser by prompt text only, using a fixed `Focus Gate Decision` block, rather than extending the provider protocol.
+
+M1 should hand the selected focus into proposer by **prompt text only**, not by changing `StageRequest` or the provider protocol.
+
+Implement it this way:
+
+1. extend `build_analysis_proposer_prompt()` and `build_analysis_reviser_prompt()` to accept an optional `focus_decision`
+2. inject a fixed `Focus Gate Decision` prompt block when `decision_state = selected`
+3. that block must include:
+   - `selected_focus_id`
+   - `selected_focus_summary`
+   - the shortlisted candidate IDs
+   - a hard requirement that downstream `primary_seam.seam_id` must equal the selected focus ID unless the run is being deliberately rejected for invalid gate output
+
+Do not add a new provider request field in M1. Keep the handoff explicit and inspectable in the prompt artifact.
+
+### Rerun Answer Matching Contract
+
+Provenance: **new normative decision**
+
+- Grounded in existing code:
+  reruns already happen as fresh harness invocations against task YAML input.
+- New normative decision:
+  these exact matching semantics for `focus_gate_answer` are new and are being fixed here to avoid fuzzy behavior in M1.
+
+`focus_gate_answer` matching should be deterministic and narrow in M1.
+
+Rules:
+
+- `focus_gate_answer.question_prompt` must equal the previously emitted `focus_decision.question.prompt` after trimming leading and trailing whitespace
+- `focus_gate_answer.selected_option` must match one of the prior `focus_decision.question.options` exactly after trimming
+- `freeform_answer` is optional supporting text and is never used as the primary matcher
+- when both `question_prompt` and `selected_option` match, the gate must not re-ask the question and should continue through the adjudication path using the answer context
+- when either field does not match, the runner may re-ask once and then terminate again as `blocked_for_clarification`
+
+This is intentionally boring. M1 does not need fuzzy matching, question IDs, or resume tokens.
+
+### Seam Adapter Rule
+
+Provenance: **grounded in existing code + new normative decision**
+
+- Grounded in existing code:
+  the downstream loop is seam-shaped today through `analysis_output_schema()`, semantic validation, and `_build_analysis_review_status()`.
+- New normative decision:
+  the gate-selected seam becomes an authoritative upstream constraint, and semantic validation becomes the single owner of drift enforcement.
+
+M1 keeps the downstream loop seam-shaped.
+
+That means:
+
+- proposer and reviser still emit `primary_seam`
+- `selected_focus_id` must become the canonical downstream primary seam identity
+- candidate overflow stays in `secondary_seams_considered`
+- recommendation seam binding stays exactly where it lives today
+
+Enforcement rule:
+
+- when the gate selected a seam, downstream `primary_seam.seam_id` must match `focus_decision.selected_focus_id`
+- if it does not match, semantic validation should fail loudly and name the drift
+
+Authoritative enforcement location:
+
+- semantic validation is the source of truth
+- `validate_stage_output()` for proposer and reviser payloads should receive `expected_primary_seam_id` from the runner context
+- the validator should reject any proposer or reviser payload whose `primary_seam.seam_id` differs from that expected value
+- the runner should not add a second independent drift checker after the loop except for tests and summary wording
+
+That keeps one enforcement owner instead of splitting the rule across runner logic and semantic validation.
+
+This matters because a gate that can be silently ignored is not a gate.
+
+### Gate Role Decision
+
+Provenance: **grounded in existing code + new normative decision**
+
+- Grounded in existing code:
+  the runner already supports role lookup and fallback behavior across existing role names.
+- New normative decision:
+  `focus_gate` becomes an optional strategy role name with proposer fallback and forced read-only access in M1.
+
+Add an optional `focus_gate` role in strategy configs, but make it **fallback to `proposer` when absent**.
+
+Why this is the right trade:
+
+- existing strategies keep working
+- the gate can use a smaller/cheaper model later without changing public shape
+- M1 does not require an example-strategy migration just to run
+
+### Error & Rescue Registry
+
+| Failure | Likely cause | Rescue |
+|---|---|---|
+| `clarification_requested` in a non-interactive run | request ambiguity is real | stop cleanly, persist `question`, rerun with `focus_gate_answer` |
+| `no_viable_focus` on a good task | poor candidate generation from request-only context | inspect `candidates` and `warnings`, tighten task context or defer to M2 probe work |
+| selected seam drifts from final `primary_seam` | proposer/reviser ignored gate context | fail semantic validation; do not silently publish |
+| gate output is structurally invalid | prompt/schema mismatch | fail the gate stage before proposer |
+| `files_hint` is missing or messy | task author gave weak entry signals | warn in artifact, do not fail by itself |
+
+## Code Quality Review
+
+### Explicit-Over-Clever Decisions
+
+1. Add one focused `focus_gate` policy to the existing contract. Do not create `analysis_review_focus_gate_v1`.
+2. Add one dedicated focus-decision schema. Do not overload `analysis_output_schema()`.
+3. Store `focus_decision` at summary top-level. Do not thread it through fake `analysis_review_status` fields.
+4. Allow `focus_gate` role override, but default to proposer. Do not force every strategy fixture to gain a new role before the feature can run.
+5. Keep M1 validation seam-specific. Do not build a registry/plug-in system for future focus types yet.
+
+### Module-Level Plan
+
+| Slice | Files | What changes |
+|---|---|---|
+| input + contract | `anvil/harness/types.py`, `anvil/harness/contracts.py` | parse raw `focus_gate` / `focus_gate_answer`, resolve effective `focus_gate` policy |
+| gate schema + validation | `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | define gate output schema and lightweight semantic checks for state transitions |
+| prompt surface | `anvil/harness/prompts.py` | add adjudicate and deliberate gate prompt builders and inject a fixed `Focus Gate Decision` block into proposer/reviser prompts |
+| runner integration | `anvil/harness/runner.py` | run `focus_gate` before proposer, persist `focus_decision`, emit exact blocked verdicts, seed proposer by prompt text, enforce seam agreement through semantic validation context |
+| reporting | `anvil/harness/report.py` | render `## Focus Decision` even when the review loop never starts |
+| docs | `docs/analysis_review_contract.md` | document config precedence, terminal states, rerun answer contract, and report behavior |
+
+### Milestone Boundaries
+
+#### M1: Branch Scope
+
+- typed `focus_gate` policy
+- `focus_type = seam`
+- `adjudicate` and `deliberate`
+- `focus_decision` artifact
+- blocked clarification path
+- downstream seam-agreement enforcement
+
+#### M2: Explicit Follow-On
+
+- one quick repo probe round before asking a question
+- richer candidate scoring and rationale
+- better handling of malformed or stale `focus_gate_answer`
+
+#### M3: Explicit Follow-On
+
+- remove remaining seam assumptions from gate-core decision logic
+- prove a second focus type
+
+## Test Review
+
+### Test Strategy
+
+The implementation should add tests before or alongside each slice. This is not optional.
+
+The plan needs both unit-style coverage and runner-style integration coverage, because the gate is mostly orchestration logic and failure-state plumbing.
+
+### Code Path Coverage
+
+```text
+CODE PATH COVERAGE
+===========================
+[+] anvil/harness/types.py
+    │
+    ├── TaskSpec parses focus_gate + focus_gate_answer
+    │   ├── [ADD] defaults when fields absent
+    │   ├── [ADD] accepts valid focus_gate_answer shape
+    │   └── [ADD] rejects invalid focus_gate config
+    │
+    └── StrategyConfig parses optional focus_gate defaults
+        └── [ADD] strategy/task precedence coverage
+
+[+] anvil/harness/contracts.py
+    │
+    ├── build_analysis_review_contract() resolves effective focus_gate policy
+    │   ├── [ADD] disabled by default
+    │   ├── [ADD] strategy default_path respected
+    │   └── [ADD] task narrowing allowed_focus_types / clarification_policy
+    │
+    └── contract serialization includes focus_gate
+        └── [ADD] bounded + trust serialization coverage
+
+[+] anvil/harness/runner.py
+    │
+    ├── gate disabled -> legacy proposer path
+    │   └── [ADD] regression that legacy runs still work unchanged
+    │
+    ├── gate enabled + selected
+    │   ├── [ADD] focus gate stage runs before proposer
+    │   ├── [ADD] summary.json persists focus_decision
+    │   ├── [ADD] proposer prompt contains the fixed Focus Gate Decision block
+    │   └── [ADD] reviser prompt preserves the same selected seam requirement
+    │
+    ├── gate enabled + clarification_requested
+    │   ├── [ADD] run exits before proposer
+    │   ├── [ADD] run_verdict/content_verdict are exactly blocked_for_clarification
+    │   └── [ADD] question block is preserved in summary/report
+    │
+    ├── gate enabled + no_viable_focus
+    │   ├── [ADD] run exits before proposer
+    │   ├── [ADD] run_verdict/content_verdict are exactly no_viable_focus
+    │   └── [ADD] candidate rationale is preserved
+    │
+    ├── focus_gate_answer rerun path
+    │   ├── [ADD] trimmed question_prompt must match prior prompt exactly
+    │   └── [ADD] selected_option must match one prior option exactly
+    │
+    └── selected seam drift
+        └── [ADD] semantic validation failure when proposer or reviser primary_seam differs
+
+[+] anvil/harness/report.py
+    │
+    ├── selected focus block
+    │   └── [ADD] report renders compact explanation block
+    │
+    ├── clarification focus block
+    │   └── [ADD] report renders question + options for blocked runs
+    │
+    └── no-viable focus block
+        └── [ADD] report renders warnings and candidate summary
+```
+
+### User Flow Coverage
+
+```text
+USER FLOW COVERAGE
+===========================
+[+] Operator runs a clear seam-focused task
+    ├── [ADD] Gate selects a seam and the run enters proposer
+    └── [ADD] REPORT.md shows why that seam won
+
+[+] Operator runs an ambiguous task
+    ├── [ADD] Gate asks one clarification question and stops
+    └── [ADD] No silent auto-route into the expensive review loop
+
+[+] Operator reruns with focus_gate_answer
+    ├── [ADD] Gate uses the answer and selects a seam
+    └── [ADD] The main loop starts only after a selected state
+
+[+] Operator gives bad files_hint
+    ├── [ADD] Warning emitted
+    └── [ADD] Run does not fail on files_hint alone
+
+[+] Operator compares bounded and trust runs on the same task
+    ├── [ADD] focus_decision is visible in both summaries
+    └── [ADD] bounded/trust still differ only downstream of focus selection
+```
+
+### Required Test Files
+
+- `tests/test_harness_analysis_contract.py`
+- `tests/test_harness_prompt_consistency.py`
+- `tests/test_harness_semantic_validation.py`
+- `tests/test_harness_runner.py`
+- `tests/test_harness_reporting.py`
+
+### Manual Acceptance
+
+Run at minimum:
+
+```bash
+poetry run pytest -q tests/test_harness_analysis_contract.py tests/test_harness_prompt_consistency.py tests/test_harness_semantic_validation.py tests/test_harness_runner.py tests/test_harness_reporting.py
+```
+
+Then run one live clear-task case and one live ambiguous-task case with `focus_gate.enabled: true`:
+
+1. clear case: expect `decision_state = selected` and proposer stage present
+2. ambiguous case: expect `decision_state = clarification_requested` and no proposer stage
 
 ## Failure Modes Registry
 
-| Failure mode | Test covers it | Error handling exists | User-visible impact | Required mitigation |
+| Codepath | Production failure | Test required | Error handling required | User-visible outcome |
 |---|---|---|---|---|
-| trust and bounded choose different `primary_seam.seam_id` | not yet | no | branch looks green while the product invariant is false | paired-summary checker must fail non-zero |
-| seam IDs match but `primary_seam.paths` differ | not yet | no | users see the same seam label masking different actual review surfaces | checker must compare normalized path sets |
-| secondary seam IDs drift while primary seam matches | not yet | no | parity looks cleaner than it is, especially for corroboration scope | checker must compare secondary seam IDs |
-| recommendation seam bindings drift while primary seam matches | not yet | no | canonical seam choice looks aligned but the actual recommendations are grounded on different seams | checker must compare recommendation seam bindings |
-| both runs publish `FINAL_ANSWER.*` and no pair gate notices | not yet | no | false release confidence | negative pair regression and live checker command |
-| one run downgrades to `PARTIAL_ANSWER.*` and checker reads artifact payload instead of `summary.json` | not yet | no | allowed publication divergence is mistaken for seam drift, or real seam drift is missed | checker must read only canonical `summary.json` state |
-| trust fixture still inherits bounded seam behavior | partially | no | offline parity test stays green even if real trust behavior drifts | independently author trust fixture |
+| task/strategy parsing | invalid `focus_gate` config is accepted and mis-executed | yes | yes | clear config error |
+| gate selected path | gate returns malformed artifact | yes | yes | run fails before proposer |
+| clarification path | runner still enters proposer after asking a question | yes | yes | blocked, not silent continuation |
+| no-viable path | runner emits vague failure with no candidate context | yes | yes | actionable blocked explanation |
+| seam adapter | proposer/reviser changes `primary_seam` after gate selection | yes | yes | loud semantic validation failure |
+| report rendering | blocked run has no `Focus Decision` section | yes | yes | operator can see why the run stopped |
 
-Critical gap to avoid: a closure pass that replaces the synthetic fixture but still lacks a machine-readable paired acceptance gate.
+Critical gap if omitted:
 
-## What Already Exists
+- If selected-seam drift is not tested and not enforced, the branch will reintroduce the same trust problem in a shinier place.
 
-Use these instead of rebuilding anything:
+## Performance Review
 
-- canonical seam state in `summary.json`
-- runner-owned `analysis_review_status`
-- current reporting/projection surfaces
-- current harness-run CLI summary pointer
-- current `scripts/` replay-helper pattern
+### Expected Cost
 
-## NOT in Scope
+The gate adds one extra provider round for enabled tasks.
 
-- redesigning seam metadata fields
-- redesigning semantic validation for single-run payload structure
-- redesigning report rendering unless the checker exposes a real canonical-state bug
-- moving seam choice into a new orchestration phase
-- `adjudicate` / `deliberate` request-gate work
-- LangGraph parity work
-- new package or deploy surfaces
+That is acceptable because:
 
-## TODOS.md
+- the round is single-shot in M1
+- there is no repo probe in M1
+- the gate is cheaper than spending a whole proposer/critic/auditor loop on the wrong seam
 
-No new TODO should be added from this closure pass.
+### Performance Constraints
 
-If a later follow-up wants a richer dashboard for paired-run comparison, that should be a separate milestone after parity closure is green.
+1. The gate must run at most once per request in M1.
+2. `deliberate` may ask at most one clarification block.
+3. Candidate lists should cap at three items.
+4. No additional validator round should be introduced before proposer.
+
+### Performance Risks
+
+| Risk | Why it matters | Mitigation |
+|---|---|---|
+| clear tasks become slower | every enabled run pays one more LLM call | default `focus_gate` role to a cheap read-only model or proposer fallback |
+| blocked runs look like failures | operators may think the harness broke | make `REPORT.md` and `summary.json` explicit about blocked-for-clarification |
+| large candidate payloads bloat artifacts | noisy reports and harder debugging | hard-cap candidate list size and warnings count in M1 |
+
+## Implementation Plan
+
+### Slice 1: Input and Contract Surface
+
+Files:
+
+- `anvil/harness/types.py`
+- `anvil/harness/contracts.py`
+- `tests/test_harness_analysis_contract.py`
+
+Changes:
+
+1. Add optional raw `focus_gate` config to `TaskSpec` and `StrategyConfig`.
+2. Add optional `focus_gate_answer` to `TaskSpec`.
+3. Add one `FocusGatePolicy` dataclass to `contracts.py`.
+4. Resolve effective `focus_gate` policy inside `build_analysis_review_contract()`.
+5. Reject unknown `focus_gate` keys and reject any non-`seam` allowed focus type in M1.
+
+Acceptance:
+
+- contracts serialize deterministic `focus_gate` policy
+- bounded and trust both carry the same focus-gate shape
+- absent config keeps legacy behavior
+
+### Slice 2: Gate Schema, Prompt, and Validation
+
+Files:
+
+- `anvil/harness/schemas.py`
+- `anvil/harness/prompts.py`
+- `anvil/harness/semantic_validation.py`
+- `tests/test_harness_prompt_consistency.py`
+- `tests/test_harness_semantic_validation.py`
+
+Changes:
+
+1. Add a focused gate output schema.
+2. Add adjudicate and deliberate gate prompt builders.
+3. Add semantic validation for:
+   - allowed `decision_state`
+   - `selected` requires `selected_focus_id`
+   - `clarification_requested` requires non-empty `question`
+   - `no_viable_focus` requires candidate/warning context
+   - proposer/reviser `primary_seam.seam_id` must equal `expected_primary_seam_id` when provided by the runner
+4. Add prompt-consistency tests so bounded and trust share the gate vocabulary.
+
+Acceptance:
+
+- prompt text states that non-interactive ambiguity blocks instead of auto-routing
+- semantic validation rejects malformed gate artifacts
+
+### Slice 3: Runner Integration and Seam Adapter
+
+Files:
+
+- `anvil/harness/runner.py`
+- `tests/test_harness_runner.py`
+
+Changes:
+
+1. Insert `_run_focus_gate()` before proposer in `_run_analysis_review_v1()`.
+2. Persist `focus_decision` into summary details even when the loop never starts.
+3. Short-circuit the run on `clarification_requested` and `no_viable_focus` using the exact blocked verdict taxonomy above.
+4. Record the gate as `role_name = "focus_gate"` in `agent_stages`.
+5. Seed proposer and reviser by injecting the fixed Focus Gate Decision prompt block.
+6. Enforce that downstream `primary_seam.seam_id` matches gate selection through semantic validation context.
+7. Keep bounded/trust divergence strictly downstream of focus selection.
+
+Acceptance:
+
+- gate-disabled runs are unchanged
+- gate-selected runs enter proposer with seeded context
+- blocked runs have no proposer stage
+- drift path fails loudly
+
+### Slice 4: Report and Summary Surfacing
+
+Files:
+
+- `anvil/harness/report.py`
+- `tests/test_harness_reporting.py`
+
+Changes:
+
+1. Render a dedicated `## Focus Decision` section.
+2. Render selected rationale, clarification prompt/options, or no-viable warnings depending on state.
+3. Ensure the section appears even when `analysis_review_status` is absent.
+
+Acceptance:
+
+- blocked runs still produce readable `REPORT.md`
+- report wording stays runner-owned
+
+### Slice 5: Docs
+
+Files:
+
+- `docs/analysis_review_contract.md`
+
+Changes:
+
+1. Document `focus_gate` precedence.
+2. Document terminal states.
+3. Document `focus_gate_answer` rerun contract.
+4. Document that `focus_decision` is top-level runner-owned state, not model-authored review status.
+
+Acceptance:
+
+- docs explain M1 behavior without implying M2 repo probing already exists
 
 ## Worktree Parallelization Strategy
 
-### Dependency table
+### Dependency Table
 
 | Step | Modules touched | Depends on |
-|------|-----------------|------------|
-| independent trust fixture + runner parity regressions | `tests/` | — |
-| paired-summary checker | `scripts/` | — |
-| checker unit tests | `tests/` | paired-summary checker |
-| README / command docs | repo docs | checker command settled |
-| live rerun evidence | run artifacts | fixture + checker complete |
+|---|---|---|
+| A. Input + contract surface | `anvil/harness/types.py`, `anvil/harness/contracts.py` | — |
+| B. Gate schema + prompt + validation | `anvil/harness/schemas.py`, `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py` | A |
+| C. Runner integration | `anvil/harness/runner.py` | A, B |
+| D. Report surfacing | `anvil/harness/report.py` | A, artifact shape from B |
+| E. Docs | `docs/analysis_review_contract.md` | A, B, D |
+| F. Tests | `tests/test_harness_*` | A, B, C, D |
 
-### Parallel lanes
+### Parallel Lanes
 
-- Lane A: independent trust fixture and bounded/trust runner parity regressions
-- Lane B: `scripts/check_seam_parity.py`
-- Lane C: checker unit tests after Lane B
-- Lane D: README command updates after Lane B
-- Lane E: live rerun evidence after Lane A, B, and C
+- Lane A: `A -> B -> C`  
+  Sequential because the runner needs stable contract names and gate schema shape.
 
-### Execution order
+- Lane B: `D -> E`  
+  Can run in parallel with late `B` or early `C` once the artifact JSON shape is frozen.
 
-Launch Lane A and Lane B in parallel.
+- Lane C: `F`  
+  Sequential after A+B+C+D. Tests span all touched modules and will churn badly if started too early.
 
-Then run Lane C and Lane D.
+### Execution Order
 
-Then run Lane E as the closure lane.
+1. Launch Lane A and agree the `focus_gate` policy plus `focus_decision` artifact shape.
+2. Once that shape is frozen, start Lane B in parallel while Lane A finishes runner integration.
+3. Merge A and B.
+4. Run Lane C.
 
-### Conflict flags
+### Conflict Flags
 
-- Lane A and Lane C both touch `tests/`, so they should not edit the same file in parallel.
-- Everything else is cleanly separable.
-
-## Completion Summary
-
-- Step 0: Scope Challenge, hold scope accepted
-- Design Review: skipped, no UI scope
-- Architecture Review: complete
-- Code Quality Review: complete
-- Test Review: diagram produced, 14 coverage targets identified
-- Performance Review: 0 issues
-- NOT in scope: written
-- What already exists: written
-- TODOS.md updates: none
-- Failure modes: 1 critical gap currently open, missing paired-run acceptance
-- Outside voice: ran via `codex exec`, agreed the closure blocker is the missing paired-summary acceptance gate
-- Parallelization: 5 lanes, 2 initial lanes, 2 follow-on lanes, 1 closure lane
-- Lake Score: 6/6 key decisions chose the complete option
+- `runner.py` depends on exact schema and prompt helper names from Lane A.
+- `report.py` depends on exact persisted field names for `focus_decision`.
+- test worktrees will conflict with both lanes if they start before artifact names are stable.
 
 ## Decision Audit Trail
 
 | # | Phase | Decision | Classification | Principle | Rationale | Rejected |
 |---|---|---|---|---|---|---|
-| 1 | CEO | Replace the old seam-contract implementation plan with a closure-pass acceptance plan | mechanical | pragmatic | the contract slice is already landed and the live blocker is cross-run drift | continuing to plan already-shipped seam metadata work |
-| 2 | Eng | Treat the blocker as missing paired-run acceptance, not missing single-run seam structure | mechanical | explicit over clever | the repo already stores canonical seam state per run | reopening schema or validator design |
-| 3 | Eng | Independently author the trust parity fixture | mechanical | explicit over clever | inheritance keeps the current parity regression artificially green | relying on shared bounded seam behavior |
-| 4 | Eng | Put the checker in `scripts/` instead of `HarnessRunner` | taste | minimal diff | the invariant is cross-run and offline, not part of single-run orchestration | adding a new core runtime subsystem |
-| 5 | Eng | Compare canonical `summary.json` seam state, not final artifact payloads | mechanical | engineered enough | publication may diverge while seam parity still holds | reading `FINAL_ANSWER.*` or `PARTIAL_ANSWER.*` as the parity source |
-| 6 | CEO | Keep request-gate ideas explicitly out of this pass | mechanical | boil the lake | closure should finish the current milestone before starting the next one | folding `adjudicate` or `deliberate` into parity closure |
+| 1 | Scope | Ship M1 only in this branch | Auto-decided | Completeness + Pragmatic | M1 is the full shippable lake; M2/M3 belong in follow-on packets | full planner platform now |
+| 2 | Architecture | Keep one analysis-review contract family | Auto-decided | Explicit over clever | New strategy kinds would duplicate runner and docs surface for no gain | gate-specific strategy kind |
+| 3 | Architecture | Store `focus_decision` at summary top-level | Auto-decided | Explicit over clever | Blocked runs may never have `analysis_review_status` | burying it under review status |
+| 4 | Code quality | Add optional `focus_gate` role with proposer fallback | Auto-decided | DRY + Minimal diff | Existing strategies keep working while allowing future cheaper gate roles | mandatory strategy migrations |
+| 5 | Runner | Block on clarification instead of silent auto-route | Auto-decided | Completeness | Silent routing defeats the entire trust objective | warn-and-continue behavior |
+| 6 | Validation | Enforce selected seam agreement downstream | Auto-decided | Rigor | A gate that can be ignored is cosmetic | advisory-only seam mismatch |
 
-## Autonomous Review Report
+## Completion Summary
 
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| Checkpoint Recovery | `/checkpoint` | Restore live blocker and last accepted direction | 1 | complete | Confirmed the slice is structurally landed but behaviorally incomplete in live runs |
-| Outside Voice | `codex exec` | Independent plan challenge | 1 | aligned | Outside review agreed the missing paired-summary acceptance gate is the blocking gap |
-| Eng Review | autonomous synthesis | Architecture, tests, failure modes | 1 | open_until_implemented | Required 3 concrete work items: independent trust fixtures, paired-summary checker, fresh live acceptance evidence |
-| Design Review | skipped | UI/UX gaps | 0 | skipped | No UI scope |
-
-**VERDICT:** DO NOT REOPEN THE SEAM-CONTRACT MILESTONE. Close live seam parity by proving bounded and trust agree on canonical seam context across fresh paired summaries, then move to the request-gate milestone.
+- Step 0: Scope Challenge — scope accepted as selective expansion, **M1 only**
+- Architecture Review: insertion point and artifact shape defined
+- Code Quality Review: boring-extension path chosen, no new strategy kind
+- Test Review: coverage diagram produced, full test list specified
+- Performance Review: extra gate call accepted with explicit caps
+- NOT in scope: written
+- What already exists: written
+- Failure modes: critical drift gap identified
+- Parallelization: 3 lanes, 1 real parallel window, 2 sequential merges
+- Lake Score: `6/6` key decisions chose the complete M1 over the shortcut
