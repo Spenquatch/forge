@@ -1704,6 +1704,9 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
             "run_dir": str(run_dir),
         },
     }
+    focus_decision = state.get("focus_decision")
+    if isinstance(focus_decision, dict) and focus_decision:
+        summary["focus_decision"] = copy.deepcopy(focus_decision)
     summary = apply_final_artifacts(summary)
     state.setdefault("artifact_index", {})["summary_json"] = artifact_ref(
         summary["artifacts"]["summary_json"],

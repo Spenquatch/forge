@@ -6,13 +6,14 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v9` keeps the seam-selection contract from v8 and extends the analysis payload family so proposer/reviser outputs may record bounded third-seam overflow through analysis-stage `scope_escapes`.
+`analysis_review_v1_contract_v9` keeps the seam-selection contract from v8, adds the M1 typed focus-gate policy on the same contract family, and extends the analysis payload family so proposer/reviser outputs may record bounded third-seam overflow through analysis-stage `scope_escapes`.
 
 ## What the contract governs
 
 The current contract covers:
 
 - effective strategy surface: `strategy_kind` plus explicit `mode`
+- focus-gate policy and rerun-answer matching
 - stop policy and loop limits
 - partial-acceptance policy
 - required analysis sections
@@ -58,6 +59,89 @@ The trust policy covers:
 - whether clean acceptance should be downgraded on semantic warnings
 - whether inference-backed acceptance should be downgraded to a caveated acceptance
 - whether late auditor medium-or-higher issues are treated as errors or warnings
+
+## Focus-gate contract
+
+The contract version remains `analysis_review_v1_contract_v9`. M1 focus gating is an additive v9 surface, not a new contract version or a new strategy kind.
+
+The effective contract now also resolves a typed `focus_gate` policy:
+
+```yaml
+focus_gate:
+  enabled: true
+  default_path: adjudicate
+  allowed_focus_types: [seam]
+  clarification_policy: block_for_clarification
+```
+
+Precedence and validation rules:
+
+- runner default: `enabled = false`
+- strategy-level `focus_gate` may set only `enabled` and `default_path`
+- task-level `focus_gate` may set `enabled`, `allowed_focus_types`, and `clarification_policy`
+- the resolved canonical surface lives at `analysis_review_contract.focus_gate`
+- M1 rejects unknown task or strategy `focus_gate` keys
+- M1 accepts only `allowed_focus_types: [seam]`
+
+Rerun-answer rules:
+
+- `task.focus_gate_answer` is optional and is meaningful only when `focus_gate.enabled = true`
+- `focus_gate_answer.question_prompt` must equal the prior `focus_decision.question.prompt` after trimming leading and trailing whitespace
+- `focus_gate_answer.selected_option` must match one prior `focus_decision.question.options` entry exactly after trimming
+- `focus_gate_answer.freeform_answer` is optional supporting text and is never the primary matcher
+- when both fields match, the gate must continue through adjudication without re-asking the clarification question
+- when either field does not match, the runner may re-ask once and then terminate again as `blocked_for_clarification`
+
+## Focus-decision artifact
+
+`focus_decision` is runner-owned state. It is not a model-authored review-status field and must not be buried under `analysis_review_status`.
+
+Persist it at top-level `summary.json["focus_decision"]` with this M1 shape:
+
+```json
+{
+  "gate_path": "adjudicate | deliberate",
+  "focus_type": "seam",
+  "decision_state": "selected | clarification_requested | no_viable_focus",
+  "selected_focus_id": "string|null",
+  "selected_focus_summary": "string|null",
+  "confidence": 0.0,
+  "confidence_band": "high | medium | low",
+  "candidates": [],
+  "question": {
+    "prompt": "string",
+    "options": ["string"]
+  },
+  "warnings": [],
+  "adapter_plan": {
+    "primary_focus_id": "string|null",
+    "secondary_focus_ids": []
+  }
+}
+```
+
+Artifact rules:
+
+- `decision_state` is always `selected`, `clarification_requested`, or `no_viable_focus`
+- `selected_focus_id` and `selected_focus_summary` are required for `selected` and must be `null` otherwise
+- `question.prompt` and `question.options` are required for `clarification_requested`; otherwise `question` serializes as `{ "prompt": "", "options": [] }`
+- `candidates` may be empty only for `no_viable_focus`
+- `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise
+- blocked runs may omit `analysis_review_status`, but they still persist `focus_decision`, emit `summary.json`, and emit `REPORT.md`
+- `REPORT.md` renders `focus_decision` in its own runner-owned `## Focus Decision` section before review-status/runtime-detail sections
+
+Terminal focus-gate outcomes:
+
+- `selected` continues into proposer and later review stages
+- `clarification_requested` terminates the run as `run_verdict = blocked_for_clarification`, `content_verdict = blocked_for_clarification`, `validator_verdict = not_run`, and `final_summary = "Focus gate blocked the run pending clarification."`
+- `no_viable_focus` terminates the run as `run_verdict = no_viable_focus`, `content_verdict = no_viable_focus`, `validator_verdict = not_run`, and `final_summary = "Focus gate could not identify a viable focus target."`
+- for blocked outcomes, `failure_details.stage` is `focus_gate` and carries the runner-owned `question`, `candidates`, and `warnings` payload needed for rerun or diagnosis
+
+Prompt handoff rule:
+
+- M1 hands the selected focus into proposer and reviser by prompt text only
+- the prompt block must include `selected_focus_id`, `selected_focus_summary`, and the shortlisted candidate IDs
+- M1 does not add a new provider-protocol field for focus-gate context
 
 ## Topic lifecycle artifact contract
 
