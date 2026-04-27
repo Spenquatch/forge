@@ -11,6 +11,7 @@ from anvil.harness.prompts import (
     build_analysis_critic_prompt,
     build_analysis_proposer_prompt,
     build_analysis_reviser_prompt,
+    build_focus_gate_prompt,
 )
 from anvil.harness.types import StrategyConfig, TaskSpec
 
@@ -664,3 +665,143 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         assert rubric_line in critic
         assert rubric_line in auditor
         assert rubric_line in reviser
+
+
+def test_focus_gate_prompt_exposes_typed_focus_decision_contract():
+    task = _task()
+    strategy = _strategy()
+    contract = build_analysis_review_contract(task, strategy)
+
+    prompt = build_focus_gate_prompt(
+        task,
+        strategy.prompt_preamble,
+        _GIT_SNAPSHOT,
+        contract,
+        gate_path="deliberate",
+        focus_gate_answer={
+            "question_prompt": "Which seam should this run prioritize?",
+            "selected_option": "release-trigger-automation",
+            "freeform_answer": "",
+        },
+    )
+
+    assert "You are the FOCUS_GATE stage in an analysis-review harness." in prompt
+    assert "Gate path: deliberate" in prompt
+    assert "Focus gate output rules:" in prompt
+    assert "Set `gate_path` to exactly `adjudicate` or `deliberate`." in prompt
+    assert "Set `focus_type` to exactly `seam`." in prompt
+    assert (
+        "When `decision_state=clarification_requested`, keep `candidates` non-empty"
+        in prompt
+    )
+    assert (
+        "When not `clarification_requested`, serialize `question` exactly as `{ \"prompt\": \"\", \"options\": [] }`."
+        in prompt
+    )
+    assert "Focus gate answer:" in prompt
+    assert '"selected_option": "release-trigger-automation"' in prompt
+
+
+def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prompts():
+    task = _task()
+    strategy = _strategy()
+    contract = build_analysis_review_contract(task, strategy)
+    focus_decision = {
+        "gate_path": "adjudicate",
+        "focus_type": "seam",
+        "decision_state": "selected",
+        "selected_focus_id": "release-trigger-automation",
+        "selected_focus_summary": "The release trigger workflows are the governing seam.",
+        "confidence": 0.88,
+        "confidence_band": "high",
+        "candidates": [
+            {
+                "focus_id": "release-trigger-automation",
+                "focus_summary": "Release trigger workflows",
+            },
+            {
+                "focus_id": "nightly-parity",
+                "focus_summary": "Nightly workflow parity seam",
+            },
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": "release-trigger-automation",
+            "secondary_focus_ids": ["nightly-parity"],
+        },
+    }
+
+    proposer = build_analysis_proposer_prompt(
+        task,
+        strategy.prompt_preamble,
+        _GIT_SNAPSHOT,
+        contract,
+        focus_decision=focus_decision,
+    )
+    reviser = build_analysis_reviser_prompt(
+        task,
+        strategy.prompt_preamble,
+        prior_output={"status": "done"},
+        critic_output={"verdict": "revise"},
+        validation_runs=[],
+        git_snapshot=_GIT_SNAPSHOT,
+        revision_round=1,
+        contract=contract,
+        open_issues=[
+            {"issue_id": "AR-001", "severity": "medium", "title": "Example issue"}
+        ],
+        open_topics=[],
+        focus_decision=focus_decision,
+    )
+
+    expected_lines = [
+        "Focus Gate Decision:",
+        "- selected_focus_id: release-trigger-automation",
+        "- selected_focus_summary: The release trigger workflows are the governing seam.",
+        "- shortlisted_candidate_ids: release-trigger-automation, nightly-parity",
+        "downstream `primary_seam.seam_id` must equal `selected_focus_id`",
+    ]
+    for line in expected_lines:
+        assert line in proposer
+        assert line in reviser
+
+
+def test_non_selected_focus_gate_decision_is_not_injected_into_analysis_prompts():
+    task = _task()
+    strategy = _strategy()
+    contract = build_analysis_review_contract(task, strategy)
+    focus_decision = {
+        "gate_path": "deliberate",
+        "focus_type": "seam",
+        "decision_state": "clarification_requested",
+        "selected_focus_id": None,
+        "selected_focus_summary": None,
+        "confidence": 0.55,
+        "confidence_band": "medium",
+        "candidates": [
+            {
+                "focus_id": "release-trigger-automation",
+                "focus_summary": "Release trigger workflows",
+            }
+        ],
+        "question": {
+            "prompt": "Which seam should this run prioritize?",
+            "options": ["release-trigger-automation"],
+        },
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": None,
+            "secondary_focus_ids": ["release-trigger-automation"],
+        },
+    }
+
+    proposer = build_analysis_proposer_prompt(
+        task,
+        strategy.prompt_preamble,
+        _GIT_SNAPSHOT,
+        contract,
+        focus_decision=focus_decision,
+    )
+
+    assert "Focus Gate Decision:" not in proposer

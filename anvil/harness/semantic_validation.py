@@ -54,6 +54,7 @@ def validate_stage_output(
     prior_open_topic_records: Iterable[dict[str, Any]] | None = None,
     historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
+    expected_primary_seam_id: str | None = None,
     payload_provenance: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
@@ -64,7 +65,9 @@ def validate_stage_output(
         return result
 
     role = canonical_stage_role(role_name)
-    if role in {"proposer", "reviser"}:
+    if role == "focus_gate":
+        result.extend(validate_focus_decision_payload(payload))
+    elif role in {"proposer", "reviser"}:
         result.extend(
             validate_analysis_output_payload(
                 payload,
@@ -75,6 +78,7 @@ def validate_stage_output(
                 expected_open_topic_ids=expected_open_topic_ids,
                 require_issue_resolution_map=(role == "reviser"),
                 require_topic_resolution_map=(role == "reviser"),
+                expected_primary_seam_id=expected_primary_seam_id,
             )
         )
     elif role in {"critic", "auditor"}:
@@ -107,6 +111,7 @@ def validate_analysis_output_payload(
     expected_open_topic_ids: Iterable[str] | None = None,
     require_issue_resolution_map: bool = False,
     require_topic_resolution_map: bool = False,
+    expected_primary_seam_id: str | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     review_requirements = task.review_requirements
@@ -151,6 +156,12 @@ def validate_analysis_output_payload(
         contract=contract,
         scope_escapes=scope_escapes,
     )
+    if expected_primary_seam_id is not None:
+        _validate_expected_primary_seam_id(
+            result,
+            actual_primary_seam_id=primary_seam_id,
+            expected_primary_seam_id=expected_primary_seam_id,
+        )
     declared_seam_ids = ({primary_seam_id} if primary_seam_id else set()) | declared_secondary_seam_ids
     primary_bound_recommendation_count = 0
 
@@ -272,6 +283,128 @@ def validate_analysis_output_payload(
             topic_resolution_map=payload.get("topic_resolution_map"),
             expected_open_topic_ids=expected_open_topic_ids,
             expected_recommendation_count=len(recommendations),
+        )
+
+    return result
+
+
+def validate_focus_decision_payload(
+    payload: dict[str, Any] | None,
+) -> SemanticValidationResult:
+    result = SemanticValidationResult()
+    if not isinstance(payload, dict) or not payload:
+        result.errors.append("Structured output is empty, so semantic validation could not run.")
+        return result
+
+    gate_path = str(payload.get("gate_path") or "").strip()
+    if gate_path not in {"adjudicate", "deliberate"}:
+        result.errors.append("gate_path must be exactly 'adjudicate' or 'deliberate'.")
+
+    focus_type = str(payload.get("focus_type") or "").strip()
+    if focus_type != "seam":
+        result.errors.append("focus_type must be exactly 'seam'.")
+
+    decision_state = str(payload.get("decision_state") or "").strip()
+    if decision_state not in {"selected", "clarification_requested", "no_viable_focus"}:
+        result.errors.append(
+            "decision_state must be exactly one of: selected, clarification_requested, no_viable_focus."
+        )
+        return result
+
+    selected_focus_id = payload.get("selected_focus_id")
+    selected_focus_summary = payload.get("selected_focus_summary")
+    selected_focus_id_text = _nullable_non_empty_string(selected_focus_id)
+    selected_focus_summary_text = _nullable_non_empty_string(selected_focus_summary)
+
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        result.errors.append("candidates must be a list.")
+        candidates = []
+    candidate_ids = _validated_focus_candidate_ids(result, candidates=candidates)
+
+    question = payload.get("question")
+    question_is_canonical_empty = (
+        isinstance(question, dict)
+        and question.get("prompt") == ""
+        and question.get("options") == []
+    )
+    question_prompt, question_options = _validated_focus_question(
+        result,
+        question=question,
+    )
+
+    adapter_plan = payload.get("adapter_plan")
+    adapter_primary_focus_id, adapter_secondary_focus_ids = _validated_focus_adapter_plan(
+        result,
+        adapter_plan=adapter_plan,
+    )
+
+    if decision_state == "selected":
+        if not selected_focus_id_text:
+            result.errors.append(
+                "selected_focus_id is required when decision_state=selected."
+            )
+        if not selected_focus_summary_text:
+            result.errors.append(
+                "selected_focus_summary is required when decision_state=selected."
+            )
+        if not candidate_ids:
+            result.errors.append(
+                "candidates must be non-empty when decision_state=selected."
+            )
+        if selected_focus_id_text and selected_focus_id_text not in candidate_ids:
+            result.errors.append(
+                "selected_focus_id must appear in candidates when decision_state=selected."
+            )
+        if not adapter_primary_focus_id or adapter_primary_focus_id != selected_focus_id_text:
+            result.errors.append(
+                "adapter_plan.primary_focus_id must equal selected_focus_id when decision_state=selected."
+            )
+    else:
+        if selected_focus_id is not None:
+            result.errors.append(
+                "selected_focus_id must be null when decision_state is not selected."
+            )
+        if selected_focus_summary is not None:
+            result.errors.append(
+                "selected_focus_summary must be null when decision_state is not selected."
+            )
+        if adapter_primary_focus_id is not None:
+            result.errors.append(
+                "adapter_plan.primary_focus_id must be null when decision_state is not selected."
+            )
+
+    if decision_state == "clarification_requested":
+        if not candidate_ids:
+            result.errors.append(
+                "candidates must be non-empty when decision_state=clarification_requested."
+            )
+        if not question_prompt:
+            result.errors.append(
+                "question.prompt is required when decision_state=clarification_requested."
+            )
+        if not question_options:
+            result.errors.append(
+                "question.options must be non-empty when decision_state=clarification_requested."
+            )
+    elif decision_state == "no_viable_focus":
+        if candidate_ids:
+            pass
+    else:
+        # selected path already handled above
+        pass
+
+    if decision_state != "clarification_requested" and not question_is_canonical_empty:
+        result.errors.append(
+            "question must serialize as {'prompt': '', 'options': []} when decision_state is not clarification_requested."
+        )
+
+    secondary_focus_id_set = set(adapter_secondary_focus_ids)
+    unknown_secondary_focus_ids = sorted(secondary_focus_id_set - set(candidate_ids))
+    if unknown_secondary_focus_ids:
+        result.errors.append(
+            "adapter_plan.secondary_focus_ids must be a subset of candidates: "
+            + ", ".join(unknown_secondary_focus_ids)
         )
 
     return result
@@ -942,6 +1075,23 @@ def _validate_seam_entry(
     return seam_id or None
 
 
+def _validate_expected_primary_seam_id(
+    result: SemanticValidationResult,
+    *,
+    actual_primary_seam_id: str | None,
+    expected_primary_seam_id: str,
+) -> None:
+    expected = str(expected_primary_seam_id or "").strip()
+    if not expected:
+        return
+    actual = str(actual_primary_seam_id or "").strip()
+    if actual != expected:
+        result.errors.append(
+            "primary_seam.seam_id drifted from the selected focus gate seam: "
+            f"expected {expected}, got {actual or '(missing)'}."
+        )
+
+
 def _validate_recommendation_seam_binding(
     result: SemanticValidationResult,
     *,
@@ -973,6 +1123,94 @@ def _validate_recommendation_seam_binding(
             f"recommendations[{recommendation_index}].seam_expansion_reason must be non-empty for non-primary seams."
         )
     return False
+
+
+def _validated_focus_candidate_ids(
+    result: SemanticValidationResult,
+    *,
+    candidates: list[Any],
+) -> list[str]:
+    candidate_ids: list[str] = []
+    for index, item in enumerate(candidates, start=1):
+        if not isinstance(item, dict):
+            result.errors.append(f"candidates[{index}] must be an object.")
+            continue
+        focus_id = str(item.get("focus_id") or "").strip()
+        focus_summary = str(item.get("focus_summary") or "").strip()
+        if not focus_id:
+            result.errors.append(f"candidates[{index}].focus_id must be non-empty.")
+            continue
+        if not focus_summary:
+            result.errors.append(f"candidates[{index}].focus_summary must be non-empty.")
+        candidate_ids.append(focus_id)
+    duplicates = sorted(
+        {focus_id for focus_id in candidate_ids if candidate_ids.count(focus_id) > 1}
+    )
+    if duplicates:
+        result.errors.append(
+            "candidates contains duplicate focus IDs: " + ", ".join(duplicates)
+        )
+    return candidate_ids
+
+
+def _validated_focus_question(
+    result: SemanticValidationResult,
+    *,
+    question: Any,
+) -> tuple[str, list[str]]:
+    if not isinstance(question, dict):
+        result.errors.append("question must be an object.")
+        return "", []
+    prompt = str(question.get("prompt") or "")
+    options = question.get("options")
+    if not isinstance(options, list):
+        result.errors.append("question.options must be a list.")
+        return prompt.strip(), []
+    normalized_options = _non_empty_strings(options)
+    return prompt.strip(), normalized_options
+
+
+def _validated_focus_adapter_plan(
+    result: SemanticValidationResult,
+    *,
+    adapter_plan: Any,
+) -> tuple[str | None, list[str]]:
+    if not isinstance(adapter_plan, dict):
+        result.errors.append("adapter_plan must be an object.")
+        return None, []
+
+    raw_primary_focus_id = adapter_plan.get("primary_focus_id")
+    if raw_primary_focus_id is None:
+        primary_focus_id = None
+    else:
+        primary_focus_id = str(raw_primary_focus_id or "").strip() or None
+
+    secondary_focus_ids = adapter_plan.get("secondary_focus_ids")
+    if not isinstance(secondary_focus_ids, list):
+        result.errors.append("adapter_plan.secondary_focus_ids must be a list.")
+        return primary_focus_id, []
+
+    normalized_secondary_focus_ids = _non_empty_strings(secondary_focus_ids)
+    duplicates = sorted(
+        {
+            focus_id
+            for focus_id in normalized_secondary_focus_ids
+            if normalized_secondary_focus_ids.count(focus_id) > 1
+        }
+    )
+    if duplicates:
+        result.errors.append(
+            "adapter_plan.secondary_focus_ids contains duplicate IDs: "
+            + ", ".join(duplicates)
+        )
+    return primary_focus_id, normalized_secondary_focus_ids
+
+
+def _nullable_non_empty_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _validate_trust_recommendation_metadata(

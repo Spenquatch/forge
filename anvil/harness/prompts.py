@@ -135,6 +135,86 @@ def _json_block(title: str, payload: dict | list | None) -> str:
     return f"{title}:\n{_clip(json.dumps(payload, indent=2, sort_keys=False))}"
 
 
+def _join_prompt_blocks(*blocks: str) -> str:
+    return "\n".join(block for block in blocks if str(block).strip())
+
+
+def _focus_gate_output_rules_block() -> str:
+    return "\n".join(
+        [
+            "Focus gate output rules:",
+            "- Return a `focus_decision` artifact only; do not draft recommendations or review findings here.",
+            "- Set `gate_path` to exactly `adjudicate` or `deliberate`.",
+            "- Set `focus_type` to exactly `seam`.",
+            (
+                "- Set `decision_state` to exactly one of "
+                "`selected`, `clarification_requested`, or `no_viable_focus`."
+            ),
+            (
+                "- When `decision_state=selected`, set both "
+                "`selected_focus_id` and `selected_focus_summary`, keep "
+                "`candidates` non-empty, and set "
+                "`adapter_plan.primary_focus_id` equal to `selected_focus_id`."
+            ),
+            (
+                "- When `decision_state=clarification_requested`, keep "
+                "`candidates` non-empty and populate "
+                "`question.prompt` plus `question.options` with the exact clarification "
+                "you need."
+            ),
+            (
+                "- When `decision_state=no_viable_focus`, set "
+                "`selected_focus_id=null`, `selected_focus_summary=null`, "
+                "`adapter_plan.primary_focus_id=null`, and serialize "
+                "`question` exactly as `{ \"prompt\": \"\", \"options\": [] }`."
+            ),
+            (
+                "- When not `clarification_requested`, serialize `question` exactly "
+                "as `{ \"prompt\": \"\", \"options\": [] }`."
+            ),
+            (
+                "- Candidate IDs and adapter secondary IDs must stay consistent with "
+                "the shortlisted seam set you emit."
+            ),
+        ]
+    )
+
+
+def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
+    if not isinstance(focus_decision, dict):
+        return ""
+    if str(focus_decision.get("decision_state") or "").strip() != "selected":
+        return ""
+
+    selected_focus_id = str(focus_decision.get("selected_focus_id") or "").strip()
+    selected_focus_summary = str(focus_decision.get("selected_focus_summary") or "").strip()
+    candidates = focus_decision.get("candidates")
+    candidate_ids: list[str] = []
+    if isinstance(candidates, list):
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("focus_id") or "").strip()
+            if candidate_id:
+                candidate_ids.append(candidate_id)
+    if not selected_focus_id:
+        return ""
+
+    shortlisted_ids = ", ".join(candidate_ids) if candidate_ids else "(none recorded)"
+    lines = [
+        "Focus Gate Decision:",
+        f"- selected_focus_id: {selected_focus_id}",
+        f"- selected_focus_summary: {selected_focus_summary or '(missing summary)'}",
+        f"- shortlisted_candidate_ids: {shortlisted_ids}",
+        (
+            "- Treat this gate result as authoritative: downstream "
+            "`primary_seam.seam_id` must equal `selected_focus_id` unless you are "
+            "deliberately rejecting invalid gate output."
+        ),
+    ]
+    return "\n".join(lines)
+
+
 def _recommendation_review_coverage_block(prior_output: dict | None) -> str:
     recommendations: list[dict[str, Any]] = []
     if isinstance(prior_output, dict):
@@ -897,6 +977,7 @@ def build_analysis_proposer_prompt(
     prompt_preamble: str,
     git_snapshot: dict,
     contract: AnalysisReviewContract,
+    focus_decision: dict[str, Any] | None = None,
 ) -> str:
     return f"""
 You are the PROPOSER stage in an analysis-review harness.
@@ -924,14 +1005,77 @@ Your job:
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
-{_seam_selection_guidance_block(contract)}
-{_repo_local_discovery_guidance_block(contract, role="proposer")}
+{_join_prompt_blocks(
+    _seam_selection_guidance_block(contract),
+    _focus_gate_decision_block(focus_decision),
+    _repo_local_discovery_guidance_block(contract, role="proposer"),
+)}
 {_trust_review_policy_block(contract)}
 {_trust_recommendation_atomicity_block(contract, role="proposer")}
 {_recommendation_payload_block(contract)}
 {_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
+
+
+def build_focus_gate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    gate_path: str,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+) -> str:
+    normalized_gate_path = str(gate_path or "").strip().lower()
+    if normalized_gate_path not in {"adjudicate", "deliberate"}:
+        raise ValueError("gate_path must be exactly 'adjudicate' or 'deliberate'.")
+
+    gate_specific_guidance = {
+        "adjudicate": [
+            "Gate-path guidance:",
+            "- Use `adjudicate` when the current task context is sufficient to select one seam cleanly.",
+            "- Prefer `selected` over `clarification_requested` when one seam is clearly dominant from the task and repo context.",
+            "- Use `no_viable_focus` only when the current task context does not support any defensible seam shortlist.",
+        ],
+        "deliberate": [
+            "Gate-path guidance:",
+            "- Use `deliberate` when the task likely needs shortlist comparison or clarification before a seam can be selected confidently.",
+            "- Prefer `clarification_requested` when multiple plausible seams remain and the missing distinction is best answered by the operator.",
+            "- Use `selected` only when the ambiguity collapses after comparing the shortlisted seams against the current repo context.",
+        ],
+    }[normalized_gate_path]
+
+    return f"""
+You are the FOCUS_GATE stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Return ONLY the JSON object required by the schema.
+- This stage selects or clarifies the run focus; it does not produce recommendations.
+
+Your job:
+1. Inspect the task, any files_hint/context, and the current workspace snapshot.
+2. Decide whether the run can proceed with a selected seam focus now.
+3. Emit a typed `focus_decision` artifact that matches the fixed schema and state rules.
+4. Keep the shortlisted seam set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.
+5. Ask for clarification only when the missing distinction is real and operator input is required.
+
+Gate path: {normalized_gate_path}
+{chr(10).join(gate_specific_guidance)}
+{_focus_gate_output_rules_block()}
+{_analysis_contract_block(contract)}
+
+{_task_block(task, prompt_preamble)}
+
+{_json_block('Prior focus decision', prior_focus_decision)}
+
+{_json_block('Focus gate answer', focus_gate_answer)}
 
 Current workspace snapshot:
 {render_git_snapshot(git_snapshot)}
@@ -1090,6 +1234,7 @@ def build_analysis_reviser_prompt(
     contract: AnalysisReviewContract,
     open_issues: list[dict[str, Any]],
     open_topics: list[dict[str, Any]],
+    focus_decision: dict[str, Any] | None = None,
 ) -> str:
     return f"""
 You are the REVISER stage in an analysis-review harness.
@@ -1119,9 +1264,12 @@ Your job:
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}
-{_seam_selection_guidance_block(contract)}
-{_role_specific_seam_review_guidance_block("reviser")}
-{_repo_local_discovery_guidance_block(contract, role="reviser")}
+{_join_prompt_blocks(
+    _seam_selection_guidance_block(contract),
+    _role_specific_seam_review_guidance_block("reviser"),
+    _focus_gate_decision_block(focus_decision),
+    _repo_local_discovery_guidance_block(contract, role="reviser"),
+)}
 {_trust_review_policy_block(contract)}
 {_trust_recommendation_atomicity_block(contract, role="reviser")}
 {_recommendation_payload_block(contract)}
