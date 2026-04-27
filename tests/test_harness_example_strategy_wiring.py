@@ -60,9 +60,9 @@ def test_analysis_review_entry_points_reference_focus_gate_adjudicate_examples()
     assert bounded_path in run_script
 
 
-def test_m2_focus_gate_live_triads_resolve_task_strategy_and_workspace():
+def test_m2_focus_gate_fixture_wiring_triads_resolve_task_strategy_and_workspace():
     triads = load_structured_file(
-        Path("tests/fixtures/harness/m2_focus_gate_live/triads.yaml")
+        Path("tests/fixtures/harness/m2_focus_gate_fixture_wiring/triads.yaml")
     )
 
     for case in triads["cases"]:

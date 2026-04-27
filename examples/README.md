@@ -33,3 +33,9 @@ poetry run python -m anvil.cli harness-run \
 ```
 
 Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
+
+These adjudicate strategies are runnable examples, not by themselves the authoritative M2 acceptance proof.
+
+Repo-local fixture wiring coverage lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and only checks that the task, strategy, and fixture workspace stay coherent.
+
+Authoritative M2 acceptance uses `scripts/run_m2_focus_gate_live_acceptance.py` with `examples/harness/live_acceptance/m2_focus_gate_local.yaml` against the external workspace.
