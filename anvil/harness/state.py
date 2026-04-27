@@ -7,6 +7,7 @@ import operator
 import uuid
 from pathlib import Path
 from typing import Annotated, Any, Literal
+
 from typing_extensions import TypedDict
 
 from .reporting import artifact_ref
@@ -32,6 +33,8 @@ class StageRecord(TypedDict, total=False):
     verdict: str | None
     text_path: str | None
     json_path: str | None
+    raw_json_path: str | None
+    normalized_json_path: str | None
     prompt_path: str | None
     schema_path: str | None
     duration_sec: float | None
@@ -49,6 +52,8 @@ class DraftRecord(TypedDict, total=False):
     round_index: int
     text_path: str
     json_path: str | None
+    raw_json_path: str | None
+    normalized_json_path: str | None
     summary: str
     review_status: Literal["candidate", "accepted", "accepted_partial", "rejected", "best"]
     scores: dict[str, float]
@@ -237,7 +242,21 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
                 ok=bool(stage.get("ok")),
                 verdict=(None if stage.get("verdict") in (None, "") else str(stage.get("verdict"))),
                 text_path=(None if stage.get("stdout_path") in (None, "") else str(stage.get("stdout_path"))),
-                json_path=(None if stage.get("output_path") in (None, "") else str(stage.get("output_path"))),
+                json_path=(
+                    None
+                    if stage.get("output_path") in (None, "")
+                    else str(stage.get("output_path"))
+                ),
+                raw_json_path=(
+                    None
+                    if stage.get("raw_output_path") in (None, "")
+                    else str(stage.get("raw_output_path"))
+                ),
+                normalized_json_path=(
+                    None
+                    if stage.get("normalized_output_path") in (None, "")
+                    else str(stage.get("normalized_output_path"))
+                ),
                 prompt_path=(None if stage.get("prompt_path") in (None, "") else str(stage.get("prompt_path"))),
                 schema_path=(None if stage.get("schema_path") in (None, "") else str(stage.get("schema_path"))),
                 duration_sec=(None if stage.get("duration_sec") is None else float(stage.get("duration_sec"))),
@@ -260,6 +279,8 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
                         "verdict",
                         "stdout_path",
                         "output_path",
+                        "raw_output_path",
+                        "normalized_output_path",
                         "prompt_path",
                         "schema_path",
                         "duration_sec",

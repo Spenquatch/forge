@@ -6,7 +6,13 @@ from typing import Any
 
 from anvil.usage import TokenUsage, extract_token_usage
 
-from .base import BaseCliAgent, CliInvocationPlan, CliRunResult, normalize_str_list, stringify_content
+from .base import (
+    BaseCliAgent,
+    CliInvocationPlan,
+    CliRunResult,
+    normalize_str_list,
+    stringify_content,
+)
 
 
 class CodexCliAgent(BaseCliAgent):
@@ -70,7 +76,7 @@ class CodexCliAgent(BaseCliAgent):
         output_path: Path | None = None
         if output_schema is not None:
             schema_path = tmpdir / "schema.json"
-            output_path = tmpdir / "structured_output.json"
+            output_path = tmpdir / "structured_output.raw.json"
             schema_path.write_text(
                 json.dumps(_codex_compatible_schema(output_schema), indent=2),
                 encoding="utf-8",

@@ -68,7 +68,8 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         schema_path = out_dir / "schema.json"
         stdout_path = out_dir / "response.txt"
         stderr_path = out_dir / "error.txt"
-        output_path = out_dir / "structured_output.json"
+        raw_output_path = out_dir / "structured_output.raw.json"
+        normalized_output_path = out_dir / "structured_output.normalized.json"
 
         write_text(prompt_path, request.prompt_text)
         write_json(schema_path, request.schema)
@@ -96,6 +97,8 @@ class ForgeProviderAdapter(BaseProviderAdapter):
                 prompt_path=str(prompt_path),
                 schema_path=str(schema_path),
                 output_path=None,
+                raw_output_path=None,
+                normalized_output_path=None,
                 structured_output=None,
                 raw_meta={"requested_provider": self.requested_name},
                 error=message,
@@ -138,10 +141,12 @@ class ForgeProviderAdapter(BaseProviderAdapter):
                 error_text = stderr_text or str(exc)
                 command = list(getattr(cli_result, "command", []) or [])
                 raw_meta.update(_cli_result_meta(cli_result))
-                if getattr(cli_result, "structured_output", None) is not None:
-                    maybe_structured = getattr(cli_result, "structured_output")
-                    if isinstance(maybe_structured, dict):
-                        structured_output = maybe_structured
+                try:
+                    maybe_structured = cli_result.structured_output
+                except AttributeError:
+                    maybe_structured = None
+                if isinstance(maybe_structured, dict):
+                    structured_output = maybe_structured
             else:
                 exit_code = 1
                 error_text = str(exc)
@@ -205,7 +210,8 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             (stderr_text if provider_type == "cli" else error_text) or "",
         )
         if structured_output is not None:
-            write_json(output_path, structured_output)
+            write_json(raw_output_path, structured_output)
+            write_json(normalized_output_path, structured_output)
 
         if request.role_config.model and provider_type != "cli":
             raw_meta["model_override_ignored"] = request.role_config.model
@@ -238,7 +244,15 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             stderr_path=str(stderr_path),
             prompt_path=str(prompt_path),
             schema_path=str(schema_path),
-            output_path=str(output_path) if structured_output is not None else None,
+            output_path=(
+                str(normalized_output_path) if structured_output is not None else None
+            ),
+            raw_output_path=(
+                str(raw_output_path) if structured_output is not None else None
+            ),
+            normalized_output_path=(
+                str(normalized_output_path) if structured_output is not None else None
+            ),
             structured_output=structured_output,
             raw_meta=raw_meta,
             error=error_text,
@@ -588,11 +602,14 @@ def _format_provider_failure_summary(kind: str, message: str) -> str:
 def _cli_result_meta(cli_result: Any) -> dict[str, Any]:
     meta = getattr(cli_result, "metadata", None)
     result = dict(meta) if isinstance(meta, Mapping) else {}
-    if getattr(cli_result, "usage", None) is not None:
+    try:
+        usage = cli_result.usage
+    except AttributeError:
+        usage = None
+    if usage is not None:
         try:
-            result["usage"] = asdict(getattr(cli_result, "usage"))
+            result["usage"] = asdict(usage)
         except Exception:
-            usage = getattr(cli_result, "usage")
             result["usage"] = {
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None),

@@ -178,6 +178,10 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                 "round_index": round_index,
                 "text_path": str(stage.get("stdout_path") or ""),
                 "json_path": str(stage.get("output_path") or "") or None,
+                "raw_json_path": str(stage.get("raw_output_path") or "") or None,
+                "normalized_json_path": (
+                    str(stage.get("normalized_output_path") or "") or None
+                ),
                 "summary": str(payload.get("summary", "") or ""),
                 "review_status": "candidate",
                 "review_state": "not_evaluated",

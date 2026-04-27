@@ -164,12 +164,24 @@ def _focus_gate_output_rules_block() -> str:
                 "`selected`, `clarification_requested`, or `no_viable_focus`."
             ),
             (
+                "- Set `decision_basis` to exactly one of "
+                "`request_only`, `repo_probe`, or `rerun_answer`."
+            ),
+            (
+                "- Set `files_hint_disposition` to exactly one of "
+                "`helped`, `hurt`, `ignored`, or `absent`."
+            ),
+            (
                 "- Every `candidates[*]` item must include a non-empty "
                 "`candidate_paths` array built from concrete workspace paths."
             ),
             (
                 "- Candidate `focus_id` values must stay aligned with the canonical "
                 "seam identity implied by their `candidate_paths`."
+            ),
+            (
+                "- Every `candidates[*]` item must include `why_candidate`, "
+                "`evidence_refs`, and `score`."
             ),
             (
                 "- When `decision_state=selected`, set both "
@@ -202,9 +214,64 @@ def _focus_gate_output_rules_block() -> str:
                 "as `[]`."
             ),
             (
+                "- `decision_basis=request_only` requires `gate_path=adjudicate` "
+                "and `checked_files=[]`."
+            ),
+            (
+                "- `decision_basis=repo_probe` and `decision_basis=rerun_answer` "
+                "require `gate_path=deliberate` and non-empty `checked_files`."
+            ),
+            (
                 "- Candidate IDs and adapter secondary IDs must stay consistent with "
                 "the shortlisted seam set you emit."
             ),
+        ]
+    )
+
+
+def _focus_probe_rules_block() -> str:
+    return "\n".join(
+        [
+            "Probe rules:",
+            "- `focus_type` is always `seam`.",
+            "- `files_hint_disposition` must be exactly one of `helped`, `hurt`, `ignored`, or `absent`.",
+            "- `checked_files` must contain the concrete repo files the probe inspected.",
+            "- `checked_files` caps at 6.",
+            "- Candidate count caps at 3.",
+            "- Every candidate must include `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`.",
+            "- Each candidate `score` is a float in `[0.0, 1.0]`.",
+            "- Each `evidence_refs` entry must be a path-only ref that also appears in `checked_files`.",
+            "- The probe exists to make ambiguity concrete. If it cannot point to files, it did not do the job.",
+        ]
+    )
+
+
+def _focus_selection_thresholds_block() -> str:
+    return "\n".join(
+        [
+            "Selection thresholds:",
+            "- `high`: `confidence >= 0.80`",
+            "- `medium`: `0.55 <= confidence < 0.80`",
+            "- `low`: `confidence < 0.55`",
+            "- Select directly when the top candidate is `high`.",
+            "- Select directly when the top candidate is `medium` and leads the second candidate by at least `0.15`.",
+            "- Ambiguity remains when the top candidate is `medium` and the lead is `< 0.15`.",
+            "- Ambiguity remains when the top candidate is `low`.",
+        ]
+    )
+
+
+def _focus_stale_answer_rules_block() -> str:
+    return "\n".join(
+        [
+            "Rerun-answer and stale-answer rules:",
+            "- `focus_gate_answer.question_prompt` must still match the current question prompt after trimming.",
+            "- `focus_gate_answer.selected_option` must still match one current question option after trimming.",
+            "- The selected option must still appear in the current deliberate probe candidate set.",
+            "- If the selected option vanished from the current probe candidate set, the answer is stale.",
+            "- If the selected option remains but the current probe now makes a different candidate clearly dominant, the answer is stale.",
+            "- `freeform_answer` remains advisory context, never the primary matcher.",
+            "- When `clarification_policy = never_ask`, emit `no_viable_focus` with a stale-answer warning instead of re-asking.",
         ]
     )
 
@@ -253,6 +320,38 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def build_focus_probe_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+) -> str:
+    return f"""
+You are the FOCUS_GATE_PROBE stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Return ONLY the JSON object required by the schema.
+- This stage records an internal repo-backed shortlist artifact; it does not emit the final public `focus_decision`.
+
+Your job:
+1. Inspect the task, any `files_hint`/context, and the current workspace snapshot.
+2. Check concrete repo files so the retained shortlist is grounded in current workspace reality.
+3. Emit the internal probe artifact with explicit `checked_files`, scored `candidates`, and `files_hint_disposition`.
+4. Keep ambiguity concrete: if a candidate survives, explain `why_candidate` and cite path-only `evidence_refs`.
+5. Record warnings only as supporting context; warnings do not replace file-backed probe evidence.
+
+{_focus_probe_rules_block()}
+{_focus_selection_thresholds_block()}
+{_analysis_contract_block(contract)}
+
+{_task_block(task, prompt_preamble)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
 
 
 def _focus_gate_deliberate_guidance_block() -> str:
@@ -1097,8 +1196,10 @@ def _build_focus_gate_prompt(
     contract: AnalysisReviewContract,
     *,
     gate_path: str,
+    focus_probe: dict[str, Any] | None = None,
     focus_gate_answer: dict[str, Any] | None = None,
     prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
 ) -> str:
     normalized_gate_path = str(gate_path or "").strip().lower()
     if normalized_gate_path not in {"adjudicate", "deliberate"}:
@@ -1118,22 +1219,29 @@ Critical rules:
 - This stage selects or clarifies the run focus; it does not produce recommendations.
 
 Your job:
-1. Inspect the task, any files_hint/context, and the current workspace snapshot.
+1. Inspect the task, any files_hint/context, the current workspace snapshot, and any supplied probe or rerun context.
 2. Decide whether the run can proceed with a selected seam focus now.
 3. Emit a typed `focus_decision` artifact that matches the fixed schema and state rules.
 4. Keep the shortlisted seam set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.
-5. Ask for clarification only when the missing distinction is real and operator input is required.
+5. Ask for clarification only when the missing distinction is real and operator input is required, and follow the stale-answer rules exactly when a prior answer is now stale.
 
 Gate path: {normalized_gate_path}
 {gate_specific_guidance}
 {_focus_gate_output_rules_block()}
+{_focus_probe_rules_block()}
+{_focus_selection_thresholds_block()}
+{_focus_stale_answer_rules_block()}
 {_analysis_contract_block(contract)}
 
 {_task_block(task, prompt_preamble)}
 
+{_json_block('Focus gate probe artifact', focus_probe)}
+
 {_json_block('Prior focus decision', prior_focus_decision)}
 
 {_json_block('Focus gate answer', focus_gate_answer)}
+
+{_json_block('Stale answer context', stale_answer_context)}
 
 Current workspace snapshot:
 {render_git_snapshot(git_snapshot)}
@@ -1146,8 +1254,10 @@ def build_focus_gate_adjudicate_prompt(
     git_snapshot: dict,
     contract: AnalysisReviewContract,
     *,
+    focus_probe: dict[str, Any] | None = None,
     focus_gate_answer: dict[str, Any] | None = None,
     prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
 ) -> str:
     return _build_focus_gate_prompt(
         task,
@@ -1155,8 +1265,10 @@ def build_focus_gate_adjudicate_prompt(
         git_snapshot,
         contract,
         gate_path="adjudicate",
+        focus_probe=focus_probe,
         focus_gate_answer=focus_gate_answer,
         prior_focus_decision=prior_focus_decision,
+        stale_answer_context=stale_answer_context,
     )
 
 
@@ -1166,8 +1278,10 @@ def build_focus_gate_deliberate_prompt(
     git_snapshot: dict,
     contract: AnalysisReviewContract,
     *,
+    focus_probe: dict[str, Any] | None = None,
     focus_gate_answer: dict[str, Any] | None = None,
     prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
 ) -> str:
     return _build_focus_gate_prompt(
         task,
@@ -1175,8 +1289,10 @@ def build_focus_gate_deliberate_prompt(
         git_snapshot,
         contract,
         gate_path="deliberate",
+        focus_probe=focus_probe,
         focus_gate_answer=focus_gate_answer,
         prior_focus_decision=prior_focus_decision,
+        stale_answer_context=stale_answer_context,
     )
 
 
@@ -1187,8 +1303,10 @@ def build_focus_gate_prompt(
     contract: AnalysisReviewContract,
     *,
     gate_path: str,
+    focus_probe: dict[str, Any] | None = None,
     focus_gate_answer: dict[str, Any] | None = None,
     prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
 ) -> str:
     return _build_focus_gate_prompt(
         task,
@@ -1196,8 +1314,10 @@ def build_focus_gate_prompt(
         git_snapshot,
         contract,
         gate_path=gate_path,
+        focus_probe=focus_probe,
         focus_gate_answer=focus_gate_answer,
         prior_focus_decision=prior_focus_decision,
+        stale_answer_context=stale_answer_context,
     )
 
 

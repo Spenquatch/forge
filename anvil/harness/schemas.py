@@ -334,8 +334,21 @@ FOCUS_GATE_CANDIDATE_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
             "minItems": 1,
         },
+        "why_candidate": {"type": "string"},
+        "evidence_refs": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "score": {"type": "number", "minimum": 0, "maximum": 1},
     },
-    "required": ["focus_id", "focus_summary", "candidate_paths"],
+    "required": [
+        "focus_id",
+        "focus_summary",
+        "candidate_paths",
+        "why_candidate",
+        "evidence_refs",
+        "score",
+    ],
     "additionalProperties": False,
 }
 
@@ -610,6 +623,10 @@ def focus_gate_output_schema() -> dict[str, Any]:
                 "type": "string",
                 "enum": ["selected", "clarification_requested", "no_viable_focus"],
             },
+            "decision_basis": {
+                "type": "string",
+                "enum": ["request_only", "repo_probe", "rerun_answer"],
+            },
             "selected_focus_id": {
                 "anyOf": [
                     {"type": "string"},
@@ -631,9 +648,19 @@ def focus_gate_output_schema() -> dict[str, Any]:
                 "type": "string",
                 "enum": ["high", "medium", "low"],
             },
+            "files_hint_disposition": {
+                "type": "string",
+                "enum": ["helped", "hurt", "ignored", "absent"],
+            },
+            "checked_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 6,
+            },
             "candidates": {
                 "type": "array",
                 "items": FOCUS_GATE_CANDIDATE_SCHEMA,
+                "maxItems": 3,
             },
             "question": FOCUS_GATE_QUESTION_SCHEMA,
             "warnings": {
@@ -646,11 +673,14 @@ def focus_gate_output_schema() -> dict[str, Any]:
             "gate_path",
             "focus_type",
             "decision_state",
+            "decision_basis",
             "selected_focus_id",
             "selected_focus_summary",
             "selected_focus_paths",
             "confidence",
             "confidence_band",
+            "files_hint_disposition",
+            "checked_files",
             "candidates",
             "question",
             "warnings",
@@ -658,3 +688,45 @@ def focus_gate_output_schema() -> dict[str, Any]:
         ],
         "additionalProperties": False,
     }
+
+
+def focus_probe_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "focus_type": {
+                "type": "string",
+                "enum": ["seam"],
+            },
+            "files_hint_disposition": {
+                "type": "string",
+                "enum": ["helped", "hurt", "ignored", "absent"],
+            },
+            "checked_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 6,
+            },
+            "candidates": {
+                "type": "array",
+                "items": FOCUS_GATE_CANDIDATE_SCHEMA,
+                "maxItems": 3,
+            },
+            "warnings": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": [
+            "focus_type",
+            "files_hint_disposition",
+            "checked_files",
+            "candidates",
+            "warnings",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def focus_gate_probe_output_schema() -> dict[str, Any]:
+    return focus_probe_output_schema()

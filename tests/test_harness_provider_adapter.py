@@ -205,6 +205,8 @@ def test_provider_aliases_and_non_cli_json_parsing(tmp_path, monkeypatch):
     assert result.structured_output["status"] == "done"
     assert result.raw_meta["model_override_ignored"] == "ignored-model"
     assert Path(result.stdout_path).exists()
+    assert Path(result.raw_output_path or "").exists()
+    assert Path(result.normalized_output_path or "").exists()
     assert Path(result.output_path or "").exists()
 
 
@@ -237,6 +239,8 @@ def test_provider_adapter_classifies_provider_failures_before_schema_validation(
     assert result.schema_validation_errors == []
     assert "missing required field" not in (result.error or "")
     assert Path(result.stdout_path).exists()
+    assert Path(result.raw_output_path or "").exists()
+    assert Path(result.normalized_output_path or "").exists()
     assert Path(result.output_path or "").exists()
 
 

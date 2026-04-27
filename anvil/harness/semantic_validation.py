@@ -18,6 +18,11 @@ from .contracts import (
 from .types import TaskSpec, canonical_workspace_ref_list
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+_FOCUS_FILES_HINT_DISPOSITIONS = {"helped", "hurt", "ignored", "absent"}
+_FOCUS_DECISION_BASES = {"request_only", "repo_probe", "rerun_answer"}
+_FOCUS_MAX_CANDIDATES = 3
+_FOCUS_MAX_CHECKED_FILES = 6
+_FOCUS_MAX_EVIDENCE_REFS = 2
 
 
 @dataclass
@@ -71,7 +76,14 @@ def validate_stage_output(
         return result
 
     role = canonical_stage_role(role_name)
-    if role == "focus_gate":
+    if role == "focus_gate_probe":
+        result.extend(
+            validate_focus_probe_payload(
+                payload,
+                workspace_paths=workspace_paths,
+            )
+        )
+    elif role == "focus_gate":
         result.extend(
             validate_focus_decision_payload(
                 payload,
@@ -343,6 +355,44 @@ def validate_focus_decision_payload(
         )
         return result
 
+    decision_basis = str(payload.get("decision_basis") or "").strip()
+    if decision_basis not in _FOCUS_DECISION_BASES:
+        result.errors.append(
+            "decision_basis must be exactly one of: request_only, repo_probe, rerun_answer."
+        )
+
+    files_hint_disposition = str(payload.get("files_hint_disposition") or "").strip()
+    if files_hint_disposition not in _FOCUS_FILES_HINT_DISPOSITIONS:
+        result.errors.append(
+            "files_hint_disposition must be exactly one of: helped, hurt, ignored, absent."
+        )
+
+    checked_files = _validated_checked_files(
+        result,
+        checked_files=payload.get("checked_files"),
+        field_name="checked_files",
+        require_non_empty=False,
+        workspace_paths=workspace_path_set,
+    )
+    if decision_basis == "request_only":
+        if gate_path != "adjudicate":
+            result.errors.append(
+                "decision_basis=request_only requires gate_path=adjudicate."
+            )
+        if checked_files:
+            result.errors.append(
+                "checked_files must serialize as [] when decision_basis=request_only."
+            )
+    elif decision_basis in {"repo_probe", "rerun_answer"}:
+        if gate_path != "deliberate":
+            result.errors.append(
+                f"decision_basis={decision_basis} requires gate_path=deliberate."
+            )
+        if not checked_files:
+            result.errors.append(
+                f"checked_files must be non-empty when decision_basis={decision_basis}."
+            )
+
     selected_focus_id = payload.get("selected_focus_id")
     selected_focus_summary = payload.get("selected_focus_summary")
     selected_focus_id_text = _nullable_non_empty_string(selected_focus_id)
@@ -363,7 +413,19 @@ def validate_focus_decision_payload(
         result,
         candidates=candidates,
         workspace_paths=workspace_path_set,
+        checked_files=checked_files,
+        require_evidence_refs=(decision_basis != "request_only"),
     )
+
+    confidence = payload.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        expected_confidence_band = _expected_confidence_band(float(confidence))
+        actual_confidence_band = str(payload.get("confidence_band") or "").strip()
+        if actual_confidence_band != expected_confidence_band:
+            result.errors.append(
+                "confidence_band must match confidence thresholds: "
+                f"expected {expected_confidence_band} for confidence={float(confidence):.2f}."
+            )
 
     question = payload.get("question")
     question_is_canonical_empty = (
@@ -480,6 +542,54 @@ def validate_focus_decision_payload(
             "adapter_plan.secondary_focus_ids must be a subset of candidates: "
             + ", ".join(unknown_secondary_focus_ids)
         )
+
+    return result
+
+
+def validate_focus_probe_payload(
+    payload: dict[str, Any] | None,
+    *,
+    workspace_paths: Iterable[str] | None = None,
+) -> SemanticValidationResult:
+    result = SemanticValidationResult()
+    if not isinstance(payload, dict) or not payload:
+        result.errors.append("Structured output is empty, so semantic validation could not run.")
+        return result
+
+    workspace_path_set = _workspace_path_set(workspace_paths)
+    focus_type = str(payload.get("focus_type") or "").strip()
+    if focus_type != "seam":
+        result.errors.append("focus_type must be exactly 'seam'.")
+
+    files_hint_disposition = str(payload.get("files_hint_disposition") or "").strip()
+    if files_hint_disposition not in _FOCUS_FILES_HINT_DISPOSITIONS:
+        result.errors.append(
+            "files_hint_disposition must be exactly one of: helped, hurt, ignored, absent."
+        )
+
+    checked_files = _validated_checked_files(
+        result,
+        checked_files=payload.get("checked_files"),
+        field_name="checked_files",
+        require_non_empty=True,
+        workspace_paths=workspace_path_set,
+    )
+
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        result.errors.append("candidates must be a list.")
+        candidates = []
+    _validated_focus_candidates(
+        result,
+        candidates=candidates,
+        workspace_paths=workspace_path_set,
+        checked_files=checked_files,
+        require_evidence_refs=True,
+    )
+
+    warnings = payload.get("warnings")
+    if not isinstance(warnings, list):
+        result.errors.append("warnings must be a list.")
 
     return result
 
@@ -1213,20 +1323,30 @@ def _validated_focus_candidates(
     *,
     candidates: list[Any],
     workspace_paths: set[str],
+    checked_files: list[str],
+    require_evidence_refs: bool,
 ) -> tuple[list[str], dict[str, list[str]]]:
     candidate_ids: list[str] = []
     candidate_paths_by_id: dict[str, list[str]] = {}
+    if len(candidates) > _FOCUS_MAX_CANDIDATES:
+        result.errors.append(
+            f"candidates must contain at most {_FOCUS_MAX_CANDIDATES} item(s)."
+        )
+    checked_file_set = set(checked_files)
     for index, item in enumerate(candidates, start=1):
         if not isinstance(item, dict):
             result.errors.append(f"candidates[{index}] must be an object.")
             continue
         focus_id = str(item.get("focus_id") or "").strip()
         focus_summary = str(item.get("focus_summary") or "").strip()
+        why_candidate = str(item.get("why_candidate") or "").strip()
         if not focus_id:
             result.errors.append(f"candidates[{index}].focus_id must be non-empty.")
             continue
         if not focus_summary:
             result.errors.append(f"candidates[{index}].focus_summary must be non-empty.")
+        if not why_candidate:
+            result.errors.append(f"candidates[{index}].why_candidate must be non-empty.")
         candidate_paths = _canonical_workspace_paths(item.get("candidate_paths"))
         if not candidate_paths:
             result.errors.append(
@@ -1244,6 +1364,27 @@ def _validated_focus_candidates(
                 f"candidates[{index}].focus_id must equal the canonical seam ID derived from candidate_paths: "
                 f"expected {expected_focus_id}, got {focus_id}."
             )
+        unexpected_candidate_paths = sorted(set(candidate_paths) - checked_file_set)
+        if checked_file_set and unexpected_candidate_paths:
+            result.errors.append(
+                f"candidates[{index}].candidate_paths must be a subset of checked_files: "
+                + ", ".join(unexpected_candidate_paths)
+            )
+        evidence_items = _validated_focus_candidate_evidence_refs(
+            result,
+            evidence_refs=item.get("evidence_refs"),
+            checked_file_set=checked_file_set,
+            field_name=f"candidates[{index}].evidence_refs",
+        )
+        if require_evidence_refs and not evidence_items:
+            result.errors.append(
+                f"candidates[{index}].evidence_refs must contain at least one checked file path."
+            )
+        _validate_focus_candidate_score(
+            result,
+            score=item.get("score"),
+            field_name=f"candidates[{index}].score",
+        )
         candidate_ids.append(focus_id)
         candidate_paths_by_id[focus_id] = candidate_paths
     duplicates = sorted(
@@ -1252,8 +1393,96 @@ def _validated_focus_candidates(
     if duplicates:
         result.errors.append(
             "candidates contains duplicate focus IDs: " + ", ".join(duplicates)
-        )
+    )
     return candidate_ids, candidate_paths_by_id
+
+
+def _validated_checked_files(
+    result: SemanticValidationResult,
+    *,
+    checked_files: Any,
+    field_name: str,
+    require_non_empty: bool,
+    workspace_paths: set[str],
+) -> list[str]:
+    if not isinstance(checked_files, list):
+        result.errors.append(f"{field_name} must be a list.")
+        return []
+    normalized_checked_files = _canonical_workspace_paths(checked_files)
+    if require_non_empty and not normalized_checked_files:
+        result.errors.append(f"{field_name} must contain at least one non-empty path.")
+    if len(normalized_checked_files) > _FOCUS_MAX_CHECKED_FILES:
+        result.errors.append(
+            f"{field_name} must contain at most {_FOCUS_MAX_CHECKED_FILES} item(s)."
+        )
+    duplicates = sorted(
+        {
+            path
+            for path in normalized_checked_files
+            if normalized_checked_files.count(path) > 1
+        }
+    )
+    if duplicates:
+        result.errors.append(
+            f"{field_name} contains duplicate paths: " + ", ".join(duplicates)
+        )
+    unknown_files = sorted(set(normalized_checked_files) - workspace_paths)
+    if unknown_files:
+        result.errors.append(
+            f"{field_name} contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_files)
+        )
+    return normalized_checked_files
+
+
+def _validated_focus_candidate_evidence_refs(
+    result: SemanticValidationResult,
+    *,
+    evidence_refs: Any,
+    checked_file_set: set[str],
+    field_name: str,
+) -> list[str]:
+    if not isinstance(evidence_refs, list):
+        result.errors.append(f"{field_name} must be a list.")
+        return []
+    normalized_refs = _canonical_workspace_paths(evidence_refs)
+    if len(normalized_refs) > _FOCUS_MAX_EVIDENCE_REFS:
+        result.errors.append(
+            f"{field_name} must contain at most {_FOCUS_MAX_EVIDENCE_REFS} item(s)."
+        )
+    duplicates = sorted({ref for ref in normalized_refs if normalized_refs.count(ref) > 1})
+    if duplicates:
+        result.errors.append(
+            f"{field_name} contains duplicate refs: " + ", ".join(duplicates)
+        )
+    unexpected_refs = sorted(set(normalized_refs) - checked_file_set)
+    if unexpected_refs:
+        result.errors.append(
+            f"{field_name} must be a subset of checked_files: " + ", ".join(unexpected_refs)
+        )
+    return normalized_refs
+
+
+def _validate_focus_candidate_score(
+    result: SemanticValidationResult,
+    *,
+    score: Any,
+    field_name: str,
+) -> None:
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        result.errors.append(f"{field_name} must be a number in [0.0, 1.0].")
+        return
+    numeric_score = float(score)
+    if numeric_score < 0 or numeric_score > 1:
+        result.errors.append(f"{field_name} must be a number in [0.0, 1.0].")
+
+
+def _expected_confidence_band(confidence: float) -> str:
+    if confidence >= 0.80:
+        return "high"
+    if confidence >= 0.55:
+        return "medium"
+    return "low"
 
 
 def _validated_focus_question(

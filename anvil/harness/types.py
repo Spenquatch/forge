@@ -653,6 +653,8 @@ class ProviderRun:
     prompt_path: str
     schema_path: str
     output_path: Optional[str]
+    raw_output_path: Optional[str] = None
+    normalized_output_path: Optional[str] = None
     structured_output: Optional[dict[str, Any]] = None
     raw_meta: dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None

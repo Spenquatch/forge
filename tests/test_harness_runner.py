@@ -78,7 +78,9 @@ def _failed_provider_run(
         stderr_path=str(out_dir / "error.txt"),
         prompt_path=str(out_dir / "prompt.txt"),
         schema_path=str(out_dir / "schema.json"),
-        output_path=str(out_dir / "structured_output.json"),
+        output_path=None,
+        raw_output_path=None,
+        normalized_output_path=None,
         structured_output=None,
         raw_meta={},
         error=message,
@@ -93,7 +95,7 @@ def _successful_provider_run(request, *, payload: dict[str, object]) -> Provider
     (out_dir / "prompt.txt").write_text(request.prompt_text, encoding="utf-8")
     (out_dir / "response.txt").write_text("ok", encoding="utf-8")
     (out_dir / "error.txt").write_text("", encoding="utf-8")
-    (out_dir / "structured_output.json").write_text(
+    (out_dir / "structured_output.raw.json").write_text(
         json.dumps(payload, indent=2, sort_keys=False),
         encoding="utf-8",
     )
@@ -111,7 +113,9 @@ def _successful_provider_run(request, *, payload: dict[str, object]) -> Provider
         stderr_path=str(out_dir / "error.txt"),
         prompt_path=str(out_dir / "prompt.txt"),
         schema_path=str(out_dir / "schema.json"),
-        output_path=str(out_dir / "structured_output.json"),
+        output_path=str(out_dir / "structured_output.normalized.json"),
+        raw_output_path=str(out_dir / "structured_output.raw.json"),
+        normalized_output_path=str(out_dir / "structured_output.normalized.json"),
         structured_output=payload,
         raw_meta={},
         error=None,
@@ -504,7 +508,9 @@ class _AcceptingHarnessAdapter:
             stderr_path=str(out_dir / "error.txt"),
             prompt_path=str(out_dir / "prompt.txt"),
             schema_path=str(out_dir / "schema.json"),
-            output_path=str(out_dir / "structured_output.json"),
+            output_path=str(out_dir / "structured_output.normalized.json"),
+            raw_output_path=str(out_dir / "structured_output.raw.json"),
+            normalized_output_path=str(out_dir / "structured_output.normalized.json"),
             structured_output=payload,
             raw_meta={},
             error=None,
@@ -616,6 +622,12 @@ class _AcceptingHarnessAdapter:
 class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
     selected_focus_id = _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
     secondary_focus_id = _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID
+    selected_focus_paths = [".github/workflows/codex-cli-release-watch.yml"]
+    secondary_focus_paths = [".github/workflows/claude-code-release-watch.yml"]
+    probe_checked_files = [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+    ]
 
     def __init__(self) -> None:
         self.prompt_texts: dict[str, list[str]] = {}
@@ -625,29 +637,63 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             return "Primary release trigger workflow seam."
         return "Rollback workflow seam."
 
-    def _selected_focus_decision(self) -> dict[str, object]:
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": self.selected_focus_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.selected_focus_id
+                ),
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow remains the governing seam.",
+                "evidence_refs": [self.probe_checked_files[0]],
+                "score": 0.74,
+            },
+            {
+                "focus_id": self.secondary_focus_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.secondary_focus_id
+                ),
+                "candidate_paths": list(self.secondary_focus_paths),
+                "why_candidate": "The rollback workflow is still a plausible sibling seam.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.61,
+            },
+        ]
+
+    def _focus_gate_probe_payload(self) -> dict[str, object]:
         return {
-            "gate_path": "adjudicate",
+            "focus_type": "seam",
+            "files_hint_disposition": "helped",
+            "checked_files": list(self.probe_checked_files),
+            "candidates": self._probe_candidates(),
+            "warnings": ["The task mixes release and rollback concerns."],
+        }
+
+    def _selected_focus_decision(
+        self,
+        *,
+        gate_path: str,
+        decision_basis: str,
+        checked_files: list[str],
+        files_hint_disposition: str,
+    ) -> dict[str, object]:
+        candidates = self._probe_candidates()
+        if not checked_files:
+            candidates = [{**item, "evidence_refs": []} for item in candidates]
+        return {
+            "gate_path": gate_path,
             "focus_type": "seam",
             "decision_state": "selected",
+            "decision_basis": decision_basis,
             "selected_focus_id": self.selected_focus_id,
             "selected_focus_summary": "Use the release trigger workflow seam as the run focus.",
+            "selected_focus_paths": list(self.selected_focus_paths),
             "confidence": 0.92,
             "confidence_band": "high",
-            "candidates": [
-                {
-                    "focus_id": self.selected_focus_id,
-                    "focus_summary": self._focus_gate_candidate_summary(
-                        self.selected_focus_id
-                    ),
-                },
-                {
-                    "focus_id": self.secondary_focus_id,
-                    "focus_summary": self._focus_gate_candidate_summary(
-                        self.secondary_focus_id
-                    ),
-                },
-            ],
+            "files_hint_disposition": files_hint_disposition,
+            "checked_files": checked_files,
+            "candidates": candidates,
             "question": {"prompt": "", "options": []},
             "warnings": [],
             "adapter_plan": {
@@ -661,24 +707,15 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             "gate_path": "deliberate",
             "focus_type": "seam",
             "decision_state": "clarification_requested",
+            "decision_basis": "repo_probe",
             "selected_focus_id": None,
             "selected_focus_summary": None,
+            "selected_focus_paths": [],
             "confidence": 0.42,
             "confidence_band": "low",
-            "candidates": [
-                {
-                    "focus_id": self.selected_focus_id,
-                    "focus_summary": self._focus_gate_candidate_summary(
-                        self.selected_focus_id
-                    ),
-                },
-                {
-                    "focus_id": self.secondary_focus_id,
-                    "focus_summary": self._focus_gate_candidate_summary(
-                        self.secondary_focus_id
-                    ),
-                },
-            ],
+            "files_hint_disposition": "helped",
+            "checked_files": list(self.probe_checked_files),
+            "candidates": self._probe_candidates(),
             "question": {
                 "prompt": "Which seam should this run prioritize?",
                 "options": [self.selected_focus_id, self.secondary_focus_id],
@@ -698,10 +735,14 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             "gate_path": "adjudicate",
             "focus_type": "seam",
             "decision_state": "no_viable_focus",
+            "decision_basis": "request_only",
             "selected_focus_id": None,
             "selected_focus_summary": None,
+            "selected_focus_paths": [],
             "confidence": 0.18,
             "confidence_band": "low",
+            "files_hint_disposition": "absent",
+            "checked_files": [],
             "candidates": [],
             "question": {"prompt": "", "options": []},
             "warnings": ["No seam candidate had enough direct workspace evidence."],
@@ -740,12 +781,33 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
         return (self.selected_focus_id, "")
 
     def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        if "Gate path: adjudicate" in prompt_text:
+            return self._selected_focus_decision(
+                gate_path="adjudicate",
+                decision_basis="request_only",
+                checked_files=[],
+                files_hint_disposition="absent",
+            )
+        if '"question_prompt": "Which seam is stale?"' in prompt_text:
+            return self._clarification_focus_decision()
+        if f'"selected_option": "{self.selected_focus_id}"' in prompt_text:
+            return self._selected_focus_decision(
+                gate_path="deliberate",
+                decision_basis="rerun_answer",
+                checked_files=list(self.probe_checked_files),
+                files_hint_disposition="helped",
+            )
         if "Gate path: deliberate" in prompt_text:
             return self._clarification_focus_decision()
-        return self._selected_focus_decision()
+        raise AssertionError(f"Unexpected focus gate prompt: {prompt_text}")
 
     def run(self, request):
         self.prompt_texts.setdefault(request.role_name, []).append(request.prompt_text)
+        if request.role_name == "focus_gate_probe":
+            return _successful_provider_run(
+                request,
+                payload=self._focus_gate_probe_payload(),
+            )
         if request.role_name == "focus_gate":
             return _successful_provider_run(
                 request,
@@ -763,22 +825,38 @@ class _NoViableFocusHarnessAdapter(_FocusGateHarnessAdapter):
         return self._no_viable_focus_decision()
 
 
+class _AdjudicateConfiguredReturnsDeliberateHarnessAdapter(_FocusGateHarnessAdapter):
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+
+
 class _MismatchSelectsOnRecordedReaskHarnessAdapter(_FocusGateHarnessAdapter):
     def __init__(self) -> None:
         super().__init__()
         self.focus_gate_calls = 0
 
     def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
-        if "Gate path: deliberate" not in prompt_text:
-            return self._selected_focus_decision()
+        if "Gate path: adjudicate" in prompt_text:
+            return self._selected_focus_decision(
+                gate_path="adjudicate",
+                decision_basis="request_only",
+                checked_files=[],
+                files_hint_disposition="absent",
+            )
         self.focus_gate_calls += 1
         if self.focus_gate_calls == 1:
             return self._clarification_focus_decision()
-        return {
-            **self._selected_focus_decision(),
-            "gate_path": "deliberate",
-            "focus_type": "seam",
-        }
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="rerun_answer",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
 
 
 class _DriftingFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
@@ -2252,7 +2330,7 @@ class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
             }
             (out_dir / "response.txt").write_text("quota", encoding="utf-8")
             (out_dir / "error.txt").write_text(payload["result"], encoding="utf-8")
-            (out_dir / "structured_output.json").write_text(
+            (out_dir / "structured_output.raw.json").write_text(
                 json.dumps(payload), encoding="utf-8"
             )
             return ProviderRun(
@@ -2269,7 +2347,11 @@ class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
                 stderr_path=str(out_dir / "error.txt"),
                 prompt_path=str(out_dir / "prompt.txt"),
                 schema_path=str(out_dir / "schema.json"),
-                output_path=str(out_dir / "structured_output.json"),
+                output_path=str(out_dir / "structured_output.normalized.json"),
+                raw_output_path=str(out_dir / "structured_output.raw.json"),
+                normalized_output_path=str(
+                    out_dir / "structured_output.normalized.json"
+                ),
                 structured_output=payload,
                 raw_meta={},
                 error="Provider quota exhausted: You've hit your limit · resets 1pm (America/Indiana/Indianapolis)",
@@ -2623,8 +2705,13 @@ def test_analysis_review_runner_focus_gate_selected_records_stage_and_prompt_han
 
     assert summary["verdict"] == "accepted"
     assert focus_decision["decision_state"] == "selected"
+    assert focus_decision["decision_basis"] == "request_only"
     assert summary["run_details"]["focus_decision"] == focus_decision
     assert summary_json["focus_decision"] == focus_decision
+    assert [stage["role_name"] for stage in summary["agent_stages"][:2]] == [
+        "focus_gate",
+        "proposer",
+    ]
     assert focus_stage["role_name"] == "focus_gate"
     assert focus_stage["requested_access"] == "read"
     assert focus_stage["effective_access"] == "read"
@@ -2635,6 +2722,7 @@ def test_analysis_review_runner_focus_gate_selected_records_stage_and_prompt_han
         "focus_type": "seam",
         "decision_state": "selected",
     }
+    assert "focus_gate_probe" not in adapter.prompt_texts
     assert "Focus Gate Decision:" in adapter.prompt_texts["proposer"][-1]
     assert (
         f"selected_focus_id: {_SIMPLE_PRIMARY_CANONICAL_SEAM_ID}"
@@ -2666,6 +2754,7 @@ def test_analysis_review_runner_focus_gate_clarification_blocks_before_proposer(
 
     summary = runner.run()
     focus_decision = summary["focus_decision"]
+    probe_stage, focus_stage = summary["agent_stages"]
 
     assert summary["verdict"] == "blocked_for_clarification"
     assert summary["verdicts"]["content_verdict"] == "blocked_for_clarification"
@@ -2680,9 +2769,11 @@ def test_analysis_review_runner_focus_gate_clarification_blocks_before_proposer(
         "candidates": focus_decision["candidates"],
         "warnings": focus_decision["warnings"],
     }
-    assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
-    assert summary["agent_stages"][-1]["role_name"] == "focus_gate"
-    assert summary["agent_stages"][0]["round_index"] == 0
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == [
+        "focus_gate_probe",
+        "focus_gate",
+    ]
+    assert focus_stage["round_index"] == 0
     assert summary["validator_rounds"] == []
     assert not summary.get("analysis_review_status")
     assert Path(summary["artifacts"]["summary_json"]).exists()
@@ -2734,7 +2825,7 @@ def test_analysis_review_runner_focus_gate_no_viable_blocks_before_proposer(
     assert Path(summary["artifacts"]["report_md"]).exists()
 
 
-def test_analysis_review_runner_focus_gate_matching_rerun_answer_uses_adjudicate(
+def test_analysis_review_runner_focus_gate_matching_rerun_answer_uses_deliberate(
     tmp_path,
     monkeypatch,
 ):
@@ -2761,16 +2852,56 @@ def test_analysis_review_runner_focus_gate_matching_rerun_answer_uses_adjudicate
     )
 
     summary = runner.run()
-    focus_stage = summary["agent_stages"][0]
+    _, focus_stage = summary["agent_stages"][:2]
 
     assert summary["verdict"] == "accepted"
-    assert focus_stage["structured_output"]["gate_path"] == "adjudicate"
-    assert [stage["role_name"] for stage in summary["agent_stages"]].count(
-        "focus_gate"
-    ) == 1
-    assert len(adapter.prompt_texts["focus_gate"]) == 2
+    assert [stage["role_name"] for stage in summary["agent_stages"][:2]] == [
+        "focus_gate_probe",
+        "focus_gate",
+    ]
+    assert focus_stage["structured_output"]["gate_path"] == "deliberate"
+    assert focus_stage["structured_output"]["decision_basis"] == "rerun_answer"
+    assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
+    assert len(adapter.prompt_texts["focus_gate"]) == 1
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
-    assert "Gate path: adjudicate" in adapter.prompt_texts["focus_gate"][1]
+
+
+def test_analysis_review_runner_focus_gate_adjudicate_config_rejects_deliberate_return(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="adjudicate"),
+    )
+
+    adapter = _AdjudicateConfiguredReturnsDeliberateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_stage = summary["agent_stages"][0]
+
+    assert summary["verdict"] == "harness_error"
+    assert summary["failure_details"]["stage"] == "focus_gate"
+    assert focus_stage["role_name"] == "focus_gate"
+    assert focus_stage["failure_kind"] == "semantic_validation_error"
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert any(
+        "gate_path must match expected_gate_path=adjudicate; got deliberate."
+        in error
+        for error in focus_stage["semantic_validation_errors"]
+    )
 
 
 def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_recorded_reask(
@@ -2801,7 +2932,7 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_re
 
     summary = runner.run()
     focus_decision = summary["focus_decision"]
-    focus_stage = summary["agent_stages"][0]
+    probe_stage, focus_stage = summary["agent_stages"][:2]
     focus_envelope = json.loads(
         Path(focus_stage["stdout_path"])
         .with_name("run.envelope.json")
@@ -2820,7 +2951,10 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_re
     assert summary["failure_details"]["candidates"] == focus_decision["candidates"]
     assert summary["failure_details"]["warnings"] == focus_decision["warnings"]
     assert summary["focus_decision"]["decision_state"] == "clarification_requested"
-    assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == [
+        "focus_gate_probe",
+        "focus_gate",
+    ]
     assert focus_stage["round_index"] == 0
     assert (
         focus_stage["structured_output"]["decision_state"] == "clarification_requested"
@@ -2845,9 +2979,9 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_re
     )
     assert summary["validator_rounds"] == []
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
-    assert len(adapter.prompt_texts["focus_gate"]) == 2
+    assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
+    assert len(adapter.prompt_texts["focus_gate"]) == 1
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
-    assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][1]
 
 
 @pytest.mark.parametrize(
@@ -2887,7 +3021,7 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_a
 
     summary = runner.run()
     focus_decision = summary["focus_decision"]
-    focus_stage = summary["agent_stages"][0]
+    probe_stage, focus_stage = summary["agent_stages"][:2]
 
     assert summary["verdict"] == "blocked_for_clarification"
     assert summary["verdicts"]["content_verdict"] == "blocked_for_clarification"
@@ -2901,7 +3035,10 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_a
     assert summary["failure_details"]["candidates"] == focus_decision["candidates"]
     assert summary["failure_details"]["warnings"] == focus_decision["warnings"]
     assert summary["focus_decision"]["decision_state"] == "clarification_requested"
-    assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == [
+        "focus_gate_probe",
+        "focus_gate",
+    ]
     assert focus_stage["round_index"] == 0
     assert (
         focus_stage["structured_output"]["decision_state"] == "clarification_requested"
@@ -2914,9 +3051,9 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_a
     assert focus_stage["metadata"]["focus_gate"]["focus_type"] == "seam"
     assert summary["validator_rounds"] == []
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
-    assert len(adapter.prompt_texts["focus_gate"]) == 2
+    assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
+    assert len(adapter.prompt_texts["focus_gate"]) == 1
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
-    assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][1]
 
 
 def test_analysis_review_runner_focus_gate_selected_seam_drift_fails_semantic_validation(
@@ -2948,7 +3085,70 @@ def test_analysis_review_runner_focus_gate_selected_seam_drift_fails_semantic_va
     assert proposer_stage["role_name"] == "proposer"
     assert proposer_stage["failure_kind"] == "semantic_validation_error"
     assert any(
-        "primary_seam.seam_id drifted from the selected focus gate seam" in error
+        "primary_seam.paths drifted from the selected focus gate paths after normalization"
+        in error
+        for error in proposer_stage["semantic_validation_errors"]
+    )
+
+
+def test_analysis_review_runner_proposer_raw_and_normalized_artifacts_show_drift(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="adjudicate"),
+    )
+
+    adapter = _FocusGateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    original_normalize = runner._normalize_analysis_review_payload
+
+    def _normalize_with_drift(*args, **kwargs):
+        normalized, payload_provenance, warnings = original_normalize(*args, **kwargs)
+        if kwargs.get("role_name") == "proposer":
+            normalized["primary_seam"] = dict(normalized["primary_seam"])
+            normalized["primary_seam"]["paths"] = [
+                ".github/workflows/claude-code-release-watch.yml"
+            ]
+        return normalized, payload_provenance, warnings
+
+    monkeypatch.setattr(
+        runner,
+        "_normalize_analysis_review_payload",
+        _normalize_with_drift,
+    )
+
+    summary = runner.run()
+    proposer_stage = summary["agent_stages"][1]
+    raw_payload = load_structured_file(Path(proposer_stage["raw_output_path"]))
+    normalized_payload = load_structured_file(
+        Path(proposer_stage["normalized_output_path"])
+    )
+
+    assert summary["verdict"] == "harness_error"
+    assert proposer_stage["role_name"] == "proposer"
+    assert proposer_stage["failure_kind"] == "semantic_validation_error"
+    assert raw_payload["primary_seam"]["paths"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    assert normalized_payload["primary_seam"]["paths"] == [
+        ".github/workflows/claude-code-release-watch.yml"
+    ]
+    assert raw_payload["primary_seam"]["paths"] != normalized_payload["primary_seam"]["paths"]
+    assert any(
+        "primary_seam.paths drifted from the selected focus gate paths after normalization"
+        in error
         for error in proposer_stage["semantic_validation_errors"]
     )
 

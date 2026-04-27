@@ -17,7 +17,9 @@ def _candidate_stage(
             "recommendations": [],
         },
         "stdout_path": f"/tmp/{role_name}-{stage_index}.txt",
-        "output_path": f"/tmp/{role_name}-{stage_index}.json",
+        "output_path": f"/tmp/{role_name}-{stage_index}.normalized.json",
+        "raw_output_path": f"/tmp/{role_name}-{stage_index}.raw.json",
+        "normalized_output_path": f"/tmp/{role_name}-{stage_index}.normalized.json",
         "requested_access": "none",
         "effective_access": "none",
     }

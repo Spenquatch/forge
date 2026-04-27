@@ -165,6 +165,7 @@ def _focus_decision_payload(
         "gate_path": "adjudicate",
         "focus_type": "seam",
         "decision_state": decision_state,
+        "decision_basis": "request_only",
         "selected_focus_id": release_focus_id,
         "selected_focus_summary": "Release trigger workflows are the governing seam.",
         "selected_focus_paths": [
@@ -173,6 +174,8 @@ def _focus_decision_payload(
         ],
         "confidence": 0.86,
         "confidence_band": "high",
+        "files_hint_disposition": "absent",
+        "checked_files": [],
         "candidates": [
             {
                 "focus_id": release_focus_id,
@@ -181,6 +184,9 @@ def _focus_decision_payload(
                     "./.github/workflows/release.yml",
                     ".github/workflows/release.yml",
                 ],
+                "why_candidate": "The release workflow paths are the governing seam.",
+                "evidence_refs": [],
+                "score": 0.86,
             },
             {
                 "focus_id": nightly_focus_id,
@@ -189,6 +195,9 @@ def _focus_decision_payload(
                     ".github/workflows/nightly.yml",
                     "./.github/workflows/nightly.yml",
                 ],
+                "why_candidate": "The nightly workflow remains a plausible sibling seam.",
+                "evidence_refs": [],
+                "score": 0.61,
             },
         ],
         "question": {"prompt": "", "options": []},
@@ -200,9 +209,17 @@ def _focus_decision_payload(
     }
     if decision_state == "clarification_requested":
         payload["gate_path"] = "deliberate"
+        payload["decision_basis"] = "repo_probe"
         payload["selected_focus_id"] = None
         payload["selected_focus_summary"] = None
         payload["selected_focus_paths"] = []
+        payload["files_hint_disposition"] = "helped"
+        payload["checked_files"] = [
+            "./.github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
+        ]
+        payload["candidates"][0]["evidence_refs"] = ["./.github/workflows/release.yml"]
+        payload["candidates"][1]["evidence_refs"] = [".github/workflows/nightly.yml"]
         payload["question"] = {
             "prompt": "Which seam should this run prioritize?",
             "options": [release_focus_id, nightly_focus_id],
@@ -215,6 +232,8 @@ def _focus_decision_payload(
         payload["selected_focus_id"] = None
         payload["selected_focus_summary"] = None
         payload["selected_focus_paths"] = []
+        payload["files_hint_disposition"] = "absent"
+        payload["checked_files"] = []
         payload["candidates"] = []
         payload["adapter_plan"] = {
             "primary_focus_id": None,
