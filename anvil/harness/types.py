@@ -23,10 +23,146 @@ VALID_VALIDATOR_RUN_WHEN = {
 }
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
 VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
+VALID_FOCUS_GATE_DEFAULT_PATHS = {"adjudicate", "deliberate"}
+VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {"block_for_clarification"}
+M1_ALLOWED_FOCUS_TYPES = ["seam"]
 
 
 def is_analysis_review_strategy_kind(strategy_kind: str) -> bool:
     return strategy_kind in ANALYSIS_REVIEW_STRATEGY_KINDS
+
+
+def _reject_unknown_keys(
+    data: dict[str, Any], *, allowed_keys: set[str], field_name: str
+) -> None:
+    unknown_keys = sorted(set(data.keys()) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(
+            f"{field_name} contains unsupported keys: {', '.join(unknown_keys)}."
+        )
+
+
+def _validate_m1_allowed_focus_types(value: Any, *, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list.")
+    normalized = [str(item).strip().lower() for item in value]
+    if normalized != M1_ALLOWED_FOCUS_TYPES:
+        raise ValueError(f"{field_name} must be exactly {M1_ALLOWED_FOCUS_TYPES!r}.")
+    return normalized
+
+
+@dataclass
+class TaskFocusGateConfig:
+    enabled: Optional[bool] = None
+    allowed_focus_types: Optional[list[str]] = None
+    clarification_policy: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "TaskFocusGateConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("focus_gate must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"enabled", "allowed_focus_types", "clarification_policy"},
+            field_name="focus_gate",
+        )
+        allowed_focus_types = data.get("allowed_focus_types")
+        clarification_policy = data.get("clarification_policy")
+        normalized_clarification_policy = None
+        if clarification_policy is not None:
+            normalized_clarification_policy = str(clarification_policy).strip().lower()
+            if (
+                normalized_clarification_policy
+                not in VALID_FOCUS_GATE_CLARIFICATION_POLICIES
+            ):
+                raise ValueError(
+                    "focus_gate.clarification_policy must be one of: "
+                    + ", ".join(sorted(VALID_FOCUS_GATE_CLARIFICATION_POLICIES))
+                    + "."
+                )
+        return cls(
+            enabled=(
+                None
+                if "enabled" not in data or data.get("enabled") is None
+                else bool(data.get("enabled"))
+            ),
+            allowed_focus_types=(
+                None
+                if allowed_focus_types is None
+                else _validate_m1_allowed_focus_types(
+                    allowed_focus_types, field_name="focus_gate.allowed_focus_types"
+                )
+            ),
+            clarification_policy=normalized_clarification_policy,
+        )
+
+
+@dataclass
+class StrategyFocusGateConfig:
+    enabled: Optional[bool] = None
+    default_path: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "StrategyFocusGateConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("focus_gate must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"enabled", "default_path"},
+            field_name="focus_gate",
+        )
+        default_path = data.get("default_path")
+        normalized_default_path = None
+        if default_path is not None:
+            normalized_default_path = str(default_path).strip().lower()
+            if normalized_default_path not in VALID_FOCUS_GATE_DEFAULT_PATHS:
+                raise ValueError(
+                    "focus_gate.default_path must be one of: "
+                    + ", ".join(sorted(VALID_FOCUS_GATE_DEFAULT_PATHS))
+                    + "."
+                )
+        return cls(
+            enabled=(
+                None
+                if "enabled" not in data or data.get("enabled") is None
+                else bool(data.get("enabled"))
+            ),
+            default_path=normalized_default_path,
+        )
+
+
+@dataclass
+class FocusGateAnswer:
+    question_prompt: str
+    selected_option: str
+    freeform_answer: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "FocusGateAnswer | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("focus_gate_answer must be a mapping when provided.")
+        question_prompt = str(data.get("question_prompt", "")).strip()
+        if not question_prompt:
+            raise ValueError(
+                "focus_gate_answer.question_prompt must be a non-empty string."
+            )
+        selected_option = str(data.get("selected_option", "")).strip()
+        if not selected_option:
+            raise ValueError(
+                "focus_gate_answer.selected_option must be a non-empty string."
+            )
+        freeform_answer = data.get("freeform_answer", "")
+        return cls(
+            question_prompt=question_prompt,
+            selected_option=selected_option,
+            freeform_answer="" if freeform_answer is None else str(freeform_answer),
+        )
 
 
 @dataclass
@@ -147,6 +283,8 @@ class TaskSpec:
     files_hint: list[str] = field(default_factory=list)
     prompt_addendum: str = ""
     review_requirements: ReviewRequirements = field(default_factory=ReviewRequirements)
+    focus_gate: TaskFocusGateConfig | None = None
+    focus_gate_answer: FocusGateAnswer | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TaskSpec":
@@ -178,6 +316,8 @@ class TaskSpec:
                 data.get("review_requirements"),
                 task_kind=task_kind_raw,
             ),
+            focus_gate=TaskFocusGateConfig.from_dict(data.get("focus_gate")),
+            focus_gate_answer=FocusGateAnswer.from_dict(data.get("focus_gate_answer")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -370,6 +510,7 @@ class StrategyConfig:
     patch_on_inconclusive: bool = False
     prompt_preamble: str = ""
     review_loops: ReviewLoopPolicy = field(default_factory=ReviewLoopPolicy)
+    focus_gate: StrategyFocusGateConfig | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyConfig":
@@ -389,6 +530,7 @@ class StrategyConfig:
             patch_on_inconclusive=bool(data.get("patch_on_inconclusive", False)),
             prompt_preamble=str(data.get("prompt_preamble", "") or ""),
             review_loops=ReviewLoopPolicy.from_dict(data.get("review_loops"), strategy_kind=kind),
+            focus_gate=StrategyFocusGateConfig.from_dict(data.get("focus_gate")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -402,6 +544,7 @@ class StrategyConfig:
             "patch_on_inconclusive": self.patch_on_inconclusive,
             "prompt_preamble": self.prompt_preamble,
             "review_loops": self.review_loops.to_dict(),
+            "focus_gate": None if self.focus_gate is None else asdict(self.focus_gate),
         }
 
 

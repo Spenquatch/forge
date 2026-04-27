@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from anvil.harness.contracts import (
     build_analysis_review_contract,
     default_blocking_class_for_kind,
@@ -12,7 +14,10 @@ from anvil.harness.types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 
 def _task(
-    min_recommendations: int = 2, evidence_cap_policy: str = "trim_to_cap"
+    min_recommendations: int = 2,
+    evidence_cap_policy: str = "trim_to_cap",
+    focus_gate: dict[str, object] | None = None,
+    focus_gate_answer: dict[str, object] | None = None,
 ) -> TaskSpec:
     return TaskSpec.from_dict(
         {
@@ -34,11 +39,13 @@ def _task(
                 "min_recommendations": min_recommendations,
                 "evidence_cap_policy": evidence_cap_policy,
             },
+            "focus_gate": focus_gate,
+            "focus_gate_answer": focus_gate_answer,
         }
     )
 
 
-def _strategy() -> StrategyConfig:
+def _strategy(focus_gate: dict[str, object] | None = None) -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
@@ -77,6 +84,7 @@ def _strategy() -> StrategyConfig:
                 },
             },
             "validators": [],
+            "focus_gate": focus_gate,
         }
     )
 
@@ -120,6 +128,10 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.trust_review.downgrade_on_semantic_warnings is False
     assert contract.trust_review.downgrade_on_inferred_acceptance is False
     assert contract.trust_review.late_auditor_medium_or_higher_policy == "error"
+    assert contract.focus_gate.enabled is False
+    assert contract.focus_gate.default_path == "adjudicate"
+    assert contract.focus_gate.allowed_focus_types == ["seam"]
+    assert contract.focus_gate.clarification_policy == "block_for_clarification"
     assert serialized["effective_strategy"] == {
         "kind": "analysis_review_bounded_v1",
         "mode": "bounded",
@@ -143,6 +155,12 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
         "downgrade_on_semantic_warnings": False,
         "downgrade_on_inferred_acceptance": False,
         "late_auditor_medium_or_higher_policy": "error",
+    }
+    assert serialized["focus_gate"] == {
+        "enabled": False,
+        "default_path": "adjudicate",
+        "allowed_focus_types": ["seam"],
+        "clarification_policy": "block_for_clarification",
     }
 
 
@@ -186,6 +204,48 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
         "kind": "analysis_review_trust_v1",
         "mode": "trust",
     }
+    assert legacy.to_dict()["focus_gate"] == {
+        "enabled": False,
+        "default_path": "adjudicate",
+        "allowed_focus_types": ["seam"],
+        "clarification_policy": "block_for_clarification",
+    }
+    assert trust.to_dict()["focus_gate"] == {
+        "enabled": False,
+        "default_path": "adjudicate",
+        "allowed_focus_types": ["seam"],
+        "clarification_policy": "block_for_clarification",
+    }
+
+
+def test_analysis_review_contract_resolves_focus_gate_from_strategy_and_task():
+    contract = build_analysis_review_contract(
+        _task(
+            focus_gate={
+                "enabled": True,
+                "allowed_focus_types": ["seam"],
+                "clarification_policy": "block_for_clarification",
+            }
+        ),
+        _strategy(
+            focus_gate={
+                "enabled": False,
+                "default_path": "deliberate",
+            }
+        ),
+    )
+
+    assert contract.contract_version == "analysis_review_v1_contract_v9"
+    assert contract.focus_gate.enabled is True
+    assert contract.focus_gate.default_path == "deliberate"
+    assert contract.focus_gate.allowed_focus_types == ["seam"]
+    assert contract.focus_gate.clarification_policy == "block_for_clarification"
+    assert contract.to_dict()["focus_gate"] == {
+        "enabled": True,
+        "default_path": "deliberate",
+        "allowed_focus_types": ["seam"],
+        "clarification_policy": "block_for_clarification",
+    }
 
 
 def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
@@ -201,6 +261,79 @@ def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
 
     assert default_task.review_requirements.evidence_cap_policy == "trim_to_cap"
     assert strict_task.review_requirements.evidence_cap_policy == "strict"
+
+
+def test_task_focus_gate_answer_accepts_empty_freeform_answer():
+    task = _task(
+        focus_gate_answer={
+            "question_prompt": " Which seam should this run prioritize? ",
+            "selected_option": " release-trigger-automation ",
+            "freeform_answer": "",
+        }
+    )
+
+    assert task.focus_gate_answer is not None
+    assert task.focus_gate_answer.question_prompt == "Which seam should this run prioritize?"
+    assert task.focus_gate_answer.selected_option == "release-trigger-automation"
+    assert task.focus_gate_answer.freeform_answer == ""
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {"question_prompt": "", "selected_option": "release-trigger-automation"},
+            "focus_gate_answer.question_prompt must be a non-empty string.",
+        ),
+        (
+            {
+                "question_prompt": "Which seam should this run prioritize?",
+                "selected_option": "   ",
+            },
+            "focus_gate_answer.selected_option must be a non-empty string.",
+        ),
+    ],
+)
+def test_task_focus_gate_answer_requires_non_empty_prompt_and_selection(
+    payload: dict[str, object], message: str
+):
+    with pytest.raises(ValueError, match=message):
+        _task(focus_gate_answer=payload)
+
+
+@pytest.mark.parametrize(
+    ("task_focus_gate", "strategy_focus_gate", "message"),
+    [
+        (
+            {"default_path": "adjudicate"},
+            None,
+            "focus_gate contains unsupported keys: default_path.",
+        ),
+        (
+            None,
+            {"clarification_policy": "block_for_clarification"},
+            "focus_gate contains unsupported keys: clarification_policy.",
+        ),
+    ],
+)
+def test_focus_gate_rejects_unknown_keys(
+    task_focus_gate: dict[str, object] | None,
+    strategy_focus_gate: dict[str, object] | None,
+    message: str,
+):
+    with pytest.raises(ValueError, match=message):
+        if task_focus_gate is not None:
+            _task(focus_gate=task_focus_gate)
+        else:
+            _strategy(focus_gate=strategy_focus_gate)
+
+
+def test_task_focus_gate_rejects_non_seam_allowed_focus_types():
+    with pytest.raises(
+        ValueError,
+        match=r"focus_gate\.allowed_focus_types must be exactly \['seam'\]\.",
+    ):
+        _task(focus_gate={"allowed_focus_types": ["artifact"]})
 
 
 def test_analysis_review_schema_requires_files_reviewed_and_closure_review_arrays():
