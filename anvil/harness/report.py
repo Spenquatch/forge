@@ -42,6 +42,16 @@ def _sanitize_run_details_for_report(run_details: dict[str, Any]) -> dict[str, A
                 else None
             ),
         }
+    if "focus_decision" in sanitized:
+        focus_decision = sanitized.get("focus_decision")
+        sanitized["focus_decision"] = {
+            "rendered_in_report_section": True,
+            "decision_state": (
+                focus_decision.get("decision_state")
+                if isinstance(focus_decision, dict)
+                else None
+            ),
+        }
     return sanitized
 
 
@@ -53,6 +63,17 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     status = run_details.get("analysis_review_status")
     if isinstance(status, dict) and status:
         return status
+    return {}
+
+
+def _focus_decision(summary: dict[str, Any]) -> dict[str, Any]:
+    focus_decision = summary.get("focus_decision")
+    if isinstance(focus_decision, dict) and focus_decision:
+        return focus_decision
+    run_details = summary.get("run_details") or {}
+    focus_decision = run_details.get("focus_decision")
+    if isinstance(focus_decision, dict) and focus_decision:
+        return focus_decision
     return {}
 
 
@@ -97,6 +118,41 @@ def _normalized_seam_id(raw_value: Any) -> str:
 def _render_seam_paths(paths: Any) -> str:
     values = [str(item).strip() for item in (paths or []) if str(item).strip()]
     return ", ".join(f"`{item}`" for item in values) if values else "none"
+
+
+def _render_plain_focus_list(items: Any) -> str:
+    values = [str(item).strip() for item in (items or []) if str(item).strip()]
+    if not values:
+        return "none"
+    return ", ".join(f"`{item}`" for item in values)
+
+
+def _focus_candidate_label(candidate: Any) -> str:
+    if isinstance(candidate, dict):
+        focus_id = (
+            str(
+                candidate.get("focus_id")
+                or candidate.get("seam_id")
+                or candidate.get("candidate_id")
+                or candidate.get("id")
+                or ""
+            ).strip()
+        )
+        summary = str(
+            candidate.get("summary")
+            or candidate.get("title")
+            or candidate.get("label")
+            or candidate.get("reason")
+            or ""
+        ).strip()
+        if focus_id and summary:
+            return f"`{focus_id}`: {summary}"
+        if focus_id:
+            return f"`{focus_id}`"
+        if summary:
+            return summary
+        return json.dumps(candidate, sort_keys=True)
+    return str(candidate).strip()
 
 
 def _append_seam_status_lines(lines: list[str], status: dict[str, Any]) -> None:
@@ -315,6 +371,100 @@ def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> N
             reason = item.get("reason") or "No reason provided."
             lines.append(f"- {_format_scope_escape_label(item)} — `{path}`: {reason}")
         lines.append("")
+
+
+def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) -> None:
+    focus_decision = _focus_decision(summary)
+    if not focus_decision:
+        return
+
+    decision_state = str(focus_decision.get("decision_state") or "unknown").strip()
+    question = focus_decision.get("question") or {}
+    question_prompt = str(question.get("prompt") or "").strip()
+    question_options = question.get("options") or []
+    warnings = [
+        str(item).strip() for item in (focus_decision.get("warnings") or []) if str(item).strip()
+    ]
+    candidates: list[str] = []
+    for item in focus_decision.get("candidates") or []:
+        label = _focus_candidate_label(item)
+        if label:
+            candidates.append(label)
+    adapter_plan = focus_decision.get("adapter_plan") or {}
+
+    lines.append("## Focus Decision")
+    lines.append("")
+    lines.append(f"- Gate path: `{focus_decision.get('gate_path', 'unknown')}`")
+    lines.append(f"- Focus type: `{focus_decision.get('focus_type', 'unknown')}`")
+    lines.append(f"- Decision state: `{decision_state}`")
+    if focus_decision.get("confidence") is not None:
+        lines.append(f"- Confidence: `{focus_decision.get('confidence')}`")
+    confidence_band = str(focus_decision.get("confidence_band") or "").strip()
+    if confidence_band:
+        lines.append(f"- Confidence band: `{confidence_band}`")
+
+    if decision_state == "selected":
+        lines.append(
+            "- Selected focus ID: "
+            + (
+                f"`{focus_decision.get('selected_focus_id')}`"
+                if str(focus_decision.get("selected_focus_id") or "").strip()
+                else "none"
+            )
+        )
+        selected_focus_summary = str(
+            focus_decision.get("selected_focus_summary") or ""
+        ).strip()
+        lines.append(
+            "- Selected focus summary: "
+            + (selected_focus_summary if selected_focus_summary else "none")
+        )
+    elif decision_state == "clarification_requested":
+        lines.append(
+            "- Clarification prompt: "
+            + (question_prompt if question_prompt else "none")
+        )
+        lines.append(
+            "- Clarification options: " + _render_plain_focus_list(question_options)
+        )
+    elif decision_state == "no_viable_focus":
+        lines.append("- Viable focus identified: `no`")
+    else:
+        if question_prompt or question_options:
+            lines.append(
+                "- Clarification prompt: "
+                + (question_prompt if question_prompt else "none")
+            )
+            lines.append(
+                "- Clarification options: "
+                + _render_plain_focus_list(question_options)
+            )
+
+    if candidates:
+        lines.append("- Candidates considered:")
+        for item in candidates:
+            lines.append(f"  - {item}")
+    else:
+        lines.append("- Candidates considered: none")
+
+    adapter_primary_focus_id = str(
+        adapter_plan.get("primary_focus_id") or ""
+    ).strip()
+    lines.append(
+        "- Adapter primary focus ID: "
+        + (f"`{adapter_primary_focus_id}`" if adapter_primary_focus_id else "none")
+    )
+    lines.append(
+        "- Adapter secondary focus IDs: "
+        + _render_plain_focus_list(adapter_plan.get("secondary_focus_ids"))
+    )
+    if warnings:
+        lines.append("- Warnings:")
+        for item in warnings:
+            lines.append(f"  - {item}")
+    else:
+        lines.append("- Warnings: none")
+    lines.append("")
 
 
 def _append_analysis_review_status_section(lines: list[str], summary: dict[str, Any]) -> None:
@@ -713,6 +863,7 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("")
 
         _append_review_scope_section(lines, summary)
+    _append_focus_decision_section(lines, summary)
     _append_analysis_review_status_section(lines, summary)
     _append_review_provenance_section(lines, summary)
 

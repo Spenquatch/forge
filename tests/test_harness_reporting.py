@@ -11,6 +11,7 @@ from anvil.harness.reporting import (
     apply_final_artifacts,
     build_partial_answer_payload,
     render_deliverable_markdown,
+    write_state_artifacts,
 )
 
 
@@ -103,6 +104,89 @@ def _nested_analysis_publishability(summary: dict[str, object]) -> dict[str, obj
     return ((summary.get("run_details") or {}).get("analysis_review_status") or {}).get(
         "publishability"
     ) or {}
+
+
+def _selected_focus_decision() -> dict[str, object]:
+    return {
+        "gate_path": "adjudicate",
+        "focus_type": "seam",
+        "decision_state": "selected",
+        "selected_focus_id": "release-trigger-automation",
+        "selected_focus_summary": "Use the release trigger automation seam as the primary focus.",
+        "confidence": 0.91,
+        "confidence_band": "high",
+        "candidates": [
+            {
+                "focus_id": "release-trigger-automation",
+                "summary": "Primary release trigger workflow seam.",
+            },
+            {
+                "focus_id": "rollback-runbook",
+                "summary": "Fallback operational seam.",
+            },
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": "release-trigger-automation",
+            "secondary_focus_ids": ["rollback-runbook"],
+        },
+    }
+
+
+def _clarification_focus_decision() -> dict[str, object]:
+    return {
+        "gate_path": "deliberate",
+        "focus_type": "seam",
+        "decision_state": "clarification_requested",
+        "selected_focus_id": None,
+        "selected_focus_summary": None,
+        "confidence": 0.41,
+        "confidence_band": "low",
+        "candidates": [
+            {
+                "focus_id": "release-trigger-automation",
+                "summary": "Release workflow seam.",
+            },
+            {
+                "focus_id": "rollback-runbook",
+                "summary": "Rollback workflow seam.",
+            },
+        ],
+        "question": {
+            "prompt": "Which seam should this run prioritize?",
+            "options": [
+                "release-trigger-automation",
+                "rollback-runbook",
+            ],
+        },
+        "warnings": ["The task mixes release and rollback concerns."],
+        "adapter_plan": {
+            "primary_focus_id": None,
+            "secondary_focus_ids": [],
+        },
+    }
+
+
+def _no_viable_focus_decision() -> dict[str, object]:
+    return {
+        "gate_path": "adjudicate",
+        "focus_type": "seam",
+        "decision_state": "no_viable_focus",
+        "selected_focus_id": None,
+        "selected_focus_summary": None,
+        "confidence": 0.18,
+        "confidence_band": "low",
+        "candidates": [],
+        "question": {"prompt": "", "options": []},
+        "warnings": [
+            "No seam candidate had enough direct workspace evidence.",
+        ],
+        "adapter_plan": {
+            "primary_focus_id": None,
+            "secondary_focus_ids": [],
+        },
+    }
 
 
 def _assert_publication_parity(summary: dict[str, object]) -> None:
@@ -2276,6 +2360,126 @@ def test_render_report_uses_generic_publishability_fallback_for_fully_accepted_r
     report = render_report(summary)
 
     assert "- Publication blockers: withheld due to non-publishable run state" in report
+
+
+def test_render_report_renders_selected_focus_decision_without_analysis_review_status():
+    summary = {
+        "verdict": "accepted",
+        "task": {"id": "task-focus-selected", "task_kind": "analysis_review"},
+        "verdicts": {
+            "content_verdict": "accepted",
+            "validator_verdict": "pass",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "focus_decision": _selected_focus_decision(),
+        "run_details": {"focus_decision": _selected_focus_decision()},
+        "workspace_policy_checks": [],
+        "validator_rounds": [],
+        "agent_stages": [],
+        "artifacts": {},
+    }
+
+    report = render_report(summary)
+    section = _top_level_section(report, "## Focus Decision")
+
+    assert "## Analysis Review Status" not in report
+    assert "- Decision state: `selected`" in section
+    assert "- Selected focus ID: `release-trigger-automation`" in section
+    assert (
+        "- Selected focus summary: Use the release trigger automation seam as the primary focus."
+        in section
+    )
+    assert "- Candidates considered:" in section
+    assert "`release-trigger-automation`: Primary release trigger workflow seam." in section
+    assert (
+        "- Adapter secondary focus IDs: `rollback-runbook`" in section
+    )
+    assert report.index("## Focus Decision") < report.index("## Run Details")
+    run_details = _top_level_section(report, "## Run Details")
+    assert '"rendered_in_report_section": true' in run_details
+    assert '"decision_state": "selected"' in run_details
+
+
+def test_render_report_renders_no_viable_focus_decision_from_run_details():
+    summary = {
+        "verdict": "no_viable_focus",
+        "task": {"id": "task-focus-none", "task_kind": "analysis_review"},
+        "verdicts": {
+            "content_verdict": "no_viable_focus",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "run_details": {"focus_decision": _no_viable_focus_decision()},
+        "workspace_policy_checks": [],
+        "validator_rounds": [],
+        "agent_stages": [],
+        "artifacts": {},
+    }
+
+    report = render_report(summary)
+    section = _top_level_section(report, "## Focus Decision")
+
+    assert "- Decision state: `no_viable_focus`" in section
+    assert "- Viable focus identified: `no`" in section
+    assert "- Candidates considered: none" in section
+    assert "- Warnings:" in section
+    assert "No seam candidate had enough direct workspace evidence." in section
+
+
+def test_write_state_artifacts_preserves_clarification_focus_decision_and_report(
+    tmp_path,
+):
+    state = {
+        "run_id": "run-focus-clarification",
+        "thread_id": "thread-focus-clarification",
+        "workspace_root": "/tmp/workspace",
+        "out_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_spec": {
+            "id": "task-focus-clarification",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "warnings": [],
+        "run_verdict": "blocked_for_clarification",
+        "content_verdict": "blocked_for_clarification",
+        "validator_verdict": "not_run",
+        "policy_verdict": "pass",
+        "config_verdict": "pass",
+        "summary_text": "Focus gate blocked the run pending clarification.",
+        "policy_checks": [],
+        "stage_history": [],
+        "validator_rounds": [],
+        "drafts": [],
+        "issue_history": [],
+        "focus_decision": _clarification_focus_decision(),
+    }
+
+    updated_state = write_state_artifacts(state)
+    summary = updated_state["summary_payload"]
+    summary_json = json.loads(
+        Path(summary["artifacts"]["summary_json"]).read_text(encoding="utf-8")
+    )
+    report = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    section = _top_level_section(report, "## Focus Decision")
+
+    assert summary["focus_decision"]["decision_state"] == "clarification_requested"
+    assert (
+        summary_json["focus_decision"]["question"]["prompt"]
+        == "Which seam should this run prioritize?"
+    )
+    assert "## Analysis Review Status" not in report
+    assert "- Decision state: `clarification_requested`" in section
+    assert "- Clarification prompt: Which seam should this run prioritize?" in section
+    assert (
+        "- Clarification options: `release-trigger-automation`, `rollback-runbook`"
+        in section
+    )
+    assert "The task mixes release and rollback concerns." in section
 
 
 def _recommendation_payload(*titles: str) -> dict[str, object]:
