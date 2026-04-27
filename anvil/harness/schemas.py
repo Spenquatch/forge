@@ -324,6 +324,50 @@ def _seam_schema(*, reason_field: str) -> dict[str, Any]:
     }
 
 
+FOCUS_GATE_CANDIDATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "focus_id": {"type": "string"},
+        "focus_summary": {"type": "string"},
+    },
+    "required": ["focus_id", "focus_summary"],
+    "additionalProperties": False,
+}
+
+
+FOCUS_GATE_QUESTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "prompt": {"type": "string"},
+        "options": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["prompt", "options"],
+    "additionalProperties": False,
+}
+
+
+FOCUS_GATE_ADAPTER_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "primary_focus_id": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        },
+        "secondary_focus_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["primary_focus_id", "secondary_focus_ids"],
+    "additionalProperties": False,
+}
+
+
 COMMON_PROPS: dict[str, Any] = {
     "summary": {"type": "string"},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -540,6 +584,67 @@ def analysis_review_schema() -> dict[str, Any]:
             "actionability_score",
             "scope_compliance_score",
             "confidence",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def focus_gate_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "gate_path": {
+                "type": "string",
+                "enum": ["adjudicate", "deliberate"],
+            },
+            "focus_type": {
+                "type": "string",
+                "enum": ["seam"],
+            },
+            "decision_state": {
+                "type": "string",
+                "enum": ["selected", "clarification_requested", "no_viable_focus"],
+            },
+            "selected_focus_id": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "selected_focus_summary": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "confidence_band": {
+                "type": "string",
+                "enum": ["high", "medium", "low"],
+            },
+            "candidates": {
+                "type": "array",
+                "items": FOCUS_GATE_CANDIDATE_SCHEMA,
+            },
+            "question": FOCUS_GATE_QUESTION_SCHEMA,
+            "warnings": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "adapter_plan": FOCUS_GATE_ADAPTER_PLAN_SCHEMA,
+        },
+        "required": [
+            "gate_path",
+            "focus_type",
+            "decision_state",
+            "selected_focus_id",
+            "selected_focus_summary",
+            "confidence",
+            "confidence_band",
+            "candidates",
+            "question",
+            "warnings",
+            "adapter_plan",
         ],
         "additionalProperties": False,
     }
