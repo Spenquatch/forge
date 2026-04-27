@@ -1,24 +1,39 @@
-# PLAN: Typed Focus Gate for Analysis Review
+# PLAN: M2 Seam Gate Hardening for Analysis Review
 
-Status: ready for implementation  
-Branch: `feat/bounded-work-redesign`  
-Supersedes: the seam-parity closure plan that was already landed on this branch  
+Status: ready for implementation
+Branch: `feat/bounded-work-redesign`
+Supersedes: the M1 focus-gate implementation plan that previously lived at this path
 Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260426-194445.md`
+Implementation baseline: M1 focus-gate surface is already landed on this branch at `HEAD`
 
 ## Plan Summary
 
-This branch should not try to build the full planner platform from the design doc in one shot.
+Do not spend this branch re-implementing M1.
 
-The implementable slice is **M1 only**:
+The runner-owned focus gate already exists in code:
 
-- add a runner-owned front-door focus gate before proposer
-- support `gate_path = adjudicate | deliberate`
-- support `focus_type = seam` only
-- persist a typed `focus_decision` artifact into `summary.json`
-- render a compact focus-decision block in `REPORT.md`
-- fail fast as `blocked_for_clarification` or `no_viable_focus` instead of silently entering the main loop on an ambiguous request
+- `TaskSpec.focus_gate` and `TaskSpec.focus_gate_answer` parse in `anvil/harness/types.py`
+- `AnalysisReviewContract.focus_gate` resolves in `anvil/harness/contracts.py`
+- `HarnessRunner._run_focus_gate()` executes before proposer in `anvil/harness/runner.py`
+- `focus_decision` persists into `summary.json` and renders in `REPORT.md`
+- the harness already blocks as `blocked_for_clarification` and `no_viable_focus`
+- semantic validation already enforces selected-seam drift against downstream `primary_seam`
 
-M2 and M3 stay in this plan as explicit follow-ons, not branch scope.
+M2 is the residual hardening pass that makes the seam gate production-grade without widening to a second focus type.
+
+Branch scope for M2:
+
+- keep `focus_type = seam`
+- keep `focus_decision` as the top-level runner-owned artifact
+- keep `selected`, `clarification_requested`, and `no_viable_focus` as the only terminal gate states
+- add one repo-backed probe round on the `deliberate` path before asking the operator
+- enrich candidate records with score, rationale, and evidence refs
+- formalize selection thresholds instead of relying on vibes
+- widen `clarification_policy` to support `never_ask`
+- harden stale `focus_gate_answer` handling against repo and candidate drift
+- render the richer rationale in `REPORT.md`
+
+M3 remains out of scope. No second focus type in this branch.
 
 ## Step 0: Scope Challenge
 
@@ -26,46 +41,52 @@ M2 and M3 stay in this plan as explicit follow-ons, not branch scope.
 
 Use **SELECTIVE EXPANSION**.
 
-The plan needs enough new surface to make the gate real, but it should stay inside the existing `analysis_review_*` runner and contract family. No new strategy kind. No new orchestration subsystem. No pause/resume lifecycle.
+The right move is to harden the existing gate, not to redesign the harness around it. Stay inside the current `analysis_review_*` runner, the current contract family, and the current report pipeline. No new strategy kind. No generic planning subsystem. No pause/resume lifecycle.
 
 ### Premise Challenge
 
 | Premise | Verdict | Why |
 |---|---|---|
-| The next milestone must decide focus before the expensive review loop starts. | Accept | Today `HarnessRunner._run_analysis_review_v1()` enters proposer immediately, which means the harness can spend a full run on the wrong surface. |
-| `seam` should be the first `focus_type`, but the shape should be typed from day one. | Accept | The repo is still seam-shaped downstream, but hardcoding the artifact shape to seams again would force another rewrite. |
-| `deliberate` should block for clarification rather than silently auto-route. | Accept | Silent fallback is the exact trust failure this milestone is trying to remove. |
-| M1 should include repo probing, multi-type adapters, and pause/resume. | Reject | That is an ocean. M1 only needs request-level adjudication, typed artifacts, and a clean blocked path. |
+| M1 must be treated as a shipped baseline, not as planned work. | Accept | The contract field, runner flow, verdict taxonomy, reporting, and tests already exist in code. Re-planning them would create fake progress. |
+| M2 should still support `focus_type = seam` only. | Accept | The downstream analysis-review loop is still seam-shaped through `analysis_output_schema()`, semantic validation, and recommendation seam binding. |
+| The missing M2 value is a real deliberate probe, not more prose in the current prompt. | Accept | Today `deliberate` is still request-led. The gate can ask a question, but it cannot cheaply inspect repo-local seams first and explain the shortlist with grounded evidence. |
+| M2 should introduce a second public gate artifact or a new provider protocol. | Reject | That is overbuilt. The public artifact should stay `focus_decision`; the probe can remain a runner-owned internal stage. |
+| M2 should expose user-tunable numeric thresholds in YAML. | Reject | That is premature. M2 needs fixed, documented thresholds. If they need to move later, change code and docs together. |
+| M2 should add a second focus type while the seam path is still immature. | Reject | That is how we get a “typed” abstraction that only works in demos. Make seam good first. |
 
 ### What Already Exists
 
 | Sub-problem | Existing code | Reuse decision |
 |---|---|---|
-| task and strategy loading | `anvil/harness/types.py` | Reuse. Extend `TaskSpec` and `StrategyConfig`; do not introduce a new spec family. |
-| effective analysis-review contract | `anvil/harness/contracts.py` | Reuse. Add a typed `focus_gate` policy to the existing contract instead of branching contract types. |
-| main bounded/trust review loop | `anvil/harness/runner.py` | Reuse. Insert the gate before proposer, then keep critic/reviser/auditor flow unchanged. |
-| seam-shaped downstream payload | `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | Reuse. Keep `primary_seam` and recommendation seam bindings as the downstream contract. |
-| report and artifact emission | `anvil/harness/report.py`, `anvil/harness/reporting.py` | Reuse. Add a focus-decision section; do not invent a second artifact writer. |
-| repo-local discovery guidance | `anvil/harness/prompts.py`, `docs/analysis_review_contract.md` | Reuse. The gate should consume the same request context and `files_hint` rules. |
-| bounded/trust examples | `examples/harness/tasks/recommend_automation_improvements.yaml`, strategy examples | Reuse. No new strategy kind is needed for M1. |
+| task-level gate config and rerun answer parsing | `anvil/harness/types.py` | Reuse. Widen the existing parsing surface rather than adding a second config family. |
+| effective gate contract resolution | `anvil/harness/contracts.py` | Reuse. Extend `FocusGatePolicy`; do not create a new contract type. |
+| one-shot gate execution before proposer | `HarnessRunner._run_focus_gate()` in `anvil/harness/runner.py` | Reuse. Insert the probe into the current gate flow instead of adding a second mini-runner. |
+| gate prompt builder | `build_focus_gate_prompt()` in `anvil/harness/prompts.py` | Reuse for the final decision call. Add a dedicated probe prompt builder rather than overloading one blob of prose. |
+| top-level gate artifact | `focus_gate_output_schema()` in `anvil/harness/schemas.py` and `validate_focus_decision_payload()` in `anvil/harness/semantic_validation.py` | Reuse. Widen the existing shape instead of introducing `focus_decision_v2` under a new key. |
+| report and summary persistence | `anvil/harness/report.py`, `anvil/harness/reporting.py` | Reuse. Extend the existing `## Focus Decision` section. |
+| stage recording and read-only role enforcement | `HarnessRunner._effective_role_config()` and recorded `agent_stages` | Reuse. Record the probe as another read-only gate-adjacent stage. |
+| selected-seam drift enforcement | `validate_analysis_review_payload()` in `anvil/harness/semantic_validation.py` | Reuse. Keep semantic validation as the single enforcement owner. |
+| offline regression coverage | `tests/test_harness_analysis_contract.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_semantic_validation.py`, `tests/test_harness_runner.py`, `tests/test_harness_reporting.py` | Reuse. Add M2 coverage to the same files instead of spawning a second test suite. |
 
 ### Minimum Change That Achieves the Goal
 
-The minimum complete fix is:
+The minimum complete M2 is:
 
-1. Extend task, strategy, and contract surfaces with a `focus_gate` policy and optional `focus_gate_answer`.
-2. Add a dedicated focus-gate prompt/schema pair that can emit `selected`, `clarification_requested`, or `no_viable_focus`.
-3. Run that gate before proposer in `HarnessRunner._run_analysis_review_v1()`.
-4. Persist the runner-owned `focus_decision` artifact even when the run stops before proposer.
-5. Seed proposer with the selected seam and enforce downstream seam agreement against the gate output.
-6. Render the focus decision in `REPORT.md`.
-7. Add unit and runner tests for the happy path, blocked path, warning path, and drift path.
+1. Keep the current public `focus_gate` config surface, but widen `clarification_policy` from only `block_for_clarification` to `block_for_clarification | never_ask`.
+2. Keep the current public `focus_decision` shell, but widen it with probe-backed fields and richer candidate objects.
+3. Add one internal repo-backed `focus_gate_probe` stage that runs only on the `deliberate` path.
+4. Feed the probe artifact into the final `focus_gate` decision call.
+5. Lock exact score and lead thresholds for `selected` vs ambiguity.
+6. Treat stale rerun answers as first-class logic, not string-matching accidents.
+7. Render the richer decision basis in `REPORT.md`.
+8. Add full offline coverage for probe success, ambiguity, stale answers, `never_ask`, and report output.
 
 Anything smaller is a shortcut:
 
-- prompt-only seam hints are not enough
-- report-only explanations are not enough
-- allowing the loop to keep silently re-selecting the seam is not enough
+- telling the current prompt to “look harder” is not enough
+- adding more candidate prose without score and evidence is not enough
+- using request-only `deliberate` again and calling it M2 is not enough
+- widening the contract without report/test coverage is not enough
 
 ### Complexity Check
 
@@ -79,53 +100,56 @@ Expected touched modules:
 - `anvil/harness/runner.py`
 - `anvil/harness/report.py`
 - `docs/analysis_review_contract.md`
-- harness test files covering contract, prompts, runner, semantic validation, and reporting
+- harness test files covering contract, prompts, semantic validation, runner, and reporting
 
-That is more than 8 files, so it is a complexity smell.
+That is still more than 8 files, so the smell is real.
 
-The right response is **not** to cut the gate. The right response is to keep the architecture boring:
+The right response is to keep the architecture boring:
 
 - no new strategy kind
-- no new graph/subgraph
-- no new distribution artifact
-- at most one new contract dataclass
-- no second focus type in this branch
+- no provider protocol change
+- no new top-level summary artifact besides `focus_decision`
+- no user-tunable threshold registry
+- no second focus type
+- one internal probe round only
 
 ### Search Check
 
-- **[Layer 1]** Reuse the existing task/strategy parsing surface instead of inventing a gate-specific config file.
-- **[Layer 1]** Reuse the current runner entrypoint and report writer instead of adding a second mini-runner for the gate.
-- **[Layer 1]** Reuse seam-shaped downstream payloads and validation rather than widening the whole review loop in M1.
-- **[Layer 3]** The key architectural move is not “pick seams better.” It is “own focus selection before proposer,” because today the seam contract is enforced only after cost has already been spent.
+- **[Layer 1]** Reuse the existing `focus_gate` role and read-only stage machinery instead of inventing a bespoke probe agent system.
+- **[Layer 1]** Reuse the current top-level `focus_decision` artifact and widen it in place instead of adding `focus_decision_v2` or `probe_summary`.
+- **[Layer 1]** Reuse semantic validation as the single owner of downstream seam drift instead of adding an extra runner-only checker.
+- **[Layer 3]** The real M2 improvement is not “ask a better question.” It is “ground ambiguity in one cheap repo-backed shortlist before involving the operator.”
 
 ### TODOS Cross-Reference
 
-`TODOS.md` has no blocker for this slice.
+`TODOS.md` does not block this slice.
 
-This plan should not bundle unrelated backlog work from `TODOS.md` into the branch. The only future work that should be recorded from this slice is:
+This branch should not absorb unrelated backlog items. The only future work that should survive into follow-on packets is:
 
-- second focus-type proof for M3
-- repo-probe enrichment for `deliberate` in M2
-- possible task-authoring ergonomics around `focus_gate_answer`
+- second focus-type proof in M3
+- removing remaining seam assumptions from gate-core logic in M3
+- revisiting whether task authors ever need user-tunable gate thresholds
 
 ### Completeness Check
 
-Ship the complete M1, not the shortcut.
+Ship the complete M2 seam hardening pass, not the cosmetic version.
 
-Complete M1 means:
+Complete M2 means:
 
-- typed policy
-- runner-owned artifact
-- blocked clarification path
-- report + summary surfacing
-- downstream seam-agreement enforcement
-- offline tests for selected, blocked, and no-viable outcomes
+- repo-backed deliberate probe
+- explicit thresholds
+- richer candidate payloads
+- `never_ask` support
+- stale-answer handling tied to current candidate reality
+- report surfacing for probe-backed rationale
+- offline tests for all of the above
 
-Shortcut M1 would be:
+Shortcut M2 would be:
 
-- new prompt prose but no runner-owned artifact
-- a selected seam in proposer context but no persisted decision
-- ambiguity warnings without a blocked outcome
+- prompt wording only
+- still-thin candidate objects
+- string-match rerun answers with no drift awareness
+- keeping `never_ask` undocumented and unsupported
 
 Reject the shortcut.
 
@@ -137,85 +161,89 @@ This ships through the existing repo workflow:
 
 - Python source changes under `anvil/harness/`
 - pytest coverage
-- repo docs update in `docs/analysis_review_contract.md`
+- docs update in `docs/analysis_review_contract.md`
 
 ## Dream State
 
 ```text
-CURRENT
-task + strategy + files_hint
-    │
-    ▼
-proposer chooses seam inside the review loop
-    │
-    ▼
-critic / reviser / auditor may notice ambiguity only after cost is spent
-    │
-    ▼
-summary.json and REPORT.md explain the seam after the fact
-
-THIS PLAN (M1)
+CURRENT (HEAD / M1 LANDED)
 task + strategy + files_hint + optional focus_gate_answer
     │
     ▼
-runner-owned focus gate
-    ├── adjudicate  -> selected
-    ├── deliberate  -> clarification_requested
-    └── adjudicate  -> no_viable_focus
+one-shot focus_gate
+    ├── adjudicate -> selected
+    └── deliberate -> clarification_requested or selected from request-only context
     │
     ▼
-focus_decision artifact
-    │
-    ├── persisted into summary.json
-    ├── rendered in REPORT.md
-    └── adapted into downstream seam context
+focus_decision (thin candidates, no probe evidence)
     │
     ▼
 existing proposer -> critic -> reviser -> auditor loop
 
+THIS PLAN (M2)
+task + strategy + files_hint + optional focus_gate_answer
+    │
+    ├── adjudicate
+    │     └── request-only selection with explicit thresholds
+    │
+    └── deliberate
+          ├── focus_gate_probe (one cheap repo-backed shortlist round)
+          └── focus_gate (selected | clarification_requested | no_viable_focus)
+    │
+    ▼
+focus_decision
+    ├── decision_basis
+    ├── files_hint_disposition
+    ├── checked_files
+    ├── scored candidates with rationale + evidence refs
+    └── adapter_plan
+    │
+    ▼
+existing seam-shaped proposer -> critic -> reviser -> auditor loop
+
 12-MONTH IDEAL
 typed gate core
     │
-    ├── seam
-    ├── artifact
-    ├── policy_surface
-    └── subsystem
-    │
-    ▼
-focus-specific adapters feeding still-boring downstream review flows
+    ├── seam adapter (production-grade)
+    ├── second focus type packet
+    └── zero remaining seam assumptions in gate-core logic
 ```
 
 ## NOT In Scope
 
-- making the downstream analysis-review loop generic across all future `focus_type` values
 - adding a second real `focus_type` in this branch
-- repo-backed candidate probing in M1
-- any pause, suspend, or resume lifecycle inside the runner
-- changing recommendation admissibility, provenance, publication, or trust atomicity rules beyond what is needed to persist and display `focus_decision`
-- replacing the imperative runner bridge with a new LangGraph-native implementation
+- making the downstream review loop generic across future focus types
+- changing recommendation admissibility, provenance, publication, or trust atomicity rules
+- replacing prompt-text handoff with a new provider request field
+- adding a pause, suspend, or resume lifecycle
+- adding more than one repo probe round
+- adding vector search, indexing, embeddings, or a candidate cache
+- exposing threshold knobs in task or strategy YAML
 - redesigning bounded/trust role lineups or review-loop stop policies
 
 ## Architecture Review
 
 ### Core Architecture Decision
 
-`focus_gate` should be an **extension of the existing analysis-review contract**, not a new strategy kind.
+Keep one public gate contract and one public gate artifact.
 
-That keeps the public surface boring:
+That means:
 
-- task still declares the job
-- strategy still declares roles and review loops
-- the contract still resolves the effective behavior
-- the runner still owns execution
+- public config remains `focus_gate`
+- public rerun input remains `focus_gate_answer`
+- public runner-owned output remains top-level `focus_decision`
+- M2 adds an internal `focus_gate_probe` stage, not a second public artifact family
+
+This is the boring path. It keeps the public surface stable while still making the deliberate path materially smarter.
 
 ### Proposed Dependency Graph
 
 ```text
 TaskSpec + StrategyConfig
     │
-    ├── task.focus_gate (optional raw config)
-    ├── task.focus_gate_answer (optional rerun answer)
-    └── strategy.focus_gate (optional raw defaults)
+    ├── task.focus_gate
+    ├── task.focus_gate_answer
+    └── strategy.focus_gate
             │
             ▼
 build_analysis_review_contract()
@@ -226,56 +254,59 @@ AnalysisReviewContract.focus_gate
     ▼
 HarnessRunner._run_focus_gate()
     │
-    ├── build_focus_gate_*_prompt()
-    ├── focus_gate_output_schema()
-    ├── validate_focus_decision_payload()
-    └── persist focus_decision
+    ├── if default_path == adjudicate:
+    │       build_focus_gate_prompt()
+    │       validate_focus_decision_payload()
+    │
+    └── if default_path == deliberate:
+            build_focus_probe_prompt()
+            validate_focus_probe_payload()
             │
-            ├── selected -> proposer seeded with chosen seam
-            ├── clarification_requested -> blocked run, no main loop
-            └── no_viable_focus -> blocked run, no main loop
+            ▼
+            build_focus_gate_prompt(probe artifact + optional focus_gate_answer)
+            validate_focus_decision_payload()
+            │
+            ├── selected -> proposer seeded with selected seam
+            ├── clarification_requested -> blocked run
+            └── no_viable_focus -> blocked run
                     │
                     ▼
-summary.json + REPORT.md
+summary.json + REPORT.md + stage artifacts
 ```
 
-### Exact Contract Shape
+### Exact Public Contract Shape
 
-Provenance: **grounded in existing code + new normative decision**
+M2 should keep the existing field names and widen only what needs to become real.
 
-- Grounded in existing code:
-  the repo already resolves effective behavior through `TaskSpec`, `StrategyConfig`, and `build_analysis_review_contract()`.
-- New normative decision:
-  `focus_gate` becomes the exact new contract field name and lives on the existing analysis-review contract instead of a new strategy kind or spec family.
-
-M1 should add one new contract field:
+Public config:
 
 ```yaml
 focus_gate:
   enabled: true
-  default_path: adjudicate
+  default_path: adjudicate   # adjudicate | deliberate
   allowed_focus_types: [seam]
-  clarification_policy: block_for_clarification
+  clarification_policy: block_for_clarification   # block_for_clarification | never_ask
 ```
 
 Rules:
 
 - runner default: `enabled = false`
+- runner default: `default_path = adjudicate`
+- runner default: `allowed_focus_types = [seam]`
+- runner default: `clarification_policy = block_for_clarification`
 - strategy may set `enabled` and `default_path`
-- task may narrow `allowed_focus_types` and set `clarification_policy`
-- the effective resolved surface lives in `AnalysisReviewContract.focus_gate`
-- M1 only accepts `allowed_focus_types: [seam]`
+- task may set `enabled`, `allowed_focus_types`, and `clarification_policy`
+- the effective resolved surface still lives at `AnalysisReviewContract.focus_gate`
+- M2 still rejects any `allowed_focus_types` value other than exactly `["seam"]`
 
-### Normative M1 Input Shapes
+`clarification_policy` semantics in M2:
 
-Provenance: **new normative decision**
+- `block_for_clarification`: when ambiguity remains after the probe, emit `clarification_requested` and stop
+- `never_ask`: when ambiguity remains after the probe, emit `no_viable_focus` with candidate rationale and warnings, never a question block
 
-- Grounded in existing code:
-  task and strategy YAMLs already flow through `TaskSpec.from_dict()` and `StrategyConfig.from_dict()`.
-- New normative decision:
-  these exact YAML field names, allowed keys, and validation rules do not exist yet and are being locked by this plan.
+This is the smallest public widening that makes the contract honest.
 
-The raw config should live in the existing task and strategy YAMLs with these exact field names.
+### Normative M2 Input Shapes
 
 Task YAML:
 
@@ -283,12 +314,12 @@ Task YAML:
 focus_gate:
   enabled: true
   allowed_focus_types: [seam]
-  clarification_policy: block_for_clarification
+  clarification_policy: never_ask
 
 focus_gate_answer:
   question_prompt: "Which seam should this run prioritize?"
   selected_option: "release-trigger-automation"
-  freeform_answer: ""
+  freeform_answer: "Prefer the workflow trigger path first."
 ```
 
 Strategy YAML:
@@ -296,64 +327,132 @@ Strategy YAML:
 ```yaml
 focus_gate:
   enabled: true
-  default_path: adjudicate
+  default_path: deliberate
 ```
 
 Parsing rules:
 
-- `TaskSpec.focus_gate` is optional and may only override `enabled`, `allowed_focus_types`, and `clarification_policy`.
-- `StrategyConfig.focus_gate` is optional and may only override `enabled` and `default_path`.
-- `TaskSpec.focus_gate_answer` is optional and is only meaningful when `focus_gate.enabled = true`.
-- M1 rejects unknown `focus_gate` keys in task or strategy specs.
-- M1 rejects any `allowed_focus_types` value other than exactly `["seam"]`.
-- `freeform_answer` may be empty, but `question_prompt` and `selected_option` must be non-empty when `focus_gate_answer` is present.
+- `TaskSpec.focus_gate` remains optional and may override only `enabled`, `allowed_focus_types`, and `clarification_policy`
+- `StrategyConfig.focus_gate` remains optional and may override only `enabled` and `default_path`
+- `TaskSpec.focus_gate_answer` remains optional
+- M2 rejects unknown `focus_gate` keys in task or strategy specs
+- M2 accepts `clarification_policy` values `block_for_clarification` and `never_ask`
+- `freeform_answer` may be empty, but `question_prompt` and `selected_option` must still be non-empty when `focus_gate_answer` is present
+
+### Internal Probe Artifact
+
+M2 adds one internal runner-owned probe payload. It is not a new public summary artifact.
+
+Persist it in the `focus_gate_probe` stage envelope and feed it into the final `focus_gate` decision call.
+
+Probe artifact:
+
+```json
+{
+  "focus_type": "seam",
+  "files_hint_disposition": "helped | hurt | ignored | absent",
+  "checked_files": ["string"],
+  "candidates": [
+    {
+      "focus_id": "string",
+      "focus_summary": "string",
+      "why_candidate": "string",
+      "evidence_refs": ["string"],
+      "score": 0.0
+    }
+  ],
+  "warnings": ["string"]
+}
+```
+
+Probe rules:
+
+- `focus_type` is always `seam`
+- `checked_files` must contain the concrete repo files the probe inspected
+- each `evidence_refs` entry must be a path-only ref and must appear in `checked_files`
+- candidate count caps at 3
+- `checked_files` caps at 6
+- each candidate `score` is a float in `[0.0, 1.0]`
+- `warnings` may explain bad or misleading `files_hint` input, but must not replace `checked_files`
+
+The probe exists to make ambiguity concrete. If it cannot point to files, it did not do the job.
 
 ### Focus Decision Artifact
 
-Provenance: **grounded in existing code + new normative decision**
+Keep `focus_decision` as the top-level runner-owned object in `summary.json`.
 
-- Grounded in existing code:
-  the repo already persists runner-owned state into `summary.json` and renders runner-owned sections in `REPORT.md`.
-- New normative decision:
-  `focus_decision` becomes the exact top-level field name and this exact artifact shape is new.
+Do not bury it under `analysis_review_status`. It still exists before the main review loop and must survive blocked runs.
 
-Persist a top-level runner-owned `focus_decision` object in `summary.json`.
-
-Do **not** bury it under `analysis_review_status`. It exists before the review loop and must survive runs that never reach proposer.
-
-M1 artifact:
+M2 `focus_decision`:
 
 ```json
 {
   "gate_path": "adjudicate | deliberate",
   "focus_type": "seam",
   "decision_state": "selected | clarification_requested | no_viable_focus",
+  "decision_basis": "request_only | repo_probe | rerun_answer",
   "selected_focus_id": "string|null",
   "selected_focus_summary": "string|null",
   "confidence": 0.0,
   "confidence_band": "high | medium | low",
-  "candidates": [],
+  "files_hint_disposition": "helped | hurt | ignored | absent",
+  "checked_files": ["string"],
+  "candidates": [
+    {
+      "focus_id": "string",
+      "focus_summary": "string",
+      "why_candidate": "string",
+      "evidence_refs": ["string"],
+      "score": 0.0
+    }
+  ],
   "question": {
     "prompt": "string",
     "options": ["string"]
   },
-  "warnings": [],
+  "warnings": ["string"],
   "adapter_plan": {
     "primary_focus_id": "string|null",
-    "secondary_focus_ids": []
+    "secondary_focus_ids": ["string"]
   }
 }
 ```
 
-M1 artifact rules:
+Artifact rules:
 
-- `gate_path` is always `adjudicate` or `deliberate`.
-- `focus_type` is always `seam`.
-- `decision_state` is always one of `selected`, `clarification_requested`, `no_viable_focus`.
-- `selected_focus_id` and `selected_focus_summary` are required when `decision_state = selected` and must be `null` otherwise.
-- `question.prompt` and `question.options` are required when `decision_state = clarification_requested`; otherwise `question` must serialize as `{ "prompt": "", "options": [] }`.
-- `candidates` may be empty only when `decision_state = no_viable_focus`; for `selected` and `clarification_requested`, `candidates` must contain at least the selected or shortlisted seam set.
-- `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise.
+- M2 preserves all existing M1 top-level fields and widens the shape in place
+- `decision_basis` is required and is exactly one of:
+  - `request_only` for one-shot adjudicate
+  - `repo_probe` for deliberate decisions that rely on the probe
+  - `rerun_answer` for decisions that accept a still-valid operator answer
+- `files_hint_disposition` is required and is exactly one of `helped`, `hurt`, `ignored`, `absent`
+- `checked_files` is required and must be empty only when `decision_basis = request_only`
+- candidate count caps at 3
+- every candidate must include `why_candidate`, `evidence_refs`, and `score`
+- `selected_focus_id` and `selected_focus_summary` are required when `decision_state = selected` and must be `null` otherwise
+- `question.prompt` and `question.options` are required only when `decision_state = clarification_requested`; otherwise `question` must serialize as `{ "prompt": "", "options": [] }`
+- `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise
+- `adapter_plan.secondary_focus_ids` must be a subset of candidate IDs
+
+### Selection Thresholds
+
+M2 must stop hand-waving around confidence.
+
+Threshold rules:
+
+- `high`: `confidence >= 0.80`
+- `medium`: `0.55 <= confidence < 0.80`
+- `low`: `confidence < 0.55`
+
+Selection rules:
+
+- select directly when top candidate is `high`
+- select directly when top candidate is `medium` and leads the second candidate by at least `0.15`
+- ambiguity remains when top candidate is `medium` and lead is `< 0.15`
+- ambiguity remains when top candidate is `low`
+- `no_viable_focus` is valid when no defensible candidate survives request-only or probe-backed comparison
+
+These rules apply to both adjudicate and deliberate. The deliberate path is different because it gets one repo-backed probe before applying them.
 
 ### Runner Flow
 
@@ -362,222 +461,198 @@ _run_analysis_review_v1()
     │
     ├── build contract
     ├── if contract.focus_gate.enabled is false:
-    │       continue with existing proposer path
+    │       continue with legacy proposer path
     │
     └── if contract.focus_gate.enabled is true:
             │
-            ├── run focus gate stage
-            ├── persist focus_decision
-            ├── if decision_state == selected:
-            │       continue into proposer with selected seam context
-            ├── if decision_state == clarification_requested:
-            │       return blocked_for_clarification
-            └── if decision_state == no_viable_focus:
-                    return no_viable_focus
+            ├── if default_path == adjudicate:
+            │       run focus_gate once
+            │       ├── selected -> continue
+            │       ├── clarification_requested -> blocked_for_clarification
+            │       └── no_viable_focus -> no_viable_focus
+            │
+            └── if default_path == deliberate:
+                    run focus_gate_probe once
+                    │
+                    ├── if no candidates:
+                    │       no_viable_focus
+                    │
+                    └── run focus_gate once with probe artifact
+                            │
+                            ├── if selected:
+                            │       continue into proposer
+                            │
+                            ├── if ambiguity remains and clarification_policy == block_for_clarification:
+                            │       clarification_requested
+                            │
+                            └── if ambiguity remains and clarification_policy == never_ask:
+                                    no_viable_focus
 ```
 
 ### Exact Verdict Taxonomy
 
-Provenance: **new normative decision**
+M2 does not add new terminal states.
 
-- Grounded in existing code:
-  the runner already emits terminal `run_verdict`, `content_verdict`, `validator_verdict`, `final_summary`, and `failure_details`.
-- New normative decision:
-  the exact new verdict strings `blocked_for_clarification` and `no_viable_focus`, plus their summary payload rules, are new and are being fixed here.
+It keeps:
 
-M1 should add two new terminal review outcomes with these exact summary fields:
+- `selected`
+- `clarification_requested`
+- `no_viable_focus`
 
-For `clarification_requested`:
+And keeps these blocked outcomes:
 
 - `run_verdict = "blocked_for_clarification"`
 - `content_verdict = "blocked_for_clarification"`
 - `validator_verdict = "not_run"`
 - `final_summary = "Focus gate blocked the run pending clarification."`
-- `failure_details = { "stage": "focus_gate", "decision_state": "clarification_requested", "question": ..., "candidates": ..., "warnings": ... }`
 
-For `no_viable_focus`:
+and:
 
 - `run_verdict = "no_viable_focus"`
 - `content_verdict = "no_viable_focus"`
 - `validator_verdict = "not_run"`
 - `final_summary = "Focus gate could not identify a viable focus target."`
-- `failure_details = { "stage": "focus_gate", "decision_state": "no_viable_focus", "candidates": ..., "warnings": ... }`
 
-For `selected`:
+The M2 change is in how those outcomes are earned:
 
-- the run proceeds normally through proposer and later verdicts
-- `focus_decision` must still be persisted in `run_details`, top-level `summary.json`, and `REPORT.md`
+- `clarification_requested` now reflects probe-backed ambiguity, not just request-only ambiguity
+- `no_viable_focus` can now come from `clarification_policy = never_ask`
+- blocked outcomes must carry candidate scores, rationale, `files_hint_disposition`, `checked_files`, and warnings through `focus_decision`
 
-These blocked outcomes are terminal, not intermediate. In both cases:
+### Stage Recording
 
-- no proposer stage runs
-- no validator round runs
-- `analysis_review_status` may be absent
-- `REPORT.md` is still emitted
+M2 should record two distinct gate-adjacent stages on deliberate runs:
 
-### Gate Stage Recording
-
-Provenance: **grounded in existing code + new normative decision**
-
-- Grounded in existing code:
-  gate execution will reuse the existing `agent_stages` / `ProviderRun` stage-record model.
-- New normative decision:
-  `role_name = "focus_gate"` and the exact metadata conventions for this stage are new.
-
-The focus gate must appear in `agent_stages` as a normal stage record with these exact conventions:
-
-- `role_name = "focus_gate"`
-- `stage_index` is less than proposer's stage index
-- `round_index = 0`
-- `requested_access = "read"`
-- `effective_access = "read"`
-- `structured_output` is the validated `focus_decision`
-- `metadata.focus_gate.gate_path`, `metadata.focus_gate.focus_type`, and `metadata.focus_gate.decision_state` are copied into the stage record for easy debugging
-
-If a strategy defines `roles.focus_gate`, that role config is used. Otherwise `roles.proposer` is cloned for the gate stage and forced read-only.
-
-### Proposer Handoff Contract
-
-Provenance: **grounded in existing code + new normative decision**
-
-- Grounded in existing code:
-  the current harness hands context to providers through prompt builders and `StageRequest.prompt_text`, not through extra structured provider fields.
-- New normative decision:
-  M1 will seed proposer and reviser by prompt text only, using a fixed `Focus Gate Decision` block, rather than extending the provider protocol.
-
-M1 should hand the selected focus into proposer by **prompt text only**, not by changing `StageRequest` or the provider protocol.
-
-Implement it this way:
-
-1. extend `build_analysis_proposer_prompt()` and `build_analysis_reviser_prompt()` to accept an optional `focus_decision`
-2. inject a fixed `Focus Gate Decision` prompt block when `decision_state = selected`
-3. that block must include:
-   - `selected_focus_id`
-   - `selected_focus_summary`
-   - the shortlisted candidate IDs
-   - a hard requirement that downstream `primary_seam.seam_id` must equal the selected focus ID unless the run is being deliberately rejected for invalid gate output
-
-Do not add a new provider request field in M1. Keep the handoff explicit and inspectable in the prompt artifact.
-
-### Rerun Answer Matching Contract
-
-Provenance: **new normative decision**
-
-- Grounded in existing code:
-  reruns already happen as fresh harness invocations against task YAML input.
-- New normative decision:
-  these exact matching semantics for `focus_gate_answer` are new and are being fixed here to avoid fuzzy behavior in M1.
-
-`focus_gate_answer` matching should be deterministic and narrow in M1.
+1. `role_name = "focus_gate_probe"`
+2. `role_name = "focus_gate"`
 
 Rules:
 
-- `focus_gate_answer.question_prompt` must equal the previously emitted `focus_decision.question.prompt` after trimming leading and trailing whitespace
-- `focus_gate_answer.selected_option` must match one of the prior `focus_decision.question.options` exactly after trimming
-- `freeform_answer` is optional supporting text and is never used as the primary matcher
-- when both `question_prompt` and `selected_option` match, the gate must not re-ask the question and should continue through the adjudication path using the answer context
-- when either field does not match, the runner may re-ask once and then terminate again as `blocked_for_clarification`
+- both are forced read-only
+- both use `round_index = 0`
+- `focus_gate_probe` records the internal probe artifact
+- `focus_gate` records the final public `focus_decision`
+- `focus_gate_probe.stage_index < focus_gate.stage_index < proposer.stage_index`
+- `metadata.focus_gate_probe.candidate_count` and `metadata.focus_gate_probe.files_hint_disposition` should be copied into the stage record
+- `metadata.focus_gate.gate_path`, `metadata.focus_gate.focus_type`, and `metadata.focus_gate.decision_state` remain required
 
-This is intentionally boring. M1 does not need fuzzy matching, question IDs, or resume tokens.
+Adjudicate runs should keep a single `focus_gate` stage.
+
+### Gate Role Decision
+
+Keep the strategy role surface small:
+
+- strategy may define `roles.focus_gate`
+- runner may reuse that same role config for both `focus_gate_probe` and `focus_gate`
+- if absent, both stages fall back to `roles.proposer` with forced read-only access
+
+Do not add a new required `focus_gate_probe` role in strategies. That is needless migration churn.
+
+### Proposer Handoff Contract
+
+Keep prompt-text handoff. Do not add a provider protocol field in M2.
+
+`build_analysis_proposer_prompt()` and `build_analysis_reviser_prompt()` should still accept `focus_decision`, but the fixed `Focus Gate Decision` block must now include:
+
+- `decision_basis`
+- `selected_focus_id`
+- `selected_focus_summary`
+- the next-best candidate ID and score when present
+- `checked_files`
+- a hard requirement that downstream `primary_seam.seam_id` must equal `selected_focus_id`
+
+The goal is to make the handoff inspectable in artifacts, not implicit in runner memory.
+
+### Rerun Answer Matching Contract
+
+M1 string matching is too thin for M2.
+
+M2 answer acceptance rules:
+
+- `focus_gate_answer.question_prompt` must still match the current question prompt after trimming
+- `focus_gate_answer.selected_option` must still match one current question option after trimming
+- the selected option must still appear in the current deliberate probe candidate set
+- if the selected option vanished from the current probe candidate set, the answer is stale
+- if the selected option remains but the current probe now makes a different candidate clearly dominant, the answer is stale
+- `freeform_answer` remains advisory context, never the primary matcher
+
+Stale-answer behavior:
+
+- when `clarification_policy = block_for_clarification`, re-ask once with a warning that the prior answer went stale
+- when `clarification_policy = never_ask`, emit `no_viable_focus` with a stale-answer warning instead of re-asking
+
+This is still boring. No question IDs. No resume tokens. Just current-candidate reality instead of blind string matching.
 
 ### Seam Adapter Rule
 
-Provenance: **grounded in existing code + new normative decision**
-
-- Grounded in existing code:
-  the downstream loop is seam-shaped today through `analysis_output_schema()`, semantic validation, and `_build_analysis_review_status()`.
-- New normative decision:
-  the gate-selected seam becomes an authoritative upstream constraint, and semantic validation becomes the single owner of drift enforcement.
-
-M1 keeps the downstream loop seam-shaped.
+M2 keeps the downstream loop seam-shaped.
 
 That means:
 
 - proposer and reviser still emit `primary_seam`
-- `selected_focus_id` must become the canonical downstream primary seam identity
-- candidate overflow stays in `secondary_seams_considered`
-- recommendation seam binding stays exactly where it lives today
+- `selected_focus_id` remains the authoritative upstream seam identity
+- shortlisted overflow still lands in `secondary_seams_considered`
+- recommendation seam binding remains where it already lives
 
-Enforcement rule:
+Enforcement rule stays the same:
 
 - when the gate selected a seam, downstream `primary_seam.seam_id` must match `focus_decision.selected_focus_id`
-- if it does not match, semantic validation should fail loudly and name the drift
+- semantic validation remains the single owner of that enforcement
 
-Authoritative enforcement location:
-
-- semantic validation is the source of truth
-- `validate_stage_output()` for proposer and reviser payloads should receive `expected_primary_seam_id` from the runner context
-- the validator should reject any proposer or reviser payload whose `primary_seam.seam_id` differs from that expected value
-- the runner should not add a second independent drift checker after the loop except for tests and summary wording
-
-That keeps one enforcement owner instead of splitting the rule across runner logic and semantic validation.
-
-This matters because a gate that can be silently ignored is not a gate.
-
-### Gate Role Decision
-
-Provenance: **grounded in existing code + new normative decision**
-
-- Grounded in existing code:
-  the runner already supports role lookup and fallback behavior across existing role names.
-- New normative decision:
-  `focus_gate` becomes an optional strategy role name with proposer fallback and forced read-only access in M1.
-
-Add an optional `focus_gate` role in strategy configs, but make it **fallback to `proposer` when absent**.
-
-Why this is the right trade:
-
-- existing strategies keep working
-- the gate can use a smaller/cheaper model later without changing public shape
-- M1 does not require an example-strategy migration just to run
+Do not split this rule between runner heuristics and validator heuristics.
 
 ### Error & Rescue Registry
 
 | Failure | Likely cause | Rescue |
 |---|---|---|
-| `clarification_requested` in a non-interactive run | request ambiguity is real | stop cleanly, persist `question`, rerun with `focus_gate_answer` |
-| `no_viable_focus` on a good task | poor candidate generation from request-only context | inspect `candidates` and `warnings`, tighten task context or defer to M2 probe work |
-| selected seam drifts from final `primary_seam` | proposer/reviser ignored gate context | fail semantic validation; do not silently publish |
-| gate output is structurally invalid | prompt/schema mismatch | fail the gate stage before proposer |
-| `files_hint` is missing or messy | task author gave weak entry signals | warn in artifact, do not fail by itself |
+| `deliberate` still asks a question with no repo-backed evidence | probe path was skipped or fake | fail tests and inspect stage order; the deliberate path must record `focus_gate_probe` |
+| `no_viable_focus` on a task that obviously has a seam | probe candidate generation is weak or score thresholds are wrong | inspect `checked_files`, candidate scores, and warnings; tighten prompt or thresholds |
+| stale `focus_gate_answer` still gets accepted | answer matching still relies on prompt/options only | compare against current candidate set before acceptance |
+| `never_ask` still emits a question block | policy handling leaked the old clarification behavior | normalize ambiguity to `no_viable_focus` and suppress question serialization |
+| selected seam drifts from final `primary_seam` | proposer or reviser ignored gate context | fail semantic validation; do not silently publish |
+| candidate evidence refs cite files not actually checked | probe artifact is decorative instead of grounded | fail semantic validation on probe payload |
+| report hides why a probe-backed decision won | report only renders ID/summary | render next-best candidate, checked files, and warnings |
 
 ## Code Quality Review
 
 ### Explicit-Over-Clever Decisions
 
-1. Add one focused `focus_gate` policy to the existing contract. Do not create `analysis_review_focus_gate_v1`.
-2. Add one dedicated focus-decision schema. Do not overload `analysis_output_schema()`.
-3. Store `focus_decision` at summary top-level. Do not thread it through fake `analysis_review_status` fields.
-4. Allow `focus_gate` role override, but default to proposer. Do not force every strategy fixture to gain a new role before the feature can run.
-5. Keep M1 validation seam-specific. Do not build a registry/plug-in system for future focus types yet.
+1. Keep one public `focus_decision` object. Do not create `focus_probe_summary` beside it.
+2. Add one internal probe stage. Do not bury repo probing inside a bigger, less testable focus prompt and call it architecture.
+3. Widen candidate records in place. Do not create parallel `ranked_candidates` and `shortlist_candidates` arrays.
+4. Keep threshold values in code and docs. Do not add YAML knobs in M2.
+5. Add `never_ask` as a policy. Do not add a third gate path just to express “same path, different ambiguity behavior.”
 
 ### Module-Level Plan
 
 | Slice | Files | What changes |
 |---|---|---|
-| input + contract | `anvil/harness/types.py`, `anvil/harness/contracts.py` | parse raw `focus_gate` / `focus_gate_answer`, resolve effective `focus_gate` policy |
-| gate schema + validation | `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | define gate output schema and lightweight semantic checks for state transitions |
-| prompt surface | `anvil/harness/prompts.py` | add adjudicate and deliberate gate prompt builders and inject a fixed `Focus Gate Decision` block into proposer/reviser prompts |
-| runner integration | `anvil/harness/runner.py` | run `focus_gate` before proposer, persist `focus_decision`, emit exact blocked verdicts, seed proposer by prompt text, enforce seam agreement through semantic validation context |
-| reporting | `anvil/harness/report.py` | render `## Focus Decision` even when the review loop never starts |
-| docs | `docs/analysis_review_contract.md` | document config precedence, terminal states, rerun answer contract, and report behavior |
+| public contract | `anvil/harness/types.py`, `anvil/harness/contracts.py` | widen `clarification_policy`, keep the same field names, preserve task/strategy precedence |
+| schema + semantic rules | `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | widen candidate fields, add probe schema, validate scores/evidence/checked-files invariants |
+| prompt surface | `anvil/harness/prompts.py` | add `build_focus_probe_prompt()` and widen final focus-decision prompt instructions |
+| runner integration | `anvil/harness/runner.py` | orchestrate probe -> decision on deliberate path, widen answer matching, record stages, normalize `never_ask` |
+| reporting | `anvil/harness/report.py`, `anvil/harness/reporting.py` | render decision basis, checked files, candidate rationale, and stale-answer warnings |
+| docs | `docs/analysis_review_contract.md` | document public config widening, thresholds, deliberate probe flow, and stale-answer semantics |
 
 ### Milestone Boundaries
 
-#### M1: Branch Scope
+#### M1: Already Landed Baseline
 
 - typed `focus_gate` policy
 - `focus_type = seam`
 - `adjudicate` and `deliberate`
-- `focus_decision` artifact
+- top-level `focus_decision`
 - blocked clarification path
 - downstream seam-agreement enforcement
 
-#### M2: Explicit Follow-On
+#### M2: Branch Scope
 
-- one quick repo probe round before asking a question
-- richer candidate scoring and rationale
-- better handling of malformed or stale `focus_gate_answer`
+- repo-backed deliberate probe
+- richer candidate comparison and rationale
+- explicit score and lead thresholds
+- `clarification_policy = never_ask`
+- stale-answer handling against current candidate reality
+- richer report surfacing
 
 #### M3: Explicit Follow-On
 
@@ -588,73 +663,81 @@ Why this is the right trade:
 
 ### Test Strategy
 
-The implementation should add tests before or alongside each slice. This is not optional.
+The existing M1 coverage is real. M2 should add tests only for the new risk surface.
 
-The plan needs both unit-style coverage and runner-style integration coverage, because the gate is mostly orchestration logic and failure-state plumbing.
+The plan still needs both unit-style coverage and runner-style integration coverage because the M2 behavior is mostly orchestration logic, state normalization, and artifact honesty.
 
 ### Code Path Coverage
 
 ```text
 CODE PATH COVERAGE
 ===========================
-[+] anvil/harness/types.py
+[+] anvil/harness/types.py + contracts.py
     │
-    ├── TaskSpec parses focus_gate + focus_gate_answer
-    │   ├── [ADD] defaults when fields absent
-    │   ├── [ADD] accepts valid focus_gate_answer shape
-    │   └── [ADD] rejects invalid focus_gate config
+    ├── focus_gate.clarification_policy
+    │   ├── [EXISTS] block_for_clarification
+    │   └── [ADD]    never_ask
     │
-    └── StrategyConfig parses optional focus_gate defaults
-        └── [ADD] strategy/task precedence coverage
+    └── contract serialization
+        └── [ADD]    never_ask survives task/strategy resolution
 
-[+] anvil/harness/contracts.py
+[+] anvil/harness/schemas.py + semantic_validation.py
     │
-    ├── build_analysis_review_contract() resolves effective focus_gate policy
-    │   ├── [ADD] disabled by default
-    │   ├── [ADD] strategy default_path respected
-    │   └── [ADD] task narrowing allowed_focus_types / clarification_policy
+    ├── focus_probe_output_schema()
+    │   ├── [ADD] checked_files required
+    │   ├── [ADD] candidates cap at 3
+    │   └── [ADD] evidence_refs subset of checked_files
     │
-    └── contract serialization includes focus_gate
-        └── [ADD] bounded + trust serialization coverage
+    └── focus_gate_output_schema()
+        ├── [EXISTS] selected / clarification_requested / no_viable_focus
+        ├── [ADD]    decision_basis
+        ├── [ADD]    files_hint_disposition
+        ├── [ADD]    checked_files
+        └── [ADD]    candidate why_candidate / evidence_refs / score
+
+[+] anvil/harness/prompts.py
+    │
+    ├── build_focus_probe_prompt()
+    │   └── [ADD] probe-specific instructions and hard caps
+    │
+    └── build_focus_gate_prompt()
+        ├── [EXISTS] gate_path-specific decision prompt
+        └── [ADD]    accepts probe artifact and stale-answer context
 
 [+] anvil/harness/runner.py
     │
-    ├── gate disabled -> legacy proposer path
-    │   └── [ADD] regression that legacy runs still work unchanged
+    ├── adjudicate path
+    │   ├── [EXISTS] request-only decision before proposer
+    │   └── [ADD]    threshold-based selected vs ambiguous behavior
     │
-    ├── gate enabled + selected
-    │   ├── [ADD] focus gate stage runs before proposer
-    │   ├── [ADD] summary.json persists focus_decision
-    │   ├── [ADD] proposer prompt contains the fixed Focus Gate Decision block
-    │   └── [ADD] reviser prompt preserves the same selected seam requirement
+    ├── deliberate path
+    │   ├── [ADD]    focus_gate_probe stage runs first
+    │   ├── [ADD]    selected after probe enters proposer
+    │   ├── [ADD]    ambiguity + block_for_clarification blocks with question
+    │   └── [ADD]    ambiguity + never_ask returns no_viable_focus
     │
-    ├── gate enabled + clarification_requested
-    │   ├── [ADD] run exits before proposer
-    │   ├── [ADD] run_verdict/content_verdict are exactly blocked_for_clarification
-    │   └── [ADD] question block is preserved in summary/report
+    ├── rerun answer path
+    │   ├── [EXISTS] prompt/options match plumbing
+    │   ├── [ADD]    stale answer when option vanished from current shortlist
+    │   └── [ADD]    stale answer when current probe now favors a different seam
     │
-    ├── gate enabled + no_viable_focus
-    │   ├── [ADD] run exits before proposer
-    │   ├── [ADD] run_verdict/content_verdict are exactly no_viable_focus
-    │   └── [ADD] candidate rationale is preserved
-    │
-    ├── focus_gate_answer rerun path
-    │   ├── [ADD] trimmed question_prompt must match prior prompt exactly
-    │   └── [ADD] selected_option must match one prior option exactly
-    │
-    └── selected seam drift
-        └── [ADD] semantic validation failure when proposer or reviser primary_seam differs
+    └── stage recording
+        ├── [ADD] focus_gate_probe appears before focus_gate
+        └── [EXISTS] focus_gate remains before proposer
 
-[+] anvil/harness/report.py
+[+] anvil/harness/report.py + reporting.py
     │
     ├── selected focus block
-    │   └── [ADD] report renders compact explanation block
+    │   ├── [EXISTS] selected ID and summary
+    │   └── [ADD]    decision_basis, checked_files, next-best candidate
     │
-    ├── clarification focus block
-    │   └── [ADD] report renders question + options for blocked runs
+    ├── clarification block
+    │   ├── [EXISTS] question + options
+    │   └── [ADD]    probe-backed candidate rationale and warnings
     │
-    └── no-viable focus block
-        └── [ADD] report renders warnings and candidate summary
+    └── no-viable block
+        ├── [EXISTS] warnings and candidate summary
+        └── [ADD]    never_ask and stale-answer explanation
 ```
 
 ### User Flow Coverage
@@ -662,25 +745,31 @@ CODE PATH COVERAGE
 ```text
 USER FLOW COVERAGE
 ===========================
-[+] Operator runs a clear seam-focused task
-    ├── [ADD] Gate selects a seam and the run enters proposer
-    └── [ADD] REPORT.md shows why that seam won
+[+] Operator runs a clear seam-focused task with adjudicate
+    ├── [EXISTS] Gate selects a seam before proposer
+    └── [ADD]    Selection obeys explicit thresholds
 
-[+] Operator runs an ambiguous task
-    ├── [ADD] Gate asks one clarification question and stops
-    └── [ADD] No silent auto-route into the expensive review loop
+[+] Operator runs an ambiguous task with deliberate
+    ├── [ADD]    Probe inspects repo files and builds a shortlist
+    ├── [ADD]    Gate asks one clarification question only if ambiguity remains
+    └── [ADD]    REPORT.md shows checked files and why the shortlist was ambiguous
+
+[+] CI-style task uses deliberate + never_ask
+    ├── [ADD]    Probe still runs
+    └── [ADD]    Ambiguity returns no_viable_focus instead of a question
 
 [+] Operator reruns with focus_gate_answer
-    ├── [ADD] Gate uses the answer and selects a seam
-    └── [ADD] The main loop starts only after a selected state
+    ├── [EXISTS] Answer can advance the run
+    ├── [ADD]    Answer must still match the current shortlist
+    └── [ADD]    Stale answer re-asks or no-viables based on policy
 
-[+] Operator gives bad files_hint
-    ├── [ADD] Warning emitted
-    └── [ADD] Run does not fail on files_hint alone
+[+] Task has weak or misleading files_hint
+    ├── [ADD]    Probe records files_hint_disposition = hurt or ignored
+    └── [ADD]    Run still proceeds when a defensible shortlist exists
 
-[+] Operator compares bounded and trust runs on the same task
-    ├── [ADD] focus_decision is visible in both summaries
-    └── [ADD] bounded/trust still differ only downstream of focus selection
+[+] Bounded and trust runs share the same chosen seam
+    ├── [EXISTS] downstream drift enforcement
+    └── [ADD]    focus_decision now carries grounded checked_files and rationale in both modes
 ```
 
 ### Required Test Files
@@ -699,105 +788,125 @@ Run at minimum:
 poetry run pytest -q tests/test_harness_analysis_contract.py tests/test_harness_prompt_consistency.py tests/test_harness_semantic_validation.py tests/test_harness_runner.py tests/test_harness_reporting.py
 ```
 
-Then run one live clear-task case and one live ambiguous-task case with `focus_gate.enabled: true`:
+If `poetry` is missing on PATH in this repo, use:
 
-1. clear case: expect `decision_state = selected` and proposer stage present
-2. ambiguous case: expect `decision_state = clarification_requested` and no proposer stage
+```bash
+./.venv/bin/python -m pytest -q tests/test_harness_analysis_contract.py tests/test_harness_prompt_consistency.py tests/test_harness_semantic_validation.py tests/test_harness_runner.py tests/test_harness_reporting.py
+```
+
+Then run at least four live harness cases with `focus_gate.enabled: true`:
+
+1. adjudicate clear case: expect `decision_state = selected`, no probe stage, proposer present
+2. deliberate ambiguous case: expect `focus_gate_probe` then `clarification_requested`, no proposer
+3. deliberate ambiguous + `never_ask`: expect `focus_gate_probe` then `no_viable_focus`, no question block
+4. deliberate rerun with stale answer: expect probe-backed stale warning and either re-ask or `no_viable_focus` depending on policy
 
 ## Failure Modes Registry
 
 | Codepath | Production failure | Test required | Error handling required | User-visible outcome |
 |---|---|---|---|---|
-| task/strategy parsing | invalid `focus_gate` config is accepted and mis-executed | yes | yes | clear config error |
-| gate selected path | gate returns malformed artifact | yes | yes | run fails before proposer |
-| clarification path | runner still enters proposer after asking a question | yes | yes | blocked, not silent continuation |
-| no-viable path | runner emits vague failure with no candidate context | yes | yes | actionable blocked explanation |
-| seam adapter | proposer/reviser changes `primary_seam` after gate selection | yes | yes | loud semantic validation failure |
-| report rendering | blocked run has no `Focus Decision` section | yes | yes | operator can see why the run stopped |
+| public config parsing | `never_ask` is rejected or silently downgraded | yes | yes | clear config error |
+| probe payload | probe cites files it did not inspect | yes | yes | loud validation failure |
+| deliberate orchestration | runner asks for clarification without ever probing | yes | yes | blocked output is honest about repo evidence |
+| rerun answers | stale answer still gets accepted | yes | yes | operator sees stale-answer warning instead of a silent wrong seam |
+| never_ask policy | ambiguous deliberate task still emits a question | yes | yes | deterministic `no_viable_focus` result |
+| selected seam handoff | proposer/reviser drift away from selected seam | yes | yes | loud semantic validation failure |
+| report rendering | probe-backed rationale never appears in `REPORT.md` | yes | yes | operator can see why the seam won or why ambiguity remained |
 
 Critical gap if omitted:
 
-- If selected-seam drift is not tested and not enforced, the branch will reintroduce the same trust problem in a shinier place.
+- If stale rerun answers are not tested, M2 can select the wrong seam after the repo changed and still look “successful” in summary artifacts. That is the exact kind of silent trust failure this branch is supposed to remove.
 
 ## Performance Review
 
 ### Expected Cost
 
-The gate adds one extra provider round for enabled tasks.
+M2 adds one extra provider round on deliberate runs only.
 
-That is acceptable because:
+Expected call profile:
 
-- the round is single-shot in M1
-- there is no repo probe in M1
-- the gate is cheaper than spending a whole proposer/critic/auditor loop on the wrong seam
+- adjudicate: still 1 gate call before proposer
+- deliberate: 1 probe call + 1 final decision call before proposer
+
+That is acceptable because a deliberate task is already ambiguous. Spending 2 cheap read-only calls to avoid a full wrong-seam proposer/critic/reviser/auditor cycle is a good trade.
 
 ### Performance Constraints
 
-1. The gate must run at most once per request in M1.
-2. `deliberate` may ask at most one clarification block.
-3. Candidate lists should cap at three items.
-4. No additional validator round should be introduced before proposer.
+1. Probe rounds cap at 1.
+2. Candidate lists cap at 3.
+3. Probe checked files cap at 6.
+4. Candidate evidence refs cap at 2 per candidate.
+5. No validator round is introduced before proposer.
 
 ### Performance Risks
 
 | Risk | Why it matters | Mitigation |
 |---|---|---|
-| clear tasks become slower | every enabled run pays one more LLM call | default `focus_gate` role to a cheap read-only model or proposer fallback |
-| blocked runs look like failures | operators may think the harness broke | make `REPORT.md` and `summary.json` explicit about blocked-for-clarification |
-| large candidate payloads bloat artifacts | noisy reports and harder debugging | hard-cap candidate list size and warnings count in M1 |
+| deliberate tasks get noticeably slower | M2 adds a second gate call | keep `focus_gate` read-only, fallback to proposer role, and cap probe scope tightly |
+| probe reads too many files | cost balloons and rationale gets noisy | hard-cap checked files at 6 and require evidence refs to be path-specific |
+| never_ask masks useful clarification in CI | operators may miss a recoverable ambiguity | render rich candidate rationale and warnings in `REPORT.md` and `summary.json` |
+| report noise grows | richer candidates can bloat artifacts | render top candidate, next-best candidate, and compact checked-file list instead of dumping raw stage JSON |
 
 ## Implementation Plan
 
-### Slice 1: Input and Contract Surface
+### Slice 1: Public Contract and Schema Widening
 
 Files:
 
 - `anvil/harness/types.py`
 - `anvil/harness/contracts.py`
-- `tests/test_harness_analysis_contract.py`
-
-Changes:
-
-1. Add optional raw `focus_gate` config to `TaskSpec` and `StrategyConfig`.
-2. Add optional `focus_gate_answer` to `TaskSpec`.
-3. Add one `FocusGatePolicy` dataclass to `contracts.py`.
-4. Resolve effective `focus_gate` policy inside `build_analysis_review_contract()`.
-5. Reject unknown `focus_gate` keys and reject any non-`seam` allowed focus type in M1.
-
-Acceptance:
-
-- contracts serialize deterministic `focus_gate` policy
-- bounded and trust both carry the same focus-gate shape
-- absent config keeps legacy behavior
-
-### Slice 2: Gate Schema, Prompt, and Validation
-
-Files:
-
 - `anvil/harness/schemas.py`
-- `anvil/harness/prompts.py`
 - `anvil/harness/semantic_validation.py`
-- `tests/test_harness_prompt_consistency.py`
+- `tests/test_harness_analysis_contract.py`
 - `tests/test_harness_semantic_validation.py`
 
 Changes:
 
-1. Add a focused gate output schema.
-2. Add adjudicate and deliberate gate prompt builders.
-3. Add semantic validation for:
-   - allowed `decision_state`
-   - `selected` requires `selected_focus_id`
-   - `clarification_requested` requires non-empty `question`
-   - `no_viable_focus` requires candidate/warning context
-   - proposer/reviser `primary_seam.seam_id` must equal `expected_primary_seam_id` when provided by the runner
-4. Add prompt-consistency tests so bounded and trust share the gate vocabulary.
+1. Widen `VALID_FOCUS_GATE_CLARIFICATION_POLICIES` to include `never_ask`.
+2. Keep `FocusGatePolicy` public shape intact, but widen `clarification_policy`.
+3. Widen `FOCUS_GATE_CANDIDATE_SCHEMA` with `why_candidate`, `evidence_refs`, and `score`.
+4. Widen `focus_gate_output_schema()` with `decision_basis`, `files_hint_disposition`, and `checked_files`.
+5. Add `focus_probe_output_schema()`.
+6. Add semantic validation for:
+   - `never_ask`
+   - checked-files caps
+   - evidence refs subset of checked files
+   - candidate score bounds
+   - required decision-basis fields
 
 Acceptance:
 
-- prompt text states that non-interactive ambiguity blocks instead of auto-routing
-- semantic validation rejects malformed gate artifacts
+- existing M1 payloads fail loudly until updated to the widened shape
+- `never_ask` survives parsing and contract serialization
+- malformed probe artifacts fail before the final decision stage can use them
 
-### Slice 3: Runner Integration and Seam Adapter
+### Slice 2: Probe Prompt and Decision Prompt Widening
+
+Files:
+
+- `anvil/harness/prompts.py`
+- `tests/test_harness_prompt_consistency.py`
+
+Changes:
+
+1. Add `build_focus_probe_prompt()`.
+2. Keep `build_focus_gate_prompt()`, but teach it to accept:
+   - prior probe artifact
+   - optional rerun answer
+   - stale-answer warning context
+3. Lock prompt instructions for:
+   - checked file caps
+   - candidate caps
+   - score and lead thresholds
+   - `files_hint_disposition`
+   - `never_ask`
+
+Acceptance:
+
+- prompt text for deliberate runs clearly distinguishes probe and decision work
+- prompt-consistency tests prove bounded and trust share the same M2 vocabulary
+
+### Slice 3: Runner Integration
 
 Files:
 
@@ -806,38 +915,41 @@ Files:
 
 Changes:
 
-1. Insert `_run_focus_gate()` before proposer in `_run_analysis_review_v1()`.
-2. Persist `focus_decision` into summary details even when the loop never starts.
-3. Short-circuit the run on `clarification_requested` and `no_viable_focus` using the exact blocked verdict taxonomy above.
-4. Record the gate as `role_name = "focus_gate"` in `agent_stages`.
-5. Seed proposer and reviser by injecting the fixed Focus Gate Decision prompt block.
-6. Enforce that downstream `primary_seam.seam_id` matches gate selection through semantic validation context.
-7. Keep bounded/trust divergence strictly downstream of focus selection.
+1. Add `_run_focus_gate_probe()` and a corresponding stage record path.
+2. Route deliberate runs through `focus_gate_probe` before the final `focus_gate` decision call.
+3. Keep adjudicate runs on the current single-call path.
+4. Widen `_focus_gate_answer_matches()` into current-candidate-aware stale-answer logic.
+5. Normalize ambiguity under `never_ask` into `no_viable_focus`.
+6. Preserve selected-seam handoff and downstream drift enforcement exactly as today.
 
 Acceptance:
 
-- gate-disabled runs are unchanged
-- gate-selected runs enter proposer with seeded context
-- blocked runs have no proposer stage
-- drift path fails loudly
+- deliberate runs record probe then decision in the right order
+- adjudicate runs still record only `focus_gate`
+- stale answers never select a seam silently
+- blocked runs still skip proposer and validator rounds
 
 ### Slice 4: Report and Summary Surfacing
 
 Files:
 
 - `anvil/harness/report.py`
+- `anvil/harness/reporting.py`
 - `tests/test_harness_reporting.py`
 
 Changes:
 
-1. Render a dedicated `## Focus Decision` section.
-2. Render selected rationale, clarification prompt/options, or no-viable warnings depending on state.
-3. Ensure the section appears even when `analysis_review_status` is absent.
+1. Render `decision_basis`.
+2. Render `files_hint_disposition` and `checked_files`.
+3. Render top candidate plus next-best candidate when present.
+4. Render stale-answer warnings and `never_ask` explanations for blocked runs.
+5. Keep the report compact. No raw stage JSON dumps.
 
 Acceptance:
 
-- blocked runs still produce readable `REPORT.md`
-- report wording stays runner-owned
+- selected runs explain why the seam won
+- blocked deliberate runs explain what was probed and why ambiguity remained
+- `never_ask` blocked runs do not render a fake question block
 
 ### Slice 5: Docs
 
@@ -847,14 +959,15 @@ Files:
 
 Changes:
 
-1. Document `focus_gate` precedence.
-2. Document terminal states.
-3. Document `focus_gate_answer` rerun contract.
-4. Document that `focus_decision` is top-level runner-owned state, not model-authored review status.
+1. Document `clarification_policy = never_ask`.
+2. Document the deliberate probe round and its caps.
+3. Document widened candidate fields and top-level `focus_decision` additions.
+4. Document stale-answer semantics.
+5. Document that the probe is an internal stage and `focus_decision` remains the only public summary artifact.
 
 Acceptance:
 
-- docs explain M1 behavior without implying M2 repo probing already exists
+- docs describe the real M2 behavior, not the already-landed M1 baseline
 
 ## Worktree Parallelization Strategy
 
@@ -862,57 +975,59 @@ Acceptance:
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Input + contract surface | `anvil/harness/types.py`, `anvil/harness/contracts.py` | — |
-| B. Gate schema + prompt + validation | `anvil/harness/schemas.py`, `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py` | A |
+| A. Public contract + schema widening | `anvil/harness/types.py`, `anvil/harness/contracts.py`, `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | — |
+| B. Prompt surface | `anvil/harness/prompts.py` | A |
 | C. Runner integration | `anvil/harness/runner.py` | A, B |
-| D. Report surfacing | `anvil/harness/report.py` | A, artifact shape from B |
+| D. Reporting | `anvil/harness/report.py`, `anvil/harness/reporting.py` | A, C |
 | E. Docs | `docs/analysis_review_contract.md` | A, B, D |
 | F. Tests | `tests/test_harness_*` | A, B, C, D |
 
 ### Parallel Lanes
 
-- Lane A: `A -> B -> C`  
-  Sequential because the runner needs stable contract names and gate schema shape.
+- Lane A: `A -> B -> C`
+  Sequential. The runner needs stable schema names, prompt helper names, and threshold semantics.
 
-- Lane B: `D -> E`  
-  Can run in parallel with late `B` or early `C` once the artifact JSON shape is frozen.
+- Lane B: `D -> E`
+  Can start once A is frozen and C's persisted field names are settled.
 
-- Lane C: `F`  
-  Sequential after A+B+C+D. Tests span all touched modules and will churn badly if started too early.
+- Lane C: `F`
+  Splitable late, but should not start before A and most of C are stable.
 
 ### Execution Order
 
-1. Launch Lane A and agree the `focus_gate` policy plus `focus_decision` artifact shape.
-2. Once that shape is frozen, start Lane B in parallel while Lane A finishes runner integration.
-3. Merge A and B.
-4. Run Lane C.
+1. Freeze the M2 artifact and policy shape in Lane A.
+2. Finish runner orchestration in Lane A.
+3. Start Lane B once persisted field names are stable.
+4. Merge A and B.
+5. Run Lane C.
 
 ### Conflict Flags
 
-- `runner.py` depends on exact schema and prompt helper names from Lane A.
-- `report.py` depends on exact persisted field names for `focus_decision`.
-- test worktrees will conflict with both lanes if they start before artifact names are stable.
+- `runner.py` depends on exact schema fields from A and exact prompt helpers from B.
+- `report.py` depends on the persisted field names from C.
+- test worktrees will churn badly if they start before the widened candidate schema is final.
 
 ## Decision Audit Trail
 
 | # | Phase | Decision | Classification | Principle | Rationale | Rejected |
 |---|---|---|---|---|---|---|
-| 1 | Scope | Ship M1 only in this branch | Auto-decided | Completeness + Pragmatic | M1 is the full shippable lake; M2/M3 belong in follow-on packets | full planner platform now |
-| 2 | Architecture | Keep one analysis-review contract family | Auto-decided | Explicit over clever | New strategy kinds would duplicate runner and docs surface for no gain | gate-specific strategy kind |
-| 3 | Architecture | Store `focus_decision` at summary top-level | Auto-decided | Explicit over clever | Blocked runs may never have `analysis_review_status` | burying it under review status |
-| 4 | Code quality | Add optional `focus_gate` role with proposer fallback | Auto-decided | DRY + Minimal diff | Existing strategies keep working while allowing future cheaper gate roles | mandatory strategy migrations |
-| 5 | Runner | Block on clarification instead of silent auto-route | Auto-decided | Completeness | Silent routing defeats the entire trust objective | warn-and-continue behavior |
-| 6 | Validation | Enforce selected seam agreement downstream | Auto-decided | Rigor | A gate that can be ignored is cosmetic | advisory-only seam mismatch |
+| 1 | Scope | Treat M1 as already landed baseline | Auto-decided | Pragmatic | The code already contains the gate surface and tests; pretending otherwise wastes the branch | re-planning M1 as future work |
+| 2 | Scope | Keep M2 seam-only | Auto-decided | Completeness + Minimal diff | The downstream loop is still seam-shaped; adding a second focus type now would be fake genericity | multi-type rollout in this branch |
+| 3 | Architecture | Add one internal `focus_gate_probe` stage | Auto-decided | Explicit over clever | Repo probing needs its own testable artifact instead of hiding inside one larger prompt | “probe implicitly inside focus_gate” |
+| 4 | Contract | Widen `clarification_policy` to include `never_ask` | Auto-decided | Completeness | Non-interactive deliberate runs need an honest terminal policy, not an implied question path | leaving policy half-typed |
+| 5 | Artifact | Keep `focus_decision` as the only public summary artifact | Auto-decided | DRY + Explicit over clever | The probe is implementation detail; user-facing state should stay in one place | new top-level probe artifact family |
+| 6 | Runner | Reject stale rerun answers against the current candidate set | Auto-decided | Rigor | Prompt/option string matching alone is too weak once repo-backed probing exists | blind string-match acceptance |
+| 7 | Performance | Cap probe round at one and files at six | Auto-decided | Pragmatic | M2 should harden ambiguity handling without turning the gate into a mini review loop | open-ended probing |
 
 ## Completion Summary
 
-- Step 0: Scope Challenge — scope accepted as selective expansion, **M1 only**
-- Architecture Review: insertion point and artifact shape defined
-- Code Quality Review: boring-extension path chosen, no new strategy kind
-- Test Review: coverage diagram produced, full test list specified
-- Performance Review: extra gate call accepted with explicit caps
+- Step 0: Scope Challenge — scope reduced to the real residual M2 seam hardening work
+- Architecture Review: probe + decision architecture and public/private artifact boundary defined
+- Code Quality Review: boring-extension path chosen, no new strategy kind or provider protocol
+- Test Review: M2-only coverage diagram produced, stale-answer and `never_ask` gaps made explicit
+- Performance Review: deliberate path cost accepted with hard caps
 - NOT in scope: written
 - What already exists: written
-- Failure modes: critical drift gap identified
-- Parallelization: 3 lanes, 1 real parallel window, 2 sequential merges
-- Lake Score: `6/6` key decisions chose the complete M1 over the shortcut
+- Failure modes: stale-answer silent selection identified as the key critical gap
+- Parallelization: 3 lanes, 1 main sequential lane, 1 late parallel lane
+- Lake Score: `7/7` key decisions chose the complete M2 over the cosmetic shortcut
