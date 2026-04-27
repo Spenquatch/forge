@@ -373,10 +373,15 @@ def _focus_gate_adjudicate_guidance_block() -> str:
     return "\n".join(
         [
             "Gate-path guidance:",
-            "- Use `adjudicate` when the current task context plus the supplied clarification is sufficient to select one seam cleanly.",
-            "- Prefer `selected` over `clarification_requested` when one seam is clearly dominant from the task, repo context, and supplied answer.",
-            "- Use `clarification_requested` only when the supplied answer still leaves a real unresolved distinction.",
-            "- Use `no_viable_focus` only when the current task context and supplied answer do not support any defensible seam shortlist.",
+            "- Use `adjudicate` when the current task context alone is sufficient to select one seam cleanly.",
+            "- Emit `gate_path=adjudicate` exactly.",
+            "- Emit `decision_basis=request_only` exactly.",
+            "- Emit `files_hint_disposition=absent` exactly.",
+            "- Emit `checked_files=[]` exactly.",
+            "- Emit `evidence_refs=[]` for every candidate exactly.",
+            "- Prefer `selected` over `clarification_requested` when one seam is clearly dominant from the task and repo context.",
+            "- Use `clarification_requested` only when the task itself leaves a real unresolved distinction.",
+            "- Use `no_viable_focus` only when the current task context does not support any defensible seam shortlist.",
             "- Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`.",
         ]
     )
@@ -1209,6 +1214,43 @@ def _build_focus_gate_prompt(
         "adjudicate": _focus_gate_adjudicate_guidance_block(),
         "deliberate": _focus_gate_deliberate_guidance_block(),
     }[normalized_gate_path]
+    stage_context_blocks: list[str] = []
+    job_lines = [
+        "Your job:",
+        "1. Inspect the task, any files_hint/context, and the current workspace snapshot.",
+        "2. Decide whether the run can proceed with a selected seam focus now.",
+        "3. Emit a typed `focus_decision` artifact that matches the fixed schema and state rules.",
+        "4. Keep the shortlisted seam set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.",
+    ]
+    optional_probe_blocks = ""
+    if normalized_gate_path == "deliberate":
+        job_lines.extend(
+            [
+                "5. Reconcile any supplied probe or rerun context against the current repo state before selecting or re-asking.",
+                "6. Ask for clarification only when the missing distinction is real and operator input is required, and follow the stale-answer rules exactly when a prior answer is now stale.",
+            ]
+        )
+        optional_probe_blocks = "\n".join(
+            [
+                _focus_probe_rules_block(),
+                _focus_stale_answer_rules_block(),
+            ]
+        )
+        stage_context_blocks.extend(
+            [
+                _json_block("Focus gate probe artifact", focus_probe),
+                _json_block("Prior focus decision", prior_focus_decision),
+                _json_block("Focus gate answer", focus_gate_answer),
+                _json_block("Stale answer context", stale_answer_context),
+            ]
+        )
+    else:
+        job_lines.extend(
+            [
+                "5. If task context is insufficient, stay on `gate_path=adjudicate` and emit `clarification_requested` or `no_viable_focus` instead of switching paths.",
+                "6. Ignore probe-only, rerun-answer, and stale-answer behaviors in this path; they do not apply here.",
+            ]
+        )
 
     return f"""
 You are the FOCUS_GATE stage in an analysis-review harness.
@@ -1218,30 +1260,18 @@ Critical rules:
 - Return ONLY the JSON object required by the schema.
 - This stage selects or clarifies the run focus; it does not produce recommendations.
 
-Your job:
-1. Inspect the task, any files_hint/context, the current workspace snapshot, and any supplied probe or rerun context.
-2. Decide whether the run can proceed with a selected seam focus now.
-3. Emit a typed `focus_decision` artifact that matches the fixed schema and state rules.
-4. Keep the shortlisted seam set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.
-5. Ask for clarification only when the missing distinction is real and operator input is required, and follow the stale-answer rules exactly when a prior answer is now stale.
+{chr(10).join(job_lines)}
 
 Gate path: {normalized_gate_path}
 {gate_specific_guidance}
 {_focus_gate_output_rules_block()}
-{_focus_probe_rules_block()}
 {_focus_selection_thresholds_block()}
-{_focus_stale_answer_rules_block()}
+{optional_probe_blocks}
 {_analysis_contract_block(contract)}
 
 {_task_block(task, prompt_preamble)}
 
-{_json_block('Focus gate probe artifact', focus_probe)}
-
-{_json_block('Prior focus decision', prior_focus_decision)}
-
-{_json_block('Focus gate answer', focus_gate_answer)}
-
-{_json_block('Stale answer context', stale_answer_context)}
+{_join_prompt_blocks(*stage_context_blocks)}
 
 Current workspace snapshot:
 {render_git_snapshot(git_snapshot)}
@@ -1289,31 +1319,6 @@ def build_focus_gate_deliberate_prompt(
         git_snapshot,
         contract,
         gate_path="deliberate",
-        focus_probe=focus_probe,
-        focus_gate_answer=focus_gate_answer,
-        prior_focus_decision=prior_focus_decision,
-        stale_answer_context=stale_answer_context,
-    )
-
-
-def build_focus_gate_prompt(
-    task: TaskSpec,
-    prompt_preamble: str,
-    git_snapshot: dict,
-    contract: AnalysisReviewContract,
-    *,
-    gate_path: str,
-    focus_probe: dict[str, Any] | None = None,
-    focus_gate_answer: dict[str, Any] | None = None,
-    prior_focus_decision: dict[str, Any] | None = None,
-    stale_answer_context: dict[str, Any] | None = None,
-) -> str:
-    return _build_focus_gate_prompt(
-        task,
-        prompt_preamble,
-        git_snapshot,
-        contract,
-        gate_path=gate_path,
         focus_probe=focus_probe,
         focus_gate_answer=focus_gate_answer,
         prior_focus_decision=prior_focus_decision,

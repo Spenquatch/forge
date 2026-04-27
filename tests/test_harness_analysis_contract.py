@@ -248,6 +248,32 @@ def test_analysis_review_contract_resolves_focus_gate_from_strategy_and_task():
     }
 
 
+def test_analysis_review_contract_accepts_never_ask_focus_gate_policy():
+    contract = build_analysis_review_contract(
+        _task(
+            focus_gate={
+                "enabled": True,
+                "allowed_focus_types": ["seam"],
+                "clarification_policy": "never_ask",
+            }
+        ),
+        _strategy(
+            focus_gate={
+                "enabled": True,
+                "default_path": "deliberate",
+            }
+        ),
+    )
+
+    assert contract.focus_gate.clarification_policy == "never_ask"
+    assert contract.to_dict()["focus_gate"] == {
+        "enabled": True,
+        "default_path": "deliberate",
+        "allowed_focus_types": ["seam"],
+        "clarification_policy": "never_ask",
+    }
+
+
 def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
     default_task = TaskSpec.from_dict(
         {

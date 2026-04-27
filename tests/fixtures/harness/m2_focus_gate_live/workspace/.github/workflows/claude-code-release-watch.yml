@@ -1,0 +1,7 @@
+name: claude-code-release-watch
+on:
+  schedule:
+    - cron: "15 * * * *"
+jobs:
+  watch:
+    runs-on: ubuntu-latest

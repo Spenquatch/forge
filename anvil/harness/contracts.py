@@ -181,7 +181,9 @@ class FocusGatePolicy:
     enabled: bool = False
     default_path: Literal["adjudicate", "deliberate"] = "adjudicate"
     allowed_focus_types: list[Literal["seam"]] = field(default_factory=lambda: ["seam"])
-    clarification_policy: Literal["block_for_clarification"] = "block_for_clarification"
+    clarification_policy: Literal[
+        "block_for_clarification", "never_ask"
+    ] = "block_for_clarification"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

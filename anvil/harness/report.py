@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from .publication_authority import sanitize_summary_text
@@ -127,24 +128,45 @@ def _render_plain_focus_list(items: Any) -> str:
     return ", ".join(f"`{item}`" for item in values)
 
 
+def _focus_candidate_id(candidate: Any) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    return str(
+        candidate.get("focus_id")
+        or candidate.get("seam_id")
+        or candidate.get("candidate_id")
+        or candidate.get("id")
+        or ""
+    ).strip()
+
+
+def _focus_candidate_summary(candidate: Any) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    return str(
+        candidate.get("focus_summary")
+        or candidate.get("summary")
+        or candidate.get("title")
+        or candidate.get("label")
+        or candidate.get("why_candidate")
+        or candidate.get("reason")
+        or ""
+    ).strip()
+
+
+def _focus_candidate_score(candidate: Any) -> float | None:
+    if not isinstance(candidate, dict):
+        return None
+    score = candidate.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        return float(score)
+    return None
+
+
 def _focus_candidate_label(candidate: Any) -> str:
     if isinstance(candidate, dict):
-        focus_id = (
-            str(
-                candidate.get("focus_id")
-                or candidate.get("seam_id")
-                or candidate.get("candidate_id")
-                or candidate.get("id")
-                or ""
-            ).strip()
-        )
-        summary = str(
-            candidate.get("summary")
-            or candidate.get("title")
-            or candidate.get("label")
-            or candidate.get("reason")
-            or ""
-        ).strip()
+        focus_id = _focus_candidate_id(candidate)
+        summary = _focus_candidate_summary(candidate)
         if focus_id and summary:
             return f"`{focus_id}`: {summary}"
         if focus_id:
@@ -178,9 +200,7 @@ def _append_seam_status_lines(lines: list[str], status: dict[str, Any]) -> None:
         why_primary = str(primary_seam.get("why_primary") or "").strip()
         if why_primary:
             lines.append(f"  - Why primary: {why_primary}")
-        lines.append(
-            "  - Paths: " + _render_seam_paths(primary_seam.get("paths"))
-        )
+        lines.append("  - Paths: " + _render_seam_paths(primary_seam.get("paths")))
     else:
         lines.append("- Primary seam: none")
 
@@ -197,10 +217,7 @@ def _append_seam_status_lines(lines: list[str], status: dict[str, Any]) -> None:
                 "  - "
                 + f"`{_normalized_seam_id(item.get('seam_id')) or 'unknown'}`"
                 + ": "
-                + (
-                    str(item.get("summary") or "").strip()
-                    or "No summary provided."
-                )
+                + (str(item.get("summary") or "").strip() or "No summary provided.")
             )
     else:
         lines.append("- Secondary seams considered: none")
@@ -256,6 +273,141 @@ def _render_cap_usage(used: Any, cap: Any) -> str:
 
 def _table_cell(value: Any) -> str:
     return str(value).replace("|", "\\|")
+
+
+def _read_json_artifact(path_value: Any) -> dict[str, Any] | None:
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        return None
+    path = Path(path_text)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _focus_gate_stage(summary: dict[str, Any]) -> dict[str, Any]:
+    stages = summary.get("agent_stages")
+    if not isinstance(stages, list):
+        return {}
+    for item in reversed(stages):
+        if (
+            isinstance(item, dict)
+            and str(item.get("role_name") or "").strip() == "focus_gate"
+        ):
+            return item
+    return {}
+
+
+def _short_json_value(value: Any) -> str:
+    if isinstance(value, list):
+        items = [_short_json_value(item) for item in value[:3]]
+        suffix = ", ..." if len(value) > 3 else ""
+        return "[" + ", ".join(items) + suffix + "]"
+    if isinstance(value, dict):
+        keys = list(value.keys())
+        preview = ", ".join(str(key) for key in keys[:3])
+        if len(keys) > 3:
+            preview += ", ..."
+        return "{keys: " + preview + "}"
+    return json.dumps(value, sort_keys=True)
+
+
+def _json_value_diff_lines(
+    raw_value: Any,
+    normalized_value: Any,
+    *,
+    path_prefix: str = "",
+    depth: int = 0,
+) -> list[str]:
+    if raw_value == normalized_value:
+        return []
+    if depth < 1 and isinstance(raw_value, dict) and isinstance(normalized_value, dict):
+        lines: list[str] = []
+        for key in sorted(set(raw_value).union(normalized_value)):
+            child_prefix = f"{path_prefix}.{key}" if path_prefix else str(key)
+            lines.extend(
+                _json_value_diff_lines(
+                    raw_value.get(key),
+                    normalized_value.get(key),
+                    path_prefix=child_prefix,
+                    depth=depth + 1,
+                )
+            )
+        return lines
+    label = f"`{path_prefix or 'value'}`"
+    return [
+        f"{label}: {_short_json_value(raw_value)} -> {_short_json_value(normalized_value)}"
+    ]
+
+
+def _focus_divergence_lines(summary: dict[str, Any]) -> list[str]:
+    focus_stage = _focus_gate_stage(summary)
+    if not focus_stage:
+        return []
+
+    raw_payload = _read_json_artifact(focus_stage.get("raw_output_path"))
+    normalized_payload = _read_json_artifact(
+        focus_stage.get("normalized_output_path") or focus_stage.get("output_path")
+    )
+    envelope_path = ""
+    stdout_path = str(focus_stage.get("stdout_path") or "").strip()
+    if stdout_path:
+        envelope_path = str(Path(stdout_path).with_name("run.envelope.json"))
+    envelope_payload = _read_json_artifact(envelope_path)
+    envelope_structured_output = (
+        envelope_payload.get("structured_output")
+        if isinstance(envelope_payload, dict)
+        and isinstance(envelope_payload.get("structured_output"), dict)
+        else None
+    )
+
+    available_names = []
+    if raw_payload is not None:
+        available_names.append("`structured_output.raw.json`")
+    if normalized_payload is not None:
+        available_names.append("`structured_output.normalized.json`")
+    if envelope_payload is not None:
+        available_names.append("`run.envelope.json`")
+    if not available_names:
+        return []
+
+    lines = [
+        "- Artifact divergence sources: " + ", ".join(available_names),
+    ]
+    if raw_payload is None or normalized_payload is None:
+        lines.append("- Raw vs normalized divergence: unavailable")
+    else:
+        raw_vs_normalized = _json_value_diff_lines(raw_payload, normalized_payload)
+        if raw_vs_normalized:
+            lines.append(
+                "- Raw vs normalized divergence: "
+                + f"`{len(raw_vs_normalized)}` changed field(s)"
+            )
+            for item in raw_vs_normalized[:4]:
+                lines.append(f"  - {item}")
+        else:
+            lines.append("- Raw vs normalized divergence: none")
+
+    if normalized_payload is None or envelope_structured_output is None:
+        lines.append("- Envelope structured_output parity: unavailable")
+    else:
+        envelope_diffs = _json_value_diff_lines(
+            envelope_structured_output, normalized_payload
+        )
+        if envelope_diffs:
+            lines.append(
+                "- Envelope structured_output parity: "
+                + f"`{len(envelope_diffs)}` changed field(s)"
+            )
+            for item in envelope_diffs[:4]:
+                lines.append(f"  - {item}")
+        else:
+            lines.append("- Envelope structured_output parity: matches normalized")
+    return lines
 
 
 def _render_provenance_preview(items: Any) -> str:
@@ -326,7 +478,9 @@ def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> N
         f"`{bounded_review.get('recommendations_with_review_surface', 0)}` / "
         f"`{bounded_review.get('recommendation_count', 0)}` recommendations"
     )
-    lines.append(f"- Total scope escapes: `{bounded_review.get('scope_escape_count', 0)}`")
+    lines.append(
+        f"- Total scope escapes: `{bounded_review.get('scope_escape_count', 0)}`"
+    )
     lines.append("")
 
     review_stages = bounded_review.get("review_stages") or []
@@ -336,7 +490,9 @@ def _append_review_scope_section(lines: list[str], summary: dict[str, Any]) -> N
         for stage in review_stages:
             role_name = stage.get("role_name") or "reviewer"
             round_index = stage.get("round_index", 0)
-            new_topic_count = stage.get("new_topic_count", stage.get("missing_topic_count"))
+            new_topic_count = stage.get(
+                "new_topic_count", stage.get("missing_topic_count")
+            )
             new_topic_cap = stage.get("new_topic_cap", stage.get("missing_topic_cap"))
             lines.append(f"- `{role_name}` round `{round_index}`")
             lines.append(
@@ -379,17 +535,42 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         return
 
     decision_state = str(focus_decision.get("decision_state") or "unknown").strip()
+    decision_basis = str(focus_decision.get("decision_basis") or "").strip()
     question = focus_decision.get("question") or {}
     question_prompt = str(question.get("prompt") or "").strip()
     question_options = question.get("options") or []
     warnings = [
-        str(item).strip() for item in (focus_decision.get("warnings") or []) if str(item).strip()
+        str(item).strip()
+        for item in (focus_decision.get("warnings") or [])
+        if str(item).strip()
+    ]
+    stale_warnings = [
+        item
+        for item in warnings
+        if item.startswith("Prior focus_gate_answer went stale:")
     ]
     candidates: list[str] = []
-    for item in focus_decision.get("candidates") or []:
+    candidate_records = [
+        item
+        for item in (focus_decision.get("candidates") or [])
+        if isinstance(item, dict)
+    ]
+    for item in candidate_records:
         label = _focus_candidate_label(item)
         if label:
             candidates.append(label)
+    ranked_candidates = sorted(
+        enumerate(candidate_records),
+        key=lambda item: (
+            _focus_candidate_score(item[1]) is None,
+            -(_focus_candidate_score(item[1]) or 0.0),
+            item[0],
+        ),
+    )
+    top_candidate = ranked_candidates[0][1] if ranked_candidates else None
+    next_best_candidate = (
+        ranked_candidates[1][1] if len(ranked_candidates) > 1 else None
+    )
     adapter_plan = focus_decision.get("adapter_plan") or {}
 
     lines.append("## Focus Decision")
@@ -397,11 +578,22 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
     lines.append(f"- Gate path: `{focus_decision.get('gate_path', 'unknown')}`")
     lines.append(f"- Focus type: `{focus_decision.get('focus_type', 'unknown')}`")
     lines.append(f"- Decision state: `{decision_state}`")
+    if decision_basis:
+        lines.append(f"- Decision basis: `{decision_basis}`")
     if focus_decision.get("confidence") is not None:
         lines.append(f"- Confidence: `{focus_decision.get('confidence')}`")
     confidence_band = str(focus_decision.get("confidence_band") or "").strip()
     if confidence_band:
         lines.append(f"- Confidence band: `{confidence_band}`")
+    files_hint_disposition = str(
+        focus_decision.get("files_hint_disposition") or ""
+    ).strip()
+    if files_hint_disposition:
+        lines.append(f"- Files hint disposition: `{files_hint_disposition}`")
+    lines.append(
+        "- Checked files: "
+        + _render_plain_focus_list(focus_decision.get("checked_files"))
+    )
 
     if decision_state == "selected":
         lines.append(
@@ -419,6 +611,10 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
             "- Selected focus summary: "
             + (selected_focus_summary if selected_focus_summary else "none")
         )
+        lines.append(
+            "- Selected focus paths: "
+            + _render_plain_focus_list(focus_decision.get("selected_focus_paths"))
+        )
     elif decision_state == "clarification_requested":
         lines.append(
             "- Clarification prompt: "
@@ -429,16 +625,39 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         )
     elif decision_state == "no_viable_focus":
         lines.append("- Viable focus identified: `no`")
-    else:
-        if question_prompt or question_options:
+        if stale_warnings:
             lines.append(
-                "- Clarification prompt: "
-                + (question_prompt if question_prompt else "none")
+                "- Blocking outcome: no clarification question was emitted because the prior rerun answer went stale and the gate could not safely continue."
             )
+        elif not question_prompt and not question_options:
             lines.append(
-                "- Clarification options: "
-                + _render_plain_focus_list(question_options)
+                "- Blocking outcome: no clarification question was emitted because the gate could not identify a viable focus target."
             )
+    elif question_prompt or question_options:
+        lines.append(
+            "- Clarification prompt: "
+            + (question_prompt if question_prompt else "none")
+        )
+        lines.append(
+            "- Clarification options: " + _render_plain_focus_list(question_options)
+        )
+
+    def _candidate_detail_line(label: str, candidate: dict[str, Any] | None) -> None:
+        if not isinstance(candidate, dict):
+            lines.append(f"- {label}: none")
+            return
+        candidate_id = _focus_candidate_id(candidate) or "unknown"
+        score = _focus_candidate_score(candidate)
+        summary_text = _focus_candidate_summary(candidate)
+        detail = f"`{candidate_id}`"
+        if score is not None:
+            detail += f" (`{score:.2f}`)"
+        if summary_text:
+            detail += f": {summary_text}"
+        lines.append(f"- {label}: {detail}")
+
+    _candidate_detail_line("Top candidate", top_candidate)
+    _candidate_detail_line("Next-best candidate", next_best_candidate)
 
     if candidates:
         lines.append("- Candidates considered:")
@@ -447,9 +666,7 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
     else:
         lines.append("- Candidates considered: none")
 
-    adapter_primary_focus_id = str(
-        adapter_plan.get("primary_focus_id") or ""
-    ).strip()
+    adapter_primary_focus_id = str(adapter_plan.get("primary_focus_id") or "").strip()
     lines.append(
         "- Adapter primary focus ID: "
         + (f"`{adapter_primary_focus_id}`" if adapter_primary_focus_id else "none")
@@ -458,16 +675,24 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         "- Adapter secondary focus IDs: "
         + _render_plain_focus_list(adapter_plan.get("secondary_focus_ids"))
     )
+    if stale_warnings:
+        lines.append("- Stale-answer warnings:")
+        for item in stale_warnings:
+            lines.append(f"  - {item}")
     if warnings:
         lines.append("- Warnings:")
         for item in warnings:
             lines.append(f"  - {item}")
     else:
         lines.append("- Warnings: none")
+    for item in _focus_divergence_lines(summary):
+        lines.append(item)
     lines.append("")
 
 
-def _append_analysis_review_status_section(lines: list[str], summary: dict[str, Any]) -> None:
+def _append_analysis_review_status_section(
+    lines: list[str], summary: dict[str, Any]
+) -> None:
     status = _analysis_review_status(summary)
     if not status:
         return
@@ -509,7 +734,9 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
     lines.append(f"- Semantic warnings: `{status.get('semantic_warning_count', 0)}`")
     topic_ledger_count = status.get("topic_ledger_count")
     open_topic_ids = _topic_status_ids(summary, status_name="open")
-    carried_forward_topic_ids = _topic_status_ids(summary, status_name="carried_forward")
+    carried_forward_topic_ids = _topic_status_ids(
+        summary, status_name="carried_forward"
+    )
     waived_topic_ids = _topic_status_ids(summary, status_name="waived")
     resolved_topic_ids = _topic_status_ids(summary, status_name="resolved")
     disagreed_topic_ids = _topic_status_ids(summary, status_name="disagreed")
@@ -543,7 +770,9 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
             "- Accepted recommendations with caveats: "
             + ", ".join(str(item) for item in caveat_indices)
         )
-    inferred_indices = status.get("accepted_recommendations_with_inferred_grounding") or []
+    inferred_indices = (
+        status.get("accepted_recommendations_with_inferred_grounding") or []
+    )
     if inferred_indices:
         lines.append(
             "- Accepted recommendations with inference-only grounding: "
@@ -596,14 +825,20 @@ def _append_analysis_review_status_section(lines: list[str], summary: dict[str, 
     lines.append("")
 
 
-def _append_review_provenance_section(lines: list[str], summary: dict[str, Any]) -> None:
+def _append_review_provenance_section(
+    lines: list[str], summary: dict[str, Any]
+) -> None:
     status = _analysis_review_status(summary)
     if not status:
         return
     provenance = status.get("provenance") or {}
     provenance_stages = provenance.get("stages") or []
     review_stage = next(
-        (item for item in provenance_stages if str(item.get("surface") or "") == "review"),
+        (
+            item
+            for item in provenance_stages
+            if str(item.get("surface") or "") == "review"
+        ),
         {},
     )
     recommendation_ref_count = review_stage.get(
@@ -618,22 +853,30 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
         "topic_closure_review_ref_count",
         review_stage.get("topic_closure_review_ref_count", 0),
     )
-    closure_complete_issue_ids = provenance.get("closure_complete_issue_ids") or review_stage.get(
+    closure_complete_issue_ids = provenance.get(
+        "closure_complete_issue_ids"
+    ) or review_stage.get(
         "closure_complete_issue_ids",
         [],
     )
-    closure_complete_topic_ids = provenance.get("closure_complete_topic_ids") or review_stage.get(
+    closure_complete_topic_ids = provenance.get(
+        "closure_complete_topic_ids"
+    ) or review_stage.get(
         "closure_complete_topic_ids",
         [],
     )
     uncovered_recommendation_indices = provenance.get(
         "uncovered_recommendation_indices"
     ) or review_stage.get("uncovered_recommendation_indices", [])
-    uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or review_stage.get(
+    uncovered_global_issue_ids = provenance.get(
+        "uncovered_global_issue_ids"
+    ) or review_stage.get(
         "uncovered_global_issue_ids",
         [],
     )
-    uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or review_stage.get(
+    uncovered_global_topic_ids = provenance.get(
+        "uncovered_global_topic_ids"
+    ) or review_stage.get(
         "uncovered_global_topic_ids",
         [],
     )
@@ -660,20 +903,24 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
     lines.append(f"- Issue closure review refs: `{issue_ref_count}`")
     lines.append(f"- Topic closure review refs: `{topic_ref_count}`")
     lines.append(
-        "- Closure-complete issue IDs: " + _render_id_list(list(closure_complete_issue_ids))
+        "- Closure-complete issue IDs: "
+        + _render_id_list(list(closure_complete_issue_ids))
     )
     lines.append(
-        "- Closure-complete topic IDs: " + _render_id_list(list(closure_complete_topic_ids))
+        "- Closure-complete topic IDs: "
+        + _render_id_list(list(closure_complete_topic_ids))
     )
     lines.append(
         "- Uncovered recommendation indices: "
         + _render_id_list(list(uncovered_recommendation_indices))
     )
     lines.append(
-        "- Uncovered global issue IDs: " + _render_id_list(list(uncovered_global_issue_ids))
+        "- Uncovered global issue IDs: "
+        + _render_id_list(list(uncovered_global_issue_ids))
     )
     lines.append(
-        "- Uncovered global topic IDs: " + _render_id_list(list(uncovered_global_topic_ids))
+        "- Uncovered global topic IDs: "
+        + _render_id_list(list(uncovered_global_topic_ids))
     )
     lines.append("")
     if closure_proof_by_id:
@@ -684,7 +931,9 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
         for record_id in sorted(closure_proof_by_id):
             item = closure_proof_by_id.get(record_id) or {}
             checked_files = _render_provenance_preview(item.get("checked_files"))
-            verified_refs = _render_provenance_preview(item.get("verified_evidence_refs"))
+            verified_refs = _render_provenance_preview(
+                item.get("verified_evidence_refs")
+            )
             lines.append(
                 "| "
                 + " | ".join(
@@ -692,7 +941,9 @@ def _append_review_provenance_section(lines: list[str], summary: dict[str, Any])
                         _table_cell(f"`{record_id}`"),
                         _table_cell(f"`{item.get('proof_path', 'unknown')}`"),
                         _table_cell(f"`{item.get('proof_strength', 'unknown')}`"),
-                        _table_cell(f"`{item.get('classification_status', 'unknown')}`"),
+                        _table_cell(
+                            f"`{item.get('classification_status', 'unknown')}`"
+                        ),
                         _table_cell(checked_files),
                         _table_cell(verified_refs),
                     ]
@@ -708,7 +959,9 @@ def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -
         return
 
     open_topic_ids = _topic_status_ids(summary, status_name="open")
-    carried_forward_topic_ids = _topic_status_ids(summary, status_name="carried_forward")
+    carried_forward_topic_ids = _topic_status_ids(
+        summary, status_name="carried_forward"
+    )
     resolved_topic_ids = _topic_status_ids(summary, status_name="resolved")
     waived_topic_ids = _topic_status_ids(summary, status_name="waived")
     disagreed_topic_ids = _topic_status_ids(summary, status_name="disagreed")
@@ -742,7 +995,9 @@ def _append_topic_lifecycle_section(lines: list[str], summary: dict[str, Any]) -
     )
     lines.append("")
 
-    lines.append("| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |")
+    lines.append(
+        "| Topic ID | Title | Severity | Introduced By | Status | Recommendation | Resolution Note |"
+    )
     lines.append("|---|---|---|---|---|---|---|")
     for topic in topic_ledger:
         recommendation = topic.get("recommendation_index")
@@ -785,13 +1040,19 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"- Run verdict: **{summary.get('verdict')}**")
     if verdicts:
-        lines.append(f"- Content verdict: `{verdicts.get('content_verdict', 'unknown')}`")
-        lines.append(f"- Validator verdict: `{verdicts.get('validator_verdict', 'unknown')}`")
+        lines.append(
+            f"- Content verdict: `{verdicts.get('content_verdict', 'unknown')}`"
+        )
+        lines.append(
+            f"- Validator verdict: `{verdicts.get('validator_verdict', 'unknown')}`"
+        )
         lines.append(f"- Policy verdict: `{verdicts.get('policy_verdict', 'unknown')}`")
         lines.append(f"- Config verdict: `{verdicts.get('config_verdict', 'unknown')}`")
     lines.append(f"- Task ID: `{task.get('id', 'task')}`")
     lines.append(f"- Task kind: `{task.get('task_kind', 'unknown')}`")
-    lines.append(f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})")
+    lines.append(
+        f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})"
+    )
     if analysis_status:
         lines.append(f"- Review mode: `{analysis_status.get('mode', 'unknown')}`")
         if publishability:
@@ -806,12 +1067,17 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:
-            lines.append("- Downgrade causes: " + "; ".join(str(item) for item in downgrade_causes))
+            lines.append(
+                "- Downgrade causes: "
+                + "; ".join(str(item) for item in downgrade_causes)
+            )
     lines.append(f"- Workspace: `{summary.get('workspace')}`")
     final_artifact = (summary.get("artifacts") or {}).get("final_artifact")
     final_artifact_kind = (summary.get("artifacts") or {}).get("final_artifact_kind")
     if final_artifact:
-        lines.append(f"- Primary deliverable: `{final_artifact_kind}` → `{final_artifact}`")
+        lines.append(
+            f"- Primary deliverable: `{final_artifact_kind}` → `{final_artifact}`"
+        )
     lines.append("")
 
     if summary.get("final_summary"):
@@ -827,8 +1093,12 @@ def render_report(summary: dict[str, Any]) -> str:
         stop_policy = contract.get("stop_policy") or {}
         stop_when = stop_policy.get("stop_when") or {}
         lines.append(f"- Reviser goal: `{contract.get('reviser_goal')}`")
-        lines.append(f"- Require issue ledger: `{contract.get('require_issue_ledger')}`")
-        lines.append(f"- Require recommendation reviews: `{contract.get('require_recommendation_reviews')}`")
+        lines.append(
+            f"- Require issue ledger: `{contract.get('require_issue_ledger')}`"
+        )
+        lines.append(
+            f"- Require recommendation reviews: `{contract.get('require_recommendation_reviews')}`"
+        )
         if stop_when:
             lines.append(f"- Stop policy: `{json.dumps(stop_when, sort_keys=True)}`")
         partial_acceptance = contract.get("partial_acceptance") or {}
@@ -843,18 +1113,31 @@ def render_report(summary: dict[str, Any]) -> str:
             )
         lines.append("")
 
-    if task.get("task_kind") == "analysis_review" or summary.get("strategy_kind") == "analysis_review_v1":
+    if (
+        task.get("task_kind") == "analysis_review"
+        or summary.get("strategy_kind") == "analysis_review_v1"
+    ):
         lines.append("## Review Loop Coverage")
         lines.append("")
-        lines.append(f"- Review stages attempted: `{review_coverage.get('review_stages_attempted', 0)}`")
-        lines.append(f"- Review stages completed: `{review_coverage.get('review_stages_completed', 0)}`")
-        lines.append(f"- Review loop exercised: `{review_coverage.get('review_loop_exercised', False)}`")
+        lines.append(
+            f"- Review stages attempted: `{review_coverage.get('review_stages_attempted', 0)}`"
+        )
+        lines.append(
+            f"- Review stages completed: `{review_coverage.get('review_stages_completed', 0)}`"
+        )
+        lines.append(
+            f"- Review loop exercised: `{review_coverage.get('review_loop_exercised', False)}`"
+        )
         failed_review_stages = review_coverage.get("failed_review_stages") or []
         if failed_review_stages:
             lines.append("- Failed review stages:")
             for item in failed_review_stages:
                 label = item.get("role_name") or f"stage-{item.get('stage_index')}"
-                detail = item.get("failure_summary") or item.get("failure_kind") or "unknown error"
+                detail = (
+                    item.get("failure_summary")
+                    or item.get("failure_kind")
+                    or "unknown error"
+                )
                 lines.append(f"  - {label}: {detail}")
         if not review_coverage.get("review_loop_exercised", False):
             lines.append(
@@ -871,7 +1154,11 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("## Run Details")
         lines.append("")
         lines.append("```json")
-        lines.append(json.dumps(_sanitize_run_details_for_report(run_details), indent=2, sort_keys=False))
+        lines.append(
+            json.dumps(
+                _sanitize_run_details_for_report(run_details), indent=2, sort_keys=False
+            )
+        )
         lines.append("```")
         lines.append("")
 
@@ -886,22 +1173,36 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("## Workspace Write Policy")
     lines.append("")
     lines.append(f"- Mode: `{policy.get('mode', 'unknown')}`")
-    lines.append(f"- Allowed paths: {_render_policy_list(policy.get('allowed_paths', []))}")
-    lines.append(f"- Denied paths: {_render_policy_list(policy.get('denied_paths', []))}")
+    lines.append(
+        f"- Allowed paths: {_render_policy_list(policy.get('allowed_paths', []))}"
+    )
+    lines.append(
+        f"- Denied paths: {_render_policy_list(policy.get('denied_paths', []))}"
+    )
     lines.append(f"- Allow untracked files: `{policy.get('allow_untracked')}`")
     lines.append(f"- Allow renames: `{policy.get('allow_renames')}`")
     lines.append(f"- Allow deletions: `{policy.get('allow_deletions')}`")
-    max_touched = policy.get('max_touched_files')
-    lines.append(f"- Max touched files: `{max_touched if max_touched is not None else 'unlimited'}`")
+    max_touched = policy.get("max_touched_files")
+    lines.append(
+        f"- Max touched files: `{max_touched if max_touched is not None else 'unlimited'}`"
+    )
     lines.append(f"- Require clean start: `{policy.get('require_clean_start')}`")
     ignored = summary.get("workspace_policy_ignored_rel_paths") or []
     lines.append(f"- Ignored harness-artifact paths: {_render_policy_list(ignored)}")
     review_requirements = task.get("review_requirements") or {}
     if task.get("task_kind") == "analysis_review":
-        lines.append(f"- Require evidence per recommendation: `{review_requirements.get('require_evidence_per_recommendation')}`")
-        lines.append(f"- Require classification: `{review_requirements.get('require_classification')}`")
-        lines.append(f"- Require priority: `{review_requirements.get('require_priority')}`")
-        lines.append(f"- Minimum recommendations: `{review_requirements.get('min_recommendations')}`")
+        lines.append(
+            f"- Require evidence per recommendation: `{review_requirements.get('require_evidence_per_recommendation')}`"
+        )
+        lines.append(
+            f"- Require classification: `{review_requirements.get('require_classification')}`"
+        )
+        lines.append(
+            f"- Require priority: `{review_requirements.get('require_priority')}`"
+        )
+        lines.append(
+            f"- Minimum recommendations: `{review_requirements.get('min_recommendations')}`"
+        )
     lines.append("")
 
     checks = summary.get("workspace_policy_checks", [])
@@ -915,16 +1216,25 @@ def render_report(summary: dict[str, Any]) -> str:
             outcome = "PASS" if check.get("ok") else "FAIL"
             lines.append(f"### {check.get('checkpoint')} — {outcome}")
             lines.append("")
-            lines.append(f"- Touched files: {_render_policy_list(check.get('touched_files', []))}")
+            lines.append(
+                f"- Touched files: {_render_policy_list(check.get('touched_files', []))}"
+            )
             if check.get("modified_files"):
-                lines.append(f"- Modified files: {_render_policy_list(check.get('modified_files', []))}")
+                lines.append(
+                    f"- Modified files: {_render_policy_list(check.get('modified_files', []))}"
+                )
             if check.get("added_files"):
-                lines.append(f"- Added files: {_render_policy_list(check.get('added_files', []))}")
+                lines.append(
+                    f"- Added files: {_render_policy_list(check.get('added_files', []))}"
+                )
             if check.get("deleted_files"):
-                lines.append(f"- Deleted files: {_render_policy_list(check.get('deleted_files', []))}")
+                lines.append(
+                    f"- Deleted files: {_render_policy_list(check.get('deleted_files', []))}"
+                )
             if check.get("renamed_files"):
                 rename_text = ", ".join(
-                    f"{item.get('from')} -> {item.get('to')}" for item in check.get("renamed_files", [])
+                    f"{item.get('from')} -> {item.get('to')}"
+                    for item in check.get("renamed_files", [])
                 )
                 lines.append(f"- Renamed files: {rename_text}")
             if check.get("new_untracked_files"):
@@ -943,10 +1253,16 @@ def render_report(summary: dict[str, Any]) -> str:
 
     lines.append("## Validators")
     lines.append("")
-    lines.append(f"- Total validator executions: `{validator_summary.get('total_runs', 0)}`")
-    lines.append(f"- Latest round verdict: `{validator_summary.get('latest_round_verdict', 'not_configured')}`")
+    lines.append(
+        f"- Total validator executions: `{validator_summary.get('total_runs', 0)}`"
+    )
+    lines.append(
+        f"- Latest round verdict: `{validator_summary.get('latest_round_verdict', 'not_configured')}`"
+    )
     if validator_summary.get("status_counts"):
-        lines.append(f"- Status counts: `{json.dumps(validator_summary.get('status_counts'), sort_keys=True)}`")
+        lines.append(
+            f"- Status counts: `{json.dumps(validator_summary.get('status_counts'), sort_keys=True)}`"
+        )
     if validator_summary.get("required_status_counts"):
         lines.append(
             f"- Required status counts: `{json.dumps(validator_summary.get('required_status_counts'), sort_keys=True)}`"
@@ -969,9 +1285,13 @@ def render_report(summary: dict[str, Any]) -> str:
                 if item.get("skip_reason"):
                     lines.append(f"  - reason: {item.get('skip_reason')}")
                 if item.get("missing_paths"):
-                    lines.append(f"  - missing paths: {_render_policy_list(item.get('missing_paths', []))}")
+                    lines.append(
+                        f"  - missing paths: {_render_policy_list(item.get('missing_paths', []))}"
+                    )
                 if item.get("missing_binaries"):
-                    lines.append(f"  - missing binaries: {_render_policy_list(item.get('missing_binaries', []))}")
+                    lines.append(
+                        f"  - missing binaries: {_render_policy_list(item.get('missing_binaries', []))}"
+                    )
                 if item.get("error"):
                     lines.append(f"  - error: {item.get('error')}")
             lines.append("")
@@ -981,10 +1301,14 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("## Issue Ledger")
         lines.append("")
         open_count = sum(
-            1 for issue in issue_ledger if str(issue.get("resolution_status") or "") in {"open", "carried_forward"}
+            1
+            for issue in issue_ledger
+            if str(issue.get("resolution_status") or "") in {"open", "carried_forward"}
         )
         resolved_count = sum(
-            1 for issue in issue_ledger if str(issue.get("resolution_status") or "") == "resolved"
+            1
+            for issue in issue_ledger
+            if str(issue.get("resolution_status") or "") == "resolved"
         )
         lines.append(f"- Open issues: `{open_count}`")
         lines.append(f"- Resolved issues: `{resolved_count}`")
@@ -996,12 +1320,16 @@ def render_report(summary: dict[str, Any]) -> str:
             lines.append("")
             lines.append(f"- Kind: `{issue.get('kind')}`")
             if issue.get("recommendation_index") is not None:
-                lines.append(f"- Recommendation index: `{issue.get('recommendation_index')}`")
+                lines.append(
+                    f"- Recommendation index: `{issue.get('recommendation_index')}`"
+                )
             lines.append(f"- Title: {issue.get('title')}")
             lines.append(f"- Evidence: {issue.get('evidence')}")
             lines.append(f"- Repair hint: {issue.get('repair_hint')}")
             if issue.get("why_not_raised_earlier"):
-                lines.append(f"- Why not raised earlier: {issue.get('why_not_raised_earlier')}")
+                lines.append(
+                    f"- Why not raised earlier: {issue.get('why_not_raised_earlier')}"
+                )
             lines.append("")
 
     _append_topic_lifecycle_section(lines, summary)
@@ -1018,8 +1346,10 @@ def render_report(summary: dict[str, Any]) -> str:
             lines.append("")
             lines.append(f"- Role: `{draft.get('role_name')}`")
             lines.append(f"- Round: `{draft.get('round_index')}`")
-            lines.append(f"- Review state: `{draft.get('review_state', 'not_evaluated')}`")
-            issue_counts = draft.get('issue_counts') or {}
+            lines.append(
+                f"- Review state: `{draft.get('review_state', 'not_evaluated')}`"
+            )
+            issue_counts = draft.get("issue_counts") or {}
             validator_failures = issue_counts.get("required_validator_failures")
             if validator_failures is not None:
                 lines.append(f"- Required validator failures: `{validator_failures}`")
@@ -1030,10 +1360,12 @@ def render_report(summary: dict[str, Any]) -> str:
                     if key != "required_validator_failures"
                 }
                 if review_issue_counts:
-                    lines.append(f"- Review issue counts: `{json.dumps(review_issue_counts, sort_keys=True)}`")
+                    lines.append(
+                        f"- Review issue counts: `{json.dumps(review_issue_counts, sort_keys=True)}`"
+                    )
             else:
                 lines.append("- Review issue counts: `not evaluated`")
-            scores = draft.get('scores') or {}
+            scores = draft.get("scores") or {}
             if scores:
                 lines.append(f"- Scores: `{json.dumps(scores, sort_keys=True)}`")
             draft_summary = sanitize_summary_text(
@@ -1043,7 +1375,9 @@ def render_report(summary: dict[str, Any]) -> str:
             if draft_summary:
                 lines.append(f"- Summary: {draft_summary}")
             metadata = draft.get("metadata") or {}
-            if metadata.get("review_attempted") and not metadata.get("review_completed"):
+            if metadata.get("review_attempted") and not metadata.get(
+                "review_completed"
+            ):
                 lines.append(
                     f"- Review attempt failed: {metadata.get('review_failure_summary') or metadata.get('review_failure_kind') or 'unknown error'}"
                 )
@@ -1062,7 +1396,9 @@ def render_report(summary: dict[str, Any]) -> str:
                 f"- Recommendation {item.get('recommendation_index')}: `{item.get('verdict')}` — {review_summary}"
             )
             if item.get("open_issue_ids"):
-                lines.append(f"  - Open issues: {_render_policy_list(item.get('open_issue_ids', []))}")
+                lines.append(
+                    f"  - Open issues: {_render_policy_list(item.get('open_issue_ids', []))}"
+                )
             lines.append(
                 f"  - Confidence assessment: `{item.get('confidence_assessment', 'not_assessed')}`"
             )
@@ -1076,8 +1412,12 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"- Provider: `{stage.get('provider')}`")
         lines.append(f"- Model: `{stage.get('model')}`")
-        lines.append(f"- Requested access: `{stage.get('requested_access', stage.get('access'))}`")
-        lines.append(f"- Effective access: `{stage.get('effective_access', stage.get('access'))}`")
+        lines.append(
+            f"- Requested access: `{stage.get('requested_access', stage.get('access'))}`"
+        )
+        lines.append(
+            f"- Effective access: `{stage.get('effective_access', stage.get('access'))}`"
+        )
         if stage.get("access_override_reason"):
             lines.append(f"- Access override: {stage.get('access_override_reason')}")
         lines.append(f"- OK: `{stage.get('ok')}`")

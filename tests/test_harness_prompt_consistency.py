@@ -748,11 +748,23 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
     assert "rerun-answer context" not in adjudicate_prompt
     assert "stale-answer context" not in adjudicate_prompt
     assert (
+        "If task context is insufficient, stay on `gate_path=adjudicate` and emit "
+        "`clarification_requested` or `no_viable_focus` instead of switching paths."
+        in adjudicate_prompt
+    )
+    assert (
+        "Ignore probe-only, rerun-answer, and stale-answer behaviors in this path; "
+        "they do not apply here."
+        in adjudicate_prompt
+    )
+    assert "Focus gate probe artifact:" not in adjudicate_prompt
+    assert "Prior focus decision:" not in adjudicate_prompt
+    assert "Focus gate answer:" not in adjudicate_prompt
+    assert "Stale answer context:" not in adjudicate_prompt
+    assert (
         "Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`."
         in adjudicate_prompt
     )
-    assert "Focus gate answer:" in adjudicate_prompt
-    assert '"selected_option": "release-trigger-automation"' in adjudicate_prompt
 
 
 def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prompts():

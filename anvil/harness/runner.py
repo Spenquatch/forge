@@ -75,6 +75,8 @@ from .types import (
 from .validation import preflight_validators, run_validators
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+_FOCUS_MAX_CHECKED_FILES = 6
+_FOCUS_MAX_EVIDENCE_REFS = 2
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
 _TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST = {
     "strengths contains both concrete items and none_reason; prefer one or the other.",
@@ -1003,22 +1005,37 @@ class HarnessRunner:
             )
             selected_focus_paths = context.get("selected_focus_paths")
             if isinstance(run.structured_output, dict):
-                normalized_payload, payload_provenance, normalization_warnings = (
-                    self._normalize_analysis_review_payload(
+                if role_name == "focus_gate":
+                    normalized_payload = self._normalize_focus_gate_decision_payload(
                         run.structured_output,
-                        role_name=role_name,
-                        payload_provenance_mode=contract.trust_review.payload_provenance_mode,
-                        contract=contract,
-                        prior_open_issue_records=normalization_prior_open_issue_records,
-                        prior_open_topic_records=normalization_prior_open_topic_records,
-                        selected_focus_paths=selected_focus_paths,
+                        expected_gate_path=context.get("expected_gate_path"),
                     )
-                )
+                    payload_provenance = None
+                    normalization_warnings = []
+                elif role_name == "focus_gate_probe":
+                    normalized_payload = self._normalize_focus_gate_probe_payload(
+                        run.structured_output
+                    )
+                    payload_provenance = None
+                    normalization_warnings = []
+                else:
+                    normalized_payload, payload_provenance, normalization_warnings = (
+                        self._normalize_analysis_review_payload(
+                            run.structured_output,
+                            role_name=role_name,
+                            payload_provenance_mode=contract.trust_review.payload_provenance_mode,
+                            contract=contract,
+                            prior_open_issue_records=normalization_prior_open_issue_records,
+                            prior_open_topic_records=normalization_prior_open_topic_records,
+                            selected_focus_paths=selected_focus_paths,
+                        )
+                    )
                 schema_validation_errors = _soft_validate_schema(
                     normalized_payload, schema
                 )
                 raw_meta = dict(run.raw_meta or {})
-                raw_meta["payload_provenance"] = payload_provenance
+                if payload_provenance is not None:
+                    raw_meta["payload_provenance"] = payload_provenance
                 run = replace(
                     run,
                     structured_output=normalized_payload,
@@ -4102,6 +4119,116 @@ class HarnessRunner:
             )
         )
         return values or None
+
+    def _normalize_focus_gate_candidate_payloads(
+        self,
+        candidates: Any,
+        *,
+        checked_files: list[str],
+    ) -> list[dict[str, Any]]:
+        if not isinstance(candidates, list):
+            return []
+        checked_file_set = set(checked_files)
+        normalized_candidates: list[dict[str, Any]] = []
+        for item in candidates[:3]:
+            if not isinstance(item, dict):
+                continue
+            normalized_candidate = deepcopy(item)
+            candidate_paths = self._dedupe_preserving_order(
+                self._normalize_workspace_ref_list(item.get("candidate_paths"))
+            )
+            normalized_candidate["candidate_paths"] = candidate_paths
+            if candidate_paths:
+                normalized_candidate["focus_id"] = self._canonical_seam_id_for_paths(
+                    candidate_paths
+                )
+            evidence_refs = self._dedupe_preserving_order(
+                self._normalize_workspace_ref_list(item.get("evidence_refs"))
+            )
+            if checked_file_set:
+                evidence_refs = [
+                    ref for ref in evidence_refs if ref in checked_file_set
+                ]
+            else:
+                evidence_refs = []
+            normalized_candidate["evidence_refs"] = evidence_refs[
+                :_FOCUS_MAX_EVIDENCE_REFS
+            ]
+            normalized_candidates.append(normalized_candidate)
+        return normalized_candidates
+
+    def _normalize_focus_gate_probe_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = deepcopy(payload)
+        checked_files = self._dedupe_preserving_order(
+            self._normalize_workspace_ref_list(payload.get("checked_files"))
+        )[:_FOCUS_MAX_CHECKED_FILES]
+        normalized["checked_files"] = checked_files
+        normalized["candidates"] = self._normalize_focus_gate_candidate_payloads(
+            payload.get("candidates"),
+            checked_files=checked_files,
+        )
+        return normalized
+
+    def _normalize_focus_gate_decision_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        expected_gate_path: Any,
+    ) -> dict[str, Any]:
+        normalized = deepcopy(payload)
+        gate_path = str(normalized.get("gate_path") or "").strip()
+        checked_files = self._dedupe_preserving_order(
+            self._normalize_workspace_ref_list(payload.get("checked_files"))
+        )[:_FOCUS_MAX_CHECKED_FILES]
+        if gate_path == "adjudicate":
+            normalized["decision_basis"] = "request_only"
+            normalized["files_hint_disposition"] = "absent"
+            checked_files = []
+        normalized["checked_files"] = checked_files
+        normalized["candidates"] = self._normalize_focus_gate_candidate_payloads(
+            payload.get("candidates"),
+            checked_files=checked_files,
+        )
+        candidate_ids = [
+            str(item.get("focus_id") or "").strip()
+            for item in normalized["candidates"]
+            if str(item.get("focus_id") or "").strip()
+        ]
+        selected_focus_paths = self._dedupe_preserving_order(
+            self._normalize_workspace_ref_list(payload.get("selected_focus_paths"))
+        )
+        normalized["selected_focus_paths"] = selected_focus_paths
+        if selected_focus_paths:
+            canonical_focus_id = self._canonical_seam_id_for_paths(selected_focus_paths)
+            normalized["selected_focus_id"] = canonical_focus_id
+            adapter_plan = normalized.get("adapter_plan")
+            if isinstance(adapter_plan, dict):
+                adapter_plan["primary_focus_id"] = canonical_focus_id
+                adapter_plan["secondary_focus_ids"] = [
+                    candidate_id
+                    for candidate_id in candidate_ids
+                    if candidate_id != canonical_focus_id
+                ]
+        else:
+            adapter_plan = normalized.get("adapter_plan")
+            if isinstance(adapter_plan, dict):
+                adapter_plan["secondary_focus_ids"] = candidate_ids
+        decision_state = str(normalized.get("decision_state") or "").strip()
+        question = normalized.get("question")
+        if decision_state == "clarification_requested":
+            prompt = ""
+            if isinstance(question, dict):
+                prompt = str(question.get("prompt") or "").strip()
+            normalized["question"] = {"prompt": prompt, "options": candidate_ids}
+        if gate_path == "adjudicate":
+            question = normalized.get("question")
+            if isinstance(question, dict) and decision_state != "clarification_requested":
+                normalized["question"] = {"prompt": "", "options": []}
+        del expected_gate_path
+        return normalized
 
     @staticmethod
     def _probe_candidate_score_map(

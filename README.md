@@ -202,10 +202,10 @@ Use it when you want explicit task specs, strategy specs, workspace write-policy
 Example:
 
 ```bash
-poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recommend_automation_improvements.yaml   --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml   --workspace /path/to/repo   --out-root .forge-harness-runs
+poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recommend_automation_improvements.yaml   --strategy examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml   --workspace /path/to/repo   --out-root .forge-harness-runs
 ```
 
-For the alternate trust-oriented mode, swap in `examples/harness/strategies/analysis_review_trust_codex_claude.yaml`.
+For the alternate trust-oriented mode, swap in `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
 
 For analysis-review tasks, `review_requirements.evidence_cap_policy` defaults to `trim_to_cap`, which canonicalizes path-like refs and trims oversize evidence lists before semantic validation. Set it to `strict` when you want fail-fast bounded-review enforcement instead.
 
@@ -236,7 +236,7 @@ set -euo pipefail
 BOUNDED_SUMMARY=$(
   poetry run python -m anvil.cli harness-run \
     --task examples/harness/tasks/recommend_automation_improvements.yaml \
-    --strategy examples/harness/strategies/analysis_review_bounded_codex_claude.yaml \
+    --strategy examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml \
     --workspace /path/to/repo \
     --out-root .forge-harness-runs | awk -F= '/^summary=/{print $2}'
 )
@@ -244,7 +244,7 @@ BOUNDED_SUMMARY=$(
 TRUST_SUMMARY=$(
   poetry run python -m anvil.cli harness-run \
     --task examples/harness/tasks/recommend_automation_improvements.yaml \
-    --strategy examples/harness/strategies/analysis_review_trust_codex_claude.yaml \
+    --strategy examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml \
     --workspace /path/to/repo \
     --out-root .forge-harness-runs | awk -F= '/^summary=/{print $2}'
 )

@@ -96,6 +96,54 @@ def _summary_json(tmp_path) -> dict[str, object]:
     return json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
 
 
+def _focus_stage_record(
+    tmp_path, *, raw_payload: dict[str, object], normalized_payload: dict[str, object]
+) -> dict[str, object]:
+    stage_dir = tmp_path / "01_focus_gate"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = stage_dir / "structured_output.raw.json"
+    normalized_path = stage_dir / "structured_output.normalized.json"
+    stdout_path = stage_dir / "response.txt"
+    raw_path.write_text(
+        json.dumps(raw_payload, indent=2, sort_keys=False),
+        encoding="utf-8",
+    )
+    normalized_path.write_text(
+        json.dumps(normalized_payload, indent=2, sort_keys=False),
+        encoding="utf-8",
+    )
+    stdout_path.write_text("ok", encoding="utf-8")
+    (stage_dir / "run.envelope.json").write_text(
+        json.dumps(
+            {
+                "role_name": "focus_gate",
+                "structured_output": {
+                    **normalized_payload,
+                    "confidence_band": "medium",
+                },
+                "metadata": {
+                    "focus_gate": {
+                        "gate_path": normalized_payload["gate_path"],
+                        "focus_type": normalized_payload["focus_type"],
+                        "decision_state": normalized_payload["decision_state"],
+                    }
+                },
+            },
+            indent=2,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "stage_index": 1,
+        "role_name": "focus_gate",
+        "stdout_path": str(stdout_path),
+        "raw_output_path": str(raw_path),
+        "normalized_output_path": str(normalized_path),
+        "output_path": str(normalized_path),
+    }
+
+
 def _analysis_publishability(summary: dict[str, object]) -> dict[str, object]:
     return (summary.get("analysis_review_status") or {}).get("publishability") or {}
 
@@ -111,18 +159,30 @@ def _selected_focus_decision() -> dict[str, object]:
         "gate_path": "adjudicate",
         "focus_type": "seam",
         "decision_state": "selected",
+        "decision_basis": "request_only",
         "selected_focus_id": "release-trigger-automation",
         "selected_focus_summary": "Use the release trigger automation seam as the primary focus.",
+        "selected_focus_paths": [".github/workflows/codex-cli-release-watch.yml"],
         "confidence": 0.91,
         "confidence_band": "high",
+        "files_hint_disposition": "absent",
+        "checked_files": [],
         "candidates": [
             {
                 "focus_id": "release-trigger-automation",
-                "summary": "Primary release trigger workflow seam.",
+                "focus_summary": "Primary release trigger workflow seam.",
+                "candidate_paths": [".github/workflows/codex-cli-release-watch.yml"],
+                "why_candidate": "The release workflow remains the governing seam.",
+                "evidence_refs": [],
+                "score": 0.91,
             },
             {
                 "focus_id": "rollback-runbook",
-                "summary": "Fallback operational seam.",
+                "focus_summary": "Fallback operational seam.",
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "The rollback path remains a plausible sibling seam.",
+                "evidence_refs": [],
+                "score": 0.62,
             },
         ],
         "question": {"prompt": "", "options": []},
@@ -139,18 +199,33 @@ def _clarification_focus_decision() -> dict[str, object]:
         "gate_path": "deliberate",
         "focus_type": "seam",
         "decision_state": "clarification_requested",
+        "decision_basis": "repo_probe",
         "selected_focus_id": None,
         "selected_focus_summary": None,
+        "selected_focus_paths": [],
         "confidence": 0.41,
         "confidence_band": "low",
+        "files_hint_disposition": "helped",
+        "checked_files": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/rollback-runbook.md",
+        ],
         "candidates": [
             {
                 "focus_id": "release-trigger-automation",
-                "summary": "Release workflow seam.",
+                "focus_summary": "Release workflow seam.",
+                "candidate_paths": [".github/workflows/codex-cli-release-watch.yml"],
+                "why_candidate": "The release workflow still looks dominant.",
+                "evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                "score": 0.54,
             },
             {
                 "focus_id": "rollback-runbook",
-                "summary": "Rollback workflow seam.",
+                "focus_summary": "Rollback workflow seam.",
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "The rollback seam is still plausible.",
+                "evidence_refs": [".github/workflows/rollback-runbook.md"],
+                "score": 0.47,
             },
         ],
         "question": {
@@ -173,10 +248,14 @@ def _no_viable_focus_decision() -> dict[str, object]:
         "gate_path": "adjudicate",
         "focus_type": "seam",
         "decision_state": "no_viable_focus",
+        "decision_basis": "request_only",
         "selected_focus_id": None,
         "selected_focus_summary": None,
+        "selected_focus_paths": [],
         "confidence": 0.18,
         "confidence_band": "low",
+        "files_hint_disposition": "absent",
+        "checked_files": [],
         "candidates": [],
         "question": {"prompt": "", "options": []},
         "warnings": [
@@ -185,6 +264,54 @@ def _no_viable_focus_decision() -> dict[str, object]:
         "adapter_plan": {
             "primary_focus_id": None,
             "secondary_focus_ids": [],
+        },
+    }
+
+
+def _stale_no_viable_focus_decision() -> dict[str, object]:
+    return {
+        "gate_path": "deliberate",
+        "focus_type": "seam",
+        "decision_state": "no_viable_focus",
+        "decision_basis": "rerun_answer",
+        "selected_focus_id": None,
+        "selected_focus_summary": None,
+        "selected_focus_paths": [],
+        "confidence": 0.54,
+        "confidence_band": "low",
+        "files_hint_disposition": "helped",
+        "checked_files": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/rollback-runbook.md",
+        ],
+        "candidates": [
+            {
+                "focus_id": "release-trigger-automation",
+                "focus_summary": "Release workflow seam.",
+                "candidate_paths": [".github/workflows/codex-cli-release-watch.yml"],
+                "why_candidate": "The release seam still exists, but the rerun answer went stale.",
+                "evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                "score": 0.54,
+            },
+            {
+                "focus_id": "rollback-runbook",
+                "focus_summary": "Rollback workflow seam.",
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "The rollback seam remains a plausible sibling.",
+                "evidence_refs": [".github/workflows/rollback-runbook.md"],
+                "score": 0.49,
+            },
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [
+            "Prior focus_gate_answer went stale: selected option no longer matches the dominant repo-backed seam.",
+        ],
+        "adapter_plan": {
+            "primary_focus_id": None,
+            "secondary_focus_ids": [
+                "release-trigger-automation",
+                "rollback-runbook",
+            ],
         },
     }
 
@@ -2362,7 +2489,14 @@ def test_render_report_uses_generic_publishability_fallback_for_fully_accepted_r
     assert "- Publication blockers: withheld due to non-publishable run state" in report
 
 
-def test_render_report_renders_selected_focus_decision_without_analysis_review_status():
+def test_render_report_renders_selected_focus_decision_without_analysis_review_status(
+    tmp_path,
+):
+    raw_focus_decision = {
+        **_selected_focus_decision(),
+        "selected_focus_paths": ["/.github/workflows/codex-cli-release-watch.yml"],
+    }
+    summary_focus_decision = _selected_focus_decision()
     summary = {
         "verdict": "accepted",
         "task": {"id": "task-focus-selected", "task_kind": "analysis_review"},
@@ -2372,11 +2506,17 @@ def test_render_report_renders_selected_focus_decision_without_analysis_review_s
             "policy_verdict": "pass",
             "config_verdict": "pass",
         },
-        "focus_decision": _selected_focus_decision(),
-        "run_details": {"focus_decision": _selected_focus_decision()},
+        "focus_decision": summary_focus_decision,
+        "run_details": {"focus_decision": summary_focus_decision},
+        "agent_stages": [
+            _focus_stage_record(
+                tmp_path,
+                raw_payload=raw_focus_decision,
+                normalized_payload=summary_focus_decision,
+            )
+        ],
         "workspace_policy_checks": [],
         "validator_rounds": [],
-        "agent_stages": [],
         "artifacts": {},
     }
 
@@ -2385,16 +2525,43 @@ def test_render_report_renders_selected_focus_decision_without_analysis_review_s
 
     assert "## Analysis Review Status" not in report
     assert "- Decision state: `selected`" in section
+    assert "- Decision basis: `request_only`" in section
+    assert "- Files hint disposition: `absent`" in section
+    assert "- Checked files: none" in section
     assert "- Selected focus ID: `release-trigger-automation`" in section
     assert (
         "- Selected focus summary: Use the release trigger automation seam as the primary focus."
         in section
     )
-    assert "- Candidates considered:" in section
-    assert "`release-trigger-automation`: Primary release trigger workflow seam." in section
     assert (
-        "- Adapter secondary focus IDs: `rollback-runbook`" in section
+        "- Selected focus paths: `.github/workflows/codex-cli-release-watch.yml`"
+        in section
     )
+    assert (
+        "- Top candidate: `release-trigger-automation` (`0.91`): Primary release trigger workflow seam."
+        in section
+    )
+    assert (
+        "- Next-best candidate: `rollback-runbook` (`0.62`): Fallback operational seam."
+        in section
+    )
+    assert "- Candidates considered:" in section
+    assert (
+        "`release-trigger-automation`: Primary release trigger workflow seam."
+        in section
+    )
+    assert (
+        "- Artifact divergence sources: `structured_output.raw.json`, `structured_output.normalized.json`, `run.envelope.json`"
+        in section
+    )
+    assert "- Raw vs normalized divergence: `1` changed field(s)" in section
+    assert (
+        '`selected_focus_paths`: ["/.github/workflows/codex-cli-release-watch.yml"] -> [".github/workflows/codex-cli-release-watch.yml"]'
+        in section
+    )
+    assert "- Envelope structured_output parity: `1` changed field(s)" in section
+    assert '`confidence_band`: "medium" -> "high"' in section
+    assert "- Adapter secondary focus IDs: `rollback-runbook`" in section
     assert report.index("## Focus Decision") < report.index("## Run Details")
     run_details = _top_level_section(report, "## Run Details")
     assert '"rendered_in_report_section": true' in run_details
@@ -2423,9 +2590,59 @@ def test_render_report_renders_no_viable_focus_decision_from_run_details():
 
     assert "- Decision state: `no_viable_focus`" in section
     assert "- Viable focus identified: `no`" in section
+    assert (
+        "- Blocking outcome: no clarification question was emitted because the gate could not identify a viable focus target."
+        in section
+    )
     assert "- Candidates considered: none" in section
     assert "- Warnings:" in section
     assert "No seam candidate had enough direct workspace evidence." in section
+    assert "- Clarification prompt:" not in section
+    assert "- Clarification options:" not in section
+
+
+def test_render_report_renders_stale_no_viable_focus_without_fake_question_block():
+    summary = {
+        "verdict": "no_viable_focus",
+        "task": {"id": "task-focus-stale", "task_kind": "analysis_review"},
+        "verdicts": {
+            "content_verdict": "no_viable_focus",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "focus_decision": _stale_no_viable_focus_decision(),
+        "workspace_policy_checks": [],
+        "validator_rounds": [],
+        "agent_stages": [],
+        "artifacts": {},
+    }
+
+    report = render_report(summary)
+    section = _top_level_section(report, "## Focus Decision")
+
+    assert "- Decision basis: `rerun_answer`" in section
+    assert "- Files hint disposition: `helped`" in section
+    assert (
+        "- Checked files: `.github/workflows/codex-cli-release-watch.yml`, `.github/workflows/rollback-runbook.md`"
+        in section
+    )
+    assert (
+        "- Blocking outcome: no clarification question was emitted because the prior rerun answer went stale and the gate could not safely continue."
+        in section
+    )
+    assert "- Stale-answer warnings:" in section
+    assert "Prior focus_gate_answer went stale:" in section
+    assert "- Clarification prompt:" not in section
+    assert "- Clarification options:" not in section
+    assert (
+        "- Top candidate: `release-trigger-automation` (`0.54`): Release workflow seam."
+        in section
+    )
+    assert (
+        "- Next-best candidate: `rollback-runbook` (`0.49`): Rollback workflow seam."
+        in section
+    )
 
 
 def test_write_state_artifacts_preserves_clarification_focus_decision_and_report(
@@ -2474,9 +2691,19 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
     )
     assert "## Analysis Review Status" not in report
     assert "- Decision state: `clarification_requested`" in section
+    assert "- Decision basis: `repo_probe`" in section
+    assert "- Files hint disposition: `helped`" in section
+    assert (
+        "- Checked files: `.github/workflows/codex-cli-release-watch.yml`, `.github/workflows/rollback-runbook.md`"
+        in section
+    )
     assert "- Clarification prompt: Which seam should this run prioritize?" in section
     assert (
         "- Clarification options: `release-trigger-automation`, `rollback-runbook`"
+        in section
+    )
+    assert (
+        "- Top candidate: `release-trigger-automation` (`0.54`): Release workflow seam."
         in section
     )
     assert "The task mixes release and rollback concerns." in section
@@ -2688,7 +2915,10 @@ def test_apply_final_artifacts_partial_answer_projects_canonical_seam_state(
 
     assert updated["artifacts"]["final_artifact_kind"] == "partial_answer"
     assert partial_json["primary_seam"]["seam_id"] == "seam-primary"
-    assert partial_json["primary_seam"]["summary"] == seam_fields["primary_seam"]["summary"]
+    assert (
+        partial_json["primary_seam"]["summary"]
+        == seam_fields["primary_seam"]["summary"]
+    )
     assert partial_json["secondary_seams_considered"] == [
         seam_fields["secondary_seams_considered"][0]
     ]
@@ -2707,7 +2937,10 @@ def test_apply_final_artifacts_partial_answer_projects_canonical_seam_state(
     assert "`seam-report`" not in partial_markdown
     assert "`payload-primary`" not in partial_markdown
     assert "- Primary seam: `seam-primary`" in report_markdown
-    assert "- Secondary seams considered: `seam-reporting`, `seam-report`" in report_markdown
+    assert (
+        "- Secondary seams considered: `seam-reporting`, `seam-report`"
+        in report_markdown
+    )
     assert "primary_seam_projection_status" not in report_markdown
     assert "`payload-primary`" not in report_markdown
 

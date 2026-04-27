@@ -26,7 +26,10 @@ VALID_VALIDATOR_RUN_WHEN = {
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
 VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
 VALID_FOCUS_GATE_DEFAULT_PATHS = {"adjudicate", "deliberate"}
-VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {"block_for_clarification"}
+VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {
+    "block_for_clarification",
+    "never_ask",
+}
 M1_ALLOWED_FOCUS_TYPES = ["seam"]
 _WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(
     r"^(?P<path>.+?):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"

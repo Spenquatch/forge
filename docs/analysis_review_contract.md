@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v9` keeps the seam-selection contract from v8, adds the M1 typed focus-gate policy on the same contract family, and extends the analysis payload family so proposer/reviser outputs may record bounded third-seam overflow through analysis-stage `scope_escapes`.
+`analysis_review_v1_contract_v9` keeps the seam-selection contract from v8, adds the typed focus-gate policy on the same contract family, and extends the analysis payload family so proposer/reviser outputs may record bounded third-seam overflow through analysis-stage `scope_escapes`.
 
 ## What the contract governs
 
@@ -62,7 +62,7 @@ The trust policy covers:
 
 ## Focus-gate contract
 
-The contract version remains `analysis_review_v1_contract_v9`. M1 focus gating is an additive v9 surface, not a new contract version or a new strategy kind.
+The contract version remains `analysis_review_v1_contract_v9`. Focus gating is an additive v9 surface, not a new contract version or a new strategy kind.
 
 The effective contract now also resolves a typed `focus_gate` policy:
 
@@ -80,33 +80,42 @@ Precedence and validation rules:
 - strategy-level `focus_gate` may set only `enabled` and `default_path`
 - task-level `focus_gate` may set `enabled`, `allowed_focus_types`, and `clarification_policy`
 - the resolved canonical surface lives at `analysis_review_contract.focus_gate`
-- M1 rejects unknown task or strategy `focus_gate` keys
-- M1 accepts only `allowed_focus_types: [seam]`
+- v9 rejects unknown task or strategy `focus_gate` keys
+- v9 accepts only `allowed_focus_types: [seam]`
 
 Rerun-answer rules:
 
 - `task.focus_gate_answer` is optional and is meaningful only when `focus_gate.enabled = true`
+- rerun answers are deliberate-only: a run whose resolved `focus_gate.default_path` is `adjudicate` must not consume `task.focus_gate_answer`
+- deliberate runs always execute the internal `focus_gate_probe` stage before the public `focus_gate` decision stage
+- the public decision stage uses split prompt builders: `build_focus_gate_adjudicate_prompt(...)` for direct adjudication and `build_focus_gate_deliberate_prompt(...)` for probe-backed shortlist / rerun handling
 - `focus_gate_answer.question_prompt` must equal the prior `focus_decision.question.prompt` after trimming leading and trailing whitespace
 - `focus_gate_answer.selected_option` must match one prior `focus_decision.question.options` entry exactly after trimming
 - `focus_gate_answer.freeform_answer` is optional supporting text and is never the primary matcher
-- when both fields match, the gate must continue through adjudication without re-asking the clarification question
-- when either field does not match, the runner may re-ask once and then terminate again as `blocked_for_clarification`
+- when both fields match, the gate stays on the deliberate path and evaluates that answer against the live repo-backed shortlist instead of skipping the probe
+- if the selected option disappears from the live shortlist, or the live shortlist now makes a different candidate clearly dominant, the answer is stale
+- when a stale answer is detected and `clarification_policy = never_ask`, the runner must normalize the public result to `decision_state = no_viable_focus` with an added stale-answer warning instead of emitting a fresh question
+- when either field does not match and `clarification_policy != never_ask`, the runner may re-ask once and then terminate again as `blocked_for_clarification`
 
 ## Focus-decision artifact
 
 `focus_decision` is runner-owned state. It is not a model-authored review-status field and must not be buried under `analysis_review_status`.
 
-Persist it at top-level `summary.json["focus_decision"]` with this M1 shape:
+Persist it at top-level `summary.json["focus_decision"]` with this v9 shape:
 
 ```json
 {
   "gate_path": "adjudicate | deliberate",
   "focus_type": "seam",
   "decision_state": "selected | clarification_requested | no_viable_focus",
+  "decision_basis": "request_only | repo_probe | rerun_answer",
   "selected_focus_id": "string|null",
   "selected_focus_summary": "string|null",
+  "selected_focus_paths": [],
   "confidence": 0.0,
   "confidence_band": "high | medium | low",
+  "files_hint_disposition": "helped | hurt | ignored | absent",
+  "checked_files": [],
   "candidates": [],
   "question": {
     "prompt": "string",
@@ -123,11 +132,20 @@ Persist it at top-level `summary.json["focus_decision"]` with this M1 shape:
 Artifact rules:
 
 - `decision_state` is always `selected`, `clarification_requested`, or `no_viable_focus`
+- `decision_basis` is always `request_only`, `repo_probe`, or `rerun_answer`
 - `selected_focus_id` and `selected_focus_summary` are required for `selected` and must be `null` otherwise
+- `selected_focus_paths` is required for `selected`, must be empty otherwise, and is compared using normalized workspace-path equality rather than raw string equality
+- seam identity is path-set identity: after normalization, two path sets that compare equal describe the same seam, and `selected_focus_id` must stay aligned with the canonical seam ID derived from that normalized path set
+- `decision_basis=request_only` requires `gate_path=adjudicate` and `checked_files=[]`
+- `decision_basis=repo_probe` and `decision_basis=rerun_answer` require `gate_path=deliberate` and non-empty `checked_files`
+- `files_hint_disposition` is always one of `helped`, `hurt`, `ignored`, or `absent`
 - `question.prompt` and `question.options` are required for `clarification_requested`; otherwise `question` serializes as `{ "prompt": "", "options": [] }`
 - `candidates` may be empty only for `no_viable_focus`
+- every `candidates[*]` item carries `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`; when `selected`, the chosen candidate's normalized `candidate_paths` must equal `selected_focus_paths`
 - `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise
 - blocked runs may omit `analysis_review_status`, but they still persist `focus_decision`, emit `summary.json`, and emit `REPORT.md`
+- deliberate runs persist three focus-stage artifacts with exact filenames: `structured_output.raw.json`, `structured_output.normalized.json`, and `run.envelope.json`
+- `run.envelope.json["structured_output"]` is the canonical persisted stage snapshot after runner normalization; `structured_output.raw.json` captures the provider-emitted JSON before normalization, and `structured_output.normalized.json` captures the post-normalization public artifact payload
 - `REPORT.md` renders `focus_decision` in its own runner-owned `## Focus Decision` section before review-status/runtime-detail sections
 
 Terminal focus-gate outcomes:
@@ -136,12 +154,20 @@ Terminal focus-gate outcomes:
 - `clarification_requested` terminates the run as `run_verdict = blocked_for_clarification`, `content_verdict = blocked_for_clarification`, `validator_verdict = not_run`, and `final_summary = "Focus gate blocked the run pending clarification."`
 - `no_viable_focus` terminates the run as `run_verdict = no_viable_focus`, `content_verdict = no_viable_focus`, `validator_verdict = not_run`, and `final_summary = "Focus gate could not identify a viable focus target."`
 - for blocked outcomes, `failure_details.stage` is `focus_gate` and carries the runner-owned `question`, `candidates`, and `warnings` payload needed for rerun or diagnosis
+- `no_viable_focus` must not fabricate a clarification block; when `question` is empty, reports should explain the block as no-viable / never-ask behavior rather than rendering fake prompt text
 
 Prompt handoff rule:
 
-- M1 hands the selected focus into proposer and reviser by prompt text only
-- the prompt block must include `selected_focus_id`, `selected_focus_summary`, and the shortlisted candidate IDs
-- M1 does not add a new provider-protocol field for focus-gate context
+- v9 still hands the selected focus into proposer and reviser by prompt text only
+- the prompt block must include `selected_focus_id`, `selected_focus_summary`, `selected_focus_paths`, and the shortlisted candidate IDs
+- v9 does not add a new provider-protocol field for focus-gate context
+
+Probe-stage behavior:
+
+- `focus_gate_probe` is runner-owned repo inspection, not the public decision artifact
+- the probe emits a shortlist artifact with `checked_files`, `candidates`, and `files_hint_disposition`
+- the later public `focus_gate` stage consumes that probe artifact, plus any rerun answer, and emits the persisted `focus_decision`
+- only the public `focus_gate` stage is copied into `summary.json["focus_decision"]`; the probe remains visible through stage artifacts and metadata
 
 ## Topic lifecycle artifact contract
 

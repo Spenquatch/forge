@@ -835,6 +835,35 @@ class _AdjudicateConfiguredReturnsDeliberateHarnessAdapter(_FocusGateHarnessAdap
         )
 
 
+class _AdjudicateNonCanonicalRepoProbeHarnessAdapter(_FocusGateHarnessAdapter):
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        payload = self._selected_focus_decision(
+            gate_path="adjudicate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+        payload["selected_focus_id"] = "release_watch_and_snapshot_automation"
+        payload["adapter_plan"]["primary_focus_id"] = "release_watch_and_snapshot_automation"
+        payload["candidates"][0]["focus_id"] = "release_watch_and_snapshot_automation"
+        payload["candidates"][1]["focus_id"] = "release_watch_automation"
+        return payload
+
+
+class _DeliberateHumanQuestionOptionsHarnessAdapter(_FocusGateHarnessAdapter):
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        payload = self._clarification_focus_decision()
+        payload["question"] = {
+            "prompt": "Which seam should this run prioritize?",
+            "options": [
+                "Prioritize Codex CLI release automation",
+                "Prioritize Claude Code release automation",
+            ],
+        }
+        return payload
+
+
 class _MismatchSelectsOnRecordedReaskHarnessAdapter(_FocusGateHarnessAdapter):
     def __init__(self) -> None:
         super().__init__()
@@ -2511,13 +2540,17 @@ validators: []
     return task_path, strategy_path
 
 
-def _task_focus_gate_block(*, enabled: bool = True) -> str:
+def _task_focus_gate_block(
+    *,
+    enabled: bool = True,
+    clarification_policy: str = "block_for_clarification",
+) -> str:
     return (
         "focus_gate:\n"
         f"  enabled: {'true' if enabled else 'false'}\n"
         "  allowed_focus_types:\n"
         "    - seam\n"
-        "  clarification_policy: block_for_clarification\n"
+        f"  clarification_policy: {clarification_policy}\n"
     )
 
 
@@ -2904,6 +2937,44 @@ def test_analysis_review_runner_focus_gate_adjudicate_config_rejects_deliberate_
     )
 
 
+def test_analysis_review_runner_focus_gate_adjudicate_normalizes_repo_probe_payload(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="adjudicate"),
+    )
+
+    adapter = _AdjudicateNonCanonicalRepoProbeHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    focus_stage = summary["agent_stages"][0]
+
+    assert summary["verdict"] == "accepted"
+    assert focus_decision["gate_path"] == "adjudicate"
+    assert focus_decision["decision_basis"] == "request_only"
+    assert focus_decision["files_hint_disposition"] == "absent"
+    assert focus_decision["checked_files"] == []
+    assert focus_decision["selected_focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    assert focus_decision["adapter_plan"]["primary_focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    assert focus_decision["candidates"][0]["focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    assert focus_decision["candidates"][0]["evidence_refs"] == []
+    assert focus_stage["structured_output"] == focus_decision
+
+
 def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_recorded_reask(
     tmp_path,
     monkeypatch,
@@ -2984,6 +3055,43 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_re
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
 
 
+def test_analysis_review_runner_focus_gate_normalizes_clarification_question_options(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _DeliberateHumanQuestionOptionsHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "blocked_for_clarification"
+    assert focus_decision["decision_state"] == "clarification_requested"
+    assert focus_decision["question"]["options"] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+    ]
+    assert focus_decision["adapter_plan"]["secondary_focus_ids"] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+    ]
+
+
 @pytest.mark.parametrize(
     ("question_prompt", "selected_option"),
     [
@@ -3054,6 +3162,45 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_a
     assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
     assert len(adapter.prompt_texts["focus_gate"]) == 1
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
+
+
+def test_analysis_review_runner_focus_gate_stale_rerun_never_ask_blocks_without_reask(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(clarification_policy="never_ask"),
+        task_focus_gate_answer=_task_focus_gate_answer_block(
+            question_prompt="Which seam should this run prioritize?",
+            selected_option="unknown-seam",
+        ),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _FocusGateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "no_viable_focus"
+    assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["question"] == {"prompt": "", "options": []}
+    assert any(
+        warning.startswith("Prior focus_gate_answer went stale:")
+        for warning in focus_decision["warnings"]
+    )
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
 
 
 def test_analysis_review_runner_focus_gate_selected_seam_drift_fails_semantic_validation(

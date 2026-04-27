@@ -1,0 +1,6 @@
+name: codex-cli-update-snapshot
+on:
+  workflow_dispatch:
+jobs:
+  update:
+    runs-on: ubuntu-latest
