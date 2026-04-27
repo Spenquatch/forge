@@ -1,3 +1,4 @@
+<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260426-233115.md -->
 # PLAN: M2 Seam Gate Hardening for Analysis Review
 
 Status: ready for implementation
@@ -34,6 +35,21 @@ Branch scope for M2:
 - render the richer rationale in `REPORT.md`
 
 M3 remains out of scope. No second focus type in this branch.
+
+## Current Code Reality at `HEAD`
+
+M2 is a hardening pass against concrete thin spots in the landed M1 implementation, not a fresh design exercise.
+
+| Area | Current behavior at `HEAD` | M2 change |
+|---|---|---|
+| contract parsing | `anvil/harness/types.py` accepts only `clarification_policy = block_for_clarification` | widen the typed surface to accept `never_ask` |
+| resolved contract | `anvil/harness/contracts.py` carries the M1 `FocusGatePolicy` and already resolves task-over-strategy precedence | keep the same owner, widen only the policy values and serialized contract |
+| deliberate orchestration | `HarnessRunner._run_focus_gate()` in `anvil/harness/runner.py` already performs an unrecorded deliberate dry run before the recorded `focus_gate` stage | replace the fake probe shape with a real recorded `focus_gate_probe` stage and artifact |
+| rerun answer matching | `_focus_gate_answer_matches()` in `anvil/harness/runner.py` only matches prompt text and option membership | make rerun acceptance candidate-aware so stale answers cannot silently win |
+| artifact schema | `focus_gate_output_schema()` in `anvil/harness/schemas.py` still exposes the thin M1 `focus_decision` shape | widen the public artifact with `decision_basis`, `files_hint_disposition`, `checked_files`, and scored candidates |
+| semantic enforcement | `validate_focus_decision_payload()` in `anvil/harness/semantic_validation.py` enforces M1 state rules only | add probe payload validation plus candidate/evidence/threshold invariants |
+| prompt surface | `build_focus_gate_prompt()` in `anvil/harness/prompts.py` handles both adjudicate and deliberate today | split the deliberate repo probe into its own prompt builder and keep the final decision call explicit |
+| report rendering | `_append_focus_decision_section()` in `anvil/harness/report.py` renders thin decision metadata only | surface the grounded rationale, checked files, next-best candidate, and stale-answer warnings |
 
 ## Step 0: Scope Challenge
 
@@ -162,6 +178,18 @@ This ships through the existing repo workflow:
 - Python source changes under `anvil/harness/`
 - pytest coverage
 - docs update in `docs/analysis_review_contract.md`
+
+### Definition of Done
+
+M2 is done only when all of these are true on this branch:
+
+1. deliberate runs record a distinct `focus_gate_probe` stage before the final `focus_gate` stage
+2. the public `focus_decision` artifact is widened in-place and is the only top-level focus summary artifact
+3. `clarification_policy = never_ask` survives parsing, contract resolution, runner execution, and report rendering
+4. stale `focus_gate_answer` inputs are rejected against the current candidate set, not just the prior prompt text
+5. blocked outputs still render an honest explanation of what was checked, why ambiguity remained, and whether the prior answer went stale
+6. the targeted offline pytest suite passes
+7. the four live harness acceptance cases in this plan pass with the new artifact shape and verdict semantics
 
 ## Dream State
 
@@ -368,6 +396,11 @@ Probe artifact:
 Probe rules:
 
 - `focus_type` is always `seam`
+- `files_hint_disposition` must be derived with this exact rubric:
+  - `absent`: task supplied no `files_hint`
+  - `helped`: at least one `files_hint` entry directly contributed to a retained candidate or to a retained `checked_files` path
+  - `ignored`: `files_hint` was present but none of its entries materially affected the retained shortlist or checked-file set
+  - `hurt`: `files_hint` pushed probe attention toward candidates or files that were later rejected from the retained shortlist
 - `checked_files` must contain the concrete repo files the probe inspected
 - each `evidence_refs` entry must be a path-only ref and must appear in `checked_files`
 - candidate count caps at 3
@@ -548,6 +581,19 @@ Keep the strategy role surface small:
 
 Do not add a new required `focus_gate_probe` role in strategies. That is needless migration churn.
 
+### Probe Validation Ownership
+
+`focus_gate_probe` must be a first-class semantic-validation path, not a runner-only side check.
+
+Rules:
+
+- add a dedicated probe-payload validator alongside `validate_focus_decision_payload()`
+- route `role_name = "focus_gate_probe"` through `validate_stage_output()`
+- keep probe payload invariants in semantic validation, not in ad hoc runner assertions
+- runner code may still guard ordering and blocked-run behavior, but payload shape and evidence integrity belong to validation
+
+This freezes ownership: schema + semantic validation own probe artifact honesty, runner owns orchestration.
+
 ### Proposer Handoff Contract
 
 Keep prompt-text handoff. Do not add a provider protocol field in M2.
@@ -580,6 +626,14 @@ Stale-answer behavior:
 
 - when `clarification_policy = block_for_clarification`, re-ask once with a warning that the prior answer went stale
 - when `clarification_policy = never_ask`, emit `no_viable_focus` with a stale-answer warning instead of re-asking
+
+Threshold-binding stale-answer rule:
+
+- “the current probe now makes a different candidate clearly dominant” means the current top candidate satisfies the same M2 direct-selection rules defined in `Selection Thresholds`
+- specifically, a prior answer is stale when another candidate now either:
+  - reaches `high` confidence (`>= 0.80`), or
+  - reaches `medium` confidence and leads the answered option by at least `0.15`
+- no second stale-answer-specific threshold is allowed; stale detection reuses the same selection math as fresh gate decisions
 
 This is still boring. No question IDs. No resume tokens. Just current-candidate reality instead of blind string matching.
 
@@ -796,10 +850,16 @@ If `poetry` is missing on PATH in this repo, use:
 
 Then run at least four live harness cases with `focus_gate.enabled: true`:
 
-1. adjudicate clear case: expect `decision_state = selected`, no probe stage, proposer present
-2. deliberate ambiguous case: expect `focus_gate_probe` then `clarification_requested`, no proposer
-3. deliberate ambiguous + `never_ask`: expect `focus_gate_probe` then `no_viable_focus`, no question block
-4. deliberate rerun with stale answer: expect probe-backed stale warning and either re-ask or `no_viable_focus` depending on policy
+1. adjudicate clear case: use a task/strategy pair with `default_path: adjudicate`, `focus_gate.enabled: true`, and no `focus_gate_answer`; expect `decision_state = selected`, no probe stage, proposer present
+2. deliberate ambiguous case: use the same ambiguous seam-selection task fixture already used for the runner blocked-clarification tests, with `default_path: deliberate` and `clarification_policy: block_for_clarification`; expect `focus_gate_probe` then `clarification_requested`, no proposer
+3. deliberate ambiguous + `never_ask`: use the same ambiguous task fixture as case 2, but set `clarification_policy: never_ask`; expect `focus_gate_probe` then `no_viable_focus`, no question block
+4. deliberate rerun with stale answer: start from the same deliberate ambiguous fixture, rerun with a `focus_gate_answer` that matches the prior prompt text/options but is stale under the current candidate thresholds; expect a probe-backed stale warning and either re-ask or `no_viable_focus` depending on policy
+
+Live command rule:
+
+- use the existing harness entrypoint, `python -m anvil.cli harness-run --task <task> --strategy <strategy> --workspace <workspace>`
+- the exact task and strategy files chosen for these four runs must be checked into the branch or generated as explicit temporary fixtures during implementation
+- do not call the acceptance pass complete until the exact four command lines used are copied into the implementation notes or PR summary
 
 ## Failure Modes Registry
 
@@ -848,6 +908,17 @@ That is acceptable because a deliberate task is already ambiguous. Spending 2 ch
 | report noise grows | richer candidates can bloat artifacts | render top candidate, next-best candidate, and compact checked-file list instead of dumping raw stage JSON |
 
 ## Implementation Plan
+
+Implement in this order. Do not start with report polish or docs while field names are still moving.
+
+Sequencing rule:
+
+1. freeze the widened typed surface first
+2. lock prompt helpers against that surface
+3. wire runner orchestration and stage recording
+4. render the widened artifact in reports
+5. update docs once persisted field names are stable
+6. finish with the regression sweep and live harness acceptance pass
 
 ### Slice 1: Public Contract and Schema Widening
 
@@ -969,43 +1040,69 @@ Acceptance:
 
 - docs describe the real M2 behavior, not the already-landed M1 baseline
 
+### Slice 6: Regression Sweep and Live Harness Acceptance
+
+Files:
+
+- `tests/test_harness_analysis_contract.py`
+- `tests/test_harness_prompt_consistency.py`
+- `tests/test_harness_semantic_validation.py`
+- `tests/test_harness_runner.py`
+- `tests/test_harness_reporting.py`
+
+Changes:
+
+1. land the targeted pytest updates only after slices 1 through 4 have stopped renaming fields
+2. verify the widened `focus_decision` shape and new probe artifact across contract, prompt, semantic, runner, and report tests
+3. run the targeted offline suite from this plan
+4. run the four live harness cases already listed under Manual Acceptance, using the exact harness command format and fixture expectations frozen there
+5. save at least one blocked deliberate run and one selected run artifact set and inspect `summary.json` plus `REPORT.md` by hand before calling M2 done
+
+Acceptance:
+
+- the targeted pytest command passes without xfails or skipped new M2 cases
+- deliberate blocked artifacts show `focus_gate_probe` then `focus_gate`
+- adjudicate selected artifacts still show only `focus_gate`
+- stale-answer live reruns never advance silently
+- report output stays compact while still surfacing the new rationale fields
+
 ## Worktree Parallelization Strategy
 
 ### Dependency Table
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Public contract + schema widening | `anvil/harness/types.py`, `anvil/harness/contracts.py`, `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | — |
-| B. Prompt surface | `anvil/harness/prompts.py` | A |
-| C. Runner integration | `anvil/harness/runner.py` | A, B |
-| D. Reporting | `anvil/harness/report.py`, `anvil/harness/reporting.py` | A, C |
-| E. Docs | `docs/analysis_review_contract.md` | A, B, D |
-| F. Tests | `tests/test_harness_*` | A, B, C, D |
+| A. Contract core | `anvil/harness/types.py`, `anvil/harness/contracts.py` | — |
+| B. Schema + semantic enforcement | `anvil/harness/schemas.py`, `anvil/harness/semantic_validation.py` | A |
+| C. Prompt surface | `anvil/harness/prompts.py` | A, B |
+| D. Runner orchestration | `anvil/harness/runner.py` | A, B, C |
+| E. Reporting + docs | `anvil/harness/report.py`, `anvil/harness/reporting.py`, `docs/analysis_review_contract.md` | B, D |
+| F. Regression sweep | `tests/test_harness_*` | A, B, C, D, E |
 
 ### Parallel Lanes
 
-- Lane A: `A -> B -> C`
-  Sequential. The runner needs stable schema names, prompt helper names, and threshold semantics.
+- Lane A: `A -> B -> C -> D`
+  Main implementation lane. Sequential because every downstream stage depends on the field names and invariants frozen in contract core and schema enforcement.
 
-- Lane B: `D -> E`
-  Can start once A is frozen and C's persisted field names are settled.
+- Lane B: `E`
+  Late parallel lane. Can start once Lane A has finished `D` and persisted field names are no longer moving.
 
 - Lane C: `F`
-  Splitable late, but should not start before A and most of C are stable.
+  Final verification lane. It can begin drafting new test cases after `B`, but it should not be considered mergeable until Lane A and Lane B are in place.
 
 ### Execution Order
 
-1. Freeze the M2 artifact and policy shape in Lane A.
-2. Finish runner orchestration in Lane A.
-3. Start Lane B once persisted field names are stable.
-4. Merge A and B.
-5. Run Lane C.
+1. Launch Lane A first and treat it as the contract-owning worktree.
+2. Once Lane A reaches runner-stable field names, launch Lane B for report and docs polish in parallel.
+3. Launch Lane C only after Lane A has stopped changing schema names and stage ordering.
+4. Merge Lane A, then Lane B, then Lane C.
+5. Run the targeted pytest suite and live harness acceptance on the merged branch only.
 
 ### Conflict Flags
 
-- `runner.py` depends on exact schema fields from A and exact prompt helpers from B.
-- `report.py` depends on the persisted field names from C.
-- test worktrees will churn badly if they start before the widened candidate schema is final.
+- `anvil/harness/runner.py` is the conflict magnet. Do not split runner orchestration across multiple worktrees.
+- `tests/test_harness_runner.py` and `tests/test_harness_prompt_consistency.py` will churn if they start before Lane A has frozen names like `decision_basis`, `checked_files`, and `focus_gate_probe`.
+- `docs/analysis_review_contract.md` should not merge before the persisted artifact and report wording are final, or it will immediately go stale.
 
 ## Decision Audit Trail
 
@@ -1018,16 +1115,18 @@ Acceptance:
 | 5 | Artifact | Keep `focus_decision` as the only public summary artifact | Auto-decided | DRY + Explicit over clever | The probe is implementation detail; user-facing state should stay in one place | new top-level probe artifact family |
 | 6 | Runner | Reject stale rerun answers against the current candidate set | Auto-decided | Rigor | Prompt/option string matching alone is too weak once repo-backed probing exists | blind string-match acceptance |
 | 7 | Performance | Cap probe round at one and files at six | Auto-decided | Pragmatic | M2 should harden ambiguity handling without turning the gate into a mini review loop | open-ended probing |
+| 8 | Implementation | Make regression sweep and live harness acceptance an explicit final slice | Auto-decided | Rigor | M2 is not done when code compiles; it is done when merged artifacts and live reruns prove the new gate behavior | treating validation as an implicit follow-up |
+| 9 | Parallelization | Keep one contract-owning implementation lane and defer docs/tests until names freeze | Auto-decided | Pragmatic + Minimal diff | `runner.py`, schemas, prompts, and harness tests all share the same artifact vocabulary, so early parallelism would mostly create merge churn | splitting runner/tests/docs into eager parallel worktrees |
 
 ## Completion Summary
 
 - Step 0: Scope Challenge — scope reduced to the real residual M2 seam hardening work
-- Architecture Review: probe + decision architecture and public/private artifact boundary defined
-- Code Quality Review: boring-extension path chosen, no new strategy kind or provider protocol
-- Test Review: M2-only coverage diagram produced, stale-answer and `never_ask` gaps made explicit
-- Performance Review: deliberate path cost accepted with hard caps
+- Architecture Review: current-vs-target delta is pinned to exact owners in `types.py`, `contracts.py`, `runner.py`, `schemas.py`, `semantic_validation.py`, `prompts.py`, and `report.py`
+- Code Quality Review: boring-extension path chosen, no new strategy kind, no provider protocol widening, no second public artifact family
+- Test Review: M2-only coverage diagram produced, stale-answer and `never_ask` gaps made explicit, and the final regression/live-acceptance slice is defined
+- Performance Review: deliberate path cost accepted with one probe round, six checked files max, and no pre-proposer validator loop
 - NOT in scope: written
 - What already exists: written
 - Failure modes: stale-answer silent selection identified as the key critical gap
-- Parallelization: 3 lanes, 1 main sequential lane, 1 late parallel lane
-- Lake Score: `7/7` key decisions chose the complete M2 over the cosmetic shortcut
+- Parallelization: 3 lanes, 1 contract-owning implementation lane, 1 late reporting/docs lane, 1 final verification lane
+- Lake Score: `9/9` key decisions chose the complete M2 over the cosmetic shortcut
