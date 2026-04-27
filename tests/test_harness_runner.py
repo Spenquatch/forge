@@ -14,9 +14,42 @@ from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.types import ProviderRun
 
+_PRIMARY_SEAM_PATHS = [
+    ".github/workflows/codex-cli-release-watch.yml",
+    "docs/project_management/next/codex-cli-parity/C1-spec.md",
+]
+_SIMPLE_PRIMARY_SEAM_PATHS = [
+    ".github/workflows/codex-cli-release-watch.yml"
+]
+_SECONDARY_RELEASE_WATCH_SEAM_PATHS = [
+    ".github/workflows/claude-code-release-watch.yml"
+]
+_SECONDARY_SNAPSHOT_SEAM_PATHS = [
+    ".github/workflows/claude-code-release-watch.yml",
+    ".github/workflows/claude-code-update-snapshot.yml",
+    ".github/workflows/codex-cli-update-snapshot.yml",
+]
 _PRIMARY_SEAM_ID = "release-watch-governing"
 _SECONDARY_RELEASE_WATCH_SEAM_ID = "release-watch-sibling-parity"
 _SECONDARY_SNAPSHOT_SEAM_ID = "snapshot-prepare-parity"
+_SIMPLE_PRIMARY_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+    _SIMPLE_PRIMARY_SEAM_PATHS
+)
+_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+    _PRIMARY_SEAM_PATHS
+)
+_SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+    _SECONDARY_RELEASE_WATCH_SEAM_PATHS
+)
+_SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+    _SECONDARY_SNAPSHOT_SEAM_PATHS
+)
+_OVERFLOW_OWNER_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+    [".github/workflows/codex-cli-update-snapshot.yml"]
+)
+_OVERFLOW_SPEC_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+    ["docs/project_management/next/codex-cli-parity/C1-spec.md"]
+)
 _CORROBORATION_FILES_REVIEWED = [
     ".github/workflows/codex-cli-release-watch.yml",
     ".github/workflows/claude-code-release-watch.yml",
@@ -571,10 +604,7 @@ class _BoundedCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
             "seam_id": _PRIMARY_SEAM_ID,
             "summary": "The governing release-watch seam anchored to the nearest parity spec.",
             "why_primary": "The release-watch workflow plus its nearest governing parity spec are the primary review surface for this task.",
-            "paths": [
-                ".github/workflows/codex-cli-release-watch.yml",
-                "docs/project_management/next/codex-cli-parity/C1-spec.md",
-            ],
+            "paths": list(_PRIMARY_SEAM_PATHS),
         }
 
     def _secondary_seams_considered(
@@ -585,17 +615,13 @@ class _BoundedCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
                 "seam_id": _SECONDARY_RELEASE_WATCH_SEAM_ID,
                 "summary": "The sibling release-watch workflow used for parity corroboration.",
                 "why_not_primary": "It corroborates the governing release-watch seam but does not set the governing requirement.",
-                "paths": [".github/workflows/claude-code-release-watch.yml"],
+                "paths": list(_SECONDARY_RELEASE_WATCH_SEAM_PATHS),
             },
             {
                 "seam_id": _SECONDARY_SNAPSHOT_SEAM_ID,
                 "summary": "The sibling snapshot and prepare-path parity seam.",
                 "why_not_primary": "It broadens the review beyond the governing release-watch seam and therefore remains secondary.",
-                "paths": [
-                    ".github/workflows/claude-code-release-watch.yml",
-                    ".github/workflows/claude-code-update-snapshot.yml",
-                    ".github/workflows/codex-cli-update-snapshot.yml",
-                ],
+                "paths": list(_SECONDARY_SNAPSHOT_SEAM_PATHS),
             },
         ]
 
@@ -646,10 +672,7 @@ class _TrustCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
             "seam_id": _PRIMARY_SEAM_ID,
             "summary": "The governing release-watch seam anchored to the nearest parity spec.",
             "why_primary": "The release-watch workflow plus its nearest governing parity spec are the primary review surface for this task.",
-            "paths": [
-                ".github/workflows/codex-cli-release-watch.yml",
-                "docs/project_management/next/codex-cli-parity/C1-spec.md",
-            ],
+            "paths": list(_PRIMARY_SEAM_PATHS),
         }
 
     def _secondary_seams_considered(
@@ -660,17 +683,13 @@ class _TrustCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
                 "seam_id": _SECONDARY_RELEASE_WATCH_SEAM_ID,
                 "summary": "The sibling release-watch workflow used for parity corroboration.",
                 "why_not_primary": "It corroborates the governing release-watch seam but does not set the governing requirement.",
-                "paths": [".github/workflows/claude-code-release-watch.yml"],
+                "paths": list(_SECONDARY_RELEASE_WATCH_SEAM_PATHS),
             },
             {
                 "seam_id": _SECONDARY_SNAPSHOT_SEAM_ID,
                 "summary": "The sibling snapshot and prepare-path parity seam.",
                 "why_not_primary": "It broadens the review beyond the governing release-watch seam and therefore remains secondary.",
-                "paths": [
-                    ".github/workflows/claude-code-release-watch.yml",
-                    ".github/workflows/claude-code-update-snapshot.yml",
-                    ".github/workflows/codex-cli-update-snapshot.yml",
-                ],
+                "paths": list(_SECONDARY_SNAPSHOT_SEAM_PATHS),
             },
         ]
 
@@ -744,6 +763,36 @@ class _TrustCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
                 )
             return payload
         raise AssertionError(f"Unexpected role: {role_name}")
+
+
+class _RelabeledTrustCorroborationHarnessAdapter(_TrustCorroborationHarnessAdapter):
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        seam = super()._primary_seam(payload=payload)
+        seam["seam_id"] = "release-watch-update-snapshot-ci"
+        return seam
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        seams = super()._secondary_seams_considered(payload=payload)
+        if seams:
+            seams[0]["seam_id"] = "release-watch-snapshot-automation"
+        if len(seams) > 1:
+            seams[1]["seam_id"] = "snapshot-release-sibling-surface"
+        return seams
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        if recommendation_index == 3:
+            return (
+                "snapshot-release-sibling-surface",
+                "Compare the sibling snapshot prepare seam before broadening the timeout recommendation.",
+            )
+        return ("release-watch-update-snapshot-ci", "")
 
 
 class _PublishableDriftTrustCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
@@ -1143,7 +1192,7 @@ class _SecondarySeamOverflowHarnessAdapter(_AcceptingHarnessAdapter):
                 "seam_id": "release-watch-owner-overflow",
                 "summary": "A second overflow seam that broadens the bounded review past the default cap.",
                 "why_not_primary": "It introduces another secondary branch beyond the bounded default seam cap.",
-                "paths": [".github/workflows/codex-cli-release-watch.yml"],
+                "paths": [".github/workflows/codex-cli-update-snapshot.yml"],
             }
         )
         secondary_seams.append(
@@ -1160,6 +1209,7 @@ class _SecondarySeamOverflowHarnessAdapter(_AcceptingHarnessAdapter):
         payload = super()._base_analysis(revised=revised)
         payload["files_reviewed"] = [
             *payload["files_reviewed"],
+            ".github/workflows/codex-cli-update-snapshot.yml",
             "docs/project_management/next/codex-cli-parity/C1-spec.md",
         ]
         return self._apply_analysis_seams(payload)
@@ -1188,7 +1238,7 @@ class _ReviserOnlyScopedOverflowHarnessAdapter(_AcceptingHarnessAdapter):
                     "seam_id": "release-watch-owner-overflow",
                     "summary": "A second bounded secondary seam for ownership corroboration.",
                     "why_not_primary": "It broadens the bounded review but remains secondary.",
-                    "paths": [".github/workflows/codex-cli-release-watch.yml"],
+                    "paths": [".github/workflows/codex-cli-update-snapshot.yml"],
                 }
             )
             secondary_seams.append(
@@ -1218,6 +1268,7 @@ class _ReviserOnlyScopedOverflowHarnessAdapter(_AcceptingHarnessAdapter):
         if revised:
             payload["files_reviewed"] = [
                 *payload["files_reviewed"],
+                ".github/workflows/codex-cli-update-snapshot.yml",
                 "docs/project_management/next/codex-cli-parity/C1-spec.md",
             ]
         return self._apply_analysis_seams(payload)
@@ -2361,11 +2412,11 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert summary["analysis_review_status"]["waived_topic_ids"] == []
     _assert_canonical_analysis_review_status(
         summary,
-        expected_primary_seam_id=_PRIMARY_SEAM_ID,
-        expected_secondary_seam_ids=[_SECONDARY_RELEASE_WATCH_SEAM_ID],
+        expected_primary_seam_id=_SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        expected_secondary_seam_ids=[_SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID],
         expected_binding_seam_ids=[
-            _PRIMARY_SEAM_ID,
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
         ],
     )
     _assert_summary_json_mirrors_analysis_review_status(runner, summary)
@@ -2485,16 +2536,16 @@ def test_analysis_review_runner_bounded_mode_can_ship_fuller_repo_local_recommen
     assert summary["artifacts"]["final_artifact_kind"] == "final_answer"
     _assert_canonical_analysis_review_status(
         summary,
-        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_primary_seam_id=_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
         expected_secondary_seam_ids=[
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
-            _SECONDARY_SNAPSHOT_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+            _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID,
         ],
         expected_binding_seam_ids=[
-            _PRIMARY_SEAM_ID,
-            _PRIMARY_SEAM_ID,
-            _SECONDARY_SNAPSHOT_SEAM_ID,
-            _PRIMARY_SEAM_ID,
+            _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID,
+            _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
         ],
     )
     _assert_summary_json_mirrors_analysis_review_status(runner, summary)
@@ -2575,7 +2626,7 @@ def test_analysis_review_runner_bounded_and_trust_modes_keep_canonical_seam_cont
     )
     assert (
         _canonical_seam_context(bounded_summary)["primary_seam"]["seam_id"]
-        == _PRIMARY_SEAM_ID
+        == _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID
     )
     assert bounded_summary["analysis_review_status"]["recommendation_admissibility"] != (
         trust_summary["analysis_review_status"]["recommendation_admissibility"]
@@ -2587,6 +2638,61 @@ def test_analysis_review_runner_bounded_and_trust_modes_keep_canonical_seam_cont
     assert trust_summary["artifacts"]["final_artifact_kind"] == "partial_answer"
     _assert_summary_json_mirrors_analysis_review_status(bounded_runner, bounded_summary)
     _assert_summary_json_mirrors_analysis_review_status(trust_runner, trust_summary)
+
+
+def test_analysis_review_runner_canonicalizes_relabeled_trust_seams_to_match_bounded(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    _, bounded_summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _BoundedCorroborationHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_bounded_v1",
+        specs_dir_name="relabeled_bounded_specs",
+        runs_dir_name="relabeled_bounded_runs",
+    )
+    _, trust_summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _RelabeledTrustCorroborationHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_trust_v1",
+        specs_dir_name="relabeled_trust_specs",
+        runs_dir_name="relabeled_trust_runs",
+    )
+
+    assert _canonical_seam_context(bounded_summary) == _canonical_seam_context(
+        trust_summary
+    )
+    assert (
+        trust_summary["analysis_review_status"]["primary_seam"]["seam_id"]
+        == _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert trust_summary["analysis_review_status"]["recommendation_seam_bindings"] == [
+        {
+            "recommendation_index": 1,
+            "seam_id": _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            "seam_expansion_reason": "",
+        },
+        {
+            "recommendation_index": 2,
+            "seam_id": _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            "seam_expansion_reason": "",
+        },
+        {
+            "recommendation_index": 3,
+            "seam_id": _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID,
+            "seam_expansion_reason": "Compare the sibling snapshot prepare seam before broadening the timeout recommendation.",
+        },
+        {
+            "recommendation_index": 4,
+            "seam_id": _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            "seam_expansion_reason": "",
+        },
+    ]
 
 
 def test_analysis_review_runner_publishable_pair_can_still_drift_on_canonical_seam_context(
@@ -2672,16 +2778,16 @@ def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_
     assert summary["analysis_review_status"]["mode"] == "trust"
     _assert_canonical_analysis_review_status(
         summary,
-        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_primary_seam_id=_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
         expected_secondary_seam_ids=[
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
-            _SECONDARY_SNAPSHOT_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+            _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID,
         ],
         expected_binding_seam_ids=[
-            _PRIMARY_SEAM_ID,
-            _PRIMARY_SEAM_ID,
-            _SECONDARY_SNAPSHOT_SEAM_ID,
-            _PRIMARY_SEAM_ID,
+            _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
+            _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID,
+            _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID,
         ],
     )
     _assert_summary_json_mirrors_analysis_review_status(runner, summary)
@@ -3178,6 +3284,81 @@ def test_analysis_review_runner_trust_review_backfills_missing_closure_review_ar
     assert normalized["topic_closure_reviews"] == []
     assert schema_errors == []
     assert payload_provenance["status"] == "bound"
+
+
+def test_analysis_review_runner_normalizes_workspace_like_leading_slash_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustInferenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    assert (
+        runner._normalize_workspace_ref("/.github/workflows/codex-cli-release-watch.yml")
+        == ".github/workflows/codex-cli-release-watch.yml"
+    )
+
+
+def test_analysis_review_runner_drops_unknown_closure_reviews_during_normalization(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueClosureHarnessAdapter()._payload_for_role("critic")
+    payload["issue_closure_reviews"] = [
+        {
+            "issue_id": "AR-999",
+            "checked_files": ["/.github/workflows/codex-cli-release-watch.yml"],
+            "verified_evidence_refs": [
+                "/.github/workflows/codex-cli-release-watch.yml"
+            ],
+            "summary": "This bogus closure review should be dropped.",
+        }
+    ]
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+        prior_open_issue_records=[{"issue_id": "AR-001"}],
+        prior_open_topic_records=[],
+    )
+
+    assert normalized["issue_closure_reviews"] == []
+    assert warnings == [
+        "Dropped issue_closure_reviews[1] because it referenced an unknown prior open ID: AR-999."
+    ]
 
 
 def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insufficient(
@@ -5015,15 +5196,15 @@ def test_analysis_review_runner_accepts_bounded_third_secondary_seam_with_analys
     assert summary["verdict"] == "accepted"
     _assert_canonical_analysis_review_status(
         summary,
-        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_primary_seam_id=_SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
         expected_secondary_seam_ids=[
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
-            "release-watch-owner-overflow",
-            "release-watch-spec-overflow",
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+            _OVERFLOW_OWNER_CANONICAL_SEAM_ID,
+            _OVERFLOW_SPEC_CANONICAL_SEAM_ID,
         ],
         expected_binding_seam_ids=[
-            _PRIMARY_SEAM_ID,
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
         ],
         expected_scope_escape_paths=[
             "docs/project_management/next/codex-cli-parity/C1-spec.md"
@@ -5064,15 +5245,15 @@ def test_analysis_review_runner_uses_final_reviser_scope_escapes_as_canonical_so
     assert summary["verdict"] == "accepted"
     _assert_canonical_analysis_review_status(
         summary,
-        expected_primary_seam_id=_PRIMARY_SEAM_ID,
+        expected_primary_seam_id=_SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
         expected_secondary_seam_ids=[
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
-            "release-watch-owner-overflow",
-            "release-watch-spec-overflow",
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+            _OVERFLOW_OWNER_CANONICAL_SEAM_ID,
+            _OVERFLOW_SPEC_CANONICAL_SEAM_ID,
         ],
         expected_binding_seam_ids=[
-            _PRIMARY_SEAM_ID,
-            _SECONDARY_RELEASE_WATCH_SEAM_ID,
+            _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+            _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
         ],
         expected_scope_escape_paths=[
             "docs/project_management/next/codex-cli-parity/C1-spec.md"

@@ -1,0 +1,64 @@
+{
+  "ok": true,
+  "bounded_summary": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260426T183911Z-recommend_automation_improvements-7c63958a/summary.json",
+  "trust_summary": "/Users/spensermcconnell/__Active_Code/forge/.forge-harness-runs/20260426T183914Z-recommend_automation_improvements-2381f280/summary.json",
+  "checks": {
+    "primary_seam_id": {
+      "ok": true,
+      "bounded": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f",
+      "trust": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+    },
+    "primary_seam_paths": {
+      "ok": true,
+      "bounded": [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml"
+      ],
+      "trust": [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml"
+      ]
+    },
+    "secondary_seam_ids": {
+      "ok": true,
+      "bounded": [],
+      "trust": []
+    },
+    "recommendation_seam_bindings": {
+      "ok": true,
+      "bounded": [
+        {
+          "recommendation_index": 1,
+          "seam_id": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+        },
+        {
+          "recommendation_index": 2,
+          "seam_id": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+        },
+        {
+          "recommendation_index": 3,
+          "seam_id": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+        }
+      ],
+      "trust": [
+        {
+          "recommendation_index": 1,
+          "seam_id": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+        },
+        {
+          "recommendation_index": 2,
+          "seam_id": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+        },
+        {
+          "recommendation_index": 3,
+          "seam_id": "claude-code-release-watch-claude-code-update-sna-3358d3f2c48f"
+        }
+      ]
+    }
+  },
+  "mismatches": []
+}

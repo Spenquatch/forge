@@ -397,6 +397,11 @@ def _seam_selection_guidance_block(contract: AnalysisReviewContract) -> str:
         "Seam selection guidance:",
         "- Use `primary_seam` as the canonical run-context seam.",
         (
+            "- Treat seam identity as normalized path-set identity: if two seam "
+            "descriptions cover the same normalized paths, they are the same seam "
+            "and should not receive different labels."
+        ),
+        (
             "- Exhaust the primary seam before expanding; use "
             "`secondary_seams_considered` only for seams you actually declared "
             "or inspected beyond the primary seam."

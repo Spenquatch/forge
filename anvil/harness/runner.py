@@ -2752,6 +2752,13 @@ class HarnessRunner:
             try:
                 normalized = candidate.resolve(strict=False).relative_to(self.workspace).as_posix()
             except ValueError:
+                if normalized.startswith("/.") and not normalized.startswith("//"):
+                    normalized = posixpath.normpath(normalized.lstrip("/"))
+                    if normalized == ".":
+                        return ""
+                    while normalized.startswith("./"):
+                        normalized = normalized[2:]
+                    return normalized
                 return candidate.as_posix()
         else:
             normalized = posixpath.normpath(normalized)
@@ -3389,11 +3396,26 @@ class HarnessRunner:
             closure_reviews = normalized.get(field_name)
             if not isinstance(closure_reviews, list):
                 continue
+            prior_open_ids = {
+                str(item.get(id_field) or "").strip()
+                for item in (
+                    prior_open_issue_records
+                    if field_name == "issue_closure_reviews"
+                    else prior_open_topic_records
+                )
+                if str(item.get(id_field) or "").strip()
+            }
+            filtered_closure_reviews: list[dict[str, Any]] = []
             for index, item in enumerate(closure_reviews, start=1):
                 if not isinstance(item, dict):
                     continue
                 record_id = str(item.get(id_field) or "").strip()
                 if record_id:
+                    if prior_open_ids and record_id not in prior_open_ids:
+                        warnings.append(
+                            f"Dropped {field_name}[{index}] because it referenced an unknown prior open ID: {record_id}."
+                        )
+                        continue
                     item[id_field] = record_id
                 for ref_field_name in ("checked_files", "verified_evidence_refs"):
                     values = self._normalize_workspace_ref_list(item.get(ref_field_name))
@@ -3401,6 +3423,8 @@ class HarnessRunner:
                         values = self._dedupe_preserving_order(values)
                         item[ref_field_name] = values
                         normalized_refs[f"{field_name}[{index}].{ref_field_name}"] = values
+                filtered_closure_reviews.append(item)
+            normalized[field_name] = filtered_closure_reviews
 
         recommendations = normalized.get("recommendations")
         if isinstance(recommendations, list):
@@ -3442,6 +3466,8 @@ class HarnessRunner:
                                 f"recommendations[{index}].review_surface.{field_name}"
                             ] = values
 
+        self._canonicalize_analysis_payload_seams(normalized=normalized)
+
         scope_escapes = normalized.get("scope_escapes")
         if isinstance(scope_escapes, list):
             for index, item in enumerate(scope_escapes, start=1):
@@ -3472,6 +3498,62 @@ class HarnessRunner:
             )
 
         return (normalized, payload_provenance, warnings)
+
+    def _canonicalize_analysis_payload_seams(self, *, normalized: dict[str, Any]) -> None:
+        primary_seam = normalized.get("primary_seam")
+        secondary_seams = normalized.get("secondary_seams_considered")
+        recommendations = normalized.get("recommendations")
+        if not isinstance(primary_seam, dict) or not isinstance(secondary_seams, list):
+            return
+
+        seam_entries: list[dict[str, Any]] = [primary_seam]
+        seam_entries.extend(item for item in secondary_seams if isinstance(item, dict))
+
+        old_to_canonical: dict[str, str] = {}
+        ambiguous_old_ids: set[str] = set()
+        for seam in seam_entries:
+            normalized_paths = self._dedupe_preserving_order(
+                self._normalize_workspace_ref_list(seam.get("paths"))
+            )
+            if normalized_paths:
+                seam["paths"] = normalized_paths
+                canonical_seam_id = self._canonical_seam_id_for_paths(normalized_paths)
+                old_seam_id = str(seam.get("seam_id") or "").strip()
+                seam["seam_id"] = canonical_seam_id
+                if old_seam_id:
+                    existing = old_to_canonical.get(old_seam_id)
+                    if existing is not None and existing != canonical_seam_id:
+                        ambiguous_old_ids.add(old_seam_id)
+                    else:
+                        old_to_canonical[old_seam_id] = canonical_seam_id
+
+        for seam_id in ambiguous_old_ids:
+            old_to_canonical.pop(seam_id, None)
+
+        if not isinstance(recommendations, list):
+            return
+
+        for item in recommendations:
+            if not isinstance(item, dict):
+                continue
+            old_seam_id = str(item.get("seam_id") or "").strip()
+            canonical_seam_id = old_to_canonical.get(old_seam_id)
+            if canonical_seam_id:
+                item["seam_id"] = canonical_seam_id
+
+    @staticmethod
+    def _canonical_seam_id_for_paths(paths: list[str]) -> str:
+        normalized_paths = sorted({str(path).strip() for path in paths if str(path).strip()})
+        if not normalized_paths:
+            return "seam-empty"
+
+        stem_prefix = slugify("-".join(Path(path).stem for path in normalized_paths))[:48].strip(
+            "-._"
+        )
+        digest = hashlib.sha1("\n".join(normalized_paths).encode("utf-8")).hexdigest()[:12]
+        if stem_prefix:
+            return f"{stem_prefix}-{digest}"
+        return f"seam-{digest}"
 
     @staticmethod
     def _canonical_stage_role_name(role_name: str) -> str:

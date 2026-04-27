@@ -242,6 +242,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     shared_seam_lines = [
         "Seam selection guidance:",
         "Use `primary_seam` as the canonical run-context seam.",
+        "Treat seam identity as normalized path-set identity: if two seam descriptions cover the same normalized paths, they are the same seam and should not receive different labels.",
         "Exhaust the primary seam before expanding; use `secondary_seams_considered` only for seams you actually declared or inspected beyond the primary seam.",
         "Bind every recommendation with `recommendations[*].seam_id`; when that seam expands beyond the primary seam, populate `recommendations[*].seam_expansion_reason`.",
         "default bounded cap is 2; declaring or inspecting a third secondary seam requires a recorded scope_escape; overflow is never silently normalized away.",
