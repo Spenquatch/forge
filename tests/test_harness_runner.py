@@ -18,9 +18,7 @@ _PRIMARY_SEAM_PATHS = [
     ".github/workflows/codex-cli-release-watch.yml",
     "docs/project_management/next/codex-cli-parity/C1-spec.md",
 ]
-_SIMPLE_PRIMARY_SEAM_PATHS = [
-    ".github/workflows/codex-cli-release-watch.yml"
-]
+_SIMPLE_PRIMARY_SEAM_PATHS = [".github/workflows/codex-cli-release-watch.yml"]
 _SECONDARY_RELEASE_WATCH_SEAM_PATHS = [
     ".github/workflows/claude-code-release-watch.yml"
 ]
@@ -149,7 +147,9 @@ def _assert_canonical_analysis_review_status(
         for item in bindings
     )
     expected_scope_escape_paths = expected_scope_escape_paths or []
-    assert [item["path"] for item in status["scope_escapes"]] == expected_scope_escape_paths
+    assert [
+        item["path"] for item in status["scope_escapes"]
+    ] == expected_scope_escape_paths
     nested_status = summary["run_details"].get("analysis_review_status")
     if isinstance(nested_status, dict):
         assert nested_status == status
@@ -213,9 +213,7 @@ def _corroboration_recommendations() -> list[dict[str, object]]:
             "proposed_change": "Add a workflow-level concurrency group keyed by workflow and ref.",
             "confidence": 0.91,
             "review_surface": _AcceptingHarnessAdapter._review_surface(
-                must_check_files=[
-                    ".github/workflows/codex-cli-release-watch.yml"
-                ],
+                must_check_files=[".github/workflows/codex-cli-release-watch.yml"],
                 optional_check_files=[
                     ".github/workflows/claude-code-release-watch.yml"
                 ],
@@ -240,9 +238,7 @@ def _corroboration_recommendations() -> list[dict[str, object]]:
                     ".github/workflows/claude-code-update-snapshot.yml",
                     ".github/workflows/codex-cli-update-snapshot.yml",
                 ],
-                optional_check_files=[
-                    ".github/workflows/codex-cli-release-watch.yml"
-                ],
+                optional_check_files=[".github/workflows/codex-cli-release-watch.yml"],
                 scope_note="Compare the release-watch timeout guidance against the sibling snapshot pair so the like-for-like parity seam includes the prepare path.",
             ),
         },
@@ -255,9 +251,7 @@ def _corroboration_recommendations() -> list[dict[str, object]]:
             "proposed_change": "Add the alert-routing owner and escalation path to the release-watch documentation.",
             "confidence": 0.76,
             "review_surface": _AcceptingHarnessAdapter._review_surface(
-                must_check_files=[
-                    ".github/workflows/codex-cli-release-watch.yml"
-                ],
+                must_check_files=[".github/workflows/codex-cli-release-watch.yml"],
                 optional_check_files=[],
                 scope_note="Keep the review bounded to the existing release-watch escalation path.",
             ),
@@ -321,7 +315,9 @@ def _build_corroboration_review_payload(
     return payload
 
 
-def _trust_recommendation_metadata(*, inference_backed_indices: set[int]) -> dict[int, dict[str, object]]:
+def _trust_recommendation_metadata(
+    *, inference_backed_indices: set[int]
+) -> dict[int, dict[str, object]]:
     direct_grounding = {
         1: {
             "verified_evidence_refs": [
@@ -338,9 +334,7 @@ def _trust_recommendation_metadata(*, inference_backed_indices: set[int]) -> dic
             ],
         },
         2: {
-            "verified_evidence_refs": [
-                ".github/workflows/codex-cli-release-watch.yml"
-            ],
+            "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
             "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
             "affected_files": [".github/workflows/codex-cli-release-watch.yml"],
         },
@@ -363,9 +357,7 @@ def _trust_recommendation_metadata(*, inference_backed_indices: set[int]) -> dic
             ],
         },
         4: {
-            "verified_evidence_refs": [
-                ".github/workflows/codex-cli-release-watch.yml"
-            ],
+            "verified_evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
             "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
             "affected_files": [".github/workflows/codex-cli-release-watch.yml"],
         },
@@ -769,6 +761,24 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
 class _NoViableFocusHarnessAdapter(_FocusGateHarnessAdapter):
     def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
         return self._no_viable_focus_decision()
+
+
+class _MismatchSelectsOnRecordedReaskHarnessAdapter(_FocusGateHarnessAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.focus_gate_calls = 0
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        if "Gate path: deliberate" not in prompt_text:
+            return self._selected_focus_decision()
+        self.focus_gate_calls += 1
+        if self.focus_gate_calls == 1:
+            return self._clarification_focus_decision()
+        return {
+            **self._selected_focus_decision(),
+            "gate_path": "deliberate",
+            "focus_type": "seam",
+        }
 
 
 class _DriftingFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
@@ -1434,7 +1444,9 @@ class _ReviserOnlyScopedOverflowHarnessAdapter(_AcceptingHarnessAdapter):
                     "seam_id": "release-watch-spec-overflow",
                     "summary": "A third bounded secondary seam anchored to the parity spec.",
                     "why_not_primary": "It is only needed after the revision expands the corroboration seam to the governing parity spec.",
-                    "paths": ["docs/project_management/next/codex-cli-parity/C1-spec.md"],
+                    "paths": [
+                        "docs/project_management/next/codex-cli-parity/C1-spec.md"
+                    ],
                 }
             )
         return secondary_seams
@@ -2432,9 +2444,9 @@ def _task_focus_gate_answer_block(
 ) -> str:
     return (
         "focus_gate_answer:\n"
-        f"  question_prompt: \"{question_prompt}\"\n"
-        f"  selected_option: \"{selected_option}\"\n"
-        f"  freeform_answer: \"{freeform_answer}\"\n"
+        f'  question_prompt: "{question_prompt}"\n'
+        f'  selected_option: "{selected_option}"\n'
+        f'  freeform_answer: "{freeform_answer}"\n'
     )
 
 
@@ -2616,6 +2628,7 @@ def test_analysis_review_runner_focus_gate_selected_records_stage_and_prompt_han
     assert focus_stage["role_name"] == "focus_gate"
     assert focus_stage["requested_access"] == "read"
     assert focus_stage["effective_access"] == "read"
+    assert focus_stage["round_index"] == 0
     assert focus_stage["stage_index"] < proposer_stage["stage_index"]
     assert focus_stage["metadata"]["focus_gate"] == {
         "gate_path": "adjudicate",
@@ -2657,7 +2670,9 @@ def test_analysis_review_runner_focus_gate_clarification_blocks_before_proposer(
     assert summary["verdict"] == "blocked_for_clarification"
     assert summary["verdicts"]["content_verdict"] == "blocked_for_clarification"
     assert summary["verdicts"]["validator_verdict"] == "not_run"
-    assert summary["final_summary"] == "Focus gate blocked the run pending clarification."
+    assert (
+        summary["final_summary"] == "Focus gate blocked the run pending clarification."
+    )
     assert summary["failure_details"] == {
         "stage": "focus_gate",
         "decision_state": "clarification_requested",
@@ -2667,6 +2682,7 @@ def test_analysis_review_runner_focus_gate_clarification_blocks_before_proposer(
     }
     assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
     assert summary["agent_stages"][-1]["role_name"] == "focus_gate"
+    assert summary["agent_stages"][0]["round_index"] == 0
     assert summary["validator_rounds"] == []
     assert not summary.get("analysis_review_status")
     assert Path(summary["artifacts"]["summary_json"]).exists()
@@ -2701,7 +2717,10 @@ def test_analysis_review_runner_focus_gate_no_viable_blocks_before_proposer(
     assert summary["verdict"] == "no_viable_focus"
     assert summary["verdicts"]["content_verdict"] == "no_viable_focus"
     assert summary["verdicts"]["validator_verdict"] == "not_run"
-    assert summary["final_summary"] == "Focus gate could not identify a viable focus target."
+    assert (
+        summary["final_summary"]
+        == "Focus gate could not identify a viable focus target."
+    )
     assert summary["failure_details"] == {
         "stage": "focus_gate",
         "decision_state": "no_viable_focus",
@@ -2746,13 +2765,15 @@ def test_analysis_review_runner_focus_gate_matching_rerun_answer_uses_adjudicate
 
     assert summary["verdict"] == "accepted"
     assert focus_stage["structured_output"]["gate_path"] == "adjudicate"
-    assert [stage["role_name"] for stage in summary["agent_stages"]].count("focus_gate") == 1
+    assert [stage["role_name"] for stage in summary["agent_stages"]].count(
+        "focus_gate"
+    ) == 1
     assert len(adapter.prompt_texts["focus_gate"]) == 2
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
     assert "Gate path: adjudicate" in adapter.prompt_texts["focus_gate"][1]
 
 
-def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_and_blocks(
+def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_recorded_reask(
     tmp_path,
     monkeypatch,
 ):
@@ -2763,6 +2784,92 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_a
         task_focus_gate_answer=_task_focus_gate_answer_block(
             question_prompt="Which seam should this run prioritize?",
             selected_option="unknown-seam",
+        ),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _MismatchSelectsOnRecordedReaskHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    focus_stage = summary["agent_stages"][0]
+    focus_envelope = json.loads(
+        Path(focus_stage["stdout_path"])
+        .with_name("run.envelope.json")
+        .read_text(encoding="utf-8")
+    )
+
+    assert summary["verdict"] == "blocked_for_clarification"
+    assert summary["verdicts"]["content_verdict"] == "blocked_for_clarification"
+    assert summary["verdicts"]["validator_verdict"] == "not_run"
+    assert (
+        summary["final_summary"] == "Focus gate blocked the run pending clarification."
+    )
+    assert summary["failure_details"]["stage"] == "focus_gate"
+    assert summary["failure_details"]["decision_state"] == "clarification_requested"
+    assert summary["failure_details"]["question"] == focus_decision["question"]
+    assert summary["failure_details"]["candidates"] == focus_decision["candidates"]
+    assert summary["failure_details"]["warnings"] == focus_decision["warnings"]
+    assert summary["focus_decision"]["decision_state"] == "clarification_requested"
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
+    assert focus_stage["round_index"] == 0
+    assert (
+        focus_stage["structured_output"]["decision_state"] == "clarification_requested"
+    )
+    assert focus_stage["structured_output"]["gate_path"] == "deliberate"
+    assert (
+        focus_stage["metadata"]["focus_gate"]["decision_state"]
+        == "clarification_requested"
+    )
+    assert focus_stage["metadata"]["focus_gate"]["gate_path"] == "deliberate"
+    assert focus_stage["metadata"]["focus_gate"]["focus_type"] == "seam"
+    assert (
+        focus_decision["question"]["prompt"] == "Which seam should this run prioritize?"
+    )
+    assert (
+        focus_envelope["structured_output"]["decision_state"]
+        == "clarification_requested"
+    )
+    assert (
+        focus_envelope["metadata"]["focus_gate"]["decision_state"]
+        == "clarification_requested"
+    )
+    assert summary["validator_rounds"] == []
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert len(adapter.prompt_texts["focus_gate"]) == 2
+    assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
+    assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][1]
+
+
+@pytest.mark.parametrize(
+    ("question_prompt", "selected_option"),
+    [
+        ("Which seam should this run prioritize?", "unknown-seam"),
+        ("Which seam is stale?", _SIMPLE_PRIMARY_CANONICAL_SEAM_ID),
+    ],
+)
+def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_and_blocks(
+    tmp_path,
+    monkeypatch,
+    question_prompt,
+    selected_option,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        task_focus_gate_answer=_task_focus_gate_answer_block(
+            question_prompt=question_prompt,
+            selected_option=selected_option,
         ),
         strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
     )
@@ -2779,11 +2886,34 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_reasks_once_a
     )
 
     summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    focus_stage = summary["agent_stages"][0]
 
     assert summary["verdict"] == "blocked_for_clarification"
+    assert summary["verdicts"]["content_verdict"] == "blocked_for_clarification"
+    assert summary["verdicts"]["validator_verdict"] == "not_run"
+    assert (
+        summary["final_summary"] == "Focus gate blocked the run pending clarification."
+    )
+    assert summary["failure_details"]["stage"] == "focus_gate"
+    assert summary["failure_details"]["decision_state"] == "clarification_requested"
+    assert summary["failure_details"]["question"] == focus_decision["question"]
+    assert summary["failure_details"]["candidates"] == focus_decision["candidates"]
+    assert summary["failure_details"]["warnings"] == focus_decision["warnings"]
+    assert summary["focus_decision"]["decision_state"] == "clarification_requested"
     assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
-    assert summary["agent_stages"][0]["structured_output"]["gate_path"] == "deliberate"
+    assert focus_stage["round_index"] == 0
+    assert (
+        focus_stage["structured_output"]["decision_state"] == "clarification_requested"
+    )
+    assert (
+        focus_stage["metadata"]["focus_gate"]["decision_state"]
+        == "clarification_requested"
+    )
+    assert focus_stage["metadata"]["focus_gate"]["gate_path"] == "deliberate"
+    assert focus_stage["metadata"]["focus_gate"]["focus_type"] == "seam"
     assert summary["validator_rounds"] == []
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
     assert len(adapter.prompt_texts["focus_gate"]) == 2
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][0]
     assert "Gate path: deliberate" in adapter.prompt_texts["focus_gate"][1]
@@ -2818,8 +2948,7 @@ def test_analysis_review_runner_focus_gate_selected_seam_drift_fails_semantic_va
     assert proposer_stage["role_name"] == "proposer"
     assert proposer_stage["failure_kind"] == "semantic_validation_error"
     assert any(
-        "primary_seam.seam_id drifted from the selected focus gate seam"
-        in error
+        "primary_seam.seam_id drifted from the selected focus gate seam" in error
         for error in proposer_stage["semantic_validation_errors"]
     )
 
@@ -3101,9 +3230,9 @@ def test_analysis_review_runner_bounded_and_trust_modes_keep_canonical_seam_cont
         _canonical_seam_context(bounded_summary)["primary_seam"]["seam_id"]
         == _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID
     )
-    assert bounded_summary["analysis_review_status"]["recommendation_admissibility"] != (
-        trust_summary["analysis_review_status"]["recommendation_admissibility"]
-    )
+    assert bounded_summary["analysis_review_status"][
+        "recommendation_admissibility"
+    ] != (trust_summary["analysis_review_status"]["recommendation_admissibility"])
     assert bounded_summary["analysis_review_status"]["publishability"] != (
         trust_summary["analysis_review_status"]["publishability"]
     )
@@ -3196,12 +3325,18 @@ def test_analysis_review_runner_publishable_pair_can_still_drift_on_canonical_se
     assert trust_summary["verdict"] == "accepted"
     assert bounded_summary["artifacts"]["final_artifact_kind"] == "final_answer"
     assert trust_summary["artifacts"]["final_artifact_kind"] == "final_answer"
-    assert bounded_summary["analysis_review_status"]["publishability"][
-        "final_answer_publishable"
-    ] is True
-    assert trust_summary["analysis_review_status"]["publishability"][
-        "final_answer_publishable"
-    ] is True
+    assert (
+        bounded_summary["analysis_review_status"]["publishability"][
+            "final_answer_publishable"
+        ]
+        is True
+    )
+    assert (
+        trust_summary["analysis_review_status"]["publishability"][
+            "final_answer_publishable"
+        ]
+        is True
+    )
     assert _canonical_seam_context(bounded_summary) != _canonical_seam_context(
         trust_summary
     )
@@ -3274,9 +3409,9 @@ def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_
     assert summary["analysis_review_status"][
         "accepted_recommendations_with_inferred_grounding"
     ] == [3]
-    assert summary["analysis_review_status"][
-        "accepted_recommendations_with_caveats"
-    ] == []
+    assert (
+        summary["analysis_review_status"]["accepted_recommendations_with_caveats"] == []
+    )
     assert summary["analysis_review_status"]["recommendation_admissibility"] == {
         "final_answer_recommendation_indices": [1, 2, 4],
         "partial_only_recommendation_indices": [3],
@@ -3329,8 +3464,7 @@ def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_
         recommendation_reviews = stage["structured_output"]["recommendation_reviews"]
         assert all(item["verdict"] == "accept" for item in recommendation_reviews)
         assert not any(
-            item["verdict"] == "accept_with_caveat"
-            for item in recommendation_reviews
+            item["verdict"] == "accept_with_caveat" for item in recommendation_reviews
         )
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
@@ -3780,7 +3914,9 @@ def test_analysis_review_runner_normalizes_workspace_like_leading_slash_refs(
     )
 
     assert (
-        runner._normalize_workspace_ref("/.github/workflows/codex-cli-release-watch.yml")
+        runner._normalize_workspace_ref(
+            "/.github/workflows/codex-cli-release-watch.yml"
+        )
         == ".github/workflows/codex-cli-release-watch.yml"
     )
 
@@ -4349,7 +4485,11 @@ def test_analysis_review_status_marks_trust_inferred_acceptance_as_partial_only(
     ("grounding_mode", "verdict", "expected_reasons"),
     [
         ("mixed", "accept_with_caveat", ["accepted_with_caveat"]),
-        ("inferred", "accept_with_caveat", ["accepted_with_caveat", "inferred_grounding"]),
+        (
+            "inferred",
+            "accept_with_caveat",
+            ["accepted_with_caveat", "inferred_grounding"],
+        ),
     ],
 )
 def test_analysis_review_status_marks_split_trust_sibling_recommendation_as_partial_only(
@@ -4375,16 +4515,15 @@ def test_analysis_review_status_marks_split_trust_sibling_recommendation_as_part
         content_verdict="accepted_with_warnings",
     )
 
-    assert (
-        status["recommendation_admissibility"]["final_answer_recommendation_indices"]
-        == [1]
-    )
+    assert status["recommendation_admissibility"][
+        "final_answer_recommendation_indices"
+    ] == [1]
     assert status["recommendation_admissibility"][
         "partial_only_recommendation_indices"
     ] == [2]
-    assert status["recommendation_admissibility"][
-        "excluded_recommendation_indices"
-    ] == []
+    assert (
+        status["recommendation_admissibility"]["excluded_recommendation_indices"] == []
+    )
     assert status["recommendation_admissibility"][
         "reasons_by_recommendation_index"
     ] == {
@@ -5629,7 +5768,9 @@ def test_analysis_review_runner_rejects_bounded_secondary_seam_overflow_without_
 
     assert summary["verdict"] == "harness_error"
     proposer_stage = summary["agent_stages"][0]
-    assert len(proposer_stage["structured_output"]["secondary_seams_considered"]) == 2 + 1
+    assert (
+        len(proposer_stage["structured_output"]["secondary_seams_considered"]) == 2 + 1
+    )
     assert any(
         error
         == "secondary_seams_considered[3] requires scope_escapes coverage for every declared third-seam path: docs/project_management/next/codex-cli-parity/C1-spec.md"
