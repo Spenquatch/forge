@@ -142,6 +142,8 @@ Artifact rules:
 - `question.prompt` and `question.options` are required for `clarification_requested`; otherwise `question` serializes as `{ "prompt": "", "options": [] }`
 - `candidates` may be empty only for `no_viable_focus`
 - every `candidates[*]` item carries `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`; when `selected`, the chosen candidate's normalized `candidate_paths` must equal `selected_focus_paths`
+- model-authored candidate shortlists must not include multiple entries whose normalized `candidate_paths` collapse to the same canonical seam ID
+- runner normalization collapses duplicate canonical candidate groups before semantic validation, then caps the final normalized `candidates` list at 3 total items
 - `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise
 - blocked runs may omit `analysis_review_status`, but they still persist `focus_decision`, emit `summary.json`, and emit `REPORT.md`
 - deliberate runs persist three focus-stage artifacts with exact filenames: `structured_output.raw.json`, `structured_output.normalized.json`, and `run.envelope.json`

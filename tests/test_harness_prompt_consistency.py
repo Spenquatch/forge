@@ -14,6 +14,7 @@ from anvil.harness.prompts import (
     build_analysis_reviser_prompt,
     build_focus_gate_adjudicate_prompt,
     build_focus_gate_deliberate_prompt,
+    build_focus_probe_prompt,
 )
 from anvil.harness.types import StrategyConfig, TaskSpec
 
@@ -713,12 +714,14 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
 
     assert "build_focus_gate_prompt" not in prompt_builders.__all__
 
-    assert "You are the FOCUS_GATE stage in an analysis-review harness." in deliberate_prompt
+    assert (
+        "You are the FOCUS_GATE stage in an analysis-review harness."
+        in deliberate_prompt
+    )
     assert "Gate path: deliberate" in deliberate_prompt
     assert "Focus gate output rules:" in deliberate_prompt
     assert (
-        "Set `gate_path` to exactly `adjudicate` or `deliberate`."
-        in deliberate_prompt
+        "Set `gate_path` to exactly `adjudicate` or `deliberate`." in deliberate_prompt
     )
     assert "Set `focus_type` to exactly `seam`." in deliberate_prompt
     assert (
@@ -726,11 +729,15 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
         in deliberate_prompt
     )
     assert (
-        "When not `clarification_requested`, serialize `question` exactly as `{ \"prompt\": \"\", \"options\": [] }`."
+        'When not `clarification_requested`, serialize `question` exactly as `{ "prompt": "", "options": [] }`.'
         in deliberate_prompt
     )
     assert (
         "Every `candidates[*]` item must include a non-empty `candidate_paths` array"
+        in deliberate_prompt
+    )
+    assert (
+        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity."
         in deliberate_prompt
     )
     assert (
@@ -754,8 +761,7 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
     )
     assert (
         "Ignore probe-only, rerun-answer, and stale-answer behaviors in this path; "
-        "they do not apply here."
-        in adjudicate_prompt
+        "they do not apply here." in adjudicate_prompt
     )
     assert "Focus gate probe artifact:" not in adjudicate_prompt
     assert "Prior focus decision:" not in adjudicate_prompt
@@ -763,6 +769,10 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
     assert "Stale answer context:" not in adjudicate_prompt
     assert (
         "Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`."
+        in adjudicate_prompt
+    )
+    assert (
+        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity."
         in adjudicate_prompt
     )
 
@@ -841,6 +851,26 @@ def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prom
     for line in expected_lines:
         assert line in proposer
         assert line in reviser
+
+
+def test_focus_probe_prompt_forbids_duplicate_canonical_candidate_path_sets():
+    task = _task()
+    strategy = _strategy()
+    contract = build_analysis_review_contract(task, strategy)
+
+    prompt = build_focus_probe_prompt(
+        task,
+        strategy.prompt_preamble,
+        _GIT_SNAPSHOT,
+        contract,
+    )
+
+    assert "Probe rules:" in prompt
+    assert "Candidate count caps at 3." in prompt
+    assert (
+        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity."
+        in prompt
+    )
 
 
 def test_non_selected_focus_gate_decision_is_not_injected_into_analysis_prompts():

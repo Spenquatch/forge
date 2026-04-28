@@ -180,6 +180,10 @@ def _focus_gate_output_rules_block() -> str:
                 "seam identity implied by their `candidate_paths`."
             ),
             (
+                "- Do not emit multiple candidates whose normalized "
+                "`candidate_paths` collapse to the same canonical seam identity."
+            ),
+            (
                 "- Every `candidates[*]` item must include `why_candidate`, "
                 "`evidence_refs`, and `score`."
             ),
@@ -203,11 +207,11 @@ def _focus_gate_output_rules_block() -> str:
                 "`selected_focus_id=null`, `selected_focus_summary=null`, "
                 "`selected_focus_paths=[]`, "
                 "`adapter_plan.primary_focus_id=null`, and serialize "
-                "`question` exactly as `{ \"prompt\": \"\", \"options\": [] }`."
+                '`question` exactly as `{ "prompt": "", "options": [] }`.'
             ),
             (
                 "- When not `clarification_requested`, serialize `question` exactly "
-                "as `{ \"prompt\": \"\", \"options\": [] }`."
+                'as `{ "prompt": "", "options": [] }`.'
             ),
             (
                 "- When not `selected`, serialize `selected_focus_paths` exactly "
@@ -238,6 +242,7 @@ def _focus_probe_rules_block() -> str:
             "- `checked_files` must contain the concrete repo files the probe inspected.",
             "- `checked_files` caps at 6.",
             "- Candidate count caps at 3.",
+            "- Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity.",
             "- Every candidate must include `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`.",
             "- Each candidate `score` is a float in `[0.0, 1.0]`.",
             "- Each `evidence_refs` entry must be a path-only ref that also appears in `checked_files`.",
@@ -283,7 +288,9 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
         return ""
 
     selected_focus_id = str(focus_decision.get("selected_focus_id") or "").strip()
-    selected_focus_summary = str(focus_decision.get("selected_focus_summary") or "").strip()
+    selected_focus_summary = str(
+        focus_decision.get("selected_focus_summary") or ""
+    ).strip()
     selected_focus_paths = [
         str(path).strip()
         for path in (focus_decision.get("selected_focus_paths") or [])
@@ -308,7 +315,11 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
         f"- selected_focus_summary: {selected_focus_summary or '(missing summary)'}",
         (
             "- selected_focus_paths: "
-            + (", ".join(selected_focus_paths) if selected_focus_paths else "(missing paths)")
+            + (
+                ", ".join(selected_focus_paths)
+                if selected_focus_paths
+                else "(missing paths)"
+            )
         ),
         f"- shortlisted_candidate_ids: {shortlisted_ids}",
         (
@@ -601,7 +612,7 @@ def _trust_recommendation_atomicity_block(
             "with weaker optional hardening."
         ),
         (
-            "- Reserve `grounding_mode=\"mixed\"` for truly inseparable "
+            '- Reserve `grounding_mode="mixed"` for truly inseparable '
             "single-action recommendations, not convenient bundling of a direct "
             "half and an inferred half."
         ),
@@ -745,9 +756,7 @@ def _role_specific_seam_review_guidance_block(role: str) -> str:
             ),
         ],
     }
-    return "\n".join(
-        ["Role-specific seam-review guidance:", *role_lines[role]]
-    )
+    return "\n".join(["Role-specific seam-review guidance:", *role_lines[role]])
 
 
 def _repo_local_discovery_guidance_block(

@@ -75,6 +75,7 @@ from .types import (
 from .validation import preflight_validators, run_validators
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+_FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
@@ -4130,7 +4131,10 @@ class HarnessRunner:
             return []
         checked_file_set = set(checked_files)
         normalized_candidates: list[dict[str, Any]] = []
-        for item in candidates[:3]:
+        candidate_group_indices: dict[str, int] = {}
+        merged_evidence_refs_by_index: list[list[str]] = []
+        representative_scores: list[float | None] = []
+        for item in candidates:
             if not isinstance(item, dict):
                 continue
             normalized_candidate = deepcopy(item)
@@ -4138,10 +4142,10 @@ class HarnessRunner:
                 self._normalize_workspace_ref_list(item.get("candidate_paths"))
             )
             normalized_candidate["candidate_paths"] = candidate_paths
+            canonical_focus_id: str | None = None
             if candidate_paths:
-                normalized_candidate["focus_id"] = self._canonical_seam_id_for_paths(
-                    candidate_paths
-                )
+                canonical_focus_id = self._canonical_seam_id_for_paths(candidate_paths)
+                normalized_candidate["focus_id"] = canonical_focus_id
             evidence_refs = self._dedupe_preserving_order(
                 self._normalize_workspace_ref_list(item.get("evidence_refs"))
             )
@@ -4151,10 +4155,48 @@ class HarnessRunner:
                 ]
             else:
                 evidence_refs = []
+            candidate_score: float | None
+            raw_score = normalized_candidate.get("score")
+            if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
+                candidate_score = float(raw_score)
+            else:
+                candidate_score = None
+
+            if canonical_focus_id:
+                existing_index = candidate_group_indices.get(canonical_focus_id)
+                if existing_index is not None:
+                    merged_refs = self._dedupe_preserving_order(
+                        merged_evidence_refs_by_index[existing_index] + evidence_refs
+                    )
+                    merged_evidence_refs_by_index[existing_index] = merged_refs
+                    existing_score = representative_scores[existing_index]
+                    should_replace = candidate_score is not None and (
+                        existing_score is None or candidate_score > existing_score
+                    )
+                    if should_replace:
+                        normalized_candidate["evidence_refs"] = merged_refs[
+                            :_FOCUS_MAX_EVIDENCE_REFS
+                        ]
+                        normalized_candidates[existing_index] = normalized_candidate
+                        representative_scores[existing_index] = candidate_score
+                    else:
+                        normalized_candidates[existing_index]["evidence_refs"] = (
+                            merged_refs[:_FOCUS_MAX_EVIDENCE_REFS]
+                        )
+                    continue
+                if len(normalized_candidates) >= _FOCUS_MAX_CANDIDATES:
+                    continue
+                candidate_group_indices[canonical_focus_id] = len(normalized_candidates)
+            else:
+                if len(normalized_candidates) >= _FOCUS_MAX_CANDIDATES:
+                    continue
+
             normalized_candidate["evidence_refs"] = evidence_refs[
                 :_FOCUS_MAX_EVIDENCE_REFS
             ]
             normalized_candidates.append(normalized_candidate)
+            merged_evidence_refs_by_index.append(evidence_refs)
+            representative_scores.append(candidate_score)
         return normalized_candidates
 
     def _normalize_focus_gate_probe_payload(
@@ -4225,7 +4267,10 @@ class HarnessRunner:
             normalized["question"] = {"prompt": prompt, "options": candidate_ids}
         if gate_path == "adjudicate":
             question = normalized.get("question")
-            if isinstance(question, dict) and decision_state != "clarification_requested":
+            if (
+                isinstance(question, dict)
+                and decision_state != "clarification_requested"
+            ):
                 normalized["question"] = {"prompt": "", "options": []}
         del expected_gate_path
         return normalized
@@ -4242,7 +4287,11 @@ class HarnessRunner:
                 continue
             focus_id = str(item.get("focus_id") or "").strip()
             score = item.get("score")
-            if focus_id and isinstance(score, (int, float)) and not isinstance(score, bool):
+            if (
+                focus_id
+                and isinstance(score, (int, float))
+                and not isinstance(score, bool)
+            ):
                 score_map[focus_id] = float(score)
         return score_map
 
@@ -4285,7 +4334,10 @@ class HarnessRunner:
             return None
         if best_other["score"] >= 0.80:
             return best_other
-        if best_other["score"] >= 0.55 and (best_other["score"] - answered_score) >= 0.15:
+        if (
+            best_other["score"] >= 0.55
+            and (best_other["score"] - answered_score) >= 0.15
+        ):
             return best_other
         return None
 

@@ -286,7 +286,9 @@ def test_focus_decision_semantic_validation_rejects_selected_rule_violations():
     )
 
     assert result.ok is False
-    assert "selected_focus_id is required when decision_state=selected." in result.errors
+    assert (
+        "selected_focus_id is required when decision_state=selected." in result.errors
+    )
     assert (
         "adapter_plan.primary_focus_id must equal selected_focus_id when decision_state=selected."
         in result.errors
@@ -388,6 +390,37 @@ def test_focus_decision_semantic_validation_rejects_noncanonical_selected_focus_
         error.startswith(
             "selected_focus_id must equal the canonical seam ID derived from selected_focus_paths:"
         )
+        for error in result.errors
+    )
+
+
+def test_focus_decision_semantic_validation_rejects_duplicate_candidate_focus_ids():
+    payload = _focus_decision_payload("clarification_requested")
+    payload["candidates"].append(
+        {
+            "focus_id": payload["candidates"][0]["focus_id"],
+            "focus_summary": "Release trigger workflows duplicate",
+            "candidate_paths": list(payload["candidates"][0]["candidate_paths"]),
+            "why_candidate": "This duplicate should still be rejected by semantic validation.",
+            "evidence_refs": list(payload["candidates"][0]["evidence_refs"]),
+            "score": 0.51,
+        }
+    )
+    payload["question"]["options"] = [
+        item["focus_id"] for item in payload["candidates"] if item["focus_id"]
+    ]
+    payload["adapter_plan"]["secondary_focus_ids"] = list(
+        payload["question"]["options"]
+    )
+
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert any(
+        error.startswith("candidates contains duplicate focus IDs:")
         for error in result.errors
     )
 
@@ -836,7 +869,9 @@ def test_analysis_output_semantic_validation_rejects_too_many_optional_check_fil
 def test_analysis_output_semantic_validation_rejects_must_check_files_outside_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
-    payload = _analysis_output_payload("analysis_output_must_check_not_in_files_reviewed")
+    payload = _analysis_output_payload(
+        "analysis_output_must_check_not_in_files_reviewed"
+    )
 
     result = validate_analysis_output_payload(
         payload,
@@ -949,14 +984,18 @@ def test_analysis_output_semantic_validation_requires_primary_seam_structure():
     assert "primary_seam.seam_id must be non-empty." in result.errors
     assert "primary_seam.summary must be non-empty." in result.errors
     assert "primary_seam.why_primary must be non-empty." in result.errors
-    assert "primary_seam.paths must contain at least one non-empty path." in result.errors
+    assert (
+        "primary_seam.paths must contain at least one non-empty path." in result.errors
+    )
 
 
 def test_analysis_output_semantic_validation_rejects_seam_paths_outside_files_reviewed():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
     payload = _analysis_output_payload("analysis_output_valid")
-    payload["secondary_seams_considered"][0]["paths"] = [".github/workflows/release.yml"]
+    payload["secondary_seams_considered"][0]["paths"] = [
+        ".github/workflows/release.yml"
+    ]
 
     result = validate_analysis_output_payload(
         payload,
@@ -1066,10 +1105,12 @@ def test_analysis_output_semantic_validation_requires_primary_seam_binding_reten
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
     payload = _analysis_output_payload("analysis_output_valid")
-    payload["recommendations"][0]["seam_id"] = payload["secondary_seams_considered"][0]["seam_id"]
-    payload["recommendations"][0]["seam_expansion_reason"] = (
-        "Shifted entirely to the sibling seam."
-    )
+    payload["recommendations"][0]["seam_id"] = payload["secondary_seams_considered"][0][
+        "seam_id"
+    ]
+    payload["recommendations"][0][
+        "seam_expansion_reason"
+    ] = "Shifted entirely to the sibling seam."
 
     result = validate_analysis_output_payload(
         payload,
@@ -1081,7 +1122,10 @@ def test_analysis_output_semantic_validation_requires_primary_seam_binding_reten
     )
 
     assert result.ok is False
-    assert "At least one recommendation must remain bound to primary_seam.seam_id." in result.errors
+    assert (
+        "At least one recommendation must remain bound to primary_seam.seam_id."
+        in result.errors
+    )
 
 
 def test_analysis_output_semantic_validation_rejects_bounded_secondary_seam_overflow():
@@ -1111,7 +1155,9 @@ def test_analysis_output_semantic_validation_rejects_bounded_secondary_seam_over
     payload["files_reviewed"] = list(_workspace_paths())
     payload["scope_escapes"] = []
     payload["recommendations"][1]["seam_id"] = "secondary-a"
-    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+    payload["recommendations"][1][
+        "seam_expansion_reason"
+    ] = "Corroborate against sibling automation."
 
     result = validate_analysis_output_payload(
         payload,
@@ -1161,7 +1207,9 @@ def test_analysis_output_semantic_validation_accepts_bounded_third_secondary_sea
         }
     ]
     payload["recommendations"][1]["seam_id"] = "secondary-a"
-    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+    payload["recommendations"][1][
+        "seam_expansion_reason"
+    ] = "Corroborate against sibling automation."
 
     result = validate_analysis_output_payload(
         payload,
@@ -1212,7 +1260,9 @@ def test_analysis_output_semantic_validation_rejects_bounded_third_secondary_sea
         },
     ]
     payload["recommendations"][1]["seam_id"] = "secondary-a"
-    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+    payload["recommendations"][1][
+        "seam_expansion_reason"
+    ] = "Corroborate against sibling automation."
 
     result = validate_analysis_output_payload(
         payload,
@@ -1311,7 +1361,9 @@ def test_trust_analysis_output_semantic_validation_allows_more_than_two_secondar
         },
     ]
     payload["recommendations"][1]["seam_id"] = "secondary-a"
-    payload["recommendations"][1]["seam_expansion_reason"] = "Corroborate against sibling automation."
+    payload["recommendations"][1][
+        "seam_expansion_reason"
+    ] = "Corroborate against sibling automation."
 
     result = validate_analysis_output_payload(
         payload,

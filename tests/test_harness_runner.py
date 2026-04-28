@@ -27,6 +27,8 @@ _SECONDARY_SNAPSHOT_SEAM_PATHS = [
     ".github/workflows/claude-code-update-snapshot.yml",
     ".github/workflows/codex-cli-update-snapshot.yml",
 ]
+_OVERFLOW_OWNER_SEAM_PATHS = [".github/workflows/codex-cli-update-snapshot.yml"]
+_OVERFLOW_SPEC_SEAM_PATHS = ["docs/project_management/next/codex-cli-parity/C1-spec.md"]
 _PRIMARY_SEAM_ID = "release-watch-governing"
 _SECONDARY_RELEASE_WATCH_SEAM_ID = "release-watch-sibling-parity"
 _SECONDARY_SNAPSHOT_SEAM_ID = "snapshot-prepare-parity"
@@ -43,10 +45,10 @@ _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_pat
     _SECONDARY_SNAPSHOT_SEAM_PATHS
 )
 _OVERFLOW_OWNER_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
-    [".github/workflows/codex-cli-update-snapshot.yml"]
+    _OVERFLOW_OWNER_SEAM_PATHS
 )
 _OVERFLOW_SPEC_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
-    ["docs/project_management/next/codex-cli-parity/C1-spec.md"]
+    _OVERFLOW_SPEC_SEAM_PATHS
 )
 _CORROBORATION_FILES_REVIEWED = [
     ".github/workflows/codex-cli-release-watch.yml",
@@ -844,7 +846,9 @@ class _AdjudicateNonCanonicalRepoProbeHarnessAdapter(_FocusGateHarnessAdapter):
             files_hint_disposition="helped",
         )
         payload["selected_focus_id"] = "release_watch_and_snapshot_automation"
-        payload["adapter_plan"]["primary_focus_id"] = "release_watch_and_snapshot_automation"
+        payload["adapter_plan"][
+            "primary_focus_id"
+        ] = "release_watch_and_snapshot_automation"
         payload["candidates"][0]["focus_id"] = "release_watch_and_snapshot_automation"
         payload["candidates"][1]["focus_id"] = "release_watch_automation"
         return payload
@@ -862,6 +866,185 @@ class _DeliberateHumanQuestionOptionsHarnessAdapter(_FocusGateHarnessAdapter):
             ],
         }
         return payload
+
+
+class _DuplicateProbeCandidatesHarnessAdapter(_FocusGateHarnessAdapter):
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": "release-trigger-low",
+                "focus_summary": "Lower-confidence release trigger seam.",
+                "candidate_paths": ["./.github/workflows/codex-cli-release-watch.yml"],
+                "why_candidate": "The release workflow still appears relevant.",
+                "evidence_refs": ["./.github/workflows/codex-cli-release-watch.yml"],
+                "score": 0.63,
+            },
+            {
+                "focus_id": "release-trigger-high",
+                "focus_summary": "Highest-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow is the dominant seam after inspection.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.91,
+            },
+            {
+                "focus_id": "release-trigger-supporting",
+                "focus_summary": "Supporting duplicate release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "Additional evidence points at the same seam.",
+                "evidence_refs": [
+                    self.probe_checked_files[0],
+                    self.probe_checked_files[1],
+                ],
+                "score": 0.52,
+            },
+        ]
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+
+
+class _ClarificationDuplicateFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
+    def _clarification_focus_decision(self) -> dict[str, object]:
+        payload = super()._clarification_focus_decision()
+        payload["candidates"] = [
+            {
+                "focus_id": "release-trigger-low",
+                "focus_summary": "Lower-confidence release trigger seam.",
+                "candidate_paths": ["./.github/workflows/codex-cli-release-watch.yml"],
+                "why_candidate": "The release workflow remains plausible.",
+                "evidence_refs": ["./.github/workflows/codex-cli-release-watch.yml"],
+                "score": 0.41,
+            },
+            {
+                "focus_id": "release-trigger-high",
+                "focus_summary": "Highest-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow remains the best focus.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.83,
+            },
+            {
+                "focus_id": "rollback-sibling",
+                "focus_summary": "Rollback workflow seam.",
+                "candidate_paths": list(self.secondary_focus_paths),
+                "why_candidate": "The rollback workflow is still a plausible sibling seam.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.61,
+            },
+        ]
+        payload["question"] = {
+            "prompt": "Which seam should this run prioritize?",
+            "options": ["stale-option", "another-stale-option"],
+        }
+        payload["adapter_plan"]["secondary_focus_ids"] = ["stale-secondary-id"]
+        return payload
+
+
+class _ProbeCandidateOverflowHarnessAdapter(_FocusGateHarnessAdapter):
+    probe_checked_files = list(_CORROBORATION_FILES_REVIEWED)
+
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": "release-trigger-low",
+                "focus_summary": "Lower-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow remains plausible.",
+                "evidence_refs": [self.probe_checked_files[0]],
+                "score": 0.41,
+            },
+            {
+                "focus_id": "release-trigger-medium",
+                "focus_summary": "Medium-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "Repeated evidence still points at the same seam.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.58,
+            },
+            {
+                "focus_id": "release-trigger-high",
+                "focus_summary": "Highest-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow is still the dominant seam.",
+                "evidence_refs": [
+                    self.probe_checked_files[0],
+                    self.probe_checked_files[1],
+                ],
+                "score": 0.81,
+            },
+            {
+                "focus_id": "snapshot-owner",
+                "focus_summary": "Snapshot owner workflow seam.",
+                "candidate_paths": list(_OVERFLOW_OWNER_SEAM_PATHS),
+                "why_candidate": "Snapshot automation is a distinct downstream seam.",
+                "evidence_refs": [self.probe_checked_files[3]],
+                "score": 0.52,
+            },
+        ]
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+
+
+class _InvalidProbeCandidateSlotsHarnessAdapter(_FocusGateHarnessAdapter):
+    probe_checked_files = list(_CORROBORATION_FILES_REVIEWED)
+
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": "",
+                "focus_summary": "Invalid empty-path candidate.",
+                "candidate_paths": [],
+                "why_candidate": "This invalid candidate should still consume a slot.",
+                "evidence_refs": [self.probe_checked_files[0]],
+                "score": 0.11,
+            },
+            {
+                "focus_id": "release-trigger-low",
+                "focus_summary": "Lower-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow remains plausible.",
+                "evidence_refs": [self.probe_checked_files[0]],
+                "score": 0.44,
+            },
+            {
+                "focus_id": "release-trigger-high",
+                "focus_summary": "Highest-confidence release trigger seam.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "Repeated evidence still points at the same seam.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.79,
+            },
+            {
+                "focus_id": "snapshot-owner",
+                "focus_summary": "Snapshot owner workflow seam.",
+                "candidate_paths": list(_OVERFLOW_OWNER_SEAM_PATHS),
+                "why_candidate": "Snapshot automation is a distinct downstream seam.",
+                "evidence_refs": [self.probe_checked_files[3]],
+                "score": 0.52,
+            },
+            {
+                "focus_id": "spec-focus",
+                "focus_summary": "Codex CLI parity spec seam.",
+                "candidate_paths": list(_OVERFLOW_SPEC_SEAM_PATHS),
+                "why_candidate": "The planning spec is another distinct seam.",
+                "evidence_refs": [self.probe_checked_files[4]],
+                "score": 0.5,
+            },
+        ]
 
 
 class _MismatchSelectsOnRecordedReaskHarnessAdapter(_FocusGateHarnessAdapter):
@@ -2931,8 +3114,7 @@ def test_analysis_review_runner_focus_gate_adjudicate_config_rejects_deliberate_
     assert [stage["role_name"] for stage in summary["agent_stages"]] == ["focus_gate"]
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
     assert any(
-        "gate_path must match expected_gate_path=adjudicate; got deliberate."
-        in error
+        "gate_path must match expected_gate_path=adjudicate; got deliberate." in error
         for error in focus_stage["semantic_validation_errors"]
     )
 
@@ -2969,10 +3151,199 @@ def test_analysis_review_runner_focus_gate_adjudicate_normalizes_repo_probe_payl
     assert focus_decision["files_hint_disposition"] == "absent"
     assert focus_decision["checked_files"] == []
     assert focus_decision["selected_focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
-    assert focus_decision["adapter_plan"]["primary_focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
-    assert focus_decision["candidates"][0]["focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    assert (
+        focus_decision["adapter_plan"]["primary_focus_id"]
+        == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert (
+        focus_decision["candidates"][0]["focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
     assert focus_decision["candidates"][0]["evidence_refs"] == []
     assert focus_stage["structured_output"] == focus_decision
+
+
+def test_analysis_review_runner_focus_gate_probe_dedupes_duplicate_canonical_candidates(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _DuplicateProbeCandidatesHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    probe_stage = summary["agent_stages"][0]
+    probe_payload = probe_stage["structured_output"]
+
+    assert summary["verdict"] == "accepted"
+    assert probe_stage["role_name"] == "focus_gate_probe"
+    assert len(probe_payload["candidates"]) == 1
+    assert (
+        probe_payload["candidates"][0]["focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert (
+        probe_payload["candidates"][0]["focus_summary"]
+        == "Highest-confidence release trigger seam."
+    )
+    assert (
+        probe_payload["candidates"][0]["why_candidate"]
+        == "The release workflow is the dominant seam after inspection."
+    )
+    assert probe_payload["candidates"][0]["evidence_refs"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+    ]
+    assert probe_stage["ok"] is True
+
+
+def test_analysis_review_runner_focus_gate_clarification_dedupes_decision_candidates(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _ClarificationDuplicateFocusGateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    focus_stage = summary["agent_stages"][1]
+
+    assert summary["verdict"] == "blocked_for_clarification"
+    assert focus_decision["decision_state"] == "clarification_requested"
+    assert [item["focus_id"] for item in focus_decision["candidates"]] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+    ]
+    assert (
+        focus_decision["candidates"][0]["focus_summary"]
+        == "Highest-confidence release trigger seam."
+    )
+    assert focus_decision["candidates"][0]["evidence_refs"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+    ]
+    assert focus_decision["question"]["options"] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+    ]
+    assert focus_decision["adapter_plan"]["secondary_focus_ids"] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+    ]
+    assert focus_stage["structured_output"] == focus_decision
+
+
+def test_analysis_review_runner_focus_gate_probe_caps_after_canonical_dedupe(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _ProbeCandidateOverflowHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    probe_payload = summary["agent_stages"][0]["structured_output"]
+
+    assert summary["verdict"] == "accepted"
+    assert [item["focus_id"] for item in probe_payload["candidates"]] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _OVERFLOW_OWNER_CANONICAL_SEAM_ID,
+    ]
+
+
+def test_analysis_review_runner_focus_gate_probe_invalid_candidates_consume_slots(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _InvalidProbeCandidateSlotsHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    probe_stage = summary["agent_stages"][0]
+    probe_payload = probe_stage["structured_output"]
+
+    assert summary["verdict"] == "harness_error"
+    assert summary["failure_details"]["stage"] == "focus_gate"
+    assert probe_stage["failure_kind"] == "schema_validation_error"
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == [
+        "focus_gate_probe"
+    ]
+    assert len(probe_payload["candidates"]) == 3
+    assert probe_payload["candidates"][0]["candidate_paths"] == []
+    assert (
+        probe_payload["candidates"][1]["focus_id"] == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert probe_payload["candidates"][1]["evidence_refs"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+    ]
+    assert (
+        probe_payload["candidates"][2]["focus_id"] == _OVERFLOW_OWNER_CANONICAL_SEAM_ID
+    )
+    assert all(
+        candidate["focus_id"] != _OVERFLOW_SPEC_CANONICAL_SEAM_ID
+        for candidate in probe_payload["candidates"]
+        if candidate.get("focus_id")
+    )
+    assert any(
+        "candidate_paths" in error for error in probe_stage["schema_validation_errors"]
+    )
 
 
 def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_recorded_reask(
@@ -3292,7 +3663,10 @@ def test_analysis_review_runner_proposer_raw_and_normalized_artifacts_show_drift
     assert normalized_payload["primary_seam"]["paths"] == [
         ".github/workflows/claude-code-release-watch.yml"
     ]
-    assert raw_payload["primary_seam"]["paths"] != normalized_payload["primary_seam"]["paths"]
+    assert (
+        raw_payload["primary_seam"]["paths"]
+        != normalized_payload["primary_seam"]["paths"]
+    )
     assert any(
         "primary_seam.paths drifted from the selected focus gate paths after normalization"
         in error
