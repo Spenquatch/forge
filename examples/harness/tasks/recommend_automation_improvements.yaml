@@ -1,7 +1,7 @@
 id: recommend_automation_improvements
 task_kind: analysis_review
 objective: >
-  Analyze and recommend improvements for the CI/CD automation that triggers for new Claude Code and Codex releases in the target repository.
+  Analyze and recommend improvements for the CI/CD pipelines in this repo.
 workspace_write_policy:
   mode: forbid
   allowed_paths: []
@@ -13,7 +13,6 @@ workspace_write_policy:
   require_clean_start: false
 acceptance:
   - The recommendations should enhance the automation reliability and efficiency.
-  - The task should focus on CI/CD processes related to Claude Code and Codex releases.
   - Each recommendation should be grounded in concrete repository evidence.
   - Do not modify files in the target workspace.
 constraints:
@@ -30,10 +29,7 @@ review_requirements:
   min_recommendations: 2
   evidence_cap_policy: trim_to_cap
 files_hint:
-  - .github/workflows/codex-cli-release-watch.yml
-  - .github/workflows/claude-code-release-watch.yml
-  - .github/workflows/codex-cli-update-snapshot.yml
-  - .github/workflows/claude-code-update-snapshot.yml
+  - .github/workflows/*
 notes: |
   This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade
   any write-capable stage to effective read-only access and fail the run if repo files are changed.
