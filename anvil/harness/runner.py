@@ -78,6 +78,7 @@ _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
 _FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
+_FOCUS_GATE_DELIBERATE_QUESTION_PROMPT = "Which seam should this run prioritize?"
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
 _TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST = {
     "strengths contains both concrete items and none_reason; prefer one or the other.",
@@ -4304,42 +4305,94 @@ class HarnessRunner:
         return "low"
 
     @classmethod
-    def _dominant_probe_candidate_against_answer(
+    def _canonical_focus_gate_question_prompt(cls) -> str:
+        return _FOCUS_GATE_DELIBERATE_QUESTION_PROMPT
+
+    @classmethod
+    def _resolve_focus_probe_state(
         cls,
         *,
         focus_probe: dict[str, Any] | None,
-        answered_focus_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         if not isinstance(focus_probe, dict):
-            return None
-        score_map = cls._probe_candidate_score_map(focus_probe)
-        answered_score = score_map.get(answered_focus_id)
-        if answered_score is None:
-            return None
+            return {
+                "scored_candidates": [],
+                "top_candidate_id": None,
+                "top_candidate_score": None,
+                "second_candidate_id": None,
+                "second_candidate_score": None,
+                "top_confidence_band": "low",
+                "lead_score": None,
+                "valid_winner_focus_id": None,
+                "is_ambiguous": True,
+                "ambiguity_reason": "current probe is ambiguous under selection thresholds",
+            }
 
-        best_other: dict[str, Any] | None = None
+        scored_candidates: list[dict[str, Any]] = []
         for item in focus_probe.get("candidates") or []:
             if not isinstance(item, dict):
                 continue
             focus_id = str(item.get("focus_id") or "").strip()
-            if not focus_id or focus_id == answered_focus_id:
+            score = item.get("score")
+            if (
+                not focus_id
+                or not isinstance(score, (int, float))
+                or isinstance(score, bool)
+            ):
                 continue
-            score = score_map.get(focus_id)
-            if score is None:
-                continue
-            if best_other is None or score > float(best_other["score"]):
-                best_other = {"focus_id": focus_id, "score": score}
+            scored_candidates.append({"focus_id": focus_id, "score": float(score)})
 
-        if best_other is None:
-            return None
-        if best_other["score"] >= 0.80:
-            return best_other
-        if (
-            best_other["score"] >= 0.55
-            and (best_other["score"] - answered_score) >= 0.15
-        ):
-            return best_other
-        return None
+        scored_candidates.sort(key=lambda item: item["score"], reverse=True)
+        top_candidate = scored_candidates[0] if scored_candidates else None
+        second_candidate = scored_candidates[1] if len(scored_candidates) > 1 else None
+        top_score = (
+            float(top_candidate["score"])
+            if isinstance(top_candidate, dict)
+            else None
+        )
+        second_score = (
+            float(second_candidate["score"])
+            if isinstance(second_candidate, dict)
+            else None
+        )
+        lead_score = (
+            top_score - second_score
+            if top_score is not None and second_score is not None
+            else None
+        )
+
+        valid_winner_focus_id: str | None = None
+        ambiguity_reason = "current probe is ambiguous under selection thresholds"
+        if top_score is not None:
+            if top_score >= 0.80:
+                valid_winner_focus_id = str(top_candidate["focus_id"])
+                ambiguity_reason = ""
+            elif top_score >= 0.55 and lead_score is not None and lead_score >= 0.15:
+                valid_winner_focus_id = str(top_candidate["focus_id"])
+                ambiguity_reason = ""
+
+        return {
+            "scored_candidates": scored_candidates,
+            "top_candidate_id": (
+                str(top_candidate["focus_id"])
+                if isinstance(top_candidate, dict)
+                else None
+            ),
+            "top_candidate_score": top_score,
+            "second_candidate_id": (
+                str(second_candidate["focus_id"])
+                if isinstance(second_candidate, dict)
+                else None
+            ),
+            "second_candidate_score": second_score,
+            "top_confidence_band": (
+                cls._focus_confidence_band(top_score) if top_score is not None else "low"
+            ),
+            "lead_score": lead_score,
+            "valid_winner_focus_id": valid_winner_focus_id,
+            "is_ambiguous": valid_winner_focus_id is None,
+            "ambiguity_reason": ambiguity_reason,
+        }
 
     @classmethod
     def _focus_gate_stale_answer_context(
@@ -4352,10 +4405,19 @@ class HarnessRunner:
         if not isinstance(focus_probe, dict) or not isinstance(focus_gate_answer, dict):
             return None
 
+        canonical_prompt = cls._canonical_focus_gate_question_prompt().strip()
         answer_prompt = str(focus_gate_answer.get("question_prompt") or "").strip()
         answered_focus_id = str(focus_gate_answer.get("selected_option") or "").strip()
         if not answer_prompt or not answered_focus_id:
             return None
+        if answer_prompt != canonical_prompt:
+            return {
+                "reason": "recorded question prompt no longer matches the canonical deliberate prompt",
+                "clarification_policy": clarification_policy,
+                "question_prompt": answer_prompt,
+                "canonical_question_prompt": canonical_prompt,
+                "selected_option": answered_focus_id,
+            }
 
         candidate_ids = [
             str(item.get("focus_id") or "").strip()
@@ -4371,23 +4433,31 @@ class HarnessRunner:
                 "probe_candidate_ids": candidate_ids,
             }
 
-        dominant_candidate = cls._dominant_probe_candidate_against_answer(
-            focus_probe=focus_probe,
-            answered_focus_id=answered_focus_id,
-        )
-        if dominant_candidate is None:
+        probe_state = cls._resolve_focus_probe_state(focus_probe=focus_probe)
+        valid_winner_focus_id = str(probe_state.get("valid_winner_focus_id") or "").strip()
+        if not valid_winner_focus_id:
+            return {
+                "reason": "current probe is ambiguous under selection thresholds",
+                "clarification_policy": clarification_policy,
+                "question_prompt": answer_prompt,
+                "canonical_question_prompt": canonical_prompt,
+                "selected_option": answered_focus_id,
+                "probe_candidate_ids": candidate_ids,
+            }
+        if valid_winner_focus_id == answered_focus_id:
             return None
 
         return {
             "reason": (
-                "current probe now makes a different candidate clearly dominant: "
-                f"{dominant_candidate['focus_id']}"
+                "current probe now resolves to a different threshold-valid winner: "
+                f"{valid_winner_focus_id}"
             ),
             "clarification_policy": clarification_policy,
             "question_prompt": answer_prompt,
+            "canonical_question_prompt": canonical_prompt,
             "selected_option": answered_focus_id,
-            "dominant_candidate_id": dominant_candidate["focus_id"],
-            "dominant_candidate_score": dominant_candidate["score"],
+            "dominant_candidate_id": valid_winner_focus_id,
+            "dominant_candidate_score": probe_state.get("top_candidate_score"),
             "probe_candidate_ids": candidate_ids,
         }
 
@@ -4440,9 +4510,7 @@ class HarnessRunner:
             for item in candidates
             if str(item.get("focus_id") or "").strip()
         ]
-        prompt = ""
-        if isinstance(focus_gate_answer, dict):
-            prompt = str(focus_gate_answer.get("question_prompt") or "").strip()
+        prompt = cls._canonical_focus_gate_question_prompt()
         confidence = max(
             (
                 float(item.get("score"))
@@ -4462,6 +4530,7 @@ class HarnessRunner:
             for item in (focus_probe.get("warnings") or [])
             if str(item).strip()
         ]
+        del focus_gate_answer
         if warning not in warnings:
             warnings.append(warning)
         decision_state = "clarification_requested"
@@ -4492,6 +4561,44 @@ class HarnessRunner:
             },
         }
 
+    @classmethod
+    def _focus_gate_rerun_answer_hardening_context(
+        cls,
+        *,
+        focus_probe: dict[str, Any] | None,
+        focus_decision: dict[str, Any],
+        clarification_policy: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(focus_probe, dict) or not focus_probe:
+            return None
+        if str(focus_decision.get("decision_basis") or "").strip() != "rerun_answer":
+            return None
+
+        probe_state = cls._resolve_focus_probe_state(focus_probe=focus_probe)
+        valid_winner_focus_id = str(probe_state.get("valid_winner_focus_id") or "").strip()
+        if not valid_winner_focus_id:
+            return {
+                "reason": "current probe is ambiguous under selection thresholds",
+                "clarification_policy": clarification_policy,
+                "dominant_candidate_id": None,
+                "dominant_candidate_score": probe_state.get("top_candidate_score"),
+            }
+
+        selected_focus_id = str(focus_decision.get("selected_focus_id") or "").strip()
+        if selected_focus_id == valid_winner_focus_id:
+            return None
+
+        return {
+            "reason": (
+                "model-selected rerun seam did not match the runner-computed admissible rerun seam: "
+                f"{valid_winner_focus_id}"
+            ),
+            "clarification_policy": clarification_policy,
+            "selected_option": selected_focus_id,
+            "dominant_candidate_id": valid_winner_focus_id,
+            "dominant_candidate_score": probe_state.get("top_candidate_score"),
+        }
+
     def _normalize_focus_gate_decision_for_policy(
         self,
         *,
@@ -4501,15 +4608,23 @@ class HarnessRunner:
         focus_gate_answer: dict[str, Any] | None,
         stale_answer_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        effective_stale_answer_context = stale_answer_context
+        if effective_stale_answer_context is None:
+            effective_stale_answer_context = self._focus_gate_rerun_answer_hardening_context(
+                focus_probe=focus_probe,
+                focus_decision=focus_decision,
+                clarification_policy=contract.focus_gate.clarification_policy,
+            )
+
         if (
-            isinstance(stale_answer_context, dict)
+            isinstance(effective_stale_answer_context, dict)
             and isinstance(focus_probe, dict)
             and focus_probe
         ):
             return self._stale_focus_gate_decision_from_probe(
                 focus_probe=focus_probe,
                 focus_gate_answer=focus_gate_answer,
-                stale_answer_context=stale_answer_context,
+                stale_answer_context=effective_stale_answer_context,
                 clarification_policy=contract.focus_gate.clarification_policy,
             )
 
@@ -4519,8 +4634,10 @@ class HarnessRunner:
             and contract.focus_gate.clarification_policy == "never_ask"
         ):
             warning = None
-            if isinstance(stale_answer_context, dict):
-                reason = str(stale_answer_context.get("reason") or "").strip()
+            if isinstance(effective_stale_answer_context, dict):
+                reason = str(
+                    effective_stale_answer_context.get("reason") or ""
+                ).strip()
                 if reason:
                     warning = f"Prior focus_gate_answer went stale: {reason}."
             return self._normalized_focus_gate_no_viable_decision(

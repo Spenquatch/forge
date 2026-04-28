@@ -749,6 +749,22 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
     assert "stale-answer context" in deliberate_prompt
     assert "Focus gate answer:" in deliberate_prompt
     assert '"selected_option": "release-trigger-automation"' in deliberate_prompt
+    assert (
+        "must still match the current canonical deliberate question prompt after trimming."
+        in deliberate_prompt
+    )
+    assert (
+        "If the current probe is ambiguous under the selection thresholds, the answer is stale."
+        in deliberate_prompt
+    )
+    assert (
+        "Only auto-accept `decision_basis=rerun_answer` when the selected option is still the current threshold-valid winner."
+        in deliberate_prompt
+    )
+    assert (
+        "Ambiguity remains when there is only one `medium` candidate and no second candidate to establish the required lead."
+        in deliberate_prompt
+    )
 
     assert "Gate path: adjudicate" in adjudicate_prompt
     assert "probe artifact context" not in adjudicate_prompt

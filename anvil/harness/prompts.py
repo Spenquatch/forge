@@ -261,6 +261,7 @@ def _focus_selection_thresholds_block() -> str:
             "- Select directly when the top candidate is `high`.",
             "- Select directly when the top candidate is `medium` and leads the second candidate by at least `0.15`.",
             "- Ambiguity remains when the top candidate is `medium` and the lead is `< 0.15`.",
+            "- Ambiguity remains when there is only one `medium` candidate and no second candidate to establish the required lead.",
             "- Ambiguity remains when the top candidate is `low`.",
         ]
     )
@@ -270,11 +271,14 @@ def _focus_stale_answer_rules_block() -> str:
     return "\n".join(
         [
             "Rerun-answer and stale-answer rules:",
-            "- `focus_gate_answer.question_prompt` must still match the current question prompt after trimming.",
+            "- `focus_gate_answer.question_prompt` must still match the current canonical deliberate question prompt after trimming.",
             "- `focus_gate_answer.selected_option` must still match one current question option after trimming.",
             "- The selected option must still appear in the current deliberate probe candidate set.",
+            "- If the recorded question prompt no longer matches the current canonical deliberate question prompt, the answer is stale.",
             "- If the selected option vanished from the current probe candidate set, the answer is stale.",
-            "- If the selected option remains but the current probe now makes a different candidate clearly dominant, the answer is stale.",
+            "- If the current probe has a different threshold-valid winner, the answer is stale.",
+            "- If the current probe is ambiguous under the selection thresholds, the answer is stale.",
+            "- Only auto-accept `decision_basis=rerun_answer` when the selected option is still the current threshold-valid winner.",
             "- `freeform_answer` remains advisory context, never the primary matcher.",
             "- When `clarification_policy = never_ask`, emit `no_viable_focus` with a stale-answer warning instead of re-asking.",
         ]

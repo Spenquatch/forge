@@ -304,7 +304,7 @@ def _stale_no_viable_focus_decision() -> dict[str, object]:
         ],
         "question": {"prompt": "", "options": []},
         "warnings": [
-            "Prior focus_gate_answer went stale: selected option no longer matches the dominant repo-backed seam.",
+            "Prior focus_gate_answer went stale: current probe is ambiguous under selection thresholds.",
         ],
         "adapter_plan": {
             "primary_focus_id": None,
