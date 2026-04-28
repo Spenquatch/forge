@@ -19,6 +19,7 @@ from .contracts import (
     PartialAcceptancePolicy,
     RecommendationAdmissibilityStatus,
     build_analysis_review_contract,
+    canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
 )
 from .files import load_structured_file, slugify, write_json, write_text
@@ -3975,7 +3976,7 @@ class HarnessRunner:
             )
             if normalized_paths:
                 seam["paths"] = normalized_paths
-                canonical_seam_id = self._canonical_seam_id_for_paths(normalized_paths)
+                canonical_seam_id = canonical_seam_id_for_paths(normalized_paths)
                 old_seam_id = str(seam.get("seam_id") or "").strip()
                 seam["seam_id"] = canonical_seam_id
                 if seam is primary_seam:
@@ -4006,24 +4007,6 @@ class HarnessRunner:
                 and recommendation_seam_id == primary_canonical_seam_id
             ):
                 item["seam_expansion_reason"] = ""
-
-    @staticmethod
-    def _canonical_seam_id_for_paths(paths: list[str]) -> str:
-        normalized_paths = sorted(
-            {str(path).strip() for path in paths if str(path).strip()}
-        )
-        if not normalized_paths:
-            return "seam-empty"
-
-        stem_prefix = slugify("-".join(Path(path).stem for path in normalized_paths))[
-            :48
-        ].strip("-._")
-        digest = hashlib.sha1("\n".join(normalized_paths).encode("utf-8")).hexdigest()[
-            :12
-        ]
-        if stem_prefix:
-            return f"{stem_prefix}-{digest}"
-        return f"seam-{digest}"
 
     @staticmethod
     def _canonical_stage_role_name(role_name: str) -> str:
@@ -4145,7 +4128,7 @@ class HarnessRunner:
             normalized_candidate["candidate_paths"] = candidate_paths
             canonical_focus_id: str | None = None
             if candidate_paths:
-                canonical_focus_id = self._canonical_seam_id_for_paths(candidate_paths)
+                canonical_focus_id = canonical_seam_id_for_paths(candidate_paths)
                 normalized_candidate["focus_id"] = canonical_focus_id
             evidence_refs = self._dedupe_preserving_order(
                 self._normalize_workspace_ref_list(item.get("evidence_refs"))
@@ -4245,7 +4228,7 @@ class HarnessRunner:
         )
         normalized["selected_focus_paths"] = selected_focus_paths
         if selected_focus_paths:
-            canonical_focus_id = self._canonical_seam_id_for_paths(selected_focus_paths)
+            canonical_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
             normalized["selected_focus_id"] = canonical_focus_id
             adapter_plan = normalized.get("adapter_plan")
             if isinstance(adapter_plan, dict):

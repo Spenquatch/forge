@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from anvil.config_loader import ProviderCfg
+from anvil.harness.contracts import canonical_seam_id_for_paths
 from anvil.harness.files import load_structured_file
 from anvil.harness.providers import ForgeProviderAdapter, _soft_validate_schema
 from anvil.harness.runner import HarnessRunner
@@ -32,22 +33,18 @@ _OVERFLOW_SPEC_SEAM_PATHS = ["docs/project_management/next/codex-cli-parity/C1-s
 _PRIMARY_SEAM_ID = "release-watch-governing"
 _SECONDARY_RELEASE_WATCH_SEAM_ID = "release-watch-sibling-parity"
 _SECONDARY_SNAPSHOT_SEAM_ID = "snapshot-prepare-parity"
-_SIMPLE_PRIMARY_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
-    _SIMPLE_PRIMARY_SEAM_PATHS
-)
-_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
-    _PRIMARY_SEAM_PATHS
-)
-_SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+_SIMPLE_PRIMARY_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(_SIMPLE_PRIMARY_SEAM_PATHS)
+_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(_PRIMARY_SEAM_PATHS)
+_SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
     _SECONDARY_RELEASE_WATCH_SEAM_PATHS
 )
-_SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+_SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
     _SECONDARY_SNAPSHOT_SEAM_PATHS
 )
-_OVERFLOW_OWNER_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+_OVERFLOW_OWNER_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
     _OVERFLOW_OWNER_SEAM_PATHS
 )
-_OVERFLOW_SPEC_CANONICAL_SEAM_ID = HarnessRunner._canonical_seam_id_for_paths(
+_OVERFLOW_SPEC_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
     _OVERFLOW_SPEC_SEAM_PATHS
 )
 _FOCUS_GATE_QUESTION_PROMPT = HarnessRunner._canonical_focus_gate_question_prompt()
