@@ -30,7 +30,9 @@ VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {
     "block_for_clarification",
     "never_ask",
 }
-M1_ALLOWED_FOCUS_TYPES = ["seam"]
+VALID_SINGLETON_FOCUS_TYPES = ("seam", "artifact")
+DEFAULT_ALLOWED_FOCUS_TYPES = ["seam"]
+GENERIC_FOCUS_GATE_QUESTION_PROMPT = "Which focus should this run prioritize?"
 _WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(
     r"^(?P<path>.+?):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
 )
@@ -50,12 +52,22 @@ def _reject_unknown_keys(
         )
 
 
-def _validate_m1_allowed_focus_types(value: Any, *, field_name: str) -> list[str]:
+def _validate_singleton_focus_types(value: Any, *, field_name: str) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list.")
     normalized = [str(item).strip().lower() for item in value]
-    if normalized != M1_ALLOWED_FOCUS_TYPES:
-        raise ValueError(f"{field_name} must be exactly {M1_ALLOWED_FOCUS_TYPES!r}.")
+    if len(normalized) != 1:
+        if len(set(normalized)) > 1:
+            raise ValueError(
+                f"{field_name} must contain exactly one value; mixed-type lists are not allowed."
+            )
+        raise ValueError(
+            f"{field_name} must contain exactly one value: {DEFAULT_ALLOWED_FOCUS_TYPES!r} or ['artifact']."
+        )
+    if normalized[0] not in VALID_SINGLETON_FOCUS_TYPES:
+        raise ValueError(
+            f"{field_name} must contain exactly one value: {DEFAULT_ALLOWED_FOCUS_TYPES!r} or ['artifact']."
+        )
     return normalized
 
 
@@ -173,7 +185,7 @@ class TaskFocusGateConfig:
             allowed_focus_types=(
                 None
                 if allowed_focus_types is None
-                else _validate_m1_allowed_focus_types(
+                else _validate_singleton_focus_types(
                     allowed_focus_types, field_name="focus_gate.allowed_focus_types"
                 )
             ),

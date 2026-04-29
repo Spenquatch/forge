@@ -34,8 +34,11 @@ poetry run python -m anvil.cli harness-run \
 
 Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
 
-These adjudicate strategies are runnable examples, not by themselves the authoritative M2 acceptance proof.
+These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 
-Repo-local fixture wiring coverage lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and only checks that the task, strategy, and fixture workspace stay coherent.
+Repo-local fixture wiring coverage lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and remains seam-regression-only wiring coverage.
 
-Authoritative M2 acceptance uses `scripts/run_m2_focus_gate_live_acceptance.py` with `examples/harness/live_acceptance/m2_focus_gate_local.yaml` against the external workspace.
+Authoritative focus-gate acceptance uses `scripts/run_focus_gate_acceptance.py` with a local manifest based on `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml`.
+That canonical manifest template covers the seam/adjudicate smoke cases plus an artifact-focused adjudicate case so the manual acceptance path exercises both supported focus types.
+
+The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. Its legacy local config name stays `examples/harness/live_acceptance/m2_focus_gate_local.yaml`, and it still accepts the old `strategies:` shorthand surface.

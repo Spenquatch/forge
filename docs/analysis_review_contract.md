@@ -6,7 +6,7 @@ The analysis-review harness is driven by a typed contract in `anvil/harness/cont
 
 The contract keeps the proposer, critic, reviser, auditor, runner stop logic, and reporting aligned. Without a shared contract, prompt text and runtime behavior drift into contradictory expectations.
 
-`analysis_review_v1_contract_v9` keeps the seam-selection contract from v8, adds the typed focus-gate policy on the same contract family, and extends the analysis payload family so proposer/reviser outputs may record bounded third-seam overflow through analysis-stage `scope_escapes`.
+`analysis_review_v1_contract_v10` keeps the seam-selection contract from v9, widens the typed focus-gate family to allow exactly one public focus type (`seam` or `artifact`), and freezes the runner-owned downstream seam bridge that later analysis stages must consume.
 
 ## What the contract governs
 
@@ -28,7 +28,7 @@ The contract now serializes:
 
 ```json
 {
-  "contract_version": "analysis_review_v1_contract_v9",
+  "contract_version": "analysis_review_v1_contract_v10",
   "strategy_kind": "analysis_review_v1",
   "mode": "bounded",
   "effective_strategy": {
@@ -42,7 +42,7 @@ Today the legacy `analysis_review_v1` surface still resolves to bounded behavior
 
 ## Unified policy model
 
-The v9 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
+The v10 contract keeps one analysis-review contract type and adds one `TrustReviewPolicy`.
 
 Why this is preferable to mode-specific contract classes:
 
@@ -62,7 +62,7 @@ The trust policy covers:
 
 ## Focus-gate contract
 
-The contract version remains `analysis_review_v1_contract_v9`. Focus gating is an additive v9 surface, not a new contract version or a new strategy kind.
+The contract version is now `analysis_review_v1_contract_v10`. Focus gating remains part of the shared analysis-review contract family, but v10 changes the typed public surface enough that the version bump is mandatory.
 
 The effective contract now also resolves a typed `focus_gate` policy:
 
@@ -80,8 +80,10 @@ Precedence and validation rules:
 - strategy-level `focus_gate` may set only `enabled` and `default_path`
 - task-level `focus_gate` may set `enabled`, `allowed_focus_types`, and `clarification_policy`
 - the resolved canonical surface lives at `analysis_review_contract.focus_gate`
-- v9 rejects unknown task or strategy `focus_gate` keys
-- v9 accepts only `allowed_focus_types: [seam]`
+- v10 rejects unknown task or strategy `focus_gate` keys
+- `allowed_focus_types` remains a list in the public task shape, but v10 accepts exactly one value
+- the only allowed singleton values are `["seam"]` and `["artifact"]`
+- mixed-type lists such as `["seam", "artifact"]` are rejected explicitly
 
 Rerun-answer rules:
 
@@ -89,24 +91,25 @@ Rerun-answer rules:
 - rerun answers are deliberate-only: a run whose resolved `focus_gate.default_path` is `adjudicate` must not consume `task.focus_gate_answer`
 - deliberate runs always execute the internal `focus_gate_probe` stage before the public `focus_gate` decision stage
 - the public decision stage uses split prompt builders: `build_focus_gate_adjudicate_prompt(...)` for direct adjudication and `build_focus_gate_deliberate_prompt(...)` for probe-backed shortlist / rerun handling
-- `focus_gate_answer.question_prompt` must equal the prior `focus_decision.question.prompt` after trimming leading and trailing whitespace
-- `focus_gate_answer.selected_option` must match one prior `focus_decision.question.options` entry exactly after trimming
+- `focus_gate_answer.question_prompt` must equal the canonical deliberate clarification prompt after trimming leading and trailing whitespace
+- `focus_gate_answer.selected_option` is matched against the current live probe shortlist after trimming; the runner does not persist a prior clarification snapshot as the source of truth
 - `focus_gate_answer.freeform_answer` is optional supporting text and is never the primary matcher
-- when both fields match, the gate stays on the deliberate path and evaluates that answer against the live repo-backed shortlist instead of skipping the probe
+- when the canonical prompt matches and the selected option is still valid, the gate stays on the deliberate path and evaluates that answer against the live repo-backed shortlist instead of skipping the probe
 - if the selected option disappears from the live shortlist, or the live shortlist now makes a different candidate clearly dominant, the answer is stale
 - when a stale answer is detected and `clarification_policy = never_ask`, the runner must normalize the public result to `decision_state = no_viable_focus` with an added stale-answer warning instead of emitting a fresh question
-- when either field does not match and `clarification_policy != never_ask`, the runner may re-ask once and then terminate again as `blocked_for_clarification`
+- when the canonical prompt does not match or the selected option is no longer valid and `clarification_policy != never_ask`, the runner may re-ask once and then terminate again as `blocked_for_clarification`
+- the canonical clarification prompt text is generic, not seam-specific: `Which focus should this run prioritize?`
 
 ## Focus-decision artifact
 
 `focus_decision` is runner-owned state. It is not a model-authored review-status field and must not be buried under `analysis_review_status`.
 
-Persist it at top-level `summary.json["focus_decision"]` with this v9 shape:
+Persist it at top-level `summary.json["focus_decision"]` with this v10 shape:
 
 ```json
 {
   "gate_path": "adjudicate | deliberate",
-  "focus_type": "seam",
+  "focus_type": "seam | artifact",
   "decision_state": "selected | clarification_requested | no_viable_focus",
   "decision_basis": "request_only | repo_probe | rerun_answer",
   "selected_focus_id": "string|null",
@@ -124,7 +127,10 @@ Persist it at top-level `summary.json["focus_decision"]` with this v9 shape:
   "warnings": [],
   "adapter_plan": {
     "primary_focus_id": "string|null",
-    "secondary_focus_ids": []
+    "secondary_focus_ids": [],
+    "downstream_primary_seam_id": "string|null",
+    "downstream_primary_seam_paths": [],
+    "adaptation_basis": "selected_focus_paths | artifact_singleton | null"
   }
 }
 ```
@@ -135,16 +141,24 @@ Artifact rules:
 - `decision_basis` is always `request_only`, `repo_probe`, or `rerun_answer`
 - `selected_focus_id` and `selected_focus_summary` are required for `selected` and must be `null` otherwise
 - `selected_focus_paths` is required for `selected`, must be empty otherwise, and is compared using normalized workspace-path equality rather than raw string equality
-- seam identity is path-set identity: after normalization, two path sets that compare equal describe the same seam, and `selected_focus_id` must stay aligned with the canonical seam ID derived from that normalized path set
+- for `focus_type = seam`, seam identity is path-set identity: after normalization, two path sets that compare equal describe the same seam, and `selected_focus_id` must stay aligned with the canonical seam ID derived from that normalized path set
+- for `focus_type = artifact`, `selected_focus_paths` must normalize to exactly one workspace path, each `candidates[*].candidate_paths` must normalize to exactly one workspace path, and `selected_focus_id` must stay aligned with the canonical artifact focus ID derived from that singleton path
 - `decision_basis=request_only` requires `gate_path=adjudicate` and `checked_files=[]`
 - `decision_basis=repo_probe` and `decision_basis=rerun_answer` require `gate_path=deliberate` and non-empty `checked_files`
 - `files_hint_disposition` is always one of `helped`, `hurt`, `ignored`, or `absent`
 - `question.prompt` and `question.options` are required for `clarification_requested`; otherwise `question` serializes as `{ "prompt": "", "options": [] }`
+- for `clarification_requested`, `question.prompt` is frozen to `Which focus should this run prioritize?`
 - `candidates` may be empty only for `no_viable_focus`
 - every `candidates[*]` item carries `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`; when `selected`, the chosen candidate's normalized `candidate_paths` must equal `selected_focus_paths`
-- model-authored candidate shortlists must not include multiple entries whose normalized `candidate_paths` collapse to the same canonical seam ID
+- model-authored candidate shortlists must not include multiple entries whose normalized `candidate_paths` collapse to the same canonical focus identity for the active `focus_type`
 - runner normalization collapses duplicate canonical candidate groups before semantic validation, then caps the final normalized `candidates` list at 3 total items
 - `adapter_plan.primary_focus_id` must equal `selected_focus_id` for `selected` and must be `null` otherwise
+- `adapter_plan.secondary_focus_ids` is the shortlisted remainder and must stay a subset of candidate IDs
+- `adapter_plan.downstream_primary_seam_id` and `adapter_plan.downstream_primary_seam_paths` are the runner-owned authoritative seam bridge for downstream proposer / reviser validation
+- for `focus_type = seam`, `adapter_plan.downstream_primary_seam_id = selected_focus_id`, `adapter_plan.downstream_primary_seam_paths = selected_focus_paths`, and `adapter_plan.adaptation_basis = selected_focus_paths`
+- for `focus_type = artifact`, `adapter_plan.downstream_primary_seam_id = canonical_seam_id_for_paths(selected_focus_paths)`, `adapter_plan.downstream_primary_seam_paths = selected_focus_paths`, and `adapter_plan.adaptation_basis = artifact_singleton`
+- for `decision_state != selected`, `adapter_plan.downstream_primary_seam_id = null`, `adapter_plan.downstream_primary_seam_paths = []`, and `adapter_plan.adaptation_basis = null`
+- hard rule: for artifact runs, `selected_focus_*` is not downstream seam truth; downstream seam truth comes only from `adapter_plan.downstream_primary_seam_*`
 - blocked runs may omit `analysis_review_status`, but they still persist `focus_decision`, emit `summary.json`, and emit `REPORT.md`
 - deliberate runs persist three focus-stage artifacts with exact filenames: `structured_output.raw.json`, `structured_output.normalized.json`, and `run.envelope.json`
 - `run.envelope.json["structured_output"]` is the canonical persisted stage snapshot after runner normalization; `structured_output.raw.json` captures the provider-emitted JSON before normalization, and `structured_output.normalized.json` captures the post-normalization public artifact payload
@@ -160,9 +174,10 @@ Terminal focus-gate outcomes:
 
 Prompt handoff rule:
 
-- v9 still hands the selected focus into proposer and reviser by prompt text only
+- v10 still hands the selected focus into proposer and reviser by prompt text only
 - the prompt block must include `selected_focus_id`, `selected_focus_summary`, `selected_focus_paths`, and the shortlisted candidate IDs
-- v9 does not add a new provider-protocol field for focus-gate context
+- for artifact runs, downstream prompts must treat `adapter_plan.downstream_primary_seam_*` as the authoritative seam bridge rather than assuming `selected_focus_*` is already seam truth
+- v10 does not add a new provider-protocol field for focus-gate context
 
 Probe-stage behavior:
 

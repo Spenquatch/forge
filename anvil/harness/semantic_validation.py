@@ -12,14 +12,21 @@ from typing import Any, Iterable
 
 from .contracts import (
     AnalysisReviewContract,
+    canonical_artifact_focus_id,
     canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
 )
-from .types import TaskSpec, canonical_workspace_ref_list
+from .types import (
+    GENERIC_FOCUS_GATE_QUESTION_PROMPT,
+    TaskSpec,
+    VALID_SINGLETON_FOCUS_TYPES,
+    canonical_workspace_ref_list,
+)
 
 _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
 _FOCUS_FILES_HINT_DISPOSITIONS = {"helped", "hurt", "ignored", "absent"}
 _FOCUS_DECISION_BASES = {"request_only", "repo_probe", "rerun_answer"}
+_FOCUS_ADAPTATION_BASES = {"selected_focus_paths", "artifact_singleton"}
 _FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
@@ -345,8 +352,8 @@ def validate_focus_decision_payload(
             )
 
     focus_type = str(payload.get("focus_type") or "").strip()
-    if focus_type != "seam":
-        result.errors.append("focus_type must be exactly 'seam'.")
+    if focus_type not in VALID_SINGLETON_FOCUS_TYPES:
+        result.errors.append("focus_type must be exactly 'seam' or 'artifact'.")
 
     decision_state = str(payload.get("decision_state") or "").strip()
     if decision_state not in {"selected", "clarification_requested", "no_viable_focus"}:
@@ -412,6 +419,7 @@ def validate_focus_decision_payload(
     candidate_ids, candidate_paths_by_id = _validated_focus_candidates(
         result,
         candidates=candidates,
+        focus_type=focus_type,
         workspace_paths=workspace_path_set,
         checked_files=checked_files,
         require_evidence_refs=(decision_basis != "request_only"),
@@ -439,9 +447,16 @@ def validate_focus_decision_payload(
     )
 
     adapter_plan = payload.get("adapter_plan")
-    adapter_primary_focus_id, adapter_secondary_focus_ids = _validated_focus_adapter_plan(
+    (
+        adapter_primary_focus_id,
+        adapter_secondary_focus_ids,
+        downstream_primary_seam_id,
+        downstream_primary_seam_paths,
+        adaptation_basis,
+    ) = _validated_focus_adapter_plan(
         result,
         adapter_plan=adapter_plan,
+        workspace_paths=workspace_path_set,
     )
 
     if decision_state == "selected":
@@ -465,16 +480,6 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "selected_focus_id must appear in candidates when decision_state=selected."
             )
-        expected_selected_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
-        if (
-            selected_focus_id_text
-            and selected_focus_paths
-            and selected_focus_id_text != expected_selected_focus_id
-        ):
-            result.errors.append(
-                "selected_focus_id must equal the canonical seam ID derived from selected_focus_paths: "
-                f"expected {expected_selected_focus_id}, got {selected_focus_id_text}."
-            )
         selected_candidate_paths = candidate_paths_by_id.get(selected_focus_id_text or "")
         if (
             selected_focus_id_text
@@ -488,6 +493,61 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "adapter_plan.primary_focus_id must equal selected_focus_id when decision_state=selected."
             )
+        if focus_type == "seam":
+            expected_selected_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
+            if (
+                selected_focus_id_text
+                and selected_focus_paths
+                and selected_focus_id_text != expected_selected_focus_id
+            ):
+                result.errors.append(
+                    "selected_focus_id must equal the canonical seam ID derived from selected_focus_paths: "
+                    f"expected {expected_selected_focus_id}, got {selected_focus_id_text}."
+                )
+            if downstream_primary_seam_id != selected_focus_id_text:
+                result.errors.append(
+                    "adapter_plan.downstream_primary_seam_id must equal selected_focus_id when focus_type=seam and decision_state=selected."
+                )
+            if downstream_primary_seam_paths != selected_focus_paths:
+                result.errors.append(
+                    "adapter_plan.downstream_primary_seam_paths must equal selected_focus_paths when focus_type=seam and decision_state=selected."
+                )
+            if adaptation_basis != "selected_focus_paths":
+                result.errors.append(
+                    "adapter_plan.adaptation_basis must equal 'selected_focus_paths' when focus_type=seam and decision_state=selected."
+                )
+        elif focus_type == "artifact":
+            if len(selected_focus_paths) != 1:
+                result.errors.append(
+                    "selected_focus_paths must contain exactly one normalized path when focus_type=artifact and decision_state=selected."
+                )
+            expected_selected_focus_id = (
+                canonical_artifact_focus_id(selected_focus_paths[0])
+                if selected_focus_paths
+                else ""
+            )
+            if (
+                selected_focus_id_text
+                and selected_focus_paths
+                and selected_focus_id_text != expected_selected_focus_id
+            ):
+                result.errors.append(
+                    "selected_focus_id must equal the canonical artifact ID derived from selected_focus_paths: "
+                    f"expected {expected_selected_focus_id}, got {selected_focus_id_text}."
+                )
+            expected_downstream_seam_id = canonical_seam_id_for_paths(selected_focus_paths)
+            if downstream_primary_seam_id != expected_downstream_seam_id:
+                result.errors.append(
+                    "adapter_plan.downstream_primary_seam_id must equal the canonical seam ID derived from selected_focus_paths when focus_type=artifact and decision_state=selected."
+                )
+            if downstream_primary_seam_paths != selected_focus_paths:
+                result.errors.append(
+                    "adapter_plan.downstream_primary_seam_paths must equal selected_focus_paths when focus_type=artifact and decision_state=selected."
+                )
+            if adaptation_basis != "artifact_singleton":
+                result.errors.append(
+                    "adapter_plan.adaptation_basis must equal 'artifact_singleton' when focus_type=artifact and decision_state=selected."
+                )
     else:
         if selected_focus_id is not None:
             result.errors.append(
@@ -505,6 +565,18 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "selected_focus_paths must serialize as [] when decision_state is not selected."
             )
+        if downstream_primary_seam_id is not None:
+            result.errors.append(
+                "adapter_plan.downstream_primary_seam_id must be null when decision_state is not selected."
+            )
+        if downstream_primary_seam_paths:
+            result.errors.append(
+                "adapter_plan.downstream_primary_seam_paths must serialize as [] when decision_state is not selected."
+            )
+        if adaptation_basis is not None:
+            result.errors.append(
+                "adapter_plan.adaptation_basis must be null when decision_state is not selected."
+            )
 
     if decision_state == "clarification_requested":
         if not candidate_ids:
@@ -514,6 +586,10 @@ def validate_focus_decision_payload(
         if not question_prompt:
             result.errors.append(
                 "question.prompt is required when decision_state=clarification_requested."
+            )
+        elif question_prompt != GENERIC_FOCUS_GATE_QUESTION_PROMPT:
+            result.errors.append(
+                "question.prompt must equal the canonical focus-gate clarification prompt when decision_state=clarification_requested."
             )
         if not question_options:
             result.errors.append(
@@ -558,8 +634,8 @@ def validate_focus_probe_payload(
 
     workspace_path_set = _workspace_path_set(workspace_paths)
     focus_type = str(payload.get("focus_type") or "").strip()
-    if focus_type != "seam":
-        result.errors.append("focus_type must be exactly 'seam'.")
+    if focus_type not in VALID_SINGLETON_FOCUS_TYPES:
+        result.errors.append("focus_type must be exactly 'seam' or 'artifact'.")
 
     files_hint_disposition = str(payload.get("files_hint_disposition") or "").strip()
     if files_hint_disposition not in _FOCUS_FILES_HINT_DISPOSITIONS:
@@ -582,6 +658,7 @@ def validate_focus_probe_payload(
     _validated_focus_candidates(
         result,
         candidates=candidates,
+        focus_type=focus_type,
         workspace_paths=workspace_path_set,
         checked_files=checked_files,
         require_evidence_refs=True,
@@ -1322,6 +1399,7 @@ def _validated_focus_candidates(
     result: SemanticValidationResult,
     *,
     candidates: list[Any],
+    focus_type: str,
     workspace_paths: set[str],
     checked_files: list[str],
     require_evidence_refs: bool,
@@ -1352,16 +1430,29 @@ def _validated_focus_candidates(
             result.errors.append(
                 f"candidates[{index}].candidate_paths must contain at least one non-empty path."
             )
+        if focus_type == "artifact" and len(candidate_paths) != 1:
+            result.errors.append(
+                f"candidates[{index}].candidate_paths must contain exactly one normalized path when focus_type=artifact."
+            )
         unknown_candidate_paths = sorted(set(candidate_paths) - workspace_paths)
         if unknown_candidate_paths:
             result.errors.append(
                 f"candidates[{index}].candidate_paths contains path(s) not present in the workspace snapshot: "
                 + ", ".join(unknown_candidate_paths)
             )
-        expected_focus_id = canonical_seam_id_for_paths(candidate_paths)
+        expected_focus_id = (
+            canonical_artifact_focus_id(candidate_paths[0])
+            if focus_type == "artifact" and candidate_paths
+            else canonical_seam_id_for_paths(candidate_paths)
+        )
         if candidate_paths and focus_id != expected_focus_id:
+            expected_focus_label = (
+                "canonical artifact ID"
+                if focus_type == "artifact"
+                else "canonical seam ID"
+            )
             result.errors.append(
-                f"candidates[{index}].focus_id must equal the canonical seam ID derived from candidate_paths: "
+                f"candidates[{index}].focus_id must equal the {expected_focus_label} derived from candidate_paths: "
                 f"expected {expected_focus_id}, got {focus_id}."
             )
         unexpected_candidate_paths = sorted(set(candidate_paths) - checked_file_set)
@@ -1393,7 +1484,7 @@ def _validated_focus_candidates(
     if duplicates:
         result.errors.append(
             "candidates contains duplicate focus IDs: " + ", ".join(duplicates)
-    )
+        )
     return candidate_ids, candidate_paths_by_id
 
 
@@ -1506,10 +1597,11 @@ def _validated_focus_adapter_plan(
     result: SemanticValidationResult,
     *,
     adapter_plan: Any,
-) -> tuple[str | None, list[str]]:
+    workspace_paths: set[str],
+) -> tuple[str | None, list[str], str | None, list[str], str | None]:
     if not isinstance(adapter_plan, dict):
         result.errors.append("adapter_plan must be an object.")
-        return None, []
+        return None, [], None, [], None
 
     raw_primary_focus_id = adapter_plan.get("primary_focus_id")
     if raw_primary_focus_id is None:
@@ -1520,7 +1612,7 @@ def _validated_focus_adapter_plan(
     secondary_focus_ids = adapter_plan.get("secondary_focus_ids")
     if not isinstance(secondary_focus_ids, list):
         result.errors.append("adapter_plan.secondary_focus_ids must be a list.")
-        return primary_focus_id, []
+        return primary_focus_id, [], None, [], None
 
     normalized_secondary_focus_ids = _non_empty_strings(secondary_focus_ids)
     duplicates = sorted(
@@ -1535,7 +1627,38 @@ def _validated_focus_adapter_plan(
             "adapter_plan.secondary_focus_ids contains duplicate IDs: "
             + ", ".join(duplicates)
         )
-    return primary_focus_id, normalized_secondary_focus_ids
+    raw_downstream_primary_seam_id = adapter_plan.get("downstream_primary_seam_id")
+    if raw_downstream_primary_seam_id is None:
+        downstream_primary_seam_id = None
+    else:
+        downstream_primary_seam_id = (
+            str(raw_downstream_primary_seam_id or "").strip() or None
+        )
+
+    downstream_primary_seam_paths = _validated_checked_files(
+        result,
+        checked_files=adapter_plan.get("downstream_primary_seam_paths"),
+        field_name="adapter_plan.downstream_primary_seam_paths",
+        require_non_empty=False,
+        workspace_paths=workspace_paths,
+    )
+    adaptation_basis_raw = adapter_plan.get("adaptation_basis")
+    if adaptation_basis_raw is None:
+        adaptation_basis = None
+    else:
+        adaptation_basis = str(adaptation_basis_raw or "").strip() or None
+        if adaptation_basis not in _FOCUS_ADAPTATION_BASES:
+            result.errors.append(
+                "adapter_plan.adaptation_basis must be exactly 'selected_focus_paths', 'artifact_singleton', or null."
+            )
+            adaptation_basis = None
+    return (
+        primary_focus_id,
+        normalized_secondary_focus_ids,
+        downstream_primary_seam_id,
+        downstream_primary_seam_paths,
+        adaptation_basis,
+    )
 
 
 def _nullable_non_empty_string(value: Any) -> str | None:

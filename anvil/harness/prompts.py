@@ -152,13 +152,19 @@ def _join_prompt_blocks(*blocks: str) -> str:
     return "\n".join(block for block in blocks if str(block).strip())
 
 
-def _focus_gate_output_rules_block() -> str:
+def _allowed_singleton_focus_type(contract: AnalysisReviewContract) -> str:
+    allowed_focus_types = list(contract.focus_gate.allowed_focus_types or ["seam"])
+    return str(allowed_focus_types[0] or "seam").strip()
+
+
+def _focus_gate_output_rules_block(contract: AnalysisReviewContract) -> str:
+    allowed_focus_type = _allowed_singleton_focus_type(contract)
     return "\n".join(
         [
             "Focus gate output rules:",
             "- Return a `focus_decision` artifact only; do not draft recommendations or review findings here.",
             "- Set `gate_path` to exactly `adjudicate` or `deliberate`.",
-            "- Set `focus_type` to exactly `seam`.",
+            f"- Set `focus_type` to exactly `{allowed_focus_type}`.",
             (
                 "- Set `decision_state` to exactly one of "
                 "`selected`, `clarification_requested`, or `no_viable_focus`."
@@ -177,15 +183,19 @@ def _focus_gate_output_rules_block() -> str:
             ),
             (
                 "- Candidate `focus_id` values must stay aligned with the canonical "
-                "seam identity implied by their `candidate_paths`."
+                "focus identity implied by their `candidate_paths` and `focus_type`."
             ),
             (
                 "- Do not emit multiple candidates whose normalized "
-                "`candidate_paths` collapse to the same canonical seam identity."
+                "`candidate_paths` collapse to the same canonical focus identity."
             ),
             (
                 "- Every `candidates[*]` item must include `why_candidate`, "
                 "`evidence_refs`, and `score`."
+            ),
+            (
+                "- When `focus_type=artifact`, every `candidate_paths` set and "
+                "`selected_focus_paths` must contain exactly one normalized path."
             ),
             (
                 "- When `decision_state=selected`, set both "
@@ -193,6 +203,17 @@ def _focus_gate_output_rules_block() -> str:
                 "`candidates` non-empty, copy the selected candidate's exact path "
                 "set into `selected_focus_paths`, and set "
                 "`adapter_plan.primary_focus_id` equal to `selected_focus_id`."
+            ),
+            (
+                "- When `decision_state=selected`, always populate "
+                "`adapter_plan.downstream_primary_seam_id`, "
+                "`adapter_plan.downstream_primary_seam_paths`, and "
+                "`adapter_plan.adaptation_basis` from `selected_focus_paths`."
+            ),
+            (
+                "- For `focus_type=artifact`, keep `selected_focus_*` "
+                "artifact-shaped; the downstream seam bridge lives only in "
+                "`adapter_plan.downstream_primary_seam_*`."
             ),
             (
                 "- When `decision_state=clarification_requested`, keep "
@@ -206,7 +227,10 @@ def _focus_gate_output_rules_block() -> str:
                 "- When `decision_state=no_viable_focus`, set "
                 "`selected_focus_id=null`, `selected_focus_summary=null`, "
                 "`selected_focus_paths=[]`, "
-                "`adapter_plan.primary_focus_id=null`, and serialize "
+                "`adapter_plan.primary_focus_id=null`, "
+                "`adapter_plan.downstream_primary_seam_id=null`, "
+                "`adapter_plan.downstream_primary_seam_paths=[]`, "
+                "`adapter_plan.adaptation_basis=null`, and serialize "
                 '`question` exactly as `{ "prompt": "", "options": [] }`.'
             ),
             (
@@ -227,23 +251,25 @@ def _focus_gate_output_rules_block() -> str:
             ),
             (
                 "- Candidate IDs and adapter secondary IDs must stay consistent with "
-                "the shortlisted seam set you emit."
+                "the shortlisted focus set you emit."
             ),
         ]
     )
 
 
-def _focus_probe_rules_block() -> str:
+def _focus_probe_rules_block(contract: AnalysisReviewContract) -> str:
+    allowed_focus_type = _allowed_singleton_focus_type(contract)
     return "\n".join(
         [
             "Probe rules:",
-            "- `focus_type` is always `seam`.",
+            f"- `focus_type` is always `{allowed_focus_type}`.",
             "- `files_hint_disposition` must be exactly one of `helped`, `hurt`, `ignored`, or `absent`.",
             "- `checked_files` must contain the concrete repo files the probe inspected.",
             "- `checked_files` caps at 6.",
             "- Candidate count caps at 3.",
-            "- Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity.",
+            "- Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical focus identity.",
             "- Every candidate must include `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`.",
+            "- When `focus_type=artifact`, every candidate must point at exactly one normalized path.",
             "- Each candidate `score` is a float in `[0.0, 1.0]`.",
             "- Each `evidence_refs` entry must be a path-only ref that also appears in `checked_files`.",
             "- The probe exists to make ambiguity concrete. If it cannot point to files, it did not do the job.",
@@ -327,11 +353,36 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
         ),
         f"- shortlisted_candidate_ids: {shortlisted_ids}",
         (
-            "- Treat `selected_focus_paths` as authoritative seam identity: "
-            "downstream `primary_seam.paths` must match this exact normalized path "
-            "set, and `primary_seam.seam_id` must stay aligned with "
-            "`selected_focus_id` unless you are deliberately rejecting invalid gate "
-            "output."
+            "- adapter_plan.downstream_primary_seam_id: "
+            + str(
+                ((focus_decision.get("adapter_plan") or {}).get("downstream_primary_seam_id"))
+                or "(missing bridge)"
+            )
+        ),
+        (
+            "- adapter_plan.downstream_primary_seam_paths: "
+            + ", ".join(
+                str(path).strip()
+                for path in (
+                    ((focus_decision.get("adapter_plan") or {}).get(
+                        "downstream_primary_seam_paths"
+                    ) or [])
+                )
+                if str(path).strip()
+            )
+        ),
+        (
+            "- adapter_plan.adaptation_basis: "
+            + str(
+                ((focus_decision.get("adapter_plan") or {}).get("adaptation_basis"))
+                or "(missing basis)"
+            )
+        ),
+        (
+            "- Preserve `selected_focus_*` as the chosen focus surface. "
+            "Use `adapter_plan.downstream_primary_seam_paths` and "
+            "`adapter_plan.downstream_primary_seam_id` as the authoritative "
+            "downstream seam handoff for `primary_seam`."
         ),
     ]
     return "\n".join(lines)
@@ -358,7 +409,7 @@ Your job:
 4. Keep ambiguity concrete: if a candidate survives, explain `why_candidate` and cite path-only `evidence_refs`.
 5. Record warnings only as supporting context; warnings do not replace file-backed probe evidence.
 
-{_focus_probe_rules_block()}
+{_focus_probe_rules_block(contract)}
 {_focus_selection_thresholds_block()}
 {_analysis_contract_block(contract)}
 
@@ -373,13 +424,13 @@ def _focus_gate_deliberate_guidance_block() -> str:
     return "\n".join(
         [
             "Gate-path guidance:",
-            "- Use `deliberate` when the task likely needs shortlist comparison or clarification before a seam can be selected confidently.",
-            "- Prefer `clarification_requested` when multiple plausible seams remain and the missing distinction is best answered by the operator.",
-            "- Use `selected` only when the ambiguity collapses after comparing the shortlisted seams against the current repo context.",
+            "- Use `deliberate` when the task likely needs shortlist comparison or clarification before a focus can be selected confidently.",
+            "- Prefer `clarification_requested` when multiple plausible focuses remain and the missing distinction is best answered by the operator.",
+            "- Use `selected` only when the ambiguity collapses after comparing the shortlisted focuses against the current repo context.",
             "- A `Prior focus decision` block, when present, is probe artifact context from an earlier deliberate pass; reuse its shortlist or question only if it still fits the current repo state.",
             "- A `Focus gate answer` block, when present, is rerun-answer context from the operator.",
             "- If rerun-answer context arrives without a matching live shortlist or no longer fits the current repo state, treat it as stale-answer context instead of forcing a selection.",
-            "- Keep `candidate_paths` explicit for every shortlisted seam, and when you do select, promote the chosen path set into `selected_focus_paths` unchanged.",
+            "- Keep `candidate_paths` explicit for every shortlisted focus, and when you do select, promote the chosen path set into `selected_focus_paths` unchanged.",
         ]
     )
 
@@ -388,15 +439,15 @@ def _focus_gate_adjudicate_guidance_block() -> str:
     return "\n".join(
         [
             "Gate-path guidance:",
-            "- Use `adjudicate` when the current task context alone is sufficient to select one seam cleanly.",
+            "- Use `adjudicate` when the current task context alone is sufficient to select one focus cleanly.",
             "- Emit `gate_path=adjudicate` exactly.",
             "- Emit `decision_basis=request_only` exactly.",
             "- Emit `files_hint_disposition=absent` exactly.",
             "- Emit `checked_files=[]` exactly.",
             "- Emit `evidence_refs=[]` for every candidate exactly.",
-            "- Prefer `selected` over `clarification_requested` when one seam is clearly dominant from the task and repo context.",
+            "- Prefer `selected` over `clarification_requested` when one focus is clearly dominant from the task and repo context.",
             "- Use `clarification_requested` only when the task itself leaves a real unresolved distinction.",
-            "- Use `no_viable_focus` only when the current task context does not support any defensible seam shortlist.",
+            "- Use `no_viable_focus` only when the current task context does not support any defensible focus shortlist.",
             "- Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`.",
         ]
     )
@@ -1231,9 +1282,9 @@ def _build_focus_gate_prompt(
     job_lines = [
         "Your job:",
         "1. Inspect the task, any files_hint/context, and the current workspace snapshot.",
-        "2. Decide whether the run can proceed with a selected seam focus now.",
+        "2. Decide whether the run can proceed with a selected focus now.",
         "3. Emit a typed `focus_decision` artifact that matches the fixed schema and state rules.",
-        "4. Keep the shortlisted seam set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.",
+        "4. Keep the shortlisted focus set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.",
     ]
     optional_probe_blocks = ""
     if normalized_gate_path == "deliberate":
@@ -1245,7 +1296,7 @@ def _build_focus_gate_prompt(
         )
         optional_probe_blocks = "\n".join(
             [
-                _focus_probe_rules_block(),
+                _focus_probe_rules_block(contract),
                 _focus_stale_answer_rules_block(),
             ]
         )
@@ -1277,7 +1328,7 @@ Critical rules:
 
 Gate path: {normalized_gate_path}
 {gate_specific_guidance}
-{_focus_gate_output_rules_block()}
+{_focus_gate_output_rules_block(contract)}
 {_focus_selection_thresholds_block()}
 {optional_probe_blocks}
 {_analysis_contract_block(contract)}

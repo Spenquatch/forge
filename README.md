@@ -207,18 +207,21 @@ poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recom
 
 For the alternate trust-oriented mode, swap in `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
 
-Those adjudicate example strategies are runnable examples, not by themselves the authoritative M2 acceptance proof.
+Those adjudicate example strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 
-Repo-local regression coverage for this surface lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and verifies task/strategy/fixture-workspace wiring only.
+Repo-local regression coverage for this surface lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and remains seam-regression-only wiring coverage.
 
-Authoritative M2 acceptance uses the local helper:
+Authoritative focus-gate acceptance uses the canonical local helper:
 
 ```bash
-poetry run python scripts/run_m2_focus_gate_live_acceptance.py \
-  --config examples/harness/live_acceptance/m2_focus_gate_local.yaml
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config examples/harness/live_acceptance/focus_gate_acceptance_local.yaml
 ```
 
-The local config points at the external workspace and freezes the exact bounded/trust adjudicate smoke surface for repeatable manual acceptance.
+Start from `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml` when creating that local manifest.
+That canonical template covers the existing seam/adjudicate smoke scenarios plus an artifact-focused adjudicate scenario, so the manual acceptance path exercises both supported focus types.
+
+The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. It still defaults to `examples/harness/live_acceptance/m2_focus_gate_local.yaml` and still accepts the older `strategies:` shorthand manifest surface.
 
 For analysis-review tasks, `review_requirements.evidence_cap_policy` defaults to `trim_to_cap`, which canonicalizes path-like refs and trims oversize evidence lists before semantic validation. Set it to `strict` when you want fail-fast bounded-review enforcement instead.
 
@@ -271,7 +274,7 @@ poetry run python scripts/check_seam_parity.py \
   --out ./seam_parity_report.json
 ```
 
-For M2 focus-gate acceptance specifically, do not treat the example commands above as the full acceptance gate. Use `scripts/run_m2_focus_gate_live_acceptance.py` with `examples/harness/live_acceptance/m2_focus_gate_local.yaml` against the external workspace. The fixture wiring under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` is repo-local regression coverage only.
+For focus-gate acceptance specifically, do not treat the example commands above as the full acceptance gate. Use `scripts/run_focus_gate_acceptance.py` with a local manifest based on `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml` against the external workspace. That canonical manifest template now exercises both seam and artifact focus types. The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains for compatibility, and the fixture wiring under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` stays seam-regression-only wiring coverage.
 
 Across bounded and trust modes, the runner-owned `analysis_review_status.recommendation_admissibility` status records `final_answer_recommendation_indices`, `partial_only_recommendation_indices`, `excluded_recommendation_indices`, and `reasons_by_recommendation_index` using only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`. The field is canonical in both modes and keeps the same shape in both modes. In bounded mode, accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices` unless they are topic-blocked, and bounded mode keeps `partial_only_recommendation_indices` empty. In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode, and `PARTIAL_ANSWER.*` is the explicit scoped fallback: its candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations, while whole-artifact promotion still reuses the existing partial gates together with provenance binding, global topic blockers, and minimum-threshold fallout checks.
 

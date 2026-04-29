@@ -4,6 +4,10 @@ import copy
 import json
 from pathlib import Path
 
+from anvil.harness.contracts import (
+    canonical_artifact_focus_id,
+    canonical_seam_id_for_paths,
+)
 from anvil.harness.nodes.write_artifacts import write_artifacts_node
 from anvil.harness.report import render_report
 from anvil.harness.reporting import (
@@ -155,6 +159,7 @@ def _nested_analysis_publishability(summary: dict[str, object]) -> dict[str, obj
 
 
 def _selected_focus_decision() -> dict[str, object]:
+    selected_focus_paths = [".github/workflows/codex-cli-release-watch.yml"]
     return {
         "gate_path": "adjudicate",
         "focus_type": "seam",
@@ -162,7 +167,7 @@ def _selected_focus_decision() -> dict[str, object]:
         "decision_basis": "request_only",
         "selected_focus_id": "release-trigger-automation",
         "selected_focus_summary": "Use the release trigger automation seam as the primary focus.",
-        "selected_focus_paths": [".github/workflows/codex-cli-release-watch.yml"],
+        "selected_focus_paths": selected_focus_paths,
         "confidence": 0.91,
         "confidence_band": "high",
         "files_hint_disposition": "absent",
@@ -190,6 +195,49 @@ def _selected_focus_decision() -> dict[str, object]:
         "adapter_plan": {
             "primary_focus_id": "release-trigger-automation",
             "secondary_focus_ids": ["rollback-runbook"],
+            "downstream_primary_seam_id": canonical_seam_id_for_paths(
+                selected_focus_paths
+            ),
+            "downstream_primary_seam_paths": selected_focus_paths,
+            "adaptation_basis": "selected_focus_paths",
+        },
+    }
+
+
+def _artifact_selected_focus_decision() -> dict[str, object]:
+    selected_focus_path = ".github/workflows/codex-cli-release-watch.yml"
+    return {
+        "gate_path": "adjudicate",
+        "focus_type": "artifact",
+        "decision_state": "selected",
+        "decision_basis": "request_only",
+        "selected_focus_id": canonical_artifact_focus_id(selected_focus_path),
+        "selected_focus_summary": "Use the release trigger workflow artifact as the primary focus.",
+        "selected_focus_paths": [selected_focus_path],
+        "confidence": 0.91,
+        "confidence_band": "high",
+        "files_hint_disposition": "absent",
+        "checked_files": [],
+        "candidates": [
+            {
+                "focus_id": canonical_artifact_focus_id(selected_focus_path),
+                "focus_summary": "Primary release trigger workflow artifact.",
+                "candidate_paths": [selected_focus_path],
+                "why_candidate": "The release workflow file remains the governing artifact.",
+                "evidence_refs": [],
+                "score": 0.91,
+            }
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": canonical_artifact_focus_id(selected_focus_path),
+            "secondary_focus_ids": [],
+            "downstream_primary_seam_id": canonical_seam_id_for_paths(
+                [selected_focus_path]
+            ),
+            "downstream_primary_seam_paths": [selected_focus_path],
+            "adaptation_basis": "artifact_singleton",
         },
     }
 
@@ -229,7 +277,7 @@ def _clarification_focus_decision() -> dict[str, object]:
             },
         ],
         "question": {
-            "prompt": "Which seam should this run prioritize?",
+            "prompt": "Which focus should this run prioritize?",
             "options": [
                 "release-trigger-automation",
                 "rollback-runbook",
@@ -239,6 +287,9 @@ def _clarification_focus_decision() -> dict[str, object]:
         "adapter_plan": {
             "primary_focus_id": None,
             "secondary_focus_ids": [],
+            "downstream_primary_seam_id": None,
+            "downstream_primary_seam_paths": [],
+            "adaptation_basis": None,
         },
     }
 
@@ -264,6 +315,9 @@ def _no_viable_focus_decision() -> dict[str, object]:
         "adapter_plan": {
             "primary_focus_id": None,
             "secondary_focus_ids": [],
+            "downstream_primary_seam_id": None,
+            "downstream_primary_seam_paths": [],
+            "adaptation_basis": None,
         },
     }
 
@@ -312,6 +366,9 @@ def _stale_no_viable_focus_decision() -> dict[str, object]:
                 "release-trigger-automation",
                 "rollback-runbook",
             ],
+            "downstream_primary_seam_id": None,
+            "downstream_primary_seam_paths": [],
+            "adaptation_basis": None,
         },
     }
 
@@ -2562,10 +2619,54 @@ def test_render_report_renders_selected_focus_decision_without_analysis_review_s
     assert "- Envelope structured_output parity: `1` changed field(s)" in section
     assert '`confidence_band`: "medium" -> "high"' in section
     assert "- Adapter secondary focus IDs: `rollback-runbook`" in section
+    assert (
+        "- Downstream primary seam ID: "
+        f"`{canonical_seam_id_for_paths(['.github/workflows/codex-cli-release-watch.yml'])}`"
+        in section
+    )
+    assert (
+        "- Downstream primary seam paths: `.github/workflows/codex-cli-release-watch.yml`"
+        in section
+    )
+    assert "- Focus-to-seam adaptation basis: `selected_focus_paths`" in section
     assert report.index("## Focus Decision") < report.index("## Run Details")
     run_details = _top_level_section(report, "## Run Details")
     assert '"rendered_in_report_section": true' in run_details
     assert '"decision_state": "selected"' in run_details
+
+
+def test_render_report_distinguishes_artifact_focus_from_downstream_seam_bridge():
+    summary = {
+        "verdict": "accepted",
+        "task": {"id": "task-focus-artifact", "task_kind": "analysis_review"},
+        "verdicts": {
+            "content_verdict": "accepted",
+            "validator_verdict": "pass",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "focus_decision": _artifact_selected_focus_decision(),
+        "run_details": {"focus_decision": _artifact_selected_focus_decision()},
+        "workspace_policy_checks": [],
+        "validator_rounds": [],
+        "agent_stages": [],
+        "artifacts": {},
+    }
+
+    report = render_report(summary)
+    section = _top_level_section(report, "## Focus Decision")
+    selected_focus_id = canonical_artifact_focus_id(
+        ".github/workflows/codex-cli-release-watch.yml"
+    )
+    downstream_seam_id = canonical_seam_id_for_paths(
+        [".github/workflows/codex-cli-release-watch.yml"]
+    )
+
+    assert f"- Focus type: `artifact`" in section
+    assert f"- Selected focus ID: `{selected_focus_id}`" in section
+    assert f"- Downstream primary seam ID: `{downstream_seam_id}`" in section
+    assert "- Focus-to-seam adaptation basis: `artifact_singleton`" in section
+    assert selected_focus_id != downstream_seam_id
 
 
 def test_render_report_renders_no_viable_focus_decision_from_run_details():
@@ -2687,7 +2788,7 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
     assert summary["focus_decision"]["decision_state"] == "clarification_requested"
     assert (
         summary_json["focus_decision"]["question"]["prompt"]
-        == "Which seam should this run prioritize?"
+        == "Which focus should this run prioritize?"
     )
     assert "## Analysis Review Status" not in report
     assert "- Decision state: `clarification_requested`" in section
@@ -2697,7 +2798,7 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
         "- Checked files: `.github/workflows/codex-cli-release-watch.yml`, `.github/workflows/rollback-runbook.md`"
         in section
     )
-    assert "- Clarification prompt: Which seam should this run prioritize?" in section
+    assert "- Clarification prompt: Which focus should this run prioritize?" in section
     assert (
         "- Clarification options: `release-trigger-automation`, `rollback-runbook`"
         in section
@@ -2886,7 +2987,7 @@ def test_apply_final_artifacts_partial_answer_projects_canonical_seam_state(
         "verdict": "accepted_partial",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "mode": "trust",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
@@ -2956,7 +3057,7 @@ def test_apply_final_artifacts_final_answer_preserves_analysis_scope_escapes_unc
         "verdict": "accepted",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "mode": "bounded",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
@@ -2991,7 +3092,7 @@ def test_apply_final_artifacts_bounded_accepted_emits_final_answer_and_report_sh
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v9",
+                "contract_version": "analysis_review_v1_contract_v10",
                 "mode": "bounded",
                 "partial_acceptance": {"min_accepted_recommendations": 1},
             },
@@ -3052,7 +3153,7 @@ def test_apply_final_artifacts_emits_final_answer_when_all_accepted_recommendati
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
         "analysis_review_status": _trust_status(
@@ -3084,7 +3185,7 @@ def test_apply_final_artifacts_uses_one_sanitized_payload_copy_per_final_answer_
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
         "analysis_review_status": _trust_status(
@@ -3130,7 +3231,7 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v9",
+                "contract_version": "analysis_review_v1_contract_v10",
                 "partial_acceptance": {"min_accepted_recommendations": 2},
             },
             "analysis_review_status": _trust_status(
@@ -3235,7 +3336,7 @@ def test_apply_final_artifacts_preserves_partial_acceptance_suffix_when_sanitizi
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -3304,7 +3405,7 @@ def test_apply_final_artifacts_writes_partial_answer_with_original_indices_in_ma
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -3349,7 +3450,7 @@ def test_apply_final_artifacts_falls_back_to_best_draft_when_global_topic_blocke
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 1},
         },
         "analysis_review_status": _trust_status(
@@ -3390,7 +3491,7 @@ def test_apply_final_artifacts_falls_back_to_best_draft_when_partial_subset_drop
         "verdict": "accepted_with_warnings",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -3441,7 +3542,7 @@ def test_apply_final_artifacts_never_emits_final_answer_when_source_payload_omit
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v9",
+                "contract_version": "analysis_review_v1_contract_v10",
                 "partial_acceptance": {"min_accepted_recommendations": 2},
             },
             "analysis_review_status": _trust_status(
@@ -3508,7 +3609,7 @@ def test_apply_final_artifacts_enforces_publishability_parity_invariant_across_a
                 "verdict": "accepted_with_warnings",
                 "artifacts": {"run_dir": str(tmp_path / "final")},
                 "analysis_review_contract": {
-                    "contract_version": "analysis_review_v1_contract_v9",
+                    "contract_version": "analysis_review_v1_contract_v10",
                     "mode": "bounded",
                     "partial_acceptance": {"min_accepted_recommendations": 1},
                 },
@@ -3529,7 +3630,7 @@ def test_apply_final_artifacts_enforces_publishability_parity_invariant_across_a
                 "verdict": "accepted_with_warnings",
                 "artifacts": {"run_dir": str(tmp_path / "partial")},
                 "analysis_review_contract": {
-                    "contract_version": "analysis_review_v1_contract_v9",
+                    "contract_version": "analysis_review_v1_contract_v10",
                     "partial_acceptance": {"min_accepted_recommendations": 2},
                 },
                 "analysis_review_status": _trust_status(
@@ -3553,7 +3654,7 @@ def test_apply_final_artifacts_enforces_publishability_parity_invariant_across_a
                 "verdict": "accepted_with_warnings",
                 "artifacts": {"run_dir": str(tmp_path / "best-draft")},
                 "analysis_review_contract": {
-                    "contract_version": "analysis_review_v1_contract_v9",
+                    "contract_version": "analysis_review_v1_contract_v10",
                     "partial_acceptance": {"min_accepted_recommendations": 2},
                 },
                 "analysis_review_status": _trust_status(
@@ -3617,7 +3718,7 @@ def test_apply_final_artifacts_is_idempotent_for_finalized_trust_fallback_report
             "verdict": "accepted_with_warnings",
             "artifacts": {"run_dir": str(tmp_path)},
             "analysis_review_contract": {
-                "contract_version": "analysis_review_v1_contract_v9",
+                "contract_version": "analysis_review_v1_contract_v10",
                 "partial_acceptance": {"min_accepted_recommendations": 2},
             },
             "analysis_review_status": _trust_status(
@@ -3673,7 +3774,7 @@ def test_build_partial_answer_payload_preserves_original_indices_and_canonical_e
     payload = _recommendation_payload("First", "Second", "Third")
     summary = {
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },
         "analysis_review_status": _trust_status(
@@ -3719,7 +3820,7 @@ def test_apply_final_artifacts_bounded_partial_emits_partial_answer_without_part
         "verdict": "accepted_partial",
         "artifacts": {"run_dir": str(tmp_path)},
         "analysis_review_contract": {
-            "contract_version": "analysis_review_v1_contract_v9",
+            "contract_version": "analysis_review_v1_contract_v10",
             "mode": "bounded",
             "partial_acceptance": {"min_accepted_recommendations": 2},
         },

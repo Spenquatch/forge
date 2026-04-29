@@ -23,6 +23,7 @@ from .contracts import (
     default_blocking_class_for_kind,
 )
 from .files import load_structured_file, slugify, write_json, write_text
+from .focus_types import focus_type_adapter
 from .git_utils import (
     capture_git_snapshot,
     capture_non_git_workspace_state,
@@ -65,6 +66,7 @@ from .topic_lifecycle import (
 from .types import (
     ANALYSIS_REVIEW_BOUNDED_KIND,
     ANALYSIS_REVIEW_LEGACY_KIND,
+    GENERIC_FOCUS_GATE_QUESTION_PROMPT,
     ProviderRun,
     RoleConfig,
     StageRequest,
@@ -79,7 +81,6 @@ _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
 _FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
-_FOCUS_GATE_DELIBERATE_QUESTION_PROMPT = "Which seam should this run prioritize?"
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
 _TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST = {
     "strengths contains both concrete items and none_reason; prefer one or the other.",
@@ -655,11 +656,12 @@ class HarnessRunner:
             proposer_cfg,
             semantic_context={
                 "contract": contract,
-                "expected_primary_seam_id": self._selected_focus_id(focus_decision),
-                "expected_primary_seam_paths": self._selected_focus_paths(
+                "expected_primary_seam_id": self._downstream_primary_seam_id(
                     focus_decision
                 ),
-                "selected_focus_paths": self._selected_focus_paths(focus_decision),
+                "expected_primary_seam_paths": self._downstream_primary_seam_paths(
+                    focus_decision
+                ),
             },
         )
         if not proposer_run.ok:
@@ -749,11 +751,12 @@ class HarnessRunner:
                         for item in self._open_topic_records()
                         if str(item.get("topic_id") or "").strip()
                     ],
-                    "expected_primary_seam_id": self._selected_focus_id(focus_decision),
-                    "expected_primary_seam_paths": self._selected_focus_paths(
+                    "expected_primary_seam_id": self._downstream_primary_seam_id(
                         focus_decision
                     ),
-                    "selected_focus_paths": self._selected_focus_paths(focus_decision),
+                    "expected_primary_seam_paths": self._downstream_primary_seam_paths(
+                        focus_decision
+                    ),
                 },
             )
             if not next_analysis_run.ok:
@@ -1006,7 +1009,6 @@ class HarnessRunner:
             normalization_prior_open_topic_records = context.get(
                 "prior_open_topic_records"
             )
-            selected_focus_paths = context.get("selected_focus_paths")
             if isinstance(run.structured_output, dict):
                 if role_name == "focus_gate":
                     normalized_payload = self._normalize_focus_gate_decision_payload(
@@ -1030,7 +1032,6 @@ class HarnessRunner:
                             contract=contract,
                             prior_open_issue_records=normalization_prior_open_issue_records,
                             prior_open_topic_records=normalization_prior_open_topic_records,
-                            selected_focus_paths=selected_focus_paths,
                         )
                     )
                 schema_validation_errors = _soft_validate_schema(
@@ -3727,7 +3728,6 @@ class HarnessRunner:
         contract: AnalysisReviewContract,
         prior_open_issue_records: list[dict[str, Any]] | None = None,
         prior_open_topic_records: list[dict[str, Any]] | None = None,
-        selected_focus_paths: list[str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         normalized = json.loads(json.dumps(payload))
         normalized_refs: dict[str, Any] = {}
@@ -3917,7 +3917,6 @@ class HarnessRunner:
 
         self._canonicalize_analysis_payload_seams(
             normalized=normalized,
-            selected_focus_paths=selected_focus_paths,
         )
 
         scope_escapes = normalized.get("scope_escapes")
@@ -3955,7 +3954,6 @@ class HarnessRunner:
         self,
         *,
         normalized: dict[str, Any],
-        selected_focus_paths: list[str] | None,
     ) -> None:
         primary_seam = normalized.get("primary_seam")
         secondary_seams = normalized.get("secondary_seams_considered")
@@ -3967,7 +3965,6 @@ class HarnessRunner:
         seam_entries.extend(item for item in secondary_seams if isinstance(item, dict))
         primary_canonical_seam_id: str | None = None
 
-        del selected_focus_paths
         old_to_canonical: dict[str, str] = {}
         ambiguous_old_ids: set[str] = set()
         for seam in seam_entries:
@@ -4087,20 +4084,28 @@ class HarnessRunner:
         return asdict(self.task.focus_gate_answer)
 
     @staticmethod
-    def _selected_focus_id(focus_decision: dict[str, Any] | None) -> str | None:
+    def _downstream_primary_seam_id(
+        focus_decision: dict[str, Any] | None,
+    ) -> str | None:
         if not isinstance(focus_decision, dict):
             return None
-        value = str(focus_decision.get("selected_focus_id") or "").strip()
+        adapter_plan = focus_decision.get("adapter_plan")
+        if not isinstance(adapter_plan, dict):
+            return None
+        value = str(adapter_plan.get("downstream_primary_seam_id") or "").strip()
         return value or None
 
-    def _selected_focus_paths(
+    def _downstream_primary_seam_paths(
         self, focus_decision: dict[str, Any] | None
     ) -> list[str] | None:
         if not isinstance(focus_decision, dict):
             return None
+        adapter_plan = focus_decision.get("adapter_plan")
+        if not isinstance(adapter_plan, dict):
+            return None
         values = self._dedupe_preserving_order(
             self._normalize_workspace_ref_list(
-                focus_decision.get("selected_focus_paths")
+                adapter_plan.get("downstream_primary_seam_paths")
             )
         )
         return values or None
@@ -4110,9 +4115,11 @@ class HarnessRunner:
         candidates: Any,
         *,
         checked_files: list[str],
+        focus_type: Any,
     ) -> list[dict[str, Any]]:
         if not isinstance(candidates, list):
             return []
+        adapter = focus_type_adapter(focus_type)
         checked_file_set = set(checked_files)
         normalized_candidates: list[dict[str, Any]] = []
         candidate_group_indices: dict[str, int] = {}
@@ -4126,9 +4133,8 @@ class HarnessRunner:
                 self._normalize_workspace_ref_list(item.get("candidate_paths"))
             )
             normalized_candidate["candidate_paths"] = candidate_paths
-            canonical_focus_id: str | None = None
-            if candidate_paths:
-                canonical_focus_id = canonical_seam_id_for_paths(candidate_paths)
+            canonical_focus_id = adapter.canonical_focus_id_for_paths(candidate_paths)
+            if canonical_focus_id:
                 normalized_candidate["focus_id"] = canonical_focus_id
             evidence_refs = self._dedupe_preserving_order(
                 self._normalize_workspace_ref_list(item.get("evidence_refs"))
@@ -4188,6 +4194,7 @@ class HarnessRunner:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         normalized = deepcopy(payload)
+        focus_type = str(normalized.get("focus_type") or "").strip()
         checked_files = self._dedupe_preserving_order(
             self._normalize_workspace_ref_list(payload.get("checked_files"))
         )[:_FOCUS_MAX_CHECKED_FILES]
@@ -4195,6 +4202,7 @@ class HarnessRunner:
         normalized["candidates"] = self._normalize_focus_gate_candidate_payloads(
             payload.get("candidates"),
             checked_files=checked_files,
+            focus_type=focus_type,
         )
         return normalized
 
@@ -4206,6 +4214,9 @@ class HarnessRunner:
     ) -> dict[str, Any]:
         normalized = deepcopy(payload)
         gate_path = str(normalized.get("gate_path") or "").strip()
+        decision_state = str(normalized.get("decision_state") or "").strip()
+        focus_type = str(normalized.get("focus_type") or "").strip()
+        adapter = focus_type_adapter(focus_type)
         checked_files = self._dedupe_preserving_order(
             self._normalize_workspace_ref_list(payload.get("checked_files"))
         )[:_FOCUS_MAX_CHECKED_FILES]
@@ -4217,6 +4228,7 @@ class HarnessRunner:
         normalized["candidates"] = self._normalize_focus_gate_candidate_payloads(
             payload.get("candidates"),
             checked_files=checked_files,
+            focus_type=focus_type,
         )
         candidate_ids = [
             str(item.get("focus_id") or "").strip()
@@ -4227,22 +4239,25 @@ class HarnessRunner:
             self._normalize_workspace_ref_list(payload.get("selected_focus_paths"))
         )
         normalized["selected_focus_paths"] = selected_focus_paths
-        if selected_focus_paths:
-            canonical_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
+        canonical_focus_id = adapter.canonical_focus_id_for_paths(selected_focus_paths)
+        if decision_state == "selected" and canonical_focus_id:
             normalized["selected_focus_id"] = canonical_focus_id
-            adapter_plan = normalized.get("adapter_plan")
-            if isinstance(adapter_plan, dict):
-                adapter_plan["primary_focus_id"] = canonical_focus_id
-                adapter_plan["secondary_focus_ids"] = [
-                    candidate_id
-                    for candidate_id in candidate_ids
-                    if candidate_id != canonical_focus_id
-                ]
-        else:
-            adapter_plan = normalized.get("adapter_plan")
-            if isinstance(adapter_plan, dict):
-                adapter_plan["secondary_focus_ids"] = candidate_ids
-        decision_state = str(normalized.get("decision_state") or "").strip()
+        secondary_focus_ids = candidate_ids
+        if decision_state == "selected" and canonical_focus_id:
+            secondary_focus_ids = [
+                candidate_id
+                for candidate_id in candidate_ids
+                if candidate_id != canonical_focus_id
+            ]
+        normalized["adapter_plan"] = adapter.build_adapter_plan(
+            selected_focus_id=(
+                canonical_focus_id if decision_state == "selected" else None
+            ),
+            selected_focus_paths=(
+                selected_focus_paths if decision_state == "selected" else []
+            ),
+            secondary_focus_ids=secondary_focus_ids,
+        ).to_dict()
         question = normalized.get("question")
         if decision_state == "clarification_requested":
             prompt = ""
@@ -4289,7 +4304,7 @@ class HarnessRunner:
 
     @classmethod
     def _canonical_focus_gate_question_prompt(cls) -> str:
-        return _FOCUS_GATE_DELIBERATE_QUESTION_PROMPT
+        return GENERIC_FOCUS_GATE_QUESTION_PROMPT
 
     @classmethod
     def _resolve_focus_probe_state(
@@ -4459,6 +4474,9 @@ class HarnessRunner:
         adapter_plan = normalized.get("adapter_plan")
         if isinstance(adapter_plan, dict):
             adapter_plan["primary_focus_id"] = None
+            adapter_plan["downstream_primary_seam_id"] = None
+            adapter_plan["downstream_primary_seam_paths"] = []
+            adapter_plan["adaptation_basis"] = None
         warnings = [
             str(item).strip()
             for item in (normalized.get("warnings") or [])
@@ -4523,7 +4541,7 @@ class HarnessRunner:
             question = {"prompt": "", "options": []}
         return {
             "gate_path": "deliberate",
-            "focus_type": "seam",
+            "focus_type": str(focus_probe.get("focus_type") or "seam").strip(),
             "decision_state": decision_state,
             "decision_basis": "rerun_answer",
             "selected_focus_id": None,
@@ -4538,10 +4556,13 @@ class HarnessRunner:
             "candidates": candidates,
             "question": question,
             "warnings": warnings,
-            "adapter_plan": {
-                "primary_focus_id": None,
-                "secondary_focus_ids": candidate_ids,
-            },
+            "adapter_plan": focus_type_adapter(
+                focus_probe.get("focus_type")
+            ).build_adapter_plan(
+                selected_focus_id=None,
+                selected_focus_paths=[],
+                secondary_focus_ids=candidate_ids,
+            ).to_dict(),
         }
 
     @classmethod
@@ -4573,7 +4594,7 @@ class HarnessRunner:
 
         return {
             "reason": (
-                "model-selected rerun seam did not match the runner-computed admissible rerun seam: "
+                "model-selected rerun focus did not match the runner-computed admissible rerun focus: "
                 f"{valid_winner_focus_id}"
             ),
             "clarification_policy": clarification_policy,

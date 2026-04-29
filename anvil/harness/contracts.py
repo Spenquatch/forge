@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Literal
 
 from .files import slugify
-from .types import ReviewLoopPolicy, StrategyConfig, TaskSpec
+from .types import (
+    DEFAULT_ALLOWED_FOCUS_TYPES,
+    ReviewLoopPolicy,
+    StrategyConfig,
+    TaskSpec,
+    normalize_workspace_ref,
+)
 
 ConfidenceAssessment = Literal["too_low", "well_calibrated", "too_high", "not_assessed"]
 RecommendationVerdict = Literal["accept", "accept_with_caveat", "revise", "reject"]
@@ -80,6 +86,17 @@ def canonical_seam_id_for_paths(paths: list[str]) -> str:
     if stem_prefix:
         return f"{stem_prefix}-{digest}"
     return f"seam-{digest}"
+
+
+def canonical_artifact_focus_id(path: str) -> str:
+    normalized_path = normalize_workspace_ref(path)
+    if not normalized_path:
+        return "artifact-empty"
+    stem_prefix = slugify(Path(normalized_path).stem).strip("-._")
+    digest = hashlib.sha1(normalized_path.encode("utf-8")).hexdigest()[:12]
+    if stem_prefix:
+        return f"artifact-{stem_prefix}-{digest}"
+    return f"artifact-{digest}"
 
 
 @dataclass
@@ -180,7 +197,9 @@ class DiscoveryPolicy:
 class FocusGatePolicy:
     enabled: bool = False
     default_path: Literal["adjudicate", "deliberate"] = "adjudicate"
-    allowed_focus_types: list[Literal["seam"]] = field(default_factory=lambda: ["seam"])
+    allowed_focus_types: list[Literal["seam", "artifact"]] = field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_FOCUS_TYPES)
+    )
     clarification_policy: Literal[
         "block_for_clarification", "never_ask"
     ] = "block_for_clarification"
@@ -263,7 +282,7 @@ def build_analysis_review_contract(
                 f"resolved default_path={focus_gate.default_path}."
             )
     return AnalysisReviewContract(
-        contract_version="analysis_review_v1_contract_v9",
+        contract_version="analysis_review_v1_contract_v10",
         strategy_kind=str(strategy.kind),
         mode=mode,
         stop_policy=strategy.review_loops,

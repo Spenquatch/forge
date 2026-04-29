@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from anvil.config_loader import ProviderCfg
-from anvil.harness.contracts import canonical_seam_id_for_paths
+from anvil.harness.contracts import (
+    canonical_artifact_focus_id,
+    canonical_seam_id_for_paths,
+)
 from anvil.harness.files import load_structured_file
 from anvil.harness.providers import ForgeProviderAdapter, _soft_validate_schema
 from anvil.harness.runner import HarnessRunner
@@ -46,6 +49,12 @@ _OVERFLOW_OWNER_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
 )
 _OVERFLOW_SPEC_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
     _OVERFLOW_SPEC_SEAM_PATHS
+)
+_SIMPLE_PRIMARY_ARTIFACT_FOCUS_ID = canonical_artifact_focus_id(
+    _SIMPLE_PRIMARY_SEAM_PATHS[0]
+)
+_SECONDARY_RELEASE_WATCH_ARTIFACT_FOCUS_ID = canonical_artifact_focus_id(
+    _SECONDARY_RELEASE_WATCH_SEAM_PATHS[0]
 )
 _FOCUS_GATE_QUESTION_PROMPT = HarnessRunner._canonical_focus_gate_question_prompt()
 _CORROBORATION_FILES_REVIEWED = [
@@ -637,6 +646,40 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             return "Primary release trigger workflow seam."
         return "Rollback workflow seam."
 
+    def _focus_type(self) -> str:
+        return "seam"
+
+    def _downstream_primary_seam_id(self, selected_focus_paths: list[str]) -> str:
+        return canonical_seam_id_for_paths(selected_focus_paths)
+
+    def _adaptation_basis(self) -> str:
+        return "selected_focus_paths"
+
+    def _adapter_plan(
+        self,
+        *,
+        selected_focus_id: str | None,
+        selected_focus_paths: list[str],
+        secondary_focus_ids: list[str],
+    ) -> dict[str, object]:
+        if selected_focus_id is None:
+            return {
+                "primary_focus_id": None,
+                "secondary_focus_ids": list(secondary_focus_ids),
+                "downstream_primary_seam_id": None,
+                "downstream_primary_seam_paths": [],
+                "adaptation_basis": None,
+            }
+        return {
+            "primary_focus_id": selected_focus_id,
+            "secondary_focus_ids": list(secondary_focus_ids),
+            "downstream_primary_seam_id": self._downstream_primary_seam_id(
+                selected_focus_paths
+            ),
+            "downstream_primary_seam_paths": list(selected_focus_paths),
+            "adaptation_basis": self._adaptation_basis(),
+        }
+
     def _probe_candidates(self) -> list[dict[str, object]]:
         return [
             {
@@ -663,7 +706,7 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
 
     def _focus_gate_probe_payload(self) -> dict[str, object]:
         return {
-            "focus_type": "seam",
+            "focus_type": self._focus_type(),
             "files_hint_disposition": "helped",
             "checked_files": list(self.probe_checked_files),
             "candidates": self._probe_candidates(),
@@ -693,7 +736,7 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             candidates = [{**item, "evidence_refs": []} for item in candidates]
         return {
             "gate_path": gate_path,
-            "focus_type": "seam",
+            "focus_type": self._focus_type(),
             "decision_state": "selected",
             "decision_basis": decision_basis,
             "selected_focus_id": selected_focus_id,
@@ -706,20 +749,21 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             "candidates": candidates,
             "question": {"prompt": "", "options": []},
             "warnings": [],
-            "adapter_plan": {
-                "primary_focus_id": selected_focus_id,
-                "secondary_focus_ids": [
+            "adapter_plan": self._adapter_plan(
+                selected_focus_id=selected_focus_id,
+                selected_focus_paths=selected_focus_paths,
+                secondary_focus_ids=[
                     candidate["focus_id"]
                     for candidate in candidates
                     if candidate["focus_id"] != selected_focus_id
                 ],
-            },
+            ),
         }
 
     def _clarification_focus_decision(self) -> dict[str, object]:
         return {
             "gate_path": "deliberate",
-            "focus_type": "seam",
+            "focus_type": self._focus_type(),
             "decision_state": "clarification_requested",
             "decision_basis": "repo_probe",
             "selected_focus_id": None,
@@ -735,19 +779,20 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
                 "options": [self.selected_focus_id, self.secondary_focus_id],
             },
             "warnings": ["The task mixes release and rollback concerns."],
-            "adapter_plan": {
-                "primary_focus_id": None,
-                "secondary_focus_ids": [
+            "adapter_plan": self._adapter_plan(
+                selected_focus_id=None,
+                selected_focus_paths=[],
+                secondary_focus_ids=[
                     self.selected_focus_id,
                     self.secondary_focus_id,
                 ],
-            },
+            ),
         }
 
     def _no_viable_focus_decision(self) -> dict[str, object]:
         return {
             "gate_path": "adjudicate",
-            "focus_type": "seam",
+            "focus_type": self._focus_type(),
             "decision_state": "no_viable_focus",
             "decision_basis": "request_only",
             "selected_focus_id": None,
@@ -760,10 +805,11 @@ class _FocusGateHarnessAdapter(_AcceptingHarnessAdapter):
             "candidates": [],
             "question": {"prompt": "", "options": []},
             "warnings": ["No seam candidate had enough direct workspace evidence."],
-            "adapter_plan": {
-                "primary_focus_id": None,
-                "secondary_focus_ids": [],
-            },
+            "adapter_plan": self._adapter_plan(
+                selected_focus_id=None,
+                selected_focus_paths=[],
+                secondary_focus_ids=[],
+            ),
         }
 
     def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
@@ -839,6 +885,50 @@ class _NoViableFocusHarnessAdapter(_FocusGateHarnessAdapter):
         return self._no_viable_focus_decision()
 
 
+class _ArtifactFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
+    selected_focus_id = _SIMPLE_PRIMARY_ARTIFACT_FOCUS_ID
+    secondary_focus_id = _SECONDARY_RELEASE_WATCH_ARTIFACT_FOCUS_ID
+
+    def _focus_type(self) -> str:
+        return "artifact"
+
+    def _adaptation_basis(self) -> str:
+        return "artifact_singleton"
+
+    def _focus_gate_candidate_summary(self, focus_id: str) -> str:
+        if focus_id == self.selected_focus_id:
+            return "Primary release trigger workflow artifact."
+        return "Rollback workflow artifact."
+
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "seam_id": _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+            "summary": "The runner-owned downstream seam bridge for the selected artifact.",
+            "why_primary": "The focus gate selected a file-shaped artifact and the runner bridged it into a downstream seam.",
+            "paths": [".github/workflows/codex-cli-release-watch.yml"],
+        }
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "seam_id": _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+                "summary": "Rollback workflow seam.",
+                "why_not_primary": "It remained shortlisted but secondary after the focus gate.",
+                "paths": [".github/workflows/claude-code-release-watch.yml"],
+            }
+        ]
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        return (_SIMPLE_PRIMARY_CANONICAL_SEAM_ID, "")
+
+
 class _ThresholdValidRerunWinnerHarnessAdapter(_FocusGateHarnessAdapter):
     def _probe_candidates(self) -> list[dict[str, object]]:
         return [
@@ -897,7 +987,7 @@ class _DeliberateHumanQuestionOptionsHarnessAdapter(_FocusGateHarnessAdapter):
         del prompt_text
         payload = self._clarification_focus_decision()
         payload["question"] = {
-            "prompt": "Which seam should this run prioritize?",
+            "prompt": _FOCUS_GATE_QUESTION_PROMPT,
             "options": [
                 "Prioritize Codex CLI release automation",
                 "Prioritize Claude Code release automation",
@@ -978,7 +1068,7 @@ class _ClarificationDuplicateFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
             },
         ]
         payload["question"] = {
-            "prompt": "Which seam should this run prioritize?",
+            "prompt": _FOCUS_GATE_QUESTION_PROMPT,
             "options": ["stale-option", "another-stale-option"],
         }
         payload["adapter_plan"]["secondary_focus_ids"] = ["stale-secondary-id"]
@@ -2831,12 +2921,13 @@ def _task_focus_gate_block(
     *,
     enabled: bool = True,
     clarification_policy: str = "block_for_clarification",
+    allowed_focus_type: str = "seam",
 ) -> str:
     return (
         "focus_gate:\n"
         f"  enabled: {'true' if enabled else 'false'}\n"
         "  allowed_focus_types:\n"
-        "    - seam\n"
+        f"    - {allowed_focus_type}\n"
         f"  clarification_policy: {clarification_policy}\n"
     )
 
@@ -3304,6 +3395,56 @@ def test_analysis_review_runner_focus_gate_adjudicate_normalizes_repo_probe_payl
     )
     assert focus_decision["candidates"][0]["evidence_refs"] == []
     assert focus_stage["structured_output"] == focus_decision
+
+
+def test_analysis_review_runner_artifact_focus_uses_downstream_primary_seam_bridge(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(allowed_focus_type="artifact"),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="adjudicate"),
+    )
+
+    adapter = _ArtifactFocusGateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    proposer_stage = summary["agent_stages"][1]
+
+    assert summary["verdict"] == "accepted"
+    assert focus_decision["focus_type"] == "artifact"
+    assert focus_decision["selected_focus_id"] == _SIMPLE_PRIMARY_ARTIFACT_FOCUS_ID
+    assert focus_decision["selected_focus_paths"] == _SIMPLE_PRIMARY_SEAM_PATHS
+    assert (
+        focus_decision["adapter_plan"]["primary_focus_id"]
+        == _SIMPLE_PRIMARY_ARTIFACT_FOCUS_ID
+    )
+    assert (
+        focus_decision["adapter_plan"]["downstream_primary_seam_id"]
+        == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert (
+        focus_decision["adapter_plan"]["downstream_primary_seam_paths"]
+        == _SIMPLE_PRIMARY_SEAM_PATHS
+    )
+    assert focus_decision["adapter_plan"]["adaptation_basis"] == "artifact_singleton"
+    assert proposer_stage["ok"] is True
+    assert (
+        summary["analysis_review_status"]["primary_seam"]["seam_id"]
+        == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
 
 
 def test_analysis_review_runner_focus_gate_probe_dedupes_duplicate_canonical_candidates(
@@ -3828,7 +3969,7 @@ def test_analysis_review_runner_focus_gate_rerun_answer_hardening_normalizes_wro
     assert summary["verdict"] == "blocked_for_clarification"
     assert focus_decision["decision_state"] == "clarification_requested"
     assert any(
-        "runner-computed admissible rerun seam" in warning
+        "runner-computed admissible rerun focus" in warning
         for warning in focus_decision["warnings"]
     )
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
@@ -4003,7 +4144,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert Path(summary["artifacts"]["analysis_review_contract_json"]).exists()
     assert (
         summary["analysis_review_contract"]["contract_version"]
-        == "analysis_review_v1_contract_v9"
+        == "analysis_review_v1_contract_v10"
     )
     assert summary["analysis_review_contract"]["mode"] == "bounded"
     assert (
@@ -7129,7 +7270,7 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
         "Add release failure categorization"
     )
     assert summary["run_details"]["analysis_review_contract"]["contract_version"] == (
-        "analysis_review_v1_contract_v9"
+        "analysis_review_v1_contract_v10"
     )
     assert summary["bounded_review_summary"]["recommendation_count"] == 3
     assert summary["bounded_review_summary"]["recommendations_with_review_surface"] == 3

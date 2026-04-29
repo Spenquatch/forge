@@ -5,6 +5,8 @@ import pytest
 import anvil.harness.prompts as prompt_builders
 from anvil.harness.contracts import (
     build_analysis_review_contract,
+    canonical_artifact_focus_id,
+    canonical_seam_id_for_paths,
     confidence_rubric_lines,
 )
 from anvil.harness.prompts import (
@@ -229,7 +231,7 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     )
 
     common_bounded_lines = [
-        "Analysis-review contract: analysis_review_v1_contract_v9",
+        "Analysis-review contract: analysis_review_v1_contract_v10",
         f"Effective strategy kind: {strategy_kind}",
         f"Mode: {mode}",
         "Bounded review policy:",
@@ -681,14 +683,14 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
         _GIT_SNAPSHOT,
         contract,
         focus_gate_answer={
-            "question_prompt": "Which seam should this run prioritize?",
+            "question_prompt": "Which focus should this run prioritize?",
             "selected_option": "release-trigger-automation",
             "freeform_answer": "",
         },
         prior_focus_decision={
             "decision_state": "clarification_requested",
             "question": {
-                "prompt": "Which seam should this run prioritize?",
+                "prompt": "Which focus should this run prioritize?",
                 "options": ["release-trigger-automation", "nightly-parity"],
             },
         },
@@ -699,14 +701,14 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
         _GIT_SNAPSHOT,
         contract,
         focus_gate_answer={
-            "question_prompt": "Which seam should this run prioritize?",
+            "question_prompt": "Which focus should this run prioritize?",
             "selected_option": "release-trigger-automation",
             "freeform_answer": "",
         },
         prior_focus_decision={
             "decision_state": "clarification_requested",
             "question": {
-                "prompt": "Which seam should this run prioritize?",
+                "prompt": "Which focus should this run prioritize?",
                 "options": ["release-trigger-automation", "nightly-parity"],
             },
         },
@@ -737,11 +739,20 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
         in deliberate_prompt
     )
     assert (
-        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity."
+        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical focus identity."
         in deliberate_prompt
     )
     assert (
         "copy the selected candidate's exact path set into `selected_focus_paths`"
+        in deliberate_prompt
+    )
+    assert (
+        "`adapter_plan.downstream_primary_seam_id`, "
+        "`adapter_plan.downstream_primary_seam_paths`, and "
+        "`adapter_plan.adaptation_basis`" in deliberate_prompt
+    )
+    assert (
+        "For `focus_type=artifact`, keep `selected_focus_*` artifact-shaped;"
         in deliberate_prompt
     )
     assert "probe artifact context" in deliberate_prompt
@@ -788,7 +799,7 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
         in adjudicate_prompt
     )
     assert (
-        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity."
+        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical focus identity."
         in adjudicate_prompt
     )
 
@@ -829,6 +840,12 @@ def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prom
         "adapter_plan": {
             "primary_focus_id": "release-trigger-automation",
             "secondary_focus_ids": ["nightly-parity"],
+            "downstream_primary_seam_id": "release-trigger-automation",
+            "downstream_primary_seam_paths": [
+                ".github/workflows/release.yml",
+                ".github/workflows/reusable-release.yml",
+            ],
+            "adaptation_basis": "selected_focus_paths",
         },
     }
 
@@ -861,12 +878,75 @@ def test_selected_focus_gate_decision_is_injected_into_proposer_and_reviser_prom
         "- selected_focus_summary: The release trigger workflows are the governing seam.",
         "- selected_focus_paths: .github/workflows/release.yml, .github/workflows/reusable-release.yml",
         "- shortlisted_candidate_ids: release-trigger-automation, nightly-parity",
-        "Treat `selected_focus_paths` as authoritative seam identity:",
-        "downstream `primary_seam.paths` must match this exact normalized path set",
+        "- adapter_plan.downstream_primary_seam_id: release-trigger-automation",
+        "- adapter_plan.downstream_primary_seam_paths: .github/workflows/release.yml, .github/workflows/reusable-release.yml",
+        "- adapter_plan.adaptation_basis: selected_focus_paths",
+        "Preserve `selected_focus_*` as the chosen focus surface.",
+        "Use `adapter_plan.downstream_primary_seam_paths` and `adapter_plan.downstream_primary_seam_id` as the authoritative downstream seam handoff",
     ]
     for line in expected_lines:
         assert line in proposer
         assert line in reviser
+
+
+def test_artifact_focus_gate_decision_preserves_selected_focus_and_injects_bridge():
+    task = TaskSpec.from_dict(
+        {
+            **_task().to_dict(),
+            "focus_gate": {
+                "enabled": True,
+                "allowed_focus_types": ["artifact"],
+                "clarification_policy": "block_for_clarification",
+            },
+        }
+    )
+    strategy = _strategy()
+    contract = build_analysis_review_contract(task, strategy)
+    selected_path = ".github/workflows/release.yml"
+    focus_decision = {
+        "gate_path": "adjudicate",
+        "focus_type": "artifact",
+        "decision_state": "selected",
+        "selected_focus_id": canonical_artifact_focus_id(selected_path),
+        "selected_focus_summary": "The release workflow artifact is the chosen focus.",
+        "selected_focus_paths": [selected_path],
+        "confidence": 0.88,
+        "confidence_band": "high",
+        "candidates": [
+            {
+                "focus_id": canonical_artifact_focus_id(selected_path),
+                "focus_summary": "Release workflow artifact",
+                "candidate_paths": [selected_path],
+            }
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": canonical_artifact_focus_id(selected_path),
+            "secondary_focus_ids": [],
+            "downstream_primary_seam_id": canonical_seam_id_for_paths([selected_path]),
+            "downstream_primary_seam_paths": [selected_path],
+            "adaptation_basis": "artifact_singleton",
+        },
+    }
+
+    proposer = build_analysis_proposer_prompt(
+        task,
+        strategy.prompt_preamble,
+        _GIT_SNAPSHOT,
+        contract,
+        focus_decision=focus_decision,
+    )
+
+    assert f"- selected_focus_id: {canonical_artifact_focus_id(selected_path)}" in proposer
+    assert "- adapter_plan.adaptation_basis: artifact_singleton" in proposer
+    assert (
+        "Preserve `selected_focus_*` as the chosen focus surface." in proposer
+    )
+    assert (
+        "Use `adapter_plan.downstream_primary_seam_paths` and `adapter_plan.downstream_primary_seam_id` as the authoritative downstream seam handoff"
+        in proposer
+    )
 
 
 def test_focus_probe_prompt_forbids_duplicate_canonical_candidate_path_sets():
@@ -884,7 +964,7 @@ def test_focus_probe_prompt_forbids_duplicate_canonical_candidate_path_sets():
     assert "Probe rules:" in prompt
     assert "Candidate count caps at 3." in prompt
     assert (
-        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical seam identity."
+        "Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical focus identity."
         in prompt
     )
 
@@ -910,13 +990,16 @@ def test_non_selected_focus_gate_decision_is_not_injected_into_analysis_prompts(
             }
         ],
         "question": {
-            "prompt": "Which seam should this run prioritize?",
+            "prompt": "Which focus should this run prioritize?",
             "options": ["release-trigger-automation"],
         },
         "warnings": [],
         "adapter_plan": {
             "primary_focus_id": None,
             "secondary_focus_ids": ["release-trigger-automation"],
+            "downstream_primary_seam_id": None,
+            "downstream_primary_seam_paths": [],
+            "adaptation_basis": None,
         },
     }
 

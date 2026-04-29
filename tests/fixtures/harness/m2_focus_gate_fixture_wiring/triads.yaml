@@ -1,3 +1,5 @@
+fixture_namespace: m2_focus_gate_fixture_wiring
+fixture_purpose: seam_regression_only_wiring_coverage
 cases:
   - name: bounded-adjudicate
     task: examples/harness/tasks/recommend_automation_improvements.yaml

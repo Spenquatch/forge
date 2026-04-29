@@ -667,6 +667,10 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         lines.append("- Candidates considered: none")
 
     adapter_primary_focus_id = str(adapter_plan.get("primary_focus_id") or "").strip()
+    downstream_primary_seam_id = str(
+        adapter_plan.get("downstream_primary_seam_id") or ""
+    ).strip()
+    adaptation_basis = str(adapter_plan.get("adaptation_basis") or "").strip()
     lines.append(
         "- Adapter primary focus ID: "
         + (f"`{adapter_primary_focus_id}`" if adapter_primary_focus_id else "none")
@@ -674,6 +678,22 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
     lines.append(
         "- Adapter secondary focus IDs: "
         + _render_plain_focus_list(adapter_plan.get("secondary_focus_ids"))
+    )
+    lines.append(
+        "- Downstream primary seam ID: "
+        + (
+            f"`{downstream_primary_seam_id}`"
+            if downstream_primary_seam_id
+            else "none"
+        )
+    )
+    lines.append(
+        "- Downstream primary seam paths: "
+        + _render_plain_focus_list(adapter_plan.get("downstream_primary_seam_paths"))
+    )
+    lines.append(
+        "- Focus-to-seam adaptation basis: "
+        + (f"`{adaptation_basis}`" if adaptation_basis else "none")
     )
     if stale_warnings:
         lines.append("- Stale-answer warnings:")

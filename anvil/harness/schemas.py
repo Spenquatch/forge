@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import GROUNDING_MODE_VALUES
+from .types import VALID_SINGLETON_FOCUS_TYPES
 
 ISSUE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -380,8 +381,33 @@ FOCUS_GATE_ADAPTER_PLAN_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
         },
+        "downstream_primary_seam_id": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        },
+        "downstream_primary_seam_paths": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "adaptation_basis": {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "enum": ["selected_focus_paths", "artifact_singleton"],
+                },
+                {"type": "null"},
+            ]
+        },
     },
-    "required": ["primary_focus_id", "secondary_focus_ids"],
+    "required": [
+        "primary_focus_id",
+        "secondary_focus_ids",
+        "downstream_primary_seam_id",
+        "downstream_primary_seam_paths",
+        "adaptation_basis",
+    ],
     "additionalProperties": False,
 }
 
@@ -617,7 +643,7 @@ def focus_gate_output_schema() -> dict[str, Any]:
             },
             "focus_type": {
                 "type": "string",
-                "enum": ["seam"],
+                "enum": list(VALID_SINGLETON_FOCUS_TYPES),
             },
             "decision_state": {
                 "type": "string",
@@ -696,7 +722,7 @@ def focus_probe_output_schema() -> dict[str, Any]:
         "properties": {
             "focus_type": {
                 "type": "string",
-                "enum": ["seam"],
+                "enum": list(VALID_SINGLETON_FOCUS_TYPES),
             },
             "files_hint_disposition": {
                 "type": "string",

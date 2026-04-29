@@ -93,7 +93,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     contract = build_analysis_review_contract(_task(min_recommendations=3), _strategy())
     serialized = contract.to_dict()
 
-    assert contract.contract_version == "analysis_review_v1_contract_v9"
+    assert contract.contract_version == "analysis_review_v1_contract_v10"
     assert contract.mode == "bounded"
     assert contract.reviser_goal == "close_all_open_blockers"
     assert contract.stop_policy.max_loops == 3
@@ -235,7 +235,7 @@ def test_analysis_review_contract_resolves_focus_gate_from_strategy_and_task():
         ),
     )
 
-    assert contract.contract_version == "analysis_review_v1_contract_v9"
+    assert contract.contract_version == "analysis_review_v1_contract_v10"
     assert contract.focus_gate.enabled is True
     assert contract.focus_gate.default_path == "deliberate"
     assert contract.focus_gate.allowed_focus_types == ["seam"]
@@ -292,14 +292,14 @@ def test_task_review_requirements_default_and_explicit_evidence_cap_policy():
 def test_task_focus_gate_answer_accepts_empty_freeform_answer():
     task = _task(
         focus_gate_answer={
-            "question_prompt": " Which seam should this run prioritize? ",
+            "question_prompt": " Which focus should this run prioritize? ",
             "selected_option": " release-trigger-automation ",
             "freeform_answer": "",
         }
     )
 
     assert task.focus_gate_answer is not None
-    assert task.focus_gate_answer.question_prompt == "Which seam should this run prioritize?"
+    assert task.focus_gate_answer.question_prompt == "Which focus should this run prioritize?"
     assert task.focus_gate_answer.selected_option == "release-trigger-automation"
     assert task.focus_gate_answer.freeform_answer == ""
 
@@ -313,7 +313,7 @@ def test_task_focus_gate_answer_accepts_empty_freeform_answer():
         ),
         (
             {
-                "question_prompt": "Which seam should this run prioritize?",
+                "question_prompt": "Which focus should this run prioritize?",
                 "selected_option": "   ",
             },
             "focus_gate_answer.selected_option must be a non-empty string.",
@@ -331,7 +331,7 @@ def test_build_analysis_review_contract_rejects_adjudicate_focus_gate_answer_bef
     task = _task(
         focus_gate={"enabled": True, "allowed_focus_types": ["seam"]},
         focus_gate_answer={
-            "question_prompt": "Which seam should this run prioritize?",
+            "question_prompt": "Which focus should this run prioritize?",
             "selected_option": "release-trigger-automation",
             "freeform_answer": "",
         },
@@ -380,12 +380,35 @@ def test_focus_gate_rejects_unknown_keys(
             _strategy(focus_gate=strategy_focus_gate)
 
 
-def test_task_focus_gate_rejects_non_seam_allowed_focus_types():
-    with pytest.raises(
-        ValueError,
-        match=r"focus_gate\.allowed_focus_types must be exactly \['seam'\]\.",
-    ):
-        _task(focus_gate={"allowed_focus_types": ["artifact"]})
+def test_task_focus_gate_accepts_artifact_singleton_allowed_focus_types():
+    task = _task(focus_gate={"allowed_focus_types": ["artifact"]})
+
+    assert task.focus_gate is not None
+    assert task.focus_gate.allowed_focus_types == ["artifact"]
+
+
+@pytest.mark.parametrize(
+    ("allowed_focus_types", "message"),
+    [
+        (
+            ["seam", "artifact"],
+            "focus_gate.allowed_focus_types must contain exactly one value; mixed-type lists are not allowed.",
+        ),
+        (
+            ["seam", "seam"],
+            r"focus_gate\.allowed_focus_types must contain exactly one value: \['seam'\] or \['artifact'\]\.",
+        ),
+        (
+            ["unknown"],
+            r"focus_gate\.allowed_focus_types must contain exactly one value: \['seam'\] or \['artifact'\]\.",
+        ),
+    ],
+)
+def test_task_focus_gate_rejects_non_singleton_or_unknown_allowed_focus_types(
+    allowed_focus_types: list[str], message: str
+):
+    with pytest.raises(ValueError, match=message):
+        _task(focus_gate={"allowed_focus_types": allowed_focus_types})
 
 
 def test_analysis_review_schema_requires_files_reviewed_and_closure_review_arrays():
@@ -539,10 +562,18 @@ def test_readme_documents_trust_recommendation_admissibility_and_preview_only_ma
     assert "Markdown compaction is preview-only and renderer-owned." in readme
 
 
-def test_analysis_review_contract_docs_freeze_v9_admissibility_publishability_and_preview_budgets():
+def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_and_preview_budgets():
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
-    assert "analysis_review_v1_contract_v9" in contract_doc
+    assert "analysis_review_v1_contract_v10" in contract_doc
+    assert 'the only allowed singleton values are `["seam"]` and `["artifact"]`' in contract_doc
+    assert 'mixed-type lists such as `["seam", "artifact"]` are rejected explicitly' in contract_doc
+    assert '"focus_type": "seam | artifact"' in contract_doc
+    assert "Which focus should this run prioritize?" in contract_doc
+    assert "downstream_primary_seam_id" in contract_doc
+    assert "downstream_primary_seam_paths" in contract_doc
+    assert "adaptation_basis" in contract_doc
+    assert "hard rule: for artifact runs, `selected_focus_*` is not downstream seam truth" in contract_doc
     shared_discovery_phrase = (
         "Shared repo-local discovery applies to both bounded mode and trust mode:"
     )

@@ -58,12 +58,68 @@ def test_analysis_review_entry_points_reference_focus_gate_adjudicate_examples()
     assert bounded_path in root_readme
     assert trust_path in root_readme
     assert bounded_path in run_script
+    assert "scripts/run_focus_gate_acceptance.py" in examples_readme
+    assert "scripts/run_focus_gate_acceptance.py" in root_readme
+    assert "scripts/run_m2_focus_gate_live_acceptance.py" in examples_readme
+    assert "scripts/run_m2_focus_gate_live_acceptance.py" in root_readme
+    assert "seam-regression-only wiring coverage" in examples_readme
+    assert "seam-regression-only wiring coverage" in root_readme
+
+
+def test_focus_gate_live_acceptance_templates_cover_canonical_and_compatibility_surfaces():
+    canonical_manifest = load_structured_file(
+        Path("examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml")
+    )
+    compatibility_manifest = load_structured_file(
+        Path("examples/harness/live_acceptance/m2_focus_gate_local.template.yaml")
+    )
+
+    assert canonical_manifest["task"] == "examples/harness/tasks/recommend_automation_improvements.yaml"
+    assert canonical_manifest["scenarios"] == [
+        {
+            "name": "bounded",
+            "strategy": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
+            "expected_gate_path": "adjudicate",
+            "expected_focus_type": "seam",
+            "expected_decision_state": "selected",
+            "expect_proposer_artifacts": True,
+            "expect_downstream_bridge": True,
+        },
+        {
+            "name": "trust",
+            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
+            "expected_gate_path": "adjudicate",
+            "expected_focus_type": "seam",
+            "expected_decision_state": "selected",
+            "expect_proposer_artifacts": True,
+            "expect_downstream_bridge": True,
+        },
+        {
+            "name": "artifact-bounded",
+            "task": "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml",
+            "strategy": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
+            "expected_gate_path": "adjudicate",
+            "expected_focus_type": "artifact",
+            "expected_decision_state": "selected",
+            "expect_proposer_artifacts": True,
+            "expect_downstream_bridge": True,
+        },
+    ]
+
+    assert compatibility_manifest["task"] == canonical_manifest["task"]
+    assert compatibility_manifest["strategies"] == {
+        "bounded": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
+        "trust": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
+    }
 
 
 def test_m2_focus_gate_fixture_wiring_triads_resolve_task_strategy_and_workspace():
     triads = load_structured_file(
         Path("tests/fixtures/harness/m2_focus_gate_fixture_wiring/triads.yaml")
     )
+
+    assert triads["fixture_namespace"] == "m2_focus_gate_fixture_wiring"
+    assert triads["fixture_purpose"] == "seam_regression_only_wiring_coverage"
 
     for case in triads["cases"]:
         task_path = Path(case["task"])
@@ -86,7 +142,5 @@ def test_m2_focus_gate_fixture_wiring_triads_resolve_task_strategy_and_workspace
         }
 
         for workspace_ref in task["files_hint"]:
-            assert (workspace_path / workspace_ref).exists(), (
-                case["name"],
-                workspace_ref,
-            )
+            matches = list(workspace_path.glob(workspace_ref))
+            assert matches, (case["name"], workspace_ref)
