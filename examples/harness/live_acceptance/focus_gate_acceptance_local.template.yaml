@@ -16,6 +16,31 @@ scenarios:
     expected_decision_state: selected
     expect_proposer_artifacts: true
     expect_downstream_bridge: true
+  - name: deliberate-ambiguity
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+    expected_gate_path: deliberate
+    expected_focus_type: seam
+    expected_decision_state: clarification_requested
+    expect_proposer_artifacts: false
+    expect_downstream_bridge: false
+  - name: never-ask
+    task: examples/harness/tasks/recommend_automation_improvements_never_ask.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+    expected_gate_path: deliberate
+    expected_focus_type: seam
+    expected_decision_state: no_viable_focus
+    expect_proposer_artifacts: false
+    expect_downstream_bridge: false
+  - name: stale-rerun
+    task: examples/harness/tasks/recommend_automation_improvements_stale_focus_gate_answer.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+    expected_gate_path: deliberate
+    expected_focus_type: seam
+    expected_decision_state: clarification_requested
+    expect_proposer_artifacts: false
+    expect_downstream_bridge: false
+    expected_warning_substrings:
+      - went stale
   - name: artifact-bounded
     task: examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml
     strategy: examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml
@@ -24,3 +49,37 @@ scenarios:
     expected_decision_state: selected
     expect_proposer_artifacts: true
     expect_downstream_bridge: true
+  - name: artifact-trust
+    task: examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml
+    expected_gate_path: adjudicate
+    expected_focus_type: artifact
+    expected_decision_state: selected
+    expect_proposer_artifacts: true
+    expect_downstream_bridge: true
+  - name: artifact-deliberate-ambiguity
+    task: examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+    expected_gate_path: deliberate
+    expected_focus_type: artifact
+    expected_decision_state: clarification_requested
+    expect_proposer_artifacts: false
+    expect_downstream_bridge: false
+  - name: artifact-never-ask
+    task: examples/harness/tasks/recommend_release_workflow_artifact_improvements_never_ask.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+    expected_gate_path: deliberate
+    expected_focus_type: artifact
+    expected_decision_state: no_viable_focus
+    expect_proposer_artifacts: false
+    expect_downstream_bridge: false
+  - name: artifact-stale-rerun
+    task: examples/harness/tasks/recommend_release_workflow_artifact_improvements_stale_rerun_answer.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+    expected_gate_path: deliberate
+    expected_focus_type: artifact
+    expected_decision_state: clarification_requested
+    expect_proposer_artifacts: false
+    expect_downstream_bridge: false
+    expected_warning_substrings:
+      - went stale

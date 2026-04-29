@@ -137,6 +137,44 @@ def _selected_focus_decision() -> dict[str, Any]:
     }
 
 
+def _artifact_selected_focus_decision() -> dict[str, Any]:
+    selected_path = ".github/workflows/codex-cli-release-watch.yml"
+    artifact_id = SCRIPT.canonical_artifact_focus_id(selected_path)
+    seam_id = SCRIPT.canonical_seam_id_for_paths([selected_path])
+    return {
+        "gate_path": "adjudicate",
+        "focus_type": "artifact",
+        "decision_state": "selected",
+        "decision_basis": "request_only",
+        "selected_focus_id": artifact_id,
+        "selected_focus_summary": "The release workflow artifact is the chosen focus.",
+        "selected_focus_paths": [selected_path],
+        "confidence": 0.88,
+        "confidence_band": "high",
+        "files_hint_disposition": "helped",
+        "checked_files": [selected_path],
+        "candidates": [
+            {
+                "focus_id": artifact_id,
+                "focus_summary": "Release workflow artifact.",
+                "candidate_paths": [selected_path],
+                "why_candidate": "The task explicitly narrows to the governing workflow.",
+                "evidence_refs": [selected_path],
+                "score": 0.88,
+            }
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": artifact_id,
+            "secondary_focus_ids": [],
+            "downstream_primary_seam_id": seam_id,
+            "downstream_primary_seam_paths": [selected_path],
+            "adaptation_basis": "artifact_singleton",
+        },
+    }
+
+
 def _clarification_focus_decision() -> dict[str, Any]:
     return {
         "gate_path": "deliberate",
@@ -294,6 +332,66 @@ def _create_clarification_run_dir(tmp_path: Path) -> tuple[Path, Path]:
     return summary_path, report_path
 
 
+def _create_artifact_selected_run_dir(tmp_path: Path) -> tuple[Path, Path]:
+    run_dir = tmp_path / "artifact-selected-run"
+    summary_path = run_dir / "summary.json"
+    report_path = run_dir / "REPORT.md"
+    (tmp_path / "workspace/.github/workflows").mkdir(parents=True, exist_ok=True)
+    workflow_path = tmp_path / "workspace/.github/workflows/codex-cli-release-watch.yml"
+    workflow_path.write_text("name: release-watch\n", encoding="utf-8")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Report\n", encoding="utf-8")
+
+    focus_decision = _artifact_selected_focus_decision()
+    _write_structured(
+        summary_path,
+        {
+            "focus_decision": focus_decision,
+            "agent_stages": [
+                {
+                    "role_name": "focus_gate",
+                    "metadata": {
+                        "focus_gate": {
+                            "gate_path": "adjudicate",
+                            "focus_type": "artifact",
+                            "decision_state": "selected",
+                        }
+                    },
+                    "stdout_path": str(run_dir / "artifacts/01_focus_gate/stdout.txt"),
+                },
+                {
+                    "role_name": "proposer",
+                    "stdout_path": str(run_dir / "artifacts/02_proposer/stdout.txt"),
+                },
+                {
+                    "role_name": "critic",
+                    "stdout_path": str(run_dir / "artifacts/03_critic/stdout.txt"),
+                },
+            ],
+            "warnings": [],
+        },
+    )
+
+    proposer_payload = {
+        "primary_seam": {
+            "paths": [".github/workflows/codex-cli-release-watch.yml"],
+        }
+    }
+    _write_structured(
+        run_dir / "artifacts/02_proposer/structured_output.raw.json",
+        proposer_payload,
+    )
+    _write_structured(
+        run_dir / "artifacts/02_proposer/structured_output.normalized.json",
+        proposer_payload,
+    )
+    _write_structured(
+        run_dir / "artifacts/02_proposer/run.envelope.json",
+        {"structured_output": proposer_payload},
+    )
+    return summary_path, report_path
+
+
 def test_load_manifest_config_accepts_scenario_driven_manifest(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -432,6 +530,32 @@ def test_validate_acceptance_run_accepts_selected_bridge_and_proposer(tmp_path: 
     )
 
 
+def test_validate_acceptance_run_accepts_selected_artifact_bridge_and_proposer(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
+
+    SCRIPT.validate_acceptance_run(
+        summary_path=summary_path,
+        report_path=report_path,
+        workspace=workspace,
+        scenario=SCRIPT.AcceptanceScenario(
+            name="artifact-bounded",
+            strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
+                strict=False
+            ),
+            task=None,
+            expected_gate_path="adjudicate",
+            expected_focus_type="artifact",
+            expected_decision_state="selected",
+            expect_proposer_artifacts=True,
+            expect_downstream_bridge=True,
+        ),
+    )
+
+
 def test_validate_acceptance_run_accepts_blocked_deliberate_without_proposer(
     tmp_path: Path,
 ) -> None:
@@ -456,7 +580,108 @@ def test_validate_acceptance_run_accepts_blocked_deliberate_without_proposer(
             expect_downstream_bridge=False,
             expected_warning_substrings=("went stale",),
         ),
+        )
+
+
+def test_validate_acceptance_run_rejects_noncanonical_selected_artifact_focus_id(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["focus_decision"]["selected_focus_id"] = SCRIPT.canonical_seam_id_for_paths(
+        [".github/workflows/codex-cli-release-watch.yml"]
     )
+    _write_structured(summary_path, summary)
+
+    with pytest.raises(
+        SCRIPT.AcceptanceError,
+        match="focus_decision.selected_focus_id must be the canonical artifact focus ID",
+    ):
+        SCRIPT.validate_acceptance_run(
+            summary_path=summary_path,
+            report_path=report_path,
+            workspace=workspace,
+            scenario=SCRIPT.AcceptanceScenario(
+                name="artifact-bounded",
+                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
+                    strict=False
+                ),
+                task=None,
+                expected_gate_path="adjudicate",
+                expected_focus_type="artifact",
+                expected_decision_state="selected",
+                expect_proposer_artifacts=True,
+                expect_downstream_bridge=True,
+            ),
+        )
+
+
+def test_validate_acceptance_run_rejects_selected_artifact_primary_focus_id_mismatch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["focus_decision"]["adapter_plan"]["primary_focus_id"] = "artifact:stale-id"
+    _write_structured(summary_path, summary)
+
+    with pytest.raises(
+        SCRIPT.AcceptanceError,
+        match="adapter_plan.primary_focus_id must equal focus_decision.selected_focus_id",
+    ):
+        SCRIPT.validate_acceptance_run(
+            summary_path=summary_path,
+            report_path=report_path,
+            workspace=workspace,
+            scenario=SCRIPT.AcceptanceScenario(
+                name="artifact-bounded",
+                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
+                    strict=False
+                ),
+                task=None,
+                expected_gate_path="adjudicate",
+                expected_focus_type="artifact",
+                expected_decision_state="selected",
+                expect_proposer_artifacts=True,
+                expect_downstream_bridge=True,
+            ),
+        )
+
+
+def test_validate_acceptance_run_rejects_selected_artifact_adaptation_basis_regression(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["focus_decision"]["adapter_plan"]["adaptation_basis"] = "selected_focus_paths"
+    _write_structured(summary_path, summary)
+
+    with pytest.raises(
+        SCRIPT.AcceptanceError,
+        match="adapter_plan.adaptation_basis must equal 'artifact_singleton'",
+    ):
+        SCRIPT.validate_acceptance_run(
+            summary_path=summary_path,
+            report_path=report_path,
+            workspace=workspace,
+            scenario=SCRIPT.AcceptanceScenario(
+                name="artifact-bounded",
+                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
+                    strict=False
+                ),
+                task=None,
+                expected_gate_path="adjudicate",
+                expected_focus_type="artifact",
+                expected_decision_state="selected",
+                expect_proposer_artifacts=True,
+                expect_downstream_bridge=True,
+            ),
+        )
 
 
 def test_validate_acceptance_run_rejects_missing_expected_warning(tmp_path: Path) -> None:

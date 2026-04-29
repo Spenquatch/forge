@@ -39,6 +39,6 @@ These adjudicate strategies are runnable examples, not by themselves the authori
 Repo-local fixture wiring coverage lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and remains seam-regression-only wiring coverage.
 
 Authoritative focus-gate acceptance uses `scripts/run_focus_gate_acceptance.py` with a local manifest based on `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml`.
-That canonical manifest template covers the seam/adjudicate smoke cases plus an artifact-focused adjudicate case so the manual acceptance path exercises both supported focus types.
+That canonical manifest template covers the full seam and artifact M3 acceptance matrix, including adjudicate, deliberate ambiguity, `never_ask`, and stale rerun-answer cases.
 
 The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. Its legacy local config name stays `examples/harness/live_acceptance/m2_focus_gate_local.yaml`, and it still accepts the old `strategies:` shorthand surface.

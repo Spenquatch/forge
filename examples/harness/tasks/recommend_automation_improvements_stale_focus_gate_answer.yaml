@@ -1,0 +1,43 @@
+id: recommend_automation_improvements_stale_focus_gate_answer
+task_kind: analysis_review
+objective: >
+  Analyze and recommend improvements for the CI/CD pipelines in this repo.
+workspace_write_policy:
+  mode: forbid
+  allowed_paths: []
+  denied_paths: []
+  allow_untracked: false
+  allow_renames: false
+  allow_deletions: false
+  max_touched_files: 0
+  require_clean_start: false
+acceptance:
+  - The recommendations should enhance the automation reliability and efficiency.
+  - Each recommendation should be grounded in concrete repository evidence.
+  - Do not modify files in the target workspace.
+constraints:
+  - Provide clear, actionable recommendations for CI/CD automation improvements.
+  - Avoid refactoring unrelated code or features.
+  - Preserve existing public behavior outside the scope of CI/CD automation improvements.
+context: |
+  Use the repository state in the target workspace as ground truth.
+  Focus on CI/CD automation related to Claude Code and Codex releases.
+review_requirements:
+  require_evidence_per_recommendation: true
+  require_classification: true
+  require_priority: true
+  min_recommendations: 2
+  evidence_cap_policy: trim_to_cap
+focus_gate:
+  enabled: true
+  allowed_focus_types: [seam]
+focus_gate_answer:
+  question_prompt: Which focus should this run prioritize?
+  selected_option: unknown-seam
+  freeform_answer: ""
+files_hint:
+  - .github/workflows/*
+notes: |
+  This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade
+  any write-capable stage to effective read-only access and fail the run if repo files are changed.
+  The analysis_review_bounded_v1 strategy is the preferred fit for this task.

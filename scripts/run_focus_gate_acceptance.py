@@ -15,7 +15,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from anvil.harness.files import load_structured_file
-from anvil.harness.contracts import canonical_seam_id_for_paths
+from anvil.harness.contracts import (
+    canonical_artifact_focus_id,
+    canonical_seam_id_for_paths,
+)
 from anvil.harness.types import (
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
     canonical_workspace_ref_list,
@@ -510,6 +513,37 @@ def validate_acceptance_run(
     adapter_plan = focus_decision.get("adapter_plan")
     if not isinstance(adapter_plan, dict):
         raise AcceptanceError("focus_decision.adapter_plan must be an object.")
+    selected_focus_paths = _canonical_path_list(
+        focus_decision,
+        "selected_focus_paths",
+        workspace=workspace,
+    )
+    if (
+        scenario.expected_focus_type == "artifact"
+        and scenario.expected_decision_state == "selected"
+    ):
+        if len(selected_focus_paths) != 1:
+            raise AcceptanceError(
+                "focus_decision.selected_focus_paths must contain exactly one path "
+                "when focus_type=artifact and decision_state=selected."
+            )
+        expected_selected_focus_id = canonical_artifact_focus_id(selected_focus_paths[0])
+        if focus_decision.get("selected_focus_id") != expected_selected_focus_id:
+            raise AcceptanceError(
+                "focus_decision.selected_focus_id must be the canonical artifact "
+                "focus ID when focus_type=artifact and decision_state=selected."
+            )
+        if adapter_plan.get("primary_focus_id") != focus_decision.get("selected_focus_id"):
+            raise AcceptanceError(
+                "adapter_plan.primary_focus_id must equal "
+                "focus_decision.selected_focus_id when focus_type=artifact and "
+                "decision_state=selected."
+            )
+        if adapter_plan.get("adaptation_basis") != "artifact_singleton":
+            raise AcceptanceError(
+                "adapter_plan.adaptation_basis must equal 'artifact_singleton' "
+                "when focus_type=artifact and decision_state=selected."
+            )
     downstream_primary_seam_id = str(
         adapter_plan.get("downstream_primary_seam_id") or ""
     ).strip()
@@ -528,11 +562,6 @@ def validate_acceptance_run(
                 "adapter_plan.downstream_primary_seam_id does not match "
                 "adapter_plan.downstream_primary_seam_paths."
             )
-        selected_focus_paths = _canonical_path_list(
-            focus_decision,
-            "selected_focus_paths",
-            workspace=workspace,
-        )
         if selected_focus_paths and selected_focus_paths != downstream_primary_seam_paths:
             raise AcceptanceError(
                 "adapter_plan.downstream_primary_seam_paths do not match selected_focus_paths."
