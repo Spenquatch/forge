@@ -715,6 +715,7 @@ def test_focus_gate_prompt_builders_split_public_surface_and_context_rules():
     )
 
     assert "build_focus_gate_prompt" not in prompt_builders.__all__
+    assert "build_focus_probe_prompt" not in prompt_builders.__all__
 
     assert (
         "You are the FOCUS_GATE stage in an analysis-review harness."
@@ -938,11 +939,11 @@ def test_artifact_focus_gate_decision_preserves_selected_focus_and_injects_bridg
         focus_decision=focus_decision,
     )
 
-    assert f"- selected_focus_id: {canonical_artifact_focus_id(selected_path)}" in proposer
-    assert "- adapter_plan.adaptation_basis: artifact_singleton" in proposer
     assert (
-        "Preserve `selected_focus_*` as the chosen focus surface." in proposer
+        f"- selected_focus_id: {canonical_artifact_focus_id(selected_path)}" in proposer
     )
+    assert "- adapter_plan.adaptation_basis: artifact_singleton" in proposer
+    assert "Preserve `selected_focus_*` as the chosen focus surface." in proposer
     assert (
         "Use `adapter_plan.downstream_primary_seam_paths` and `adapter_plan.downstream_primary_seam_id` as the authoritative downstream seam handoff"
         in proposer

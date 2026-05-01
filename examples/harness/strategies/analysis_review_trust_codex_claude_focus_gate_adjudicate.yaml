@@ -11,8 +11,8 @@ roles:
     access: read
     timeout_sec: 1800
   critic:
-    provider: claude_code_sonnet
-    effort: medium
+    provider: codex_gpt_5_4
+    effort: high
     access: read
     timeout_sec: 1200
     disable_bare: true
@@ -22,8 +22,8 @@ roles:
     access: read
     timeout_sec: 1800
   auditor:
-    provider: claude_code_sonnet
-    effort: medium
+    provider: codex_gpt_5_4
+    effort: high
     access: read
     timeout_sec: 1200
     disable_bare: true

@@ -21,11 +21,15 @@ from anvil.harness.contracts import (
 )
 from anvil.harness.types import (
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
-    canonical_workspace_ref_list,
+    canonical_seam_path_list,
 )
 
-DEFAULT_CONFIG_PATH = REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance_local.yaml"
-LEGACY_DEFAULT_CONFIG_PATH = REPO_ROOT / "examples/harness/live_acceptance/m2_focus_gate_local.yaml"
+DEFAULT_CONFIG_PATH = (
+    REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance_local.yaml"
+)
+LEGACY_DEFAULT_CONFIG_PATH = (
+    REPO_ROOT / "examples/harness/live_acceptance/m2_focus_gate_local.yaml"
+)
 DEFAULT_OUT_ROOT = ".forge-harness-runs-live"
 EXAMPLE_TASK_PATH = "examples/harness/tasks/recommend_automation_improvements.yaml"
 EXAMPLE_STRATEGIES = {
@@ -228,7 +232,9 @@ def _parse_scenario(
             if str(task_value or "").strip()
             else None
         ),
-        strategy=_resolve_existing_file(strategy_value, field_name=f"scenario {name!r}.strategy"),
+        strategy=_resolve_existing_file(
+            strategy_value, field_name=f"scenario {name!r}.strategy"
+        ),
         expected_gate_path=_parse_enum(
             merged.get("expected_gate_path"),
             field_name=f"scenario {name!r}.expected_gate_path",
@@ -265,12 +271,15 @@ def _load_scenarios(payload: dict[str, Any]) -> tuple[AcceptanceScenario, ...]:
         if not isinstance(raw_scenarios, list) or not raw_scenarios:
             raise ValueError("scenarios must be a non-empty list.")
         scenarios = tuple(
-            _parse_scenario(item, index=index) for index, item in enumerate(raw_scenarios)
+            _parse_scenario(item, index=index)
+            for index, item in enumerate(raw_scenarios)
         )
     else:
         strategies = payload.get("strategies")
         if not isinstance(strategies, dict) or not strategies:
-            raise ValueError("manifest must define either scenarios or legacy strategies.")
+            raise ValueError(
+                "manifest must define either scenarios or legacy strategies."
+            )
         parsed: list[AcceptanceScenario] = []
         for name, strategy_path in strategies.items():
             parsed.append(
@@ -332,9 +341,19 @@ def parse_harness_run_output(stdout: str) -> tuple[Path, Path]:
     report_path: Path | None = None
     for line in stdout.splitlines():
         if line.startswith("summary="):
-            summary_path = _resolve_repo_path(line.split("=", 1)[1].strip())
+            emitted_path = line.split("=", 1)[1].strip()
+            if not emitted_path:
+                raise AcceptanceError(
+                    "harness-run output emitted an empty summary= path."
+                )
+            summary_path = _resolve_repo_path(emitted_path)
         elif line.startswith("report="):
-            report_path = _resolve_repo_path(line.split("=", 1)[1].strip())
+            emitted_path = line.split("=", 1)[1].strip()
+            if not emitted_path:
+                raise AcceptanceError(
+                    "harness-run output emitted an empty report= path."
+                )
+            report_path = _resolve_repo_path(emitted_path)
     if summary_path is None:
         raise AcceptanceError("harness-run output did not emit summary=...")
     if report_path is None:
@@ -363,14 +382,16 @@ def _canonical_primary_paths(payload: dict[str, Any], *, workspace: Path) -> lis
     primary_seam = payload.get("primary_seam")
     if not isinstance(primary_seam, dict):
         raise AcceptanceError("primary_seam must be an object.")
-    return canonical_workspace_ref_list(
+    return canonical_seam_path_list(
         primary_seam.get("paths"),
         workspace_root=workspace,
     )
 
 
-def _canonical_path_list(payload: dict[str, Any], key: str, *, workspace: Path) -> list[str]:
-    return canonical_workspace_ref_list(payload.get(key), workspace_root=workspace)
+def _canonical_path_list(
+    payload: dict[str, Any], key: str, *, workspace: Path
+) -> list[str]:
+    return canonical_seam_path_list(payload.get(key), workspace_root=workspace)
 
 
 def _stage_role_names(stages: list[dict[str, Any]]) -> list[str]:
@@ -466,12 +487,16 @@ def validate_acceptance_run(
         raise AcceptanceError("focus_gate stage metadata is missing focus_gate.")
     for key in ("gate_path", "focus_type", "decision_state"):
         if focus_metadata.get(key) != focus_decision.get(key):
-            raise AcceptanceError(f"focus_gate stage metadata {key} does not match focus_decision.")
+            raise AcceptanceError(
+                f"focus_gate stage metadata {key} does not match focus_decision."
+            )
 
     if scenario.expected_decision_state == "clarification_requested":
         question = focus_decision.get("question")
         if not isinstance(question, dict):
-            raise AcceptanceError("clarification scenarios must record focus_decision.question.")
+            raise AcceptanceError(
+                "clarification scenarios must record focus_decision.question."
+            )
         if (
             str(question.get("prompt") or "").strip()
             != GENERIC_FOCUS_GATE_QUESTION_PROMPT
@@ -482,22 +507,34 @@ def validate_acceptance_run(
 
     failure_details = summary.get("failure_details")
     if scenario.expected_decision_state in BLOCKED_DECISION_STATES:
-        if not isinstance(failure_details, dict) or failure_details.get("stage") != "focus_gate":
-            raise AcceptanceError("blocked focus-gate scenarios must record focus_gate failure_details.")
+        if (
+            not isinstance(failure_details, dict)
+            or failure_details.get("stage") != "focus_gate"
+        ):
+            raise AcceptanceError(
+                "blocked focus-gate scenarios must record focus_gate failure_details."
+            )
         if failure_details.get("decision_state") != scenario.expected_decision_state:
             raise AcceptanceError(
                 "failure_details.decision_state must match "
                 f"{scenario.expected_decision_state}."
             )
-    elif isinstance(failure_details, dict) and failure_details.get("stage") == "focus_gate":
-        raise AcceptanceError("selected focus-gate scenarios must not record a focus_gate failure.")
+    elif (
+        isinstance(failure_details, dict)
+        and failure_details.get("stage") == "focus_gate"
+    ):
+        raise AcceptanceError(
+            "selected focus-gate scenarios must not record a focus_gate failure."
+        )
 
     for stage in stage_records:
         if stage.get("failure_kind") != "semantic_validation_error":
             continue
         for error in stage.get("semantic_validation_errors") or []:
             if SELECTED_SEAM_DRIFT_TEXT in str(error):
-                raise AcceptanceError("selected-seam drift semantic validation failure is present.")
+                raise AcceptanceError(
+                    "selected-seam drift semantic validation failure is present."
+                )
 
     warnings = _warning_pool(
         summary=summary,
@@ -527,13 +564,17 @@ def validate_acceptance_run(
                 "focus_decision.selected_focus_paths must contain exactly one path "
                 "when focus_type=artifact and decision_state=selected."
             )
-        expected_selected_focus_id = canonical_artifact_focus_id(selected_focus_paths[0])
+        expected_selected_focus_id = canonical_artifact_focus_id(
+            selected_focus_paths[0]
+        )
         if focus_decision.get("selected_focus_id") != expected_selected_focus_id:
             raise AcceptanceError(
                 "focus_decision.selected_focus_id must be the canonical artifact "
                 "focus ID when focus_type=artifact and decision_state=selected."
             )
-        if adapter_plan.get("primary_focus_id") != focus_decision.get("selected_focus_id"):
+        if adapter_plan.get("primary_focus_id") != focus_decision.get(
+            "selected_focus_id"
+        ):
             raise AcceptanceError(
                 "adapter_plan.primary_focus_id must equal "
                 "focus_decision.selected_focus_id when focus_type=artifact and "
@@ -547,22 +588,29 @@ def validate_acceptance_run(
     downstream_primary_seam_id = str(
         adapter_plan.get("downstream_primary_seam_id") or ""
     ).strip()
-    downstream_primary_seam_paths = canonical_workspace_ref_list(
+    downstream_primary_seam_paths = canonical_seam_path_list(
         adapter_plan.get("downstream_primary_seam_paths") or [],
         workspace_root=workspace,
     )
     if scenario.expect_downstream_bridge:
         if not downstream_primary_seam_id:
-            raise AcceptanceError("adapter_plan.downstream_primary_seam_id is required.")
+            raise AcceptanceError(
+                "adapter_plan.downstream_primary_seam_id is required."
+            )
         if not downstream_primary_seam_paths:
-            raise AcceptanceError("adapter_plan.downstream_primary_seam_paths is required.")
+            raise AcceptanceError(
+                "adapter_plan.downstream_primary_seam_paths is required."
+            )
         expected_bridge_id = canonical_seam_id_for_paths(downstream_primary_seam_paths)
         if downstream_primary_seam_id != expected_bridge_id:
             raise AcceptanceError(
                 "adapter_plan.downstream_primary_seam_id does not match "
                 "adapter_plan.downstream_primary_seam_paths."
             )
-        if selected_focus_paths and selected_focus_paths != downstream_primary_seam_paths:
+        if (
+            selected_focus_paths
+            and selected_focus_paths != downstream_primary_seam_paths
+        ):
             raise AcceptanceError(
                 "adapter_plan.downstream_primary_seam_paths do not match selected_focus_paths."
             )
@@ -572,11 +620,19 @@ def validate_acceptance_run(
         )
 
     if scenario.expect_proposer_artifacts:
-        proposer_index, proposer_stage = _require_stage(stage_records, role_name="proposer")
-        if not any(role in REVIEW_ROLE_NAMES for role in role_names[proposer_index + 1 :]):
-            raise AcceptanceError("agent_stages must include a downstream review role after proposer.")
+        proposer_index, proposer_stage = _require_stage(
+            stage_records, role_name="proposer"
+        )
+        if not any(
+            role in REVIEW_ROLE_NAMES for role in role_names[proposer_index + 1 :]
+        ):
+            raise AcceptanceError(
+                "agent_stages must include a downstream review role after proposer."
+            )
 
-        proposer_artifact_dir = _stage_artifact_dir(proposer_stage, role_name="proposer")
+        proposer_artifact_dir = _stage_artifact_dir(
+            proposer_stage, role_name="proposer"
+        )
         for relative_path in REQUIRED_PROPOSER_ARTIFACTS:
             _require_file(proposer_artifact_dir / relative_path)
 
@@ -587,27 +643,38 @@ def validate_acceptance_run(
         proposer_envelope = _load_json(proposer_artifact_dir / "run.envelope.json")
         envelope_structured_output = proposer_envelope.get("structured_output")
         if not isinstance(envelope_structured_output, dict):
-            raise AcceptanceError("proposer run.envelope.json is missing structured_output.")
+            raise AcceptanceError(
+                "proposer run.envelope.json is missing structured_output."
+            )
 
         raw_paths = _canonical_primary_paths(proposer_raw, workspace=workspace)
-        normalized_paths = _canonical_primary_paths(proposer_normalized, workspace=workspace)
+        normalized_paths = _canonical_primary_paths(
+            proposer_normalized, workspace=workspace
+        )
         envelope_paths = _canonical_primary_paths(
             envelope_structured_output,
             workspace=workspace,
         )
         if raw_paths != normalized_paths:
-            raise AcceptanceError("proposer raw and normalized primary_seam.paths do not match.")
+            raise AcceptanceError(
+                "proposer raw and normalized primary_seam.paths do not match."
+            )
         if normalized_paths != envelope_paths:
             raise AcceptanceError(
                 "proposer normalized payload and run.envelope.json structured_output "
                 "primary_seam.paths do not match."
             )
-        if scenario.expect_downstream_bridge and normalized_paths != downstream_primary_seam_paths:
+        if (
+            scenario.expect_downstream_bridge
+            and normalized_paths != downstream_primary_seam_paths
+        ):
             raise AcceptanceError(
                 "proposer primary_seam.paths do not match the focus gate downstream bridge."
             )
     elif "proposer" in role_names:
-        raise AcceptanceError("blocked focus-gate scenarios must not advance to proposer.")
+        raise AcceptanceError(
+            "blocked focus-gate scenarios must not advance to proposer."
+        )
 
 
 def run_acceptance_case(

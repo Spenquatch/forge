@@ -8,6 +8,7 @@ from .publication_authority import sanitize_summary_text
 from .topic_lifecycle import topic_ids_for_status_name, topic_status_field_name
 
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
+_BLOCKED_FOCUS_DECISION_STATES = {"clarification_requested", "no_viable_focus"}
 _CANONICAL_ADMISSIBILITY_REASONS = {
     "accepted_with_caveat",
     "inferred_grounding",
@@ -302,6 +303,21 @@ def _focus_gate_stage(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _top_level_focus_decision(summary: dict[str, Any]) -> dict[str, Any]:
+    focus_decision = summary.get("focus_decision")
+    if isinstance(focus_decision, dict) and focus_decision:
+        return focus_decision
+    return {}
+
+
+def _run_details_focus_decision(summary: dict[str, Any]) -> dict[str, Any]:
+    run_details = summary.get("run_details") or {}
+    focus_decision = run_details.get("focus_decision")
+    if isinstance(focus_decision, dict) and focus_decision:
+        return focus_decision
+    return {}
+
+
 def _short_json_value(value: Any) -> str:
     if isinstance(value, list):
         items = [_short_json_value(item) for item in value[:3]]
@@ -364,6 +380,12 @@ def _focus_divergence_lines(summary: dict[str, Any]) -> list[str]:
         and isinstance(envelope_payload.get("structured_output"), dict)
         else None
     )
+    envelope_focus_metadata = (
+        (envelope_payload.get("metadata") or {}).get("focus_gate")
+        if isinstance(envelope_payload, dict)
+        and isinstance(envelope_payload.get("metadata"), dict)
+        else None
+    )
 
     available_names = []
     if raw_payload is not None:
@@ -407,6 +429,56 @@ def _focus_divergence_lines(summary: dict[str, Any]) -> list[str]:
                 lines.append(f"  - {item}")
         else:
             lines.append("- Envelope structured_output parity: matches normalized")
+    focus_decision = _focus_decision(summary)
+    metadata_projection = {}
+    if focus_decision:
+        metadata_projection = {
+            "gate_path": focus_decision.get("gate_path"),
+            "focus_type": focus_decision.get("focus_type"),
+            "decision_state": focus_decision.get("decision_state"),
+        }
+    if not metadata_projection or not isinstance(envelope_focus_metadata, dict):
+        lines.append("- Envelope focus_gate metadata parity: unavailable")
+    else:
+        metadata_diffs = _json_value_diff_lines(
+            envelope_focus_metadata,
+            metadata_projection,
+        )
+        if metadata_diffs:
+            lines.append(
+                "- Envelope focus_gate metadata parity: "
+                + f"`{len(metadata_diffs)}` changed field(s)"
+            )
+            for item in metadata_diffs[:4]:
+                lines.append(f"  - {item}")
+        else:
+            lines.append(
+                "- Envelope focus_gate metadata parity: matches canonical focus decision"
+            )
+    return lines
+
+
+def _focus_decision_parity_lines(summary: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    top_level_focus = _top_level_focus_decision(summary)
+    run_details_focus = _run_details_focus_decision(summary)
+    if not top_level_focus and not run_details_focus:
+        return lines
+    if top_level_focus and run_details_focus:
+        diffs = _json_value_diff_lines(run_details_focus, top_level_focus)
+        if diffs:
+            lines.append(
+                "- Run-details focus parity: " + f"`{len(diffs)}` changed field(s)"
+            )
+            for item in diffs[:4]:
+                lines.append(f"  - {item}")
+        else:
+            lines.append("- Run-details focus parity: matches canonical focus decision")
+        return lines
+    if top_level_focus:
+        lines.append("- Run-details focus parity: missing `run_details.focus_decision`")
+    else:
+        lines.append("- Canonical focus source: `run_details.focus_decision`")
     return lines
 
 
@@ -615,6 +687,20 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
             "- Selected focus paths: "
             + _render_plain_focus_list(focus_decision.get("selected_focus_paths"))
         )
+        if str(focus_decision.get("focus_type") or "").strip() == "artifact":
+            selected_focus_paths = [
+                str(item).strip()
+                for item in (focus_decision.get("selected_focus_paths") or [])
+                if str(item).strip()
+            ]
+            lines.append(
+                "- Artifact singleton preserved: "
+                + (
+                    f"`yes` (`{len(selected_focus_paths)}` path)"
+                    if len(selected_focus_paths) == 1
+                    else f"`no` (`{len(selected_focus_paths)}` paths)"
+                )
+            )
     elif decision_state == "clarification_requested":
         lines.append(
             "- Clarification prompt: "
@@ -681,11 +767,7 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
     )
     lines.append(
         "- Downstream primary seam ID: "
-        + (
-            f"`{downstream_primary_seam_id}`"
-            if downstream_primary_seam_id
-            else "none"
-        )
+        + (f"`{downstream_primary_seam_id}`" if downstream_primary_seam_id else "none")
     )
     lines.append(
         "- Downstream primary seam paths: "
@@ -695,6 +777,8 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         "- Focus-to-seam adaptation basis: "
         + (f"`{adaptation_basis}`" if adaptation_basis else "none")
     )
+    for item in _focus_decision_parity_lines(summary):
+        lines.append(item)
     if stale_warnings:
         lines.append("- Stale-answer warnings:")
         for item in stale_warnings:
@@ -1073,6 +1157,12 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append(
         f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})"
     )
+    focus_decision = _focus_decision(summary)
+    focus_decision_state = str(focus_decision.get("decision_state") or "").strip()
+    if focus_decision_state:
+        lines.append(f"- Request-gate result: `{focus_decision_state}`")
+        if focus_decision_state in _BLOCKED_FOCUS_DECISION_STATES:
+            lines.append("- Review loop status: `not_started`")
     if analysis_status:
         lines.append(f"- Review mode: `{analysis_status.get('mode', 'unknown')}`")
         if publishability:
@@ -1139,6 +1229,9 @@ def render_report(summary: dict[str, Any]) -> str:
     ):
         lines.append("## Review Loop Coverage")
         lines.append("")
+        if focus_decision_state in _BLOCKED_FOCUS_DECISION_STATES:
+            lines.append(f"- Request-gate result: `{focus_decision_state}`")
+            lines.append("- Review loop status: `not_started`")
         lines.append(
             f"- Review stages attempted: `{review_coverage.get('review_stages_attempted', 0)}`"
         )
@@ -1159,7 +1252,11 @@ def render_report(summary: dict[str, Any]) -> str:
                     or "unknown error"
                 )
                 lines.append(f"  - {label}: {detail}")
-        if not review_coverage.get("review_loop_exercised", False):
+        if focus_decision_state in _BLOCKED_FOCUS_DECISION_STATES:
+            lines.append(
+                "- Notes: the request gate blocked the run before proposer and reviewer stages executed."
+            )
+        elif not review_coverage.get("review_loop_exercised", False):
             lines.append(
                 "- Notes: reviewer-derived issue counts and recommendation verdicts were not produced for this run."
             )

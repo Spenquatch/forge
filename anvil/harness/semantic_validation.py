@@ -20,6 +20,7 @@ from .types import (
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
     TaskSpec,
     VALID_SINGLETON_FOCUS_TYPES,
+    canonical_seam_path_list,
     canonical_workspace_ref_list,
 )
 
@@ -404,7 +405,7 @@ def validate_focus_decision_payload(
     selected_focus_summary = payload.get("selected_focus_summary")
     selected_focus_id_text = _nullable_non_empty_string(selected_focus_id)
     selected_focus_summary_text = _nullable_non_empty_string(selected_focus_summary)
-    selected_focus_paths = _canonical_workspace_paths(payload.get("selected_focus_paths"))
+    selected_focus_paths = canonical_seam_path_list(payload.get("selected_focus_paths"))
     unknown_selected_focus_paths = sorted(set(selected_focus_paths) - workspace_path_set)
     if unknown_selected_focus_paths:
         result.errors.append(
@@ -1321,7 +1322,7 @@ def _validate_seam_entry(
     if not isinstance(paths, list):
         result.errors.append(f"{field_name}.paths must be a list.")
         return seam_id or None, []
-    path_items = _canonical_workspace_paths(paths)
+    path_items = canonical_seam_path_list(paths)
     if not path_items:
         result.errors.append(f"{field_name}.paths must contain at least one non-empty path.")
         return seam_id or None, []
@@ -1354,7 +1355,7 @@ def _validate_expected_primary_seam_id(
             "primary_seam.seam_id drifted from the selected focus gate seam: "
             f"expected {expected}, got {actual or '(missing)'}."
         )
-    expected_paths = _canonical_workspace_paths(expected_primary_seam_paths)
+    expected_paths = canonical_seam_path_list(expected_primary_seam_paths)
     if expected_paths and actual_primary_seam_paths != expected_paths:
         result.errors.append(
             "primary_seam.paths drifted from the selected focus gate paths after normalization: "
@@ -1425,7 +1426,7 @@ def _validated_focus_candidates(
             result.errors.append(f"candidates[{index}].focus_summary must be non-empty.")
         if not why_candidate:
             result.errors.append(f"candidates[{index}].why_candidate must be non-empty.")
-        candidate_paths = _canonical_workspace_paths(item.get("candidate_paths"))
+        candidate_paths = canonical_seam_path_list(item.get("candidate_paths"))
         if not candidate_paths:
             result.errors.append(
                 f"candidates[{index}].candidate_paths must contain at least one non-empty path."
@@ -1641,6 +1642,9 @@ def _validated_focus_adapter_plan(
         field_name="adapter_plan.downstream_primary_seam_paths",
         require_non_empty=False,
         workspace_paths=workspace_paths,
+    )
+    downstream_primary_seam_paths = canonical_seam_path_list(
+        downstream_primary_seam_paths
     )
     adaptation_basis_raw = adapter_plan.get("adaptation_basis")
     if adaptation_basis_raw is None:

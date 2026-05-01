@@ -468,7 +468,10 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
     assert bounded_example["roles"]["proposer"]["effort"] == "medium"
     assert bounded_example["review_loops"]["max_loops"] == 3
     assert trust_example["kind"] == "analysis_review_trust_v1"
-    assert trust_example["roles"]["auditor"]["provider"] == "claude_code_sonnet"
+    assert trust_example["roles"]["critic"]["provider"] == "codex_gpt_5_4"
+    assert trust_example["roles"]["critic"]["effort"] == "high"
+    assert trust_example["roles"]["auditor"]["provider"] == "codex_gpt_5_4"
+    assert trust_example["roles"]["auditor"]["effort"] == "high"
     assert trust_example["review_loops"]["max_loops"] == 3
 
 

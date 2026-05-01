@@ -279,8 +279,13 @@ def test_focus_gate_output_schema_exposes_v10_focus_decision_surface():
     assert "question" in schema["required"]
     assert "candidates" in schema["required"]
     assert "selected_focus_paths" in schema["required"]
-    assert "downstream_primary_seam_id" in schema["properties"]["adapter_plan"]["required"]
-    assert "downstream_primary_seam_paths" in schema["properties"]["adapter_plan"]["required"]
+    assert (
+        "downstream_primary_seam_id" in schema["properties"]["adapter_plan"]["required"]
+    )
+    assert (
+        "downstream_primary_seam_paths"
+        in schema["properties"]["adapter_plan"]["required"]
+    )
     assert "adaptation_basis" in schema["properties"]["adapter_plan"]["required"]
     assert "candidate_paths" in schema["properties"]["candidates"]["items"]["required"]
 
@@ -504,6 +509,52 @@ def test_focus_decision_semantic_validation_rejects_duplicate_candidate_focus_id
     )
 
 
+def test_focus_decision_semantic_validation_rejects_selected_path_handoff_drift():
+    payload = _focus_decision_payload("selected")
+    payload["candidates"][0]["candidate_paths"] = [".github/workflows/nightly.yml"]
+    payload["adapter_plan"]["downstream_primary_seam_paths"] = [
+        ".github/workflows/nightly.yml"
+    ]
+
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "candidates[1].focus_id must equal the canonical seam ID derived from candidate_paths: "
+        f"expected {canonical_seam_id_for_paths(['.github/workflows/nightly.yml'])}, got "
+        f"{canonical_seam_id_for_paths(['.github/workflows/release.yml'])}."
+        in result.errors
+    )
+    assert (
+        "selected_focus_paths must equal the selected candidate's candidate_paths after normalization."
+        in result.errors
+    )
+    assert (
+        "adapter_plan.downstream_primary_seam_paths must equal selected_focus_paths when focus_type=seam and decision_state=selected."
+        in result.errors
+    )
+
+
+def test_focus_decision_semantic_validation_rejects_repo_probe_without_deliberate_checked_files():
+    payload = _focus_decision_payload("selected")
+    payload["decision_basis"] = "repo_probe"
+
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert "decision_basis=repo_probe requires gate_path=deliberate." in result.errors
+    assert (
+        "checked_files must be non-empty when decision_basis=repo_probe."
+        in result.errors
+    )
+
+
 def test_analysis_output_semantic_validation_accepts_valid_payload():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(task, _strategy())
@@ -552,11 +603,15 @@ def test_analysis_output_semantic_validation_accepts_artifact_downstream_bridge(
     focus_decision = _focus_decision_payload("selected", focus_type="artifact")
     focus_decision["selected_focus_id"] = canonical_artifact_focus_id(primary_path)
     focus_decision["selected_focus_paths"] = [primary_path]
-    focus_decision["candidates"][0]["focus_id"] = canonical_artifact_focus_id(primary_path)
+    focus_decision["candidates"][0]["focus_id"] = canonical_artifact_focus_id(
+        primary_path
+    )
     focus_decision["candidates"][0]["candidate_paths"] = [primary_path]
-    focus_decision["adapter_plan"]["primary_focus_id"] = canonical_artifact_focus_id(primary_path)
-    focus_decision["adapter_plan"]["downstream_primary_seam_id"] = canonical_seam_id_for_paths(
-        [primary_path]
+    focus_decision["adapter_plan"]["primary_focus_id"] = canonical_artifact_focus_id(
+        primary_path
+    )
+    focus_decision["adapter_plan"]["downstream_primary_seam_id"] = (
+        canonical_seam_id_for_paths([primary_path])
     )
     focus_decision["adapter_plan"]["downstream_primary_seam_paths"] = [primary_path]
 
@@ -566,8 +621,12 @@ def test_analysis_output_semantic_validation_accepts_artifact_downstream_bridge(
         task=task,
         contract=contract,
         workspace_paths=_workspace_paths(),
-        expected_primary_seam_id=focus_decision["adapter_plan"]["downstream_primary_seam_id"],
-        expected_primary_seam_paths=focus_decision["adapter_plan"]["downstream_primary_seam_paths"],
+        expected_primary_seam_id=focus_decision["adapter_plan"][
+            "downstream_primary_seam_id"
+        ],
+        expected_primary_seam_paths=focus_decision["adapter_plan"][
+            "downstream_primary_seam_paths"
+        ],
     )
 
     assert result.ok is True

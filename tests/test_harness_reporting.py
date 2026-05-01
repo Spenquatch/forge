@@ -2618,6 +2618,10 @@ def test_render_report_renders_selected_focus_decision_without_analysis_review_s
     )
     assert "- Envelope structured_output parity: `1` changed field(s)" in section
     assert '`confidence_band`: "medium" -> "high"' in section
+    assert (
+        "- Envelope focus_gate metadata parity: matches canonical focus decision"
+        in section
+    )
     assert "- Adapter secondary focus IDs: `rollback-runbook`" in section
     assert (
         "- Downstream primary seam ID: "
@@ -2629,6 +2633,7 @@ def test_render_report_renders_selected_focus_decision_without_analysis_review_s
         in section
     )
     assert "- Focus-to-seam adaptation basis: `selected_focus_paths`" in section
+    assert "- Run-details focus parity: matches canonical focus decision" in section
     assert report.index("## Focus Decision") < report.index("## Run Details")
     run_details = _top_level_section(report, "## Run Details")
     assert '"rendered_in_report_section": true' in run_details
@@ -2664,8 +2669,10 @@ def test_render_report_distinguishes_artifact_focus_from_downstream_seam_bridge(
 
     assert f"- Focus type: `artifact`" in section
     assert f"- Selected focus ID: `{selected_focus_id}`" in section
+    assert "- Artifact singleton preserved: `yes` (`1` path)" in section
     assert f"- Downstream primary seam ID: `{downstream_seam_id}`" in section
     assert "- Focus-to-seam adaptation basis: `artifact_singleton`" in section
+    assert "- Run-details focus parity: matches canonical focus decision" in section
     assert selected_focus_id != downstream_seam_id
 
 
@@ -2687,8 +2694,18 @@ def test_render_report_renders_no_viable_focus_decision_from_run_details():
     }
 
     report = render_report(summary)
+    overview = _top_level_section(report, "## Overview")
+    coverage = _top_level_section(report, "## Review Loop Coverage")
     section = _top_level_section(report, "## Focus Decision")
 
+    assert "- Request-gate result: `no_viable_focus`" in overview
+    assert "- Review loop status: `not_started`" in overview
+    assert "- Request-gate result: `no_viable_focus`" in coverage
+    assert "- Review loop status: `not_started`" in coverage
+    assert (
+        "- Notes: the request gate blocked the run before proposer and reviewer stages executed."
+        in coverage
+    )
     assert "- Decision state: `no_viable_focus`" in section
     assert "- Viable focus identified: `no`" in section
     assert (
@@ -2783,14 +2800,32 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
         Path(summary["artifacts"]["summary_json"]).read_text(encoding="utf-8")
     )
     report = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
+    overview = _top_level_section(report, "## Overview")
+    coverage = _top_level_section(report, "## Review Loop Coverage")
     section = _top_level_section(report, "## Focus Decision")
 
     assert summary["focus_decision"]["decision_state"] == "clarification_requested"
+    assert (
+        summary["run_details"]["focus_decision"]["decision_state"]
+        == "clarification_requested"
+    )
+    assert (
+        summary_json["run_details"]["focus_decision"]["decision_state"]
+        == "clarification_requested"
+    )
     assert (
         summary_json["focus_decision"]["question"]["prompt"]
         == "Which focus should this run prioritize?"
     )
     assert "## Analysis Review Status" not in report
+    assert "- Request-gate result: `clarification_requested`" in overview
+    assert "- Review loop status: `not_started`" in overview
+    assert "- Request-gate result: `clarification_requested`" in coverage
+    assert "- Review loop status: `not_started`" in coverage
+    assert (
+        "- Notes: the request gate blocked the run before proposer and reviewer stages executed."
+        in coverage
+    )
     assert "- Decision state: `clarification_requested`" in section
     assert "- Decision basis: `repo_probe`" in section
     assert "- Files hint disposition: `helped`" in section
@@ -2798,6 +2833,7 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
         "- Checked files: `.github/workflows/codex-cli-release-watch.yml`, `.github/workflows/rollback-runbook.md`"
         in section
     )
+    assert "- Run-details focus parity: matches canonical focus decision" in section
     assert "- Clarification prompt: Which focus should this run prioritize?" in section
     assert (
         "- Clarification options: `release-trigger-automation`, `rollback-runbook`"

@@ -8,7 +8,9 @@ from anvil.harness.files import load_structured_file
 def test_focus_gate_adjudicate_examples_clone_base_analysis_review_strategies():
     cases = [
         (
-            Path("examples/harness/strategies/analysis_review_bounded_codex_claude.yaml"),
+            Path(
+                "examples/harness/strategies/analysis_review_bounded_codex_claude.yaml"
+            ),
             Path(
                 "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml"
             ),
@@ -68,13 +70,18 @@ def test_analysis_review_entry_points_reference_focus_gate_adjudicate_examples()
 
 def test_focus_gate_live_acceptance_templates_cover_canonical_and_compatibility_surfaces():
     canonical_manifest = load_structured_file(
-        Path("examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml")
+        Path(
+            "examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml"
+        )
     )
     compatibility_manifest = load_structured_file(
         Path("examples/harness/live_acceptance/m2_focus_gate_local.template.yaml")
     )
 
-    assert canonical_manifest["task"] == "examples/harness/tasks/recommend_automation_improvements.yaml"
+    assert (
+        canonical_manifest["task"]
+        == "examples/harness/tasks/recommend_automation_improvements.yaml"
+    )
     assert canonical_manifest["scenarios"] == [
         {
             "name": "bounded",

@@ -36,8 +36,12 @@ _OVERFLOW_SPEC_SEAM_PATHS = ["docs/project_management/next/codex-cli-parity/C1-s
 _PRIMARY_SEAM_ID = "release-watch-governing"
 _SECONDARY_RELEASE_WATCH_SEAM_ID = "release-watch-sibling-parity"
 _SECONDARY_SNAPSHOT_SEAM_ID = "snapshot-prepare-parity"
-_SIMPLE_PRIMARY_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(_SIMPLE_PRIMARY_SEAM_PATHS)
-_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(_PRIMARY_SEAM_PATHS)
+_SIMPLE_PRIMARY_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
+    _SIMPLE_PRIMARY_SEAM_PATHS
+)
+_CORROBORATION_PRIMARY_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
+    _PRIMARY_SEAM_PATHS
+)
 _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID = canonical_seam_id_for_paths(
     _SECONDARY_RELEASE_WATCH_SEAM_PATHS
 )
@@ -929,6 +933,31 @@ class _ArtifactFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
         return (_SIMPLE_PRIMARY_CANONICAL_SEAM_ID, "")
 
 
+class _ArtifactInitialSelectionHarnessAdapter(_ArtifactFocusGateHarnessAdapter):
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": self.selected_focus_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.selected_focus_id
+                ),
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The governing artifact remains the strongest repo-backed candidate.",
+                "evidence_refs": [self.probe_checked_files[0]],
+                "score": 0.97,
+            }
+        ]
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+
+
 class _ThresholdValidRerunWinnerHarnessAdapter(_FocusGateHarnessAdapter):
     def _probe_candidates(self) -> list[dict[str, object]]:
         return [
@@ -987,13 +1016,202 @@ class _DeliberateHumanQuestionOptionsHarnessAdapter(_FocusGateHarnessAdapter):
         del prompt_text
         payload = self._clarification_focus_decision()
         payload["question"] = {
-            "prompt": _FOCUS_GATE_QUESTION_PROMPT,
+            "prompt": "Which release-automation seam should the analysis prioritize first?",
             "options": [
                 "Prioritize Codex CLI release automation",
                 "Prioritize Claude Code release automation",
             ],
         }
         return payload
+
+
+class _NeverAskCloseContestHarnessAdapter(_FocusGateHarnessAdapter):
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": self.selected_focus_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.selected_focus_id
+                ),
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The release workflow remains a plausible seam.",
+                "evidence_refs": [self.probe_checked_files[0]],
+                "score": 0.92,
+            },
+            {
+                "focus_id": self.secondary_focus_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.secondary_focus_id
+                ),
+                "candidate_paths": list(self.secondary_focus_paths),
+                "why_candidate": "The sibling workflow remains almost equally plausible.",
+                "evidence_refs": [self.probe_checked_files[1]],
+                "score": 0.89,
+            },
+        ]
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+
+
+class _NeverAskUmbrellaSeamHarnessAdapter(_FocusGateHarnessAdapter):
+    selected_focus_paths = [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+    ]
+    selected_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
+    secondary_focus_id = canonical_seam_id_for_paths(
+        [
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/codex-cli-release-watch.yml",
+        ]
+    )
+    probe_checked_files = list(selected_focus_paths)
+
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": self.selected_focus_id,
+                "focus_summary": "Umbrella CI/CD seam across all four workflows.",
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "All four workflows are skeletal and form one broad automation surface.",
+                "evidence_refs": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "score": 0.93,
+            },
+            {
+                "focus_id": self.secondary_focus_id,
+                "focus_summary": "Scheduled release-watch seam.",
+                "candidate_paths": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "why_candidate": "The hourly watch workflows remain a narrower viable seam.",
+                "evidence_refs": [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "score": 0.74,
+            },
+            {
+                "focus_id": canonical_seam_id_for_paths(
+                    [
+                        ".github/workflows/claude-code-update-snapshot.yml",
+                        ".github/workflows/codex-cli-update-snapshot.yml",
+                    ]
+                ),
+                "focus_summary": "Snapshot-update seam.",
+                "candidate_paths": [
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+                "why_candidate": "The snapshot workflows remain a second narrower viable seam.",
+                "evidence_refs": [
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+                "score": 0.72,
+            },
+        ]
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return {
+            "gate_path": "deliberate",
+            "focus_type": "seam",
+            "decision_state": "selected",
+            "decision_basis": "repo_probe",
+            "selected_focus_id": self.selected_focus_id,
+            "selected_focus_summary": "Umbrella CI/CD seam across all four workflows.",
+            "selected_focus_paths": list(self.selected_focus_paths),
+            "confidence": 0.93,
+            "confidence_band": "high",
+            "files_hint_disposition": "helped",
+            "checked_files": list(self.probe_checked_files),
+            "candidates": self._probe_candidates(),
+            "question": {"prompt": "", "options": []},
+            "warnings": [],
+            "adapter_plan": self._adapter_plan(
+                selected_focus_id=self.selected_focus_id,
+                selected_focus_paths=list(self.selected_focus_paths),
+                secondary_focus_ids=[
+                    candidate["focus_id"]
+                    for candidate in self._probe_candidates()
+                    if candidate["focus_id"] != self.selected_focus_id
+                ],
+            ),
+        }
+
+
+class _AdjudicateDirectorySeamHarnessAdapter(_FocusGateHarnessAdapter):
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return {
+            "gate_path": "adjudicate",
+            "focus_type": "seam",
+            "decision_state": "selected",
+            "decision_basis": "request_only",
+            "selected_focus_id": "ci_cd_workflows",
+            "selected_focus_summary": "CI/CD workflow automation under .github/workflows.",
+            "selected_focus_paths": [".github/workflows"],
+            "confidence": 0.91,
+            "confidence_band": "high",
+            "files_hint_disposition": "absent",
+            "checked_files": [],
+            "candidates": [
+                {
+                    "focus_id": "ci_cd_workflows",
+                    "focus_summary": "CI/CD workflow automation under .github/workflows.",
+                    "candidate_paths": [".github/workflows"],
+                    "why_candidate": "The files hint points directly at the workflows directory.",
+                    "evidence_refs": [],
+                    "score": 0.91,
+                }
+            ],
+            "question": {"prompt": "", "options": []},
+            "warnings": [],
+            "adapter_plan": {
+                "primary_focus_id": "ci_cd_workflows",
+                "secondary_focus_ids": [],
+                "downstream_primary_seam_id": "ci_cd_workflows",
+                "downstream_primary_seam_paths": [".github/workflows"],
+                "adaptation_basis": "selected_focus_paths",
+            },
+        }
+
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        selected_paths = list(payload.get("selected_focus_paths") or [])
+        return {
+            "seam_id": canonical_seam_id_for_paths(selected_paths),
+            "summary": "Expanded workflow seam selected from the workflows directory.",
+            "why_primary": "The runner normalized the directory-shaped focus into the concrete workflow file set.",
+            "paths": selected_paths,
+        }
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return []
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        del recommendation_index
+        selected_paths = list(payload.get("selected_focus_paths") or [])
+        return (canonical_seam_id_for_paths(selected_paths), "")
 
 
 class _DuplicateProbeCandidatesHarnessAdapter(_FocusGateHarnessAdapter):
@@ -1036,6 +1254,10 @@ class _DuplicateProbeCandidatesHarnessAdapter(_FocusGateHarnessAdapter):
             checked_files=list(self.probe_checked_files),
             files_hint_disposition="helped",
         )
+
+
+class _DeliberateUmbrellaSeamHarnessAdapter(_NeverAskUmbrellaSeamHarnessAdapter):
+    pass
 
 
 class _ClarificationDuplicateFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
@@ -2767,6 +2989,13 @@ class _QuotaFailingReviewHarnessAdapter(_AcceptingHarnessAdapter):
         return super().run(request)
 
 
+class _FocusGateQuotaFailingReviewHarnessAdapter(_ArtifactFocusGateHarnessAdapter):
+    def run(self, request):
+        if request.role_name == "critic":
+            return _QuotaFailingReviewHarnessAdapter().run(request)
+        return super().run(request)
+
+
 class _ReviserFailingHarnessAdapter(_PartialAcceptanceHarnessAdapter):
     def run(self, request):
         if request.role_name == "reviser_round_1":
@@ -3111,6 +3340,7 @@ def test_analysis_review_runner_focus_gate_selected_records_stage_and_prompt_han
     summary = runner.run()
     focus_decision = summary["focus_decision"]
     focus_stage = summary["agent_stages"][0]
+    focus_stage = summary["agent_stages"][0]
     proposer_stage = summary["agent_stages"][1]
     summary_json = _load_run_summary_json(runner)
 
@@ -3214,7 +3444,8 @@ def test_analysis_review_runner_focus_gate_no_viable_blocks_before_proposer(
     )
 
     summary = runner.run()
-    focus_decision = summary["focus_decision"]
+    focus_stage = summary["agent_stages"][0]
+    focus_decision = focus_stage["structured_output"]
 
     assert summary["verdict"] == "no_viable_focus"
     assert summary["verdicts"]["content_verdict"] == "no_viable_focus"
@@ -3397,6 +3628,59 @@ def test_analysis_review_runner_focus_gate_adjudicate_normalizes_repo_probe_payl
     assert focus_stage["structured_output"] == focus_decision
 
 
+def test_analysis_review_runner_focus_gate_expands_directory_shaped_seam_paths(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="adjudicate"),
+    )
+
+    adapter = _AdjudicateDirectorySeamHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_stage = summary["agent_stages"][0]
+    focus_decision = focus_stage["structured_output"]
+    expected_paths = sorted(
+        [
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/claude-code-update-snapshot.yml",
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/codex-cli-update-snapshot.yml",
+        ]
+    )
+
+    assert summary["verdict"] == "harness_error"
+    assert summary["failure_details"]["stage"] == "proposer"
+    assert sorted(focus_decision["selected_focus_paths"]) == expected_paths
+    assert sorted(focus_decision["candidates"][0]["candidate_paths"]) == expected_paths
+    assert focus_decision["selected_focus_id"] == canonical_seam_id_for_paths(
+        expected_paths
+    )
+    assert (
+        focus_decision["adapter_plan"]["downstream_primary_seam_paths"]
+        == focus_decision["selected_focus_paths"]
+    )
+    assert focus_stage["structured_output"] == focus_decision
+    assert focus_stage["structured_output"] == focus_decision
+    assert focus_stage["structured_output"] == focus_decision
+    assert focus_stage["structured_output"] == focus_decision
+    assert focus_stage["structured_output"] == focus_decision
+    assert focus_stage["structured_output"] == focus_decision
+
+
 def test_analysis_review_runner_artifact_focus_uses_downstream_primary_seam_bridge(
     tmp_path,
     monkeypatch,
@@ -3421,6 +3705,7 @@ def test_analysis_review_runner_artifact_focus_uses_downstream_primary_seam_brid
 
     summary = runner.run()
     focus_decision = summary["focus_decision"]
+    focus_stage = summary["agent_stages"][0]
     proposer_stage = summary["agent_stages"][1]
 
     assert summary["verdict"] == "accepted"
@@ -3440,10 +3725,24 @@ def test_analysis_review_runner_artifact_focus_uses_downstream_primary_seam_brid
         == _SIMPLE_PRIMARY_SEAM_PATHS
     )
     assert focus_decision["adapter_plan"]["adaptation_basis"] == "artifact_singleton"
+    assert focus_stage["metadata"]["focus_gate"] == {
+        "gate_path": "adjudicate",
+        "focus_type": "artifact",
+        "decision_state": "selected",
+    }
     assert proposer_stage["ok"] is True
     assert (
         summary["analysis_review_status"]["primary_seam"]["seam_id"]
         == _SIMPLE_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert "Focus Gate Decision:" in adapter.prompt_texts["proposer"][-1]
+    assert (
+        f"selected_focus_id: {_SIMPLE_PRIMARY_ARTIFACT_FOCUS_ID}"
+        in adapter.prompt_texts["proposer"][-1]
+    )
+    assert (
+        f"adapter_plan.downstream_primary_seam_id: {_SIMPLE_PRIMARY_CANONICAL_SEAM_ID}"
+        in adapter.prompt_texts["proposer"][-1]
     )
 
 
@@ -3693,9 +3992,7 @@ def test_analysis_review_runner_focus_gate_mismatched_rerun_answer_normalizes_re
     )
     assert focus_stage["metadata"]["focus_gate"]["gate_path"] == "deliberate"
     assert focus_stage["metadata"]["focus_gate"]["focus_type"] == "seam"
-    assert (
-        focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
-    )
+    assert focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
     assert (
         focus_envelope["structured_output"]["decision_state"]
         == "clarification_requested"
@@ -3738,6 +4035,7 @@ def test_analysis_review_runner_focus_gate_normalizes_clarification_question_opt
 
     assert summary["verdict"] == "blocked_for_clarification"
     assert focus_decision["decision_state"] == "clarification_requested"
+    assert focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
     assert focus_decision["question"]["options"] == [
         _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
         _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
@@ -3852,12 +4150,15 @@ def test_analysis_review_runner_focus_gate_stale_rerun_never_ask_blocks_without_
 
     assert summary["verdict"] == "no_viable_focus"
     assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["decision_basis"] == "rerun_answer"
     assert focus_decision["question"] == {"prompt": "", "options": []}
     assert any(
         warning.startswith("Prior focus_gate_answer went stale:")
         for warning in focus_decision["warnings"]
     )
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
+    assert len(adapter.prompt_texts["focus_gate"]) == 1
 
 
 def test_analysis_review_runner_focus_gate_ambiguous_rerun_answer_never_ask_blocks_without_selection(
@@ -3891,9 +4192,239 @@ def test_analysis_review_runner_focus_gate_ambiguous_rerun_answer_never_ask_bloc
 
     assert summary["verdict"] == "no_viable_focus"
     assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["decision_basis"] == "rerun_answer"
     assert focus_decision["question"] == {"prompt": "", "options": []}
     assert any(
         "current probe is ambiguous under selection thresholds" in warning
+        for warning in focus_decision["warnings"]
+    )
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
+    assert len(adapter.prompt_texts["focus_gate"]) == 1
+
+
+def test_analysis_review_runner_focus_gate_never_ask_hardens_close_repo_probe_selection_to_no_viable_focus(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(clarification_policy="never_ask"),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _NeverAskCloseContestHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "no_viable_focus"
+    assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["question"] == {"prompt": "", "options": []}
+    assert any(
+        "current probe is ambiguous under selection thresholds" in warning
+        for warning in focus_decision["warnings"]
+    )
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
+    assert len(adapter.prompt_texts["focus_gate"]) == 1
+
+
+def test_analysis_review_runner_focus_gate_hardens_close_repo_probe_selection_to_clarification_requested(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _NeverAskCloseContestHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "blocked_for_clarification"
+    assert focus_decision["decision_state"] == "clarification_requested"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
+    assert focus_decision["question"]["options"] == [
+        _SIMPLE_PRIMARY_CANONICAL_SEAM_ID,
+        _SECONDARY_RELEASE_WATCH_CANONICAL_SEAM_ID,
+    ]
+    assert any(
+        "current probe is ambiguous under selection thresholds" in warning
+        for warning in focus_decision["warnings"]
+    )
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+
+
+def test_analysis_review_runner_focus_gate_never_ask_blocks_umbrella_repo_probe_selection(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(clarification_policy="never_ask"),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _NeverAskUmbrellaSeamHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "no_viable_focus"
+    assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["question"] == {"prompt": "", "options": []}
+    assert any("umbrella seam" in warning for warning in focus_decision["warnings"])
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+
+
+def test_analysis_review_runner_focus_gate_blocks_umbrella_repo_probe_selection_with_clarification(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _DeliberateUmbrellaSeamHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "blocked_for_clarification"
+    assert focus_decision["decision_state"] == "clarification_requested"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
+    assert _NeverAskUmbrellaSeamHarnessAdapter.selected_focus_id in focus_decision["question"]["options"]
+    assert any("umbrella seam" in warning for warning in focus_decision["warnings"])
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+
+
+def test_analysis_review_runner_focus_gate_initial_deliberate_artifact_selection_blocks_for_clarification(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(allowed_focus_type="artifact"),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _ArtifactInitialSelectionHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "blocked_for_clarification"
+    assert focus_decision["focus_type"] == "artifact"
+    assert focus_decision["decision_state"] == "clarification_requested"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["selected_focus_id"] is None
+    assert focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
+    assert focus_decision["question"]["options"] == [_SIMPLE_PRIMARY_ARTIFACT_FOCUS_ID]
+    assert any(
+        "Initial deliberate artifact selection requires operator confirmation"
+        in warning
+        for warning in focus_decision["warnings"]
+    )
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+
+
+def test_analysis_review_runner_focus_gate_initial_deliberate_artifact_selection_never_ask_blocks_without_selection(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(
+            allowed_focus_type="artifact",
+            clarification_policy="never_ask",
+        ),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _ArtifactInitialSelectionHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+
+    assert summary["verdict"] == "no_viable_focus"
+    assert focus_decision["focus_type"] == "artifact"
+    assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["selected_focus_id"] is None
+    assert focus_decision["question"] == {"prompt": "", "options": []}
+    assert any(
+        "Initial deliberate artifact selection requires operator confirmation"
+        in warning
         for warning in focus_decision["warnings"]
     )
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
@@ -5081,6 +5612,12 @@ def test_analysis_review_runner_normalizes_workspace_like_leading_slash_refs(
         )
         == ".github/workflows/codex-cli-release-watch.yml"
     )
+    assert (
+        runner._normalize_workspace_ref(
+            "\u200b.github/workflows/codex-cli-release-watch.yml"
+        )
+        == ".github/workflows/codex-cli-release-watch.yml"
+    )
 
 
 def test_analysis_review_runner_drops_unknown_closure_reviews_during_normalization(
@@ -5130,6 +5667,174 @@ def test_analysis_review_runner_drops_unknown_closure_reviews_during_normalizati
     assert warnings == [
         "Dropped issue_closure_reviews[1] because it referenced an unknown prior open ID: AR-999."
     ]
+
+
+def test_analysis_review_runner_drops_issue_closure_reviews_without_prior_open_ids(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueClosureHarnessAdapter()._payload_for_role("critic")
+    payload["issue_closure_reviews"] = [
+        {
+            "issue_id": "AR-002",
+            "checked_files": ["/.github/workflows/codex-cli-release-watch.yml"],
+            "verified_evidence_refs": [
+                "/.github/workflows/codex-cli-release-watch.yml"
+            ],
+            "summary": "This closure review should be dropped when nothing is open yet.",
+        }
+    ]
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+        prior_open_issue_records=[],
+        prior_open_topic_records=[],
+    )
+
+    assert normalized["issue_closure_reviews"] == []
+    assert warnings == [
+        "Dropped issue_closure_reviews[1] because it did not match a current classified global ID and there were no prior open IDs for issue_closure_reviews in this stage: AR-002."
+    ]
+
+
+def test_analysis_review_runner_drops_topic_ids_from_recommendation_open_issue_ids(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = {
+        "issues": [
+            {
+                "issue_id": "AR-001",
+                "severity": "medium",
+                "kind": "overclaim",
+                "blocking_class": "correctness",
+                "title": "Current issue",
+                "evidence": "Evidence",
+                "repair_hint": "Hint",
+                "recommendation_index": 3,
+            }
+        ],
+        "topics": [
+            {
+                "topic_id": "T-001",
+                "severity": "medium",
+                "title": "Current topic",
+                "evidence": "Evidence",
+                "repair_hint": "Hint",
+                "recommendation_index": 3,
+            }
+        ],
+        "recommendation_reviews": [
+            {
+                "recommendation_index": 3,
+                "verdict": "revise",
+                "open_issue_ids": ["AR-001", "T-001", "AR-999"],
+                "checked_files": ["/.github/workflows/codex-cli-release-watch.yml"],
+                "verified_evidence_refs": [
+                    "/.github/workflows/codex-cli-release-watch.yml"
+                ],
+                "summary": "Normalize mixed issue/topic IDs.",
+            }
+        ],
+        "issue_closure_reviews": [],
+        "topic_closure_reviews": [],
+    }
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+        prior_open_issue_records=[],
+        prior_open_topic_records=[],
+    )
+
+    assert normalized["recommendation_reviews"][0]["open_issue_ids"] == ["AR-001"]
+    assert warnings == [
+        "recommendation_reviews[1].open_issue_ids included topic IDs and they were dropped: T-001",
+        "recommendation_reviews[1].open_issue_ids included unknown issue IDs and they were dropped: AR-999",
+    ]
+
+
+def test_analysis_review_runner_coerces_scalar_review_refs_to_single_item_lists(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueClosureHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueClosureHarnessAdapter()._payload_for_role("auditor")
+    for item in payload["recommendation_reviews"]:
+        item["verified_evidence_refs"] = ".github/workflows/codex-cli-release-watch.yml"
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+        prior_open_issue_records=[{"issue_id": "AR-001", "recommendation_index": None}],
+        prior_open_topic_records=[],
+    )
+
+    assert warnings == []
+    assert all(
+        item["verified_evidence_refs"] == [".github/workflows/codex-cli-release-watch.yml"]
+        for item in normalized["recommendation_reviews"]
+    )
 
 
 def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insufficient(
@@ -7239,6 +7944,37 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
         encoding="utf-8"
     )
     assert "not evaluated by a successful critic/auditor stage" in best_draft_text
+
+
+def test_analysis_review_runner_preserves_focus_decision_on_late_review_failure(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(allowed_focus_type="artifact"),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="adjudicate"),
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _FocusGateQuotaFailingReviewHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "harness_error"
+    assert summary["focus_decision"]["focus_type"] == "artifact"
+    assert summary["run_details"]["focus_decision"] == summary["focus_decision"]
+    assert summary["failure_details"]["focus_decision"] == summary["focus_decision"]
 
 
 def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(

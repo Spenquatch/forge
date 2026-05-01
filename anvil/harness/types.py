@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -81,8 +82,16 @@ def strip_workspace_ref_location_suffix(value: str) -> str:
     return match.group("path")
 
 
-def normalize_workspace_ref(value: Any, *, workspace_root: str | Path | None = None) -> str:
-    text = str(value or "").strip()
+def _strip_workspace_ref_control_chars(value: str) -> str:
+    return "".join(
+        char for char in value if unicodedata.category(char) not in {"Cc", "Cf"}
+    )
+
+
+def normalize_workspace_ref(
+    value: Any, *, workspace_root: str | Path | None = None
+) -> str:
+    text = _strip_workspace_ref_control_chars(str(value or "").strip())
     if not text:
         return ""
     if "://" in text:
@@ -142,6 +151,14 @@ def canonical_workspace_ref_list(
 ) -> list[str]:
     return dedupe_preserving_order(
         normalize_workspace_ref_list(values, workspace_root=workspace_root)
+    )
+
+
+def canonical_seam_path_list(
+    values: Any, *, workspace_root: str | Path | None = None
+) -> list[str]:
+    return sorted(
+        canonical_workspace_ref_list(values, workspace_root=workspace_root)
     )
 
 
@@ -282,7 +299,9 @@ class WorkspaceWritePolicy:
         max_touched_raw = data.get("max_touched_files")
         max_touched_files = None if max_touched_raw is None else int(max_touched_raw)
         if max_touched_files is not None and max_touched_files < 0:
-            raise ValueError("workspace_write_policy.max_touched_files must be >= 0 or null.")
+            raise ValueError(
+                "workspace_write_policy.max_touched_files must be >= 0 or null."
+            )
         if mode == "forbid" and max_touched_files is None:
             max_touched_files = 0
         return cls(
@@ -327,18 +346,24 @@ class ReviewRequirements:
         return cls()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None, *, task_kind: str) -> "ReviewRequirements":
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, task_kind: str
+    ) -> "ReviewRequirements":
         defaults = cls.defaults_for_task_kind(task_kind)
         if data is None:
             return defaults
         if not isinstance(data, dict):
             raise ValueError("review_requirements must be a mapping when provided.")
-        min_recommendations = int(data.get("min_recommendations", defaults.min_recommendations))
+        min_recommendations = int(
+            data.get("min_recommendations", defaults.min_recommendations)
+        )
         if min_recommendations < 0:
             raise ValueError("review_requirements.min_recommendations must be >= 0.")
-        evidence_cap_policy = str(
-            data.get("evidence_cap_policy", defaults.evidence_cap_policy)
-        ).strip().lower()
+        evidence_cap_policy = (
+            str(data.get("evidence_cap_policy", defaults.evidence_cap_policy))
+            .strip()
+            .lower()
+        )
         if evidence_cap_policy not in VALID_EVIDENCE_CAP_POLICIES:
             raise ValueError(
                 "review_requirements.evidence_cap_policy must be one of: "
@@ -355,7 +380,9 @@ class ReviewRequirements:
             require_classification=bool(
                 data.get("require_classification", defaults.require_classification)
             ),
-            require_priority=bool(data.get("require_priority", defaults.require_priority)),
+            require_priority=bool(
+                data.get("require_priority", defaults.require_priority)
+            ),
             min_recommendations=min_recommendations,
             evidence_cap_policy=evidence_cap_policy,
         )
@@ -437,12 +464,18 @@ class RoleConfig:
         return cls(
             provider=str(data["provider"]),
             model=(None if data.get("model") in (None, "") else str(data.get("model"))),
-            effort=(None if data.get("effort") in (None, "") else str(data.get("effort"))),
+            effort=(
+                None if data.get("effort") in (None, "") else str(data.get("effort"))
+            ),
             access=str(data.get("access", "read")),
             timeout_sec=int(data.get("timeout_sec", 1800)),
-            max_turns=(None if data.get("max_turns") is None else int(data.get("max_turns"))),
+            max_turns=(
+                None if data.get("max_turns") is None else int(data.get("max_turns"))
+            ),
             max_budget_usd=(
-                None if data.get("max_budget_usd") is None else float(data.get("max_budget_usd"))
+                None
+                if data.get("max_budget_usd") is None
+                else float(data.get("max_budget_usd"))
             ),
             extra_args=[str(x) for x in data.get("extra_args", [])],
             env={str(k): str(v) for k, v in dict(data.get("env", {})).items()},
@@ -468,7 +501,9 @@ class ValidatorConfig:
     on_missing_binary: str = "fail"
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], *, default_run_when: str = "patch_only") -> "ValidatorConfig":
+    def from_dict(
+        cls, data: dict[str, Any], *, default_run_when: str = "patch_only"
+    ) -> "ValidatorConfig":
         run_when = str(data.get("run_when", default_run_when)).strip().lower()
         if run_when not in VALID_VALIDATOR_RUN_WHEN:
             raise ValueError(
@@ -529,7 +564,9 @@ class ReviewLoopPolicy:
         return cls()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None, *, strategy_kind: str) -> "ReviewLoopPolicy":
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, strategy_kind: str
+    ) -> "ReviewLoopPolicy":
         defaults = cls.defaults_for_strategy_kind(strategy_kind)
         if data is None:
             return defaults
@@ -540,7 +577,9 @@ class ReviewLoopPolicy:
             min_loops=int(data.get("min_loops", defaults.min_loops)),
             max_loops=int(data.get("max_loops", defaults.max_loops)),
             always_run_first_revision=bool(
-                data.get("always_run_first_revision", defaults.always_run_first_revision)
+                data.get(
+                    "always_run_first_revision", defaults.always_run_first_revision
+                )
             ),
             max_open_medium_issues=(
                 defaults.max_open_medium_issues
@@ -566,7 +605,9 @@ class ReviewLoopPolicy:
         if policy.min_loops < 0 or policy.max_loops < 0:
             raise ValueError("review_loops min/max must be >= 0.")
         if policy.max_loops < policy.min_loops:
-            raise ValueError("review_loops.max_loops must be >= review_loops.min_loops.")
+            raise ValueError(
+                "review_loops.max_loops must be >= review_loops.min_loops."
+            )
         for field_name in (
             "min_grounding_score",
             "min_actionability_score",
@@ -574,9 +615,16 @@ class ReviewLoopPolicy:
         ):
             value = getattr(policy, field_name)
             if value is not None and not (0 <= value <= 1):
-                raise ValueError(f"review_loops.stop_when.{field_name} must be between 0 and 1.")
-        if policy.max_open_medium_issues is not None and policy.max_open_medium_issues < 0:
-            raise ValueError("review_loops.stop_when.max_open_medium_issues must be >= 0.")
+                raise ValueError(
+                    f"review_loops.stop_when.{field_name} must be between 0 and 1."
+                )
+        if (
+            policy.max_open_medium_issues is not None
+            and policy.max_open_medium_issues < 0
+        ):
+            raise ValueError(
+                "review_loops.stop_when.max_open_medium_issues must be >= 0."
+            )
         return policy
 
     def to_dict(self) -> dict[str, Any]:
@@ -609,7 +657,10 @@ class StrategyConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyConfig":
         kind = str(data.get("kind") or "pfr_v1")
-        roles = {str(name): RoleConfig.from_dict(cfg) for name, cfg in dict(data.get("roles", {})).items()}
+        roles = {
+            str(name): RoleConfig.from_dict(cfg)
+            for name, cfg in dict(data.get("roles", {})).items()
+        }
         validators = [
             ValidatorConfig.from_dict(v, default_run_when="patch_only")
             for v in data.get("validators", [])
@@ -620,10 +671,14 @@ class StrategyConfig:
             roles=roles,
             validators=validators,
             max_repair_loops=int(data.get("max_repair_loops", 1)),
-            rerun_falsifier_after_patch=bool(data.get("rerun_falsifier_after_patch", True)),
+            rerun_falsifier_after_patch=bool(
+                data.get("rerun_falsifier_after_patch", True)
+            ),
             patch_on_inconclusive=bool(data.get("patch_on_inconclusive", False)),
             prompt_preamble=str(data.get("prompt_preamble", "") or ""),
-            review_loops=ReviewLoopPolicy.from_dict(data.get("review_loops"), strategy_kind=kind),
+            review_loops=ReviewLoopPolicy.from_dict(
+                data.get("review_loops"), strategy_kind=kind
+            ),
             focus_gate=StrategyFocusGateConfig.from_dict(data.get("focus_gate")),
         )
 

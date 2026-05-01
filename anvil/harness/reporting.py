@@ -49,6 +49,28 @@ def ensure_run_dir(run_dir: str | Path) -> Path:
     return path
 
 
+def _sync_focus_decision_into_summary(summary: dict[str, Any]) -> None:
+    top_level_focus = summary.get("focus_decision")
+    run_details = summary.get("run_details")
+    run_details_focus = (
+        run_details.get("focus_decision")
+        if isinstance(run_details, dict)
+        and isinstance(run_details.get("focus_decision"), dict)
+        and run_details.get("focus_decision")
+        else None
+    )
+
+    if isinstance(top_level_focus, dict) and top_level_focus:
+        if not isinstance(run_details, dict):
+            run_details = {}
+            summary["run_details"] = run_details
+        run_details["focus_decision"] = copy.deepcopy(top_level_focus)
+        return
+
+    if run_details_focus is not None:
+        summary["focus_decision"] = copy.deepcopy(run_details_focus)
+
+
 def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
     reviews = summary.get("recommendation_reviews") or []
     indices: list[int] = []
@@ -563,7 +585,9 @@ def _append_seam_context_section(
     if artifact_kind == "partial_answer":
         primary_seam = payload.get("primary_seam")
         secondary_seams = payload.get("secondary_seams_considered")
-        projection_status = str(payload.get("primary_seam_projection_status") or "").strip()
+        projection_status = str(
+            payload.get("primary_seam_projection_status") or ""
+        ).strip()
     else:
         primary_seam = analysis_status.get("primary_seam")
         secondary_seams = analysis_status.get("secondary_seams_considered")
@@ -594,9 +618,7 @@ def _append_seam_context_section(
         why_primary = str(primary_seam.get("why_primary") or "").strip()
         if why_primary:
             lines.append(f"  - Why primary: {why_primary}")
-        lines.append(
-            "  - Paths: " + _render_seam_paths(primary_seam.get("paths"))
-        )
+        lines.append("  - Paths: " + _render_seam_paths(primary_seam.get("paths")))
     else:
         lines.append("- Primary seam: none")
     if projection_status == "retained_without_included_recommendations":
@@ -616,10 +638,7 @@ def _append_seam_context_section(
                 "  - "
                 + f"`{_normalized_seam_id(item.get('seam_id')) or 'unknown'}`"
                 + ": "
-                + (
-                    str(item.get("summary") or "").strip()
-                    or "No summary provided."
-                )
+                + (str(item.get("summary") or "").strip() or "No summary provided.")
             )
     else:
         lines.append("- Secondary seams considered: none")
@@ -1453,6 +1472,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     """
 
     summary = copy.deepcopy(summary)
+    _sync_focus_decision_into_summary(summary)
     run_dir = ensure_run_dir(
         (summary.get("artifacts") or {}).get("run_dir") or summary.get("run_dir") or "."
     )
@@ -1707,6 +1727,7 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
     focus_decision = state.get("focus_decision")
     if isinstance(focus_decision, dict) and focus_decision:
         summary["focus_decision"] = copy.deepcopy(focus_decision)
+    _sync_focus_decision_into_summary(summary)
     summary = apply_final_artifacts(summary)
     state.setdefault("artifact_index", {})["summary_json"] = artifact_ref(
         summary["artifacts"]["summary_json"],
