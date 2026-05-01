@@ -6,6 +6,8 @@ These are intentionally **not** the first implementation slice for the current b
 
 ### Product and architecture follow-ups
 
+- After the request-gate milestone lands, evaluate whether the measured wrong-route, latency, and token deltas justify widening into a generalized intent-intake layer instead of continuing to polish analysis-review-local routing.
+- Defer full M2 compatibility shim retirement until after the request-gate branch proves user-visible value, then decide whether to remove `run_m2_focus_gate_live_acceptance.py`, rename fixture namespaces, and collapse docs onto the canonical focus-gate surface.
 - Evaluate reshaping trust mode into an attestation layer over bounded output, where bounded produces `BEST_DRAFT` and trust re-audits that draft instead of running as a separate proposer flow from scratch.
 - Explore whether bounded and trust should diverge earlier in generation strategy, not just in validation/verdict posture, so the two modes feel operationally distinct.
 - Revisit whether the current single unified runner is still the right long-term shape after the topic-ledger and review-evidence work lands.

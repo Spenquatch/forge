@@ -1,839 +1,653 @@
-<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260428-173839.md -->
-# PLAN: M3 Typed Focus Gate Finalization
+<!-- /autoplan restore point: /Users/spensermcconnell/.gstack/projects/forge/feat-bounded-work-redesign-autoplan-restore-20260429-193825.md -->
+# PLAN: M4 Request-Gate Productization on Top of M3
 
 Status: ready for implementation
+Milestone: `M4`
 Branch: `feat/bounded-work-redesign`
-Supersedes: the stale M2 implementation plan that previously lived at this path
-Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260428-173839.md`
-Implementation baseline: M2 focus-gate v9 behavior is landed on this branch at `HEAD`
+Supersedes: the prior draft at this path and the already-landed M3 typed focus-gate finalization work
+Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260429-193245.md`
+Implementation baseline: M3 typed focus gate is already landed on this branch at `HEAD`
 
-## Plan Summary
+## M4 Summary
 
-Do not spend this branch re-implementing M2.
+M3 already did the hard foundational work:
 
-The focus gate already exists end to end:
+- typed `focus_type = seam | artifact` exists
+- `focus_decision` is persisted, validated, and rendered
+- blocked deliberate behavior exists
+- stale rerun-answer handling exists
+- artifact singleton bridging exists
+- acceptance tooling already covers the core focus-gate surface
 
-- `focus_gate_probe` and `focus_gate` exist in `anvil/harness/runner.py`
-- split prompt builders exist in `anvil/harness/prompts.py`
-- `clarification_policy = never_ask` survives parse -> contract -> runner -> report
-- stale rerun-answer handling already exists and is candidate-aware
-- the runner-owned top-level `focus_decision` artifact already exists in schema, semantic validation, and reporting
-- targeted regression coverage is already green on the seam-only surface
+M4 must not rebuild that machinery.
 
-M3 is the finish pass for this feature family.
+M4 turns the existing pre-proposer focus-gate surface into the explicit productized
+request gate for analysis-review runs. The implementation stays local to the
+analysis-review harness. It does not introduce a second router, a second public
+artifact, or a third packet family.
 
-The job is not "invent focus gating again." The job is:
+The real M4 deliverable is not "we added another stage." That stage already exists.
+The M4 deliverable is:
 
-1. remove the remaining seam-only assumptions from gate-core code
-2. add one narrow second focus packet that proves the gate is genuinely typed
-3. keep the public surface stable enough that existing seam behavior does not regress
-4. leave a generic acceptance surface instead of an M2-branded one-off helper
+- one unambiguous public artifact boundary
+- one explicit policy for when `seam` wins, when `artifact` wins, and when the run blocks
+- one consistent report and summary story for the request-gate decision
+- one complete acceptance and regression matrix proving early select and early block behavior
+- one honest success bar tied to wasted-work reduction, not just cleaner contracts
 
-## User Outcome and Success Criteria
+## User Outcome
 
-This milestone still serves a user outcome, not just internal cleanup.
+After M4, a user should feel three things:
 
-When a task is really about one governing file, for example a workflow file or manifest, the gate should be able to focus that run without first pretending the user already handed it a seam-shaped multi-file review unit.
+1. Obvious singleton-file requests route cleanly without pretending they are broad seam reviews.
+2. Obvious seam-shaped requests still take the same bounded review path they take today.
+3. Ambiguous requests block before proposer instead of doing expensive wrong work first.
 
-M3 is successful only if all of the following are true:
+If users cannot feel that difference, M4 is not a product milestone. It is just
+internal tidying.
 
-- existing seam tasks behave exactly as they do today
-- a narrow `focus_type = artifact` run can complete bounded and trust end to end
-- deliberate ambiguity, `never_ask`, and stale rerun-answer behavior work for both supported focus types
-- downstream analysis remains seam-shaped in M3, but the runner-owned bridge from selected focus to downstream seam expectations is explicit, persisted, and validated
-- acceptance tooling no longer hardcodes M2-only file names or adjudicate-only assumptions
+## Success Criteria
+
+M4 is successful only if all of these are true:
+
+- every analysis-review run with focus gating enabled produces exactly one public `focus_decision`
+- that `focus_decision` is finalized before proposer starts
+- `focus_type` remains exactly `seam` or `artifact`, never a new third value
+- clear singleton-file requests can select `artifact` and still bridge cleanly into the downstream seam-shaped payload surface
+- clear seam requests still select `seam` and behave like current M3 happy paths
+- ambiguous requests block before proposer on `clarification_requested` or `no_viable_focus`
+- `summary.json`, persisted stage artifacts, and `REPORT.md` all expose the same request-gate result
+- the acceptance matrix proves selected seam, selected artifact, blocked ambiguity, `never_ask`, stale rerun-answer, and regression compatibility paths
+
+### Quantified Proof
+
+Do not call M4 done on green unit tests alone.
+
+Before closing the milestone, capture before-or-after evidence for:
+
+- wrong-route rate on sampled seam-shaped requests
+- wrong-route rate on sampled artifact-shaped requests
+- median time from run start to final request-gate decision
+- clarification rate on ambiguous requests
+- number of runs that avoid the expensive review loop because the gate blocks early
+- net runtime and token delta after including probe overhead
+
+If those numbers do not move in the right direction, M4 should be treated as a
+bounded experiment, not as proof that this abstraction deserves expansion.
 
 ## Step 0: Scope Challenge
 
-### Mode Selection
-
-Use **SELECTIVE EXPANSION**.
-
-Finish the feature that already exists. Do not widen into a general router, a new task kind, or a new downstream payload family.
-
-### Premise Challenge
-
-| Premise | Verdict | Why |
-|---|---|---|
-| M2 is landed baseline, not future work. | Accept | Code, tests, docs, and saved artifacts already exist at `HEAD`. |
-| M3 still needs one second focus packet to make the typed claim honest. | Accept | `allowed_focus_types`, schemas, prompts, normalization, and semantic validation still hardcode `seam`. |
-| The second packet on this branch remains `artifact`. | Accept with narrowing | Keep the branch direction, but define it narrowly as a governing-file focus packet, not a broad new product taxonomy. |
-| M3 can keep the downstream analysis loop seam-shaped. | Accept | That is the smallest safe implementation, but the adapter bridge must be explicit and persisted. |
-| M3 should support mixed seam+artifact arbitration in one run. | Reject | That is a separate front-door routing milestone and would expand scope materially. |
-| M3 can keep the existing contract version and just widen enums silently. | Reject | This is a real contract change, not a comment-only cleanup. |
-| M3 can treat deliberate stale-answer handling as unchanged. | Reject | The current rerun and stale-answer path is seam-authored and must move behind the typed adapter boundary. |
-
-### Implementation Alternatives
-
-| Option | Summary | Pros | Cons | Verdict |
-|---|---|---|---|---|
-| A. M2 closeout only | Rename helpers, clean docs, stop. | Small diff. | Leaves the "typed focus" claim half-true forever. | Reject |
-| B. Internal seam adapter only | Isolate seam logic internally, but keep `seam` as the only supported type. | Lower risk. | Does not prove typed reuse and punts the second packet again. | Reject |
-| C. Typed adapter core + narrow artifact packet | Extract typed gate-core seams, add one governing-file packet, keep downstream seam-shaped. | Honest finish, minimal public churn, clear proof packet. | Real contract and acceptance work, not just enum widening. | Choose |
-
 ### What Already Exists
 
-| Sub-problem | Existing code | Reuse decision |
+| Sub-problem | Existing code | M4 decision |
 |---|---|---|
-| task-level focus-gate parsing | `anvil/harness/types.py` | Reuse, but replace `_validate_m1_allowed_focus_types()` with a real typed validator. |
-| resolved focus-gate contract | `anvil/harness/contracts.py` | Reuse, but bump contract version and widen `FocusGatePolicy`. |
-| public focus schemas | `anvil/harness/schemas.py` | Reuse the existing shell. Extend `focus_type` and `adapter_plan`; do not add `focus_decision_v2`. |
-| focus-decision semantic validation | `anvil/harness/semantic_validation.py` | Reuse the entrypoint, split generic focus checks from type-specific and downstream bridge checks. |
-| gate orchestration and normalization | `HarnessRunner` helpers in `anvil/harness/runner.py` | Reuse the stage flow, but stop calling seam-only canonicalization directly from generic helpers. |
-| gate prompts | `anvil/harness/prompts.py` | Reuse the split adjudicate/deliberate builders, but move type rules and downstream handoff wording behind the adapter boundary. |
-| focus report rendering | `anvil/harness/report.py` | Reuse the `## Focus Decision` section and make it type-aware plus bridge-aware. |
-| acceptance helper pattern | `scripts/run_m2_focus_gate_live_acceptance.py` and `examples/harness/live_acceptance/` | Reuse the pattern, not the M2-only assumptions or names. |
+| Canonical typed focus vocabulary | [anvil/harness/focus_types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/focus_types.py:1) | Reuse directly. No new packet-family enum. |
+| Public `focus_decision` schema | [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:642) | Keep as the only public routing artifact unless validation proves it is insufficient. |
+| Semantic validation for `seam` and `artifact` | [anvil/harness/semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:328) | Reuse and tighten only where M4 semantics expose a gap. |
+| Pre-proposer focus gate orchestration | [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:614) | Keep the existing stage shape. M4 hardens and clarifies it; M4 does not invent a second gate. |
+| Internal probe stage for deliberate flows | [anvil/harness/prompts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:389), [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:4748) | Keep internal-only. Do not promote probe output to a second public artifact. |
+| Artifact singleton bridge | [anvil/harness/focus_types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/focus_types.py:35), [anvil/harness/semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/semantic_validation.py:519) | Reuse unchanged as the downstream handoff contract. |
+| Acceptance harness | [scripts/run_focus_gate_acceptance.py](/Users/spensermcconnell/__Active_Code/forge/scripts/run_focus_gate_acceptance.py:1), [tests/test_run_focus_gate_acceptance.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_run_focus_gate_acceptance.py:1) | Reuse and expand. Do not invent a new acceptance runner. |
 
-### Current Code Reality at `HEAD`
+### Minimum Change Set
 
-These are the real seam-only anchors that M3 must remove:
+M4 should stay inside four code surfaces:
 
-- `anvil/harness/types.py`
-  - `_validate_m1_allowed_focus_types()` accepts only `["seam"]`
-- `anvil/harness/contracts.py`
-  - `FocusGatePolicy.allowed_focus_types` is typed as `list[Literal["seam"]]`
-  - the resolved contract is still `analysis_review_v1_contract_v9`
-- `anvil/harness/schemas.py`
-  - `focus_gate_output_schema()` and `focus_probe_output_schema()` allow only `focus_type = seam`
-  - `FOCUS_GATE_ADAPTER_PLAN_SCHEMA` carries only `primary_focus_id` and `secondary_focus_ids`
-- `anvil/harness/semantic_validation.py`
-  - `validate_focus_decision_payload()` requires `focus_type == "seam"`
-  - canonical selected focus IDs are derived with `canonical_seam_id_for_paths(...)`
-- `anvil/harness/runner.py`
-  - `_normalize_focus_gate_candidate_payloads()` and `_normalize_focus_gate_decision_payload()` derive seam IDs directly
-  - `_canonical_focus_gate_question_prompt()` hardcodes `"Which seam should this run prioritize?"`
-  - stale rerun-answer handling and fallback synthesis are seam-only
-  - proposer / reviser validation passes `selected_focus_id` and `selected_focus_paths` directly into `expected_primary_seam_*`
-- `anvil/harness/prompts.py`
-  - focus-gate output rules and probe rules say `focus_type` is always `seam`
-  - downstream analysis prompt blocks still describe selected focus paths as seam identity
-- `anvil/harness/report.py`
-  - the focus-decision section renders only the current minimal `adapter_plan` bridge and assumes seam-centric wording
-- docs and acceptance
-  - `README.md`, `examples/README.md`, `docs/analysis_review_contract.md`, and `scripts/run_m2_focus_gate_live_acceptance.py` still describe an M2-only surface
+1. `anvil/harness/` for runtime, prompt, validation, and reporting alignment
+2. `tests/` for unit and semantic coverage
+3. `scripts/` for acceptance assertions
+4. `examples/harness/live_acceptance/` for scenario manifests
+
+M4 should not add a new package, a new service layer, or a new public artifact type.
+
+### Complexity Check
+
+This work will likely touch more than eight files once tests and manifests are
+counted. That is a smell, but not a reason to widen scope. The correct response is
+to keep the conceptual change small:
+
+- no new workflow family
+- no new packet family
+- no new planner
+- no new pause or resume lifecycle
+- no new external distribution surface
+
+The implementation should still feel like one bounded capability change inside the
+existing harness, not a platform rewrite in disguise.
+
+### Search and Boring-by-Default Check
+
+M4 should spend zero innovation tokens on new infrastructure.
+
+The repo already has:
+
+- a runner-owned pre-proposer gate
+- a private probe stage for deliberate routing
+- a typed public decision artifact
+- semantic validation and acceptance infrastructure
+
+The boring choice is the correct choice:
+
+- keep existing stage names in code
+- keep existing artifact family in public output
+- keep the current downstream seam bridge
+- extend tests and reporting instead of building another abstraction
 
 ### Scope Decision
 
-Proceed with M3 as:
+M4 is locked to this scope:
 
-- a real typed gate-core extraction
-- one narrow `artifact` proof packet
-- one explicit contract bump
-- one explicit runner-owned downstream seam bridge
-- one generic acceptance surface
+- productize the existing pre-proposer focus gate as the M4 request gate for analysis-review runs
+- keep exactly two packet families in scope: `seam` and `artifact`
+- keep `focus_decision` as the only public routing artifact
+- keep `focus_gate_probe` internal-only
+- keep downstream review payload shape unchanged
+- prove the behavior with unit tests, semantic validation, and live acceptance
 
-Do not widen this branch into mixed-type arbitration or a downstream non-seam review payload.
+## Decisions Locked for M4
+
+| Decision | Chosen option | Why | Rejected alternative |
+|---|---|---|---|
+| Public artifact boundary | Reuse `focus_decision` | Minimal diff, matches existing validation and reporting surfaces, avoids dual-artifact drift | Add a second public request-decision artifact |
+| Probe visibility | Keep `focus_gate_probe` internal-only | The probe is evidence-gathering context, not the published routing contract | Persist the probe as a second public surface |
+| Runtime stage naming | Keep `focus_gate_probe` and `focus_gate` in code for M4 | Boring, low-risk, preserves existing tests and artifact paths | Rename runtime stages mid-milestone |
+| Packet-family set | Exactly `seam` and `artifact` | Already landed, already validated, already bridged downstream | Add a third request type |
+| Deliberate path | Use only for materially ambiguous routing | Protects users from confident wrong routing without teaching the system to ask all the time | Clarify first on every low-confidence case |
+| Contract versioning | No public contract bump by default | Existing shape already represents the decision; only bump if implementation discovers a missing public field | Preemptive schema churn |
+| Success bar | User-visible wasted-work reduction + correctness proof | Internal neatness alone is not enough | Declare victory on schema cleanliness |
 
 ## Architecture Plan
 
-### 1. Keep the Public Surface Stable, But Bump the Contract Version
+### Core M4 Call
 
-Keep these public names:
+Treat the existing focus-gate surface as the analysis-review request gate.
 
-- `focus_gate`
-- `focus_gate_answer`
-- top-level `focus_decision`
+Do not add a second outer router. Do not add a second public artifact. Do not force
+a rename that ripples through tests, reports, and scripts unless the behavior itself
+demands it. M4 is a semantics and proof milestone built on top of the M3 runtime.
 
-Do not add `focus_decision_v2`.
-
-Do bump the resolved contract version from `analysis_review_v1_contract_v9` to `analysis_review_v1_contract_v10`.
-
-Why:
-
-- widening `allowed_focus_types`
-- widening `focus_type`
-- widening `adapter_plan`
-- making deliberate rerun behavior typed instead of seam-only
-
-This is a real contract change. Treating it as an in-place v9 edit would make old docs, old test fixtures, and old saved artifacts silently change meaning.
-
-### 2. Introduce a Typed Focus Adapter Module
-
-Add:
-
-- `anvil/harness/focus_types.py`
-
-This module owns typed focus logic that is currently scattered across `contracts.py`, `runner.py`, `semantic_validation.py`, and `prompts.py`.
-
-Minimum interface:
+### Current Runtime Leverage
 
 ```text
-FocusTypeAdapter
-  - focus_type_name() -> Literal["seam", "artifact"]
-  - normalize_candidate_paths(...)
-  - canonical_focus_id(candidate_paths) -> str
-  - question_prompt() -> str
-  - validate_selected_paths(...)
-  - validate_candidate_paths(...)
-  - build_downstream_primary_seam(selected_focus_paths) -> {seam_id, paths}
-  - prompt_rules_for_probe() -> str
-  - prompt_rules_for_decision() -> str
-  - prompt_rules_for_analysis_handoff() -> str
-  - stale_answer_fallback(...)
+analysis-review run
+    |
+    v
+focus_gate? enabled
+    |
+    +--> adjudicate path
+    |       |
+    |       v
+    |   selected | blocked
+    |
+    +--> deliberate path
+            |
+            v
+      focus_gate_probe
+            |
+            v
+      focus_gate
+            |
+            v
+      selected | blocked
 ```
 
-Concrete adapters:
+That is already real in the codebase. M4 should standardize what it means, not
+pretend it is missing.
 
-- `SeamFocusAdapter`
-- `ArtifactFocusAdapter`
-
-### 3. Define M3 Artifact Narrowly
-
-`focus_type = artifact` is a governing-file focus packet in M3.
-
-Normative rules:
-
-- `selected_focus_paths` must contain exactly one normalized workspace path
-- each `candidates[*].candidate_paths` must contain exactly one normalized workspace path
-- `checked_files` may contain corroborating files beyond the selected artifact path
-- the artifact focus ID is runner-owned, not model-owned
-- the downstream bridge remains seam-shaped for M3
-
-Runner-owned artifact ID rule:
+### Target M4 Behavioral Contract
 
 ```text
-canonical_artifact_focus_id(path) =
-  "artifact-" + slugify(Path(path).stem) + "-" + sha1(normalized_path)[:12]
-```
-
-This must be deterministic across:
-
-- candidate normalization
-- selected-focus normalization
-- rerun-answer option matching
-- report rendering
-- saved artifact inspection
-
-### 4. Extend the Public Bridge, Do Not Hide It
-
-The current `adapter_plan` is too small for typed focus.
-
-Today:
-
-```json
-{
-  "primary_focus_id": "string|null",
-  "secondary_focus_ids": []
-}
-```
-
-M3 must widen it to:
-
-```json
-{
-  "primary_focus_id": "string|null",
-  "secondary_focus_ids": [],
-  "downstream_primary_seam_id": "string|null",
-  "downstream_primary_seam_paths": [],
-  "adaptation_basis": "selected_focus_paths|artifact_singleton"
-}
-```
-
-Rules:
-
-- for `decision_state = selected`
-  - `primary_focus_id == selected_focus_id`
-  - `secondary_focus_ids` is the shortlisted remainder
-  - `downstream_primary_seam_id` is always non-null
-  - `downstream_primary_seam_paths` is always non-empty
-- for `decision_state != selected`
-  - both downstream seam bridge fields must serialize as null / `[]`
-
-This bridge is runner-owned state. The runner, semantic validation, reporting, and acceptance tooling must all use it.
-
-### 5. Keep the Downstream Loop Seam-Shaped, Explicitly
-
-M3 does not widen proposer / critic / reviser / auditor payloads away from `primary_seam`.
-
-It does make the bridge explicit:
-
-```text
-focus_gate selected focus
+task + strategy + files_hint
         |
         v
-typed adapter
+M4 request gate
+  (implemented by the existing focus-gate surface)
         |
-        v
-adapter_plan.downstream_primary_seam_{id,paths}
+        +--> selected seam
+        |       |
+        |       v
+        |   proposer -> critic -> revisers -> auditor
         |
-        v
-proposer / reviser expected_primary_seam_{id,paths}
+        +--> selected artifact
+        |       |
+        |       v
+        |   singleton focus + downstream seam bridge
+        |   proposer -> critic -> revisers -> auditor
+        |
+        +--> clarification_requested | no_viable_focus
+                |
+                v
+             STOP
+             no proposer artifacts
 ```
 
-For `focus_type = seam`:
+### Exact Stage Rules
 
-- `downstream_primary_seam_id = selected_focus_id`
-- `downstream_primary_seam_paths = selected_focus_paths`
+#### Rule 1: `focus_decision` stays public and final
 
-For `focus_type = artifact`:
+The only published routing artifact for M4 is `focus_decision`.
 
-- `selected_focus_id` remains the artifact ID
-- `selected_focus_paths` remains the single selected artifact path
-- `downstream_primary_seam_id = canonical_seam_id_for_paths([selected_artifact_path])`
-- `downstream_primary_seam_paths = [selected_artifact_path]`
-- later widening into sibling seams remains a downstream review responsibility, not a gate-core responsibility
-
-This is intentionally narrow. M3 is not claiming artifact focus is a full downstream typed review family.
-
-### 6. Move Deliberate Rerun and Stale-Answer Logic Behind the Adapter Boundary
-
-M3 must update all of these runner behaviors, not just happy-path adjudicate selection:
-
-- canonical clarification prompt generation
-- candidate ID generation
-- rerun answer matching
-- stale-answer detection
-- stale fallback synthesis for `never_ask`
-- `clarification_requested` option generation
-
-Required rule:
-
-- the canonical question prompt must become generic, not seam-specific
-- use: `"Which focus should this run prioritize?"`
-
-The current seam-only prompt text must not survive in typed code paths.
-
-### 7. Update Prompt Handoff, Not Just Gate Prompts
-
-M3 prompt work includes:
-
-- focus-gate adjudicate prompt
-- focus-gate deliberate prompt
-- focus-gate probe guidance
-- downstream proposer / reviser focus-handoff blocks
-
-The critical downstream prompt change:
-
-- selected focus is the public focus choice
-- downstream `primary_seam` is the runner-owned adapted seam
-- models must not assume `selected_focus_paths` is always identical to downstream seam identity
-
-### 8. Make Acceptance Scenario-Driven
-
-Replace the current M2-only acceptance helper assumptions:
-
-- hardcoded task and strategy pair
-- adjudicate-only success expectation
-- mandatory proposer artifacts for every scenario
-- seam-path equality assumptions between selected focus and `primary_seam`
-
-M3 acceptance must validate scenarios by:
-
-- expected `gate_path`
-- expected terminal `decision_state`
-- expected `focus_type`
-- whether proposer artifacts must exist
-- whether the downstream seam bridge must exist
-
-Blocked deliberate scenarios should validate only:
+It must continue to be the single source of truth across:
 
 - `summary.json`
+- the persisted `focus_gate` stage artifact
+- `run_details.focus_decision`
 - `REPORT.md`
-- `focus_gate_probe` artifacts
-- `focus_gate` artifacts
 
-They must not require proposer artifacts when the run blocks before proposer.
+#### Rule 2: `focus_gate_probe` stays private
 
-## Concrete Implementation Plan
+The probe stage may exist only to support deliberate routing. Its output is repo
+evidence used to justify the final public decision.
 
-### Slice 0: Contract, Naming, and Doc Hygiene
+The probe must not become:
 
-Goal:
+- a second public decision surface
+- a second report surface
+- a second compatibility contract for downstream consumers
 
-- make the finish line honest before adding typed behavior
+#### Rule 3: `adjudicate` is the cheap obvious-case path
 
-Files:
+When the task context alone is enough to choose the family, M4 should stay on
+`gate_path=adjudicate` with:
 
-- `anvil/harness/contracts.py`
-- `docs/analysis_review_contract.md`
-- `README.md`
-- `examples/README.md`
+- `decision_basis=request_only`
+- `checked_files=[]`
+- `files_hint_disposition=absent`
+
+This path is for clear cases. It should not silently do probe-like work.
+
+#### Rule 4: `deliberate` is the ambiguity path
+
+Use `deliberate` only when packet-family ambiguity materially changes the review
+shape.
+
+For M4 that means:
+
+- the request could plausibly be a multi-file seam or a singleton artifact
+- the distinction matters to the correct review path
+- asking or blocking is cheaper than confident wrong routing
+
+#### Rule 5: blocked states halt before proposer
+
+If `decision_state` is `clarification_requested` or `no_viable_focus`, the run stops.
+
+M4 must preserve this invariant:
+
+- no proposer stage
+- no reviewer stages
+- no fake downstream seam artifacts
+- failure details include the gate decision, candidates, and warnings
+
+### Packet-Family Rules
+
+#### `seam` wins when:
+
+- the task is clearly about a repo-local review unit that spans multiple related files
+- the user intent is inherently multi-file even if `files_hint` is sparse
+- a singleton-file interpretation would obviously under-scope the work
+
+#### `artifact` wins when:
+
+- the request is clearly about one governing file or one singleton control surface
+- the selected path set normalizes to exactly one path
+- the artifact singleton can still bridge into the downstream seam-shaped payload without ambiguity
+
+#### `clarification_requested` wins when:
+
+- both families remain plausible after the deliberate shortlist
+- the user can answer the missing distinction directly
+- the wrong route would waste more time than the clarification pause costs
+
+#### `no_viable_focus` wins when:
+
+- the request does not support a defensible shortlist
+- `never_ask` prevents clarification on an ambiguous case
+- a stale rerun answer no longer maps cleanly onto the current candidate set
+
+### Artifact Boundary Decision Memo
+
+M4 explicitly resolves the single-artifact versus dual-artifact question.
+
+Choose the single-artifact design.
+
+Why this is correct here:
+
+- the runtime already persists `focus_decision`
+- semantic validation already encodes the key invariants for `seam` and `artifact`
+- the acceptance runner already reads `summary["focus_decision"]`
+- a second public artifact would create two truths for one routing event
+
+What makes this safe:
+
+- the probe remains available as internal evidence
+- the final public contract remains one object with one decision
+- the downstream bridge stays encoded in `adapter_plan`
+
+What would force a later reversal:
+
+- if report clarity becomes materially worse
+- if downstream consumers need probe-level evidence as a first-class contract
+- if validation cannot express the final routing semantics cleanly in the existing shape
+
+M4 assumes none of those are true until the implementation proves otherwise.
+
+### Contract and Reporting Rules
+
+M4 should keep the existing public `focus_decision` shape as the default contract.
+
+That means the implementation should keep using:
+
+- `gate_path`
+- `focus_type`
+- `decision_state`
+- `decision_basis`
+- `files_hint_disposition`
+- `checked_files`
+- `selected_focus_id`
+- `selected_focus_paths`
+- `adapter_plan`
+
+The downstream bridge remains explicit:
+
+- `focus_type=seam` => `adapter_plan.adaptation_basis = selected_focus_paths`
+- `focus_type=artifact` => `adapter_plan.adaptation_basis = artifact_singleton`
+
+M4 should only bump the public contract version if implementation discovers that
+one of the user-visible invariants above cannot be represented without adding or
+changing a public field.
+
+## Implementation Plan
+
+### Step 1: Lock the M4 semantics in runtime and docs
+
+Modules touched:
+
+- `anvil/harness/runner.py`
+- `anvil/harness/prompts.py`
 - `PLAN.md`
 
-Work:
+Required outcome:
 
-1. bump the contract version to v10
-2. update docs so they describe M2 as landed baseline
-3. document the typed bridge and the generic focus prompt
-4. rename M2-specific helper references in docs to the generic acceptance surface
+- the code and plan both describe the same M4 request-gate semantics
+- no lingering language implies a second public artifact or a separate router
 
-Done when:
+### Step 2: Make reporting and summary output tell one story
 
-- no doc claims the typed surface is still seam-only by contract
-- no public doc points users at a missing `m2_focus_gate_local.yaml`
-
-### Slice 1: Adapter Core and Typed Parsing
-
-Goal:
-
-- centralize focus-type behavior
-
-Files:
-
-- `[ADD] anvil/harness/focus_types.py`
-- `anvil/harness/types.py`
-- `anvil/harness/contracts.py`
-
-Work:
-
-1. replace `_validate_m1_allowed_focus_types()` with a typed whitelist validator
-2. allow exactly `["seam"]` or `["artifact"]` in M3
-3. reject mixed-type lists explicitly in M3 with a direct error
-4. define canonical focus ID helpers for seam and artifact
-5. resolve the active adapter once from the resolved contract
-
-Done when:
-
-- parse -> contract resolution accepts both supported single-type runs
-- mixed-type input fails early with a deterministic validation error
-
-### Slice 2: Schema, Validation, and Bridge Widening
-
-Goal:
-
-- make the public artifact and semantic checks typed and honest
-
-Files:
-
-- `anvil/harness/schemas.py`
-- `anvil/harness/semantic_validation.py`
-
-Work:
-
-1. widen `focus_type` enums in both focus schemas to `seam | artifact`
-2. widen `FOCUS_GATE_ADAPTER_PLAN_SCHEMA` with downstream seam bridge fields
-3. split generic decision validation from adapter-specific path and ID invariants
-4. validate artifact candidate single-path rules
-5. validate runner-owned downstream seam bridge fields
-
-Done when:
-
-- seam and artifact focus decisions validate cleanly
-- blocked decisions serialize null / empty bridge fields correctly
-- selected decisions always carry a valid downstream seam bridge
-
-### Slice 3: Runner Integration and Deliberate-Path Hardening
-
-Goal:
-
-- remove seam-only assumptions from normalization and rerun behavior
-
-Files:
+Modules touched:
 
 - `anvil/harness/runner.py`
+- `anvil/harness/report.py`
+- `anvil/harness/reporting.py`
 
-Work:
+Required outcome:
 
-1. route candidate normalization through the active adapter
-2. route selected-focus normalization through the active adapter
-3. populate the widened `adapter_plan`
-4. pass `adapter_plan.downstream_primary_seam_{id,paths}` into proposer / reviser semantic validation
-5. move canonical question prompt generation behind the adapter boundary
-6. make stale rerun-answer detection and fallback synthesis typed
+- `summary.json`, stage metadata, and `REPORT.md` expose the same request-gate result
+- blocked runs show that the review loop was not exercised
+- selected artifact runs show the singleton selection plus downstream bridge cleanly
 
-Done when:
+### Step 3: Tighten prompt and policy text
 
-- the runner no longer uses `selected_focus_id` and `selected_focus_paths` directly as downstream seam truth for artifact runs
-- deliberate artifact `clarification_requested`, `never_ask`, and stale rerun-answer paths work
-
-### Slice 4: Prompt, Report, and Acceptance Surface
-
-Goal:
-
-- make typed behavior visible and inspectable
-
-Files:
+Modules touched:
 
 - `anvil/harness/prompts.py`
-- `anvil/harness/report.py`
+
+Required outcome:
+
+- adjudicate guidance is clearly the cheap obvious-case path
+- deliberate guidance is clearly the ambiguity path
+- the prompt language reinforces the single public artifact boundary
+
+### Step 4: Validate the public invariants
+
+Modules touched:
+
+- `anvil/harness/semantic_validation.py`
+- `anvil/harness/schemas.py` only if a true gap is discovered
+
+Required outcome:
+
+- semantic validation enforces the M4 rules instead of relying on prompt compliance
+- no contract change is made unless validation proves it is necessary
+
+### Step 5: Expand acceptance and regression proof
+
+Modules touched:
+
 - `scripts/run_focus_gate_acceptance.py`
-- `examples/harness/live_acceptance/*`
-- `README.md`
-- `examples/README.md`
-- `docs/analysis_review_contract.md`
-
-Work:
-
-1. replace seam-only gate prompt rules with adapter-provided type rules
-2. update downstream analysis handoff text so selected focus and downstream seam are distinct concepts
-3. render downstream seam bridge fields in `## Focus Decision`
-4. replace the M2-only helper with a scenario-driven acceptance runner
-5. rename live-acceptance templates to generic focus-gate names
-
-Done when:
-
-- `REPORT.md` reads correctly for seam and artifact runs
-- acceptance tooling supports adjudicate-selected and deliberate-blocked scenarios
-
-### Slice 5: Test Completion and Saved Proof Packets
-
-Goal:
-
-- prove the final feature, not just the happy path
-
-Files:
-
-- `tests/test_harness_analysis_contract.py`
-- `tests/test_harness_semantic_validation.py`
-- `tests/test_harness_prompt_consistency.py`
+- `examples/harness/live_acceptance/`
+- `tests/test_run_focus_gate_acceptance.py`
 - `tests/test_harness_runner.py`
-- `tests/test_harness_reporting.py`
-- replacement acceptance-helper tests
-- typed task / fixture manifests under `examples/harness/live_acceptance/`
+- `tests/test_harness_prompt_consistency.py`
+- `tests/test_harness_semantic_validation.py`
 
-Work:
+Required outcome:
 
-1. add seam-regression tests for the new v10 contract
-2. add artifact selected / blocked / stale deliberate coverage
-3. add tests for widened `adapter_plan`
-4. add tests for the generic clarification prompt
-5. add generic acceptance helper scenario coverage
+- selected seam and selected artifact paths pass
+- blocked ambiguity paths pass
+- `never_ask` blocked behavior passes
+- stale rerun-answer behavior passes
+- M3 happy-path compatibility stays green
 
-Done when:
+## Test and Validation Plan
 
-- seam runs still pass
-- artifact runs pass with typed bridge semantics
-- blocked deliberate cases prove the correct artifact-only surface without false proposer expectations
+### Test Framework
 
-## File and Module Plan
+The repo uses `pytest` and `pytest-asyncio` from [pyproject.toml](/Users/spensermcconnell/__Active_Code/forge/pyproject.toml:56).
 
-Expected touched modules:
+M4 should land with repo-local tests first, then live acceptance.
 
-- `anvil/harness/types.py`
-- `anvil/harness/contracts.py`
-- `anvil/harness/schemas.py`
-- `anvil/harness/semantic_validation.py`
-- `anvil/harness/prompts.py`
-- `anvil/harness/runner.py`
-- `anvil/harness/report.py`
-- `[ADD] anvil/harness/focus_types.py`
-- `scripts/run_focus_gate_acceptance.py`
-- `README.md`
-- `examples/README.md`
-- `docs/analysis_review_contract.md`
-- `examples/harness/live_acceptance/*`
-- targeted harness tests
-
-Keep the architecture boring:
-
-- no new strategy kind
-- no new task kind
-- no mixed-type arbitration in one run
-- no downstream non-seam payload family
-- no second public focus artifact family
-
-## Architecture Diagram
-
-```text
-TASK / STRATEGY INPUT
-    |
-    v
-types.py + contracts.py
-resolve focus_gate policy
-    |
-    v
-focus_types.py
-resolve active adapter
-    |
-    v
-runner.py focus_gate_* stages
-    |
-    +--> selected_focus_{id,paths,summary}
-    |
-    +--> adapter_plan
-           |
-           +--> primary_focus_id
-           +--> secondary_focus_ids
-           +--> downstream_primary_seam_id
-           +--> downstream_primary_seam_paths
-           +--> adaptation_basis
-    |
-    v
-semantic_validation.py
-validate focus decision + bridge
-    |
-    v
-proposer / reviser
-consume downstream_primary_seam_{id,paths}
-    |
-    v
-report.py + summary.json + acceptance helper
-render both selected focus and downstream seam bridge
-```
-
-## Test Review
-
-### Test Strategy
-
-M3 needs full branch coverage on the typed gate surface, not just an enum bump and one happy-path artifact run.
-
-The risky areas are:
-
-- contract-version drift
-- selected-focus vs downstream-seam divergence
-- deliberate rerun-answer handling
-- blocked deliberate artifact scenarios
-- acceptance-helper assumptions that every scenario reaches proposer
-
-### Code Path Coverage
+### Required Coverage Diagram
 
 ```text
 CODE PATH COVERAGE
-===========================
-[+] anvil/harness/types.py + contracts.py
-    |
-    ├── allowed_focus_types parsing
-    │   ├── [EXISTS] seam
-    │   ├── [ADD]    artifact
-    │   └── [ADD]    reject mixed seam+artifact lists
-    |
-    └── contract versioning
-        ├── [EXISTS] v9 seam contract
-        └── [ADD]    v10 typed contract surface
-
-[+] anvil/harness/schemas.py + semantic_validation.py
-    |
-    ├── focus_type enum
-    │   ├── [EXISTS] seam
-    │   └── [ADD]    artifact
-    |
-    ├── adapter_plan bridge
-    │   ├── [EXISTS] primary_focus_id + secondary_focus_ids
-    │   └── [ADD]    downstream_primary_seam_id + paths + adaptation_basis
-    |
-    ├── seam invariants
-    │   └── [EXISTS] canonical seam ID and path-set checks
-    |
-    └── artifact invariants
-        ├── [ADD] exactly one candidate path
-        ├── [ADD] exactly one selected path
-        ├── [ADD] runner-owned artifact ID
-        └── [ADD] downstream seam bridge required when selected
+==================
 
 [+] anvil/harness/runner.py
     |
-    ├── candidate normalization
-    │   ├── [EXISTS] seam canonicalization
-    │   └── [ADD]    adapter-routed canonicalization
+    ├── _run_analysis_review_v1()
+    |   ├── focus gate disabled
+    |   |   └── [KEEP] Existing non-gated behavior remains unchanged
+    |   |
+    |   └── focus gate enabled
+    |       ├── adjudicate -> selected seam
+    |       |   └── [REQUIRED] runner test + acceptance scenario
+    |       |
+    |       ├── adjudicate -> selected artifact
+    |       |   └── [REQUIRED] runner test + acceptance scenario
+    |       |
+    |       ├── adjudicate -> no_viable_focus
+    |       |   └── [REQUIRED] runner test proving proposer never runs
+    |       |
+    |       └── deliberate default
+    |           ├── probe -> selected seam
+    |           |   └── [KEEP] Existing deliberate selected path stays green
+    |           |
+    |           ├── probe -> clarification_requested
+    |           |   └── [REQUIRED] runner test + acceptance scenario
+    |           |
+    |           ├── probe -> stale rerun_answer -> clarification_requested
+    |           |   └── [REQUIRED] runner test + acceptance scenario
+    |           |
+    |           └── probe -> stale/ambiguous rerun_answer + never_ask -> no_viable_focus
+    |               └── [REQUIRED] runner test + acceptance scenario
     |
-    ├── selected decision normalization
-    │   ├── [EXISTS] seam selected focus
-    │   └── [ADD]    typed selected focus + widened adapter_plan
-    |
-    ├── deliberate clarification prompt
-    │   ├── [EXISTS] seam-only prompt text
-    │   └── [ADD]    generic focus prompt
-    |
-    ├── stale rerun-answer path
-    │   ├── [EXISTS] seam-only stale fallback
-    │   └── [ADD]    typed stale fallback
-    |
-    └── downstream validation handoff
-        ├── [EXISTS] selected_focus_* -> expected_primary_seam_*
-        └── [ADD]    adapter bridge -> expected_primary_seam_*
+    └── blocked outcome construction
+        ├── clarification_requested
+        |   └── [REQUIRED] failure_details contains question, candidates, warnings
+        └── no_viable_focus
+            └── [REQUIRED] failure_details contains candidates, warnings, no proposer artifacts
 
-[+] anvil/harness/prompts.py + report.py
+[+] anvil/harness/semantic_validation.py
     |
-    ├── gate rules
-    │   ├── [EXISTS] seam-only focus rules
-    │   └── [ADD]    adapter-provided typed rules
+    ├── selected seam invariants
+    |   └── [KEEP] selected_focus_id and downstream seam parity
     |
-    ├── downstream handoff wording
-    │   └── [ADD]    selected focus distinct from adapted seam
+    ├── selected artifact invariants
+    |   └── [KEEP] singleton path + canonical artifact ID + artifact_singleton basis
     |
-    └── report rendering
-        ├── [EXISTS] focus decision section
-        └── [ADD]    downstream seam bridge rendering
+    ├── adjudicate invariants
+    |   └── [REQUIRED] request_only => gate_path=adjudicate, checked_files=[]
+    |
+    └── deliberate invariants
+        └── [REQUIRED] repo_probe/rerun_answer => gate_path=deliberate, checked_files non-empty
 
-[+] acceptance tooling
+[+] anvil/harness/prompts.py
     |
-    ├── selected adjudicate seam baseline
-    │   └── [EXISTS] reuse as regression proof
+    ├── adjudicate prompt guidance
+    |   └── [REQUIRED] prompt consistency test for request-only rules
     |
-    ├── selected adjudicate artifact
-    │   ├── [ADD] bounded
-    │   └── [ADD] trust
+    ├── deliberate prompt guidance
+    |   └── [REQUIRED] prompt consistency test for shortlist + stale answer rules
     |
-    └── deliberate artifact cases
-        ├── [ADD] clarification_requested
-        ├── [ADD] never_ask -> no_viable_focus
-        └── [ADD] stale rerun-answer -> normalized block
+    └── public/private artifact boundary language
+        └── [REQUIRED] prompt consistency test that probe stays internal-only
+
+USER FLOW COVERAGE
+==================
+
+[+] Clear seam request
+    └── [REQUIRED] selected seam, review loop runs, downstream seam unchanged
+
+[+] Clear artifact request
+    └── [REQUIRED] selected artifact, singleton surfaced, downstream seam bridge preserved
+
+[+] Ambiguous request
+    └── [REQUIRED] clarification_requested, review loop does not start
+
+[+] Ambiguous request with never_ask
+    └── [REQUIRED] no_viable_focus, review loop does not start
+
+[+] Rerun after stale clarification answer
+    └── [REQUIRED] stale warning, no silent wrong selection
+
+[+] M3 regression
+    └── [REQUIRED] existing seam/artifact happy paths still produce the same visible output class
 ```
 
-### Test Files and Assertions
+### Test File Plan
 
-Add or update tests for:
+| Test surface | File |
+|---|---|
+| Runner behavior and stage ordering | [tests/test_harness_runner.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_runner.py:3112) |
+| Prompt semantics and artifact-boundary language | [tests/test_harness_prompt_consistency.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_prompt_consistency.py:675) |
+| Public schema and semantic validation | [tests/test_harness_semantic_validation.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_semantic_validation.py:266) |
+| Acceptance harness assertions | [tests/test_run_focus_gate_acceptance.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_run_focus_gate_acceptance.py:236) |
+| Acceptance scenario manifests and strategy wiring | [tests/test_harness_example_strategy_wiring.py](/Users/spensermcconnell/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py:69) |
 
-- `tests/test_harness_analysis_contract.py`
-  - accepts `["artifact"]`
-  - rejects `["seam", "artifact"]`
-  - serializes v10 focus-gate contract correctly
-- `tests/test_harness_semantic_validation.py`
-  - validates widened `adapter_plan`
-  - validates artifact single-path invariants
-  - rejects missing downstream seam bridge for selected decisions
-- `tests/test_harness_prompt_consistency.py`
-  - uses `"Which focus should this run prioritize?"`
-  - includes typed gate rules and typed downstream handoff wording
-- `tests/test_harness_runner.py`
-  - artifact selected normalization
-  - artifact deliberate clarification
-  - artifact deliberate `never_ask`
-  - artifact stale rerun-answer fallback
-  - downstream seam bridge feeds proposer / reviser expectations
-- `tests/test_harness_reporting.py`
-  - reports selected focus and downstream seam bridge distinctly
-- generic acceptance-helper tests
-  - selected scenarios require proposer artifacts
-  - blocked deliberate scenarios do not require proposer artifacts
+### Live Acceptance Matrix
 
-### Targeted Pytest Sweep
+Required scenario families:
 
-Run at minimum:
+1. clear seam request, `adjudicate`, `selected`
+2. clear artifact request, `adjudicate`, `selected`
+3. ambiguous request, `deliberate`, `clarification_requested`
+4. ambiguous request with `never_ask`, `no_viable_focus`
+5. stale rerun-answer on a deliberate request, `clarification_requested`
+6. regression proof that existing M3 seam and artifact happy paths still succeed
+
+### Commands
+
+Minimum repo-local command set for M4:
 
 ```bash
-poetry run pytest -q \
-  tests/test_harness_analysis_contract.py \
-  tests/test_harness_prompt_consistency.py \
-  tests/test_harness_semantic_validation.py \
-  tests/test_harness_runner.py \
-  tests/test_harness_reporting.py \
-  tests/test_run_focus_gate_acceptance.py
+poetry run pytest -q tests/test_harness_runner.py
+poetry run pytest -q tests/test_harness_prompt_consistency.py
+poetry run pytest -q tests/test_harness_semantic_validation.py
+poetry run pytest -q tests/test_run_focus_gate_acceptance.py
+poetry run pytest -q tests/test_harness_example_strategy_wiring.py
 ```
 
-### Acceptance Matrix
+Then run the acceptance harness against the local manifest in the same style M3 uses.
 
-Seam regression packet:
+## Failure Modes
 
-1. adjudicate selected, bounded
-2. adjudicate selected, trust
-3. deliberate ambiguous -> `blocked_for_clarification`
-4. deliberate ambiguous + `never_ask` -> `no_viable_focus`
-5. deliberate stale `focus_gate_answer` -> stale warning + normalized block
+| Codepath | Real production failure | Test required | Error handling required | User-visible result |
+|---|---|---|---|---|
+| adjudicate -> selected artifact | singleton file selected, but downstream seam bridge drifts | yes | semantic validation must fail parity drift | hard failure, not silent wrong review |
+| adjudicate -> no_viable_focus | gate reports no viable focus but proposer still runs | yes | blocked outcome must halt before proposer | clear blocked verdict |
+| deliberate -> clarification_requested | question emitted but candidates/options drift from shortlist | yes | stale or invalid question must re-block | clear clarification request |
+| rerun_answer -> stale | old answer silently forces a now-wrong selection | yes | stale warning + re-block or no-viable | clear blocked verdict, never silent reuse |
+| artifact report rendering | report hides singleton choice or bridge basis | yes | report and summary parity checks | readable request-gate story |
+| summary/report parity | `summary.json` and `REPORT.md` disagree | yes | acceptance harness must compare both | hard acceptance failure |
 
-Artifact packet:
+Critical gap rule for M4:
 
-1. adjudicate selected, bounded
-2. adjudicate selected, trust
-3. deliberate ambiguous -> `blocked_for_clarification`
-4. deliberate ambiguous + `never_ask` -> `no_viable_focus`
-5. deliberate stale rerun-answer -> stale warning + normalized block
-
-For each selected packet inspect:
-
-- `summary.json`
-- `REPORT.md`
-- `artifacts/*focus_gate_probe*/structured_output.*` when deliberate
-- `artifacts/*focus_gate*/structured_output.*`
-- proposer normalized payload
-- adapted downstream seam bridge in `adapter_plan`
-
-For each blocked deliberate packet inspect:
-
-- `summary.json`
-- `REPORT.md`
-- `artifacts/*focus_gate_probe*/structured_output.*`
-- `artifacts/*focus_gate*/structured_output.*`
-- absence of proposer artifacts when the run blocks before proposer
-
-## Failure Modes Registry
-
-| Failure mode | Where it happens | Prevention | Test required |
-|---|---|---|---|
-| silent contract drift between v9 docs and typed runtime | `contracts.py`, docs, fixtures | explicit v10 bump and doc rewrite | yes |
-| artifact selected focus passes, but downstream seam validation still reads `selected_focus_*` directly | `runner.py`, `semantic_validation.py` | widened `adapter_plan` bridge and runner handoff rewrite | yes |
-| artifact deliberate rerun-answer emits seam-only stale fallback | `runner.py` | adapter-owned prompt and stale fallback helpers | yes |
-| blocked deliberate acceptance still expects proposer artifacts | acceptance helper | scenario-driven acceptance expectations | yes |
-| artifact candidates emit unstable IDs from model-authored text | `runner.py`, `focus_types.py` | runner-owned canonical artifact IDs derived from normalized path | yes |
-| selected focus and downstream seam become conceptually indistinguishable in reports | `report.py` | render both surfaces distinctly | yes |
-
-No M3 failure mode is allowed to remain without both a test and explicit error-handling behavior.
-
-## Performance Review
-
-Expected runtime impact is small.
-
-- extra normalization and validation branches are O(candidate_count), and candidate count is already capped at 3
-- artifact ID derivation is one normalized path plus one hash
-- the main risk is not latency, it is semantic drift between selected focus, rerun options, and downstream seam expectations
-
-No additional caching or concurrency work is required in M3.
+Any path that can silently misroute a run or silently continue after a blocked gate is
+a release blocker. No exceptions.
 
 ## Worktree Parallelization Strategy
 
-This plan has real parallelization opportunity after the typed foundation lands.
+Parallelization exists, but it is limited. Most of the real logic still sits in
+`anvil/harness/`, so pretending this is highly parallel would be fake precision.
 
 ### Dependency Table
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Foundation and contract bump | `anvil/harness/`, `docs/` | — |
-| B. Runner integration | `anvil/harness/` | A |
-| C. Prompt/report/docs/helper surface | `anvil/harness/`, `scripts/`, `examples/`, `docs/` | A |
-| D. Tests and acceptance proof packets | `tests/`, `examples/`, `scripts/` | B, C |
+| Lock runtime semantics | `anvil/harness/`, `PLAN.md` | — |
+| Reporting and summary alignment | `anvil/harness/` | Lock runtime semantics |
+| Acceptance manifest and script expansion | `scripts/`, `examples/harness/live_acceptance/` | Lock runtime semantics |
+| Unit and semantic test expansion | `tests/` | Lock runtime semantics |
+| Regression pass and closeout | `tests/`, `scripts/`, `anvil/harness/` | Reporting alignment + acceptance expansion + test expansion |
 
 ### Parallel Lanes
 
-Lane A: Foundation and contract bump in `anvil/harness/types.py`, `contracts.py`, `schemas.py`, `semantic_validation.py`, and new `focus_types.py`
+Lane A: lock runtime semantics -> reporting and summary alignment
 
-Lane B: Runner integration in `anvil/harness/runner.py` after Lane A
+Lane B: acceptance manifest and script expansion
 
-Lane C: Prompt/report/docs/helper work in `anvil/harness/prompts.py`, `report.py`, `scripts/`, `examples/`, and docs after Lane A
-
-Lane D: Tests and acceptance proof packets after Lanes B and C
+Lane C: unit and semantic test expansion
 
 ### Execution Order
 
-1. Launch Lane A first. It defines the contract, IDs, bridge fields, and validation rules that everything else depends on.
-2. After Lane A merges, launch Lane B and Lane C in parallel worktrees.
-3. After B and C merge, launch Lane D.
+1. Do the runtime semantics lock first. That is the critical path.
+2. Once those rules are frozen, launch Lane B and Lane C in parallel worktrees.
+3. Merge B and C back.
+4. Run the regression pass and fix any parity drift.
 
 ### Conflict Flags
 
-- Lane B and Lane C both depend on the widened bridge shape defined in Lane A. Do not start them before Lane A stabilizes.
-- Lane C and Lane D will both touch acceptance helper naming and manifest expectations. Keep those changes in one lane at a time or land helper changes before scenario tests.
-- `docs/analysis_review_contract.md` is touched by Lane A and Lane C. Prefer Lane A to define the normative bridge fields, then let Lane C finish wording and examples.
+- Lane A and Lane C are low-conflict once the runtime interface is frozen, but C should not start changing assertion shapes before A locks the final semantics.
+- Lane A and Lane B are medium-conflict if B starts encoding acceptance expectations before A finalizes report and summary wording.
+- Anything that touches `anvil/harness/runner.py` stays sequential. That file is the blast radius center.
 
-## Risks and Mitigations
+This is not a three-lane freeway. It is one critical path plus two safe sidecars.
 
-| Risk | Why it happens | Mitigation |
-|---|---|---|
-| M3 becomes "proof theater" instead of user-visible improvement | typed cleanup dominates the milestone story | keep the success criteria tied to real governing-file tasks and deliberate-path behavior |
-| artifact becomes a fake seam alias | bridge fields stay implicit | persist both selected focus and downstream seam distinctly |
-| the branch pays contract cost without admitting it | v9 is silently widened | bump to v10 and update docs / fixtures accordingly |
-| mixed-type routing pressure keeps leaking in | plural field survives but mixed lists are rejected | document this explicitly as a deliberate deferral, not an accidental gap |
+## What Already Exists
+
+M4 should explicitly reuse these truths instead of recreating them:
+
+- the runner already executes focus gating before proposer when enabled
+- the repo already distinguishes `adjudicate` and `deliberate`
+- the repo already validates `artifact_singleton` versus `selected_focus_paths`
+- the acceptance harness already knows how to inspect `focus_decision`
+- the repo already has regression coverage around blocked-before-proposer behavior
+
+If an implementation step duplicates any of those, it is overbuilt.
 
 ## NOT in Scope
 
-- mixed seam+artifact arbitration inside one run
-- a new task kind outside `analysis_review`
-- a downstream non-seam output family
-- pause / resume lifecycle for clarification
-- more than two supported focus types
-- user-facing UX redesign of rerun-answer options beyond the existing internal harness surface
+- a general multi-workflow request router
+- a third packet family beyond `seam` and `artifact`
+- renaming runtime stages from `focus_gate*` to a new public vocabulary during M4
+- a second public request-decision artifact
+- a new pause or resume lifecycle beyond the current rerun-answer behavior
+- removal of all M2 compatibility shims in the same milestone
+- a downstream review payload-family rewrite
+- any new deployment or distribution surface
 
 ## Definition of Done
 
-M3 is done only when all of these are true:
+M4 is done only when all of these are true:
 
-1. the resolved focus-gate contract is versioned explicitly for the typed surface
-2. gate-core code no longer hardcodes seam-only focus typing outside the seam adapter
-3. `focus_type = artifact` works end to end
-4. `selected_focus_*` and downstream seam bridge fields are both persisted and validated
-5. deliberate artifact ambiguity, `never_ask`, and stale rerun-answer behavior are correct
-6. reporting renders selected focus and downstream seam distinctly
-7. acceptance tooling is genericized beyond M2 naming and supports blocked deliberate scenarios
-8. seam regression and artifact proof packets both pass
+1. `focus_decision` remains the single public routing artifact.
+2. The existing focus-gate surface behaves as the explicit M4 request gate for analysis-review runs.
+3. Selected seam and selected artifact flows both pass with the same downstream payload contract M3 established.
+4. `clarification_requested` and `no_viable_focus` both halt before proposer.
+5. `summary.json`, stage artifacts, and `REPORT.md` tell the same request-gate story.
+6. The full acceptance matrix passes, including stale rerun-answer and `never_ask`.
+7. Regression coverage proves M3 happy paths still work.
+8. The implementation proves real wasted-work reduction or, at minimum, does not regress it.
+9. No new public artifact, workflow family, or packet family was introduced to get there.
 
-## Completion Summary
-
-- Step 0: Scope Challenge — scope accepted with explicit contract bump and explicit bridge widening
-- Architecture Review: major issues resolved in plan by adding contract versioning, widened `adapter_plan`, and typed deliberate-path work
-- Code Quality Review: seam-only logic is consolidated behind a new adapter module instead of being duplicated
-- Test Review: full code-path coverage diagram included, no happy-path-only exit
-- Performance Review: no major runtime risk, main risk is semantic drift
-- NOT in scope: written
-- What already exists: written
-- Failure modes: explicit registry included, no silent critical gaps allowed
-- Parallelization: 4 steps, 2 parallel lanes after foundation, 1 final test lane
-- Lake Score: complete option chosen for contract versioning, typed stale-answer handling, bridge persistence, and blocked-scenario acceptance
+That is M4.
