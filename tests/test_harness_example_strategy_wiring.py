@@ -62,6 +62,12 @@ def test_analysis_review_entry_points_reference_focus_gate_adjudicate_examples()
     assert bounded_path in run_script
     assert "scripts/run_focus_gate_acceptance.py" in examples_readme
     assert "scripts/run_focus_gate_acceptance.py" in root_readme
+    assert ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml" in examples_readme
+    assert ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml" in root_readme
+    assert "focus_gate_acceptance.template.yaml" in examples_readme
+    assert "focus_gate_acceptance.template.yaml" in root_readme
+    assert "--shard seam-adjudicate" in root_readme
+    assert "--shard artifact-adjudicate" in root_readme
     assert "scripts/run_m2_focus_gate_live_acceptance.py" in examples_readme
     assert "scripts/run_m2_focus_gate_live_acceptance.py" in root_readme
     assert "seam-regression-only wiring coverage" in examples_readme
@@ -71,7 +77,7 @@ def test_analysis_review_entry_points_reference_focus_gate_adjudicate_examples()
 def test_focus_gate_live_acceptance_templates_cover_canonical_and_compatibility_surfaces():
     canonical_manifest = load_structured_file(
         Path(
-            "examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml"
+            "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
         )
     )
     compatibility_manifest = load_structured_file(
@@ -79,112 +85,33 @@ def test_focus_gate_live_acceptance_templates_cover_canonical_and_compatibility_
     )
 
     assert (
-        canonical_manifest["task"]
+        canonical_manifest["default_task"]
         == "examples/harness/tasks/recommend_automation_improvements.yaml"
     )
-    assert canonical_manifest["scenarios"] == [
-        {
-            "name": "bounded",
-            "strategy": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
-            "expected_gate_path": "adjudicate",
-            "expected_focus_type": "seam",
-            "expected_decision_state": "selected",
-            "expect_proposer_artifacts": True,
-            "expect_downstream_bridge": True,
-        },
-        {
-            "name": "trust",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
-            "expected_gate_path": "adjudicate",
-            "expected_focus_type": "seam",
-            "expected_decision_state": "selected",
-            "expect_proposer_artifacts": True,
-            "expect_downstream_bridge": True,
-        },
-        {
-            "name": "deliberate-ambiguity",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
-            "expected_gate_path": "deliberate",
-            "expected_focus_type": "seam",
-            "expected_decision_state": "clarification_requested",
-            "expect_proposer_artifacts": False,
-            "expect_downstream_bridge": False,
-        },
-        {
-            "name": "never-ask",
-            "task": "examples/harness/tasks/recommend_automation_improvements_never_ask.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
-            "expected_gate_path": "deliberate",
-            "expected_focus_type": "seam",
-            "expected_decision_state": "no_viable_focus",
-            "expect_proposer_artifacts": False,
-            "expect_downstream_bridge": False,
-        },
-        {
-            "name": "stale-rerun",
-            "task": "examples/harness/tasks/recommend_automation_improvements_stale_focus_gate_answer.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
-            "expected_gate_path": "deliberate",
-            "expected_focus_type": "seam",
-            "expected_decision_state": "clarification_requested",
-            "expect_proposer_artifacts": False,
-            "expect_downstream_bridge": False,
-            "expected_warning_substrings": ["went stale"],
-        },
-        {
-            "name": "artifact-bounded",
-            "task": "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
-            "expected_gate_path": "adjudicate",
-            "expected_focus_type": "artifact",
-            "expected_decision_state": "selected",
-            "expect_proposer_artifacts": True,
-            "expect_downstream_bridge": True,
-        },
-        {
-            "name": "artifact-trust",
-            "task": "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
-            "expected_gate_path": "adjudicate",
-            "expected_focus_type": "artifact",
-            "expected_decision_state": "selected",
-            "expect_proposer_artifacts": True,
-            "expect_downstream_bridge": True,
-        },
-        {
-            "name": "artifact-deliberate-ambiguity",
-            "task": "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
-            "expected_gate_path": "deliberate",
-            "expected_focus_type": "artifact",
-            "expected_decision_state": "clarification_requested",
-            "expect_proposer_artifacts": False,
-            "expect_downstream_bridge": False,
-        },
-        {
-            "name": "artifact-never-ask",
-            "task": "examples/harness/tasks/recommend_release_workflow_artifact_improvements_never_ask.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
-            "expected_gate_path": "deliberate",
-            "expected_focus_type": "artifact",
-            "expected_decision_state": "no_viable_focus",
-            "expect_proposer_artifacts": False,
-            "expect_downstream_bridge": False,
-        },
-        {
-            "name": "artifact-stale-rerun",
-            "task": "examples/harness/tasks/recommend_release_workflow_artifact_improvements_stale_rerun_answer.yaml",
-            "strategy": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
-            "expected_gate_path": "deliberate",
-            "expected_focus_type": "artifact",
-            "expected_decision_state": "clarification_requested",
-            "expect_proposer_artifacts": False,
-            "expect_downstream_bridge": False,
-            "expected_warning_substrings": ["went stale"],
-        },
+    assert canonical_manifest["workspace_seed"] == (
+        "tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace"
+    )
+    assert canonical_manifest["preflight_timeout_sec"] == 60
+    assert canonical_manifest["shard_timeout_sec"] == 1800
+    assert [shard["name"] for shard in canonical_manifest["shards"]] == [
+        "seam-adjudicate",
+        "seam-deliberate",
+        "artifact-adjudicate",
+        "artifact-deliberate",
+    ]
+    assert [scenario["name"] for scenario in canonical_manifest["shards"][0]["scenarios"]] == [
+        "bounded",
+        "trust",
+    ]
+    assert [
+        scenario["name"] for scenario in canonical_manifest["shards"][3]["scenarios"]
+    ] == [
+        "artifact-deliberate-ambiguity",
+        "artifact-never-ask",
+        "artifact-stale-rerun",
     ]
 
-    assert compatibility_manifest["task"] == canonical_manifest["task"]
+    assert compatibility_manifest["task"] == canonical_manifest["default_task"]
     assert compatibility_manifest["strategies"] == {
         "bounded": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
         "trust": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",

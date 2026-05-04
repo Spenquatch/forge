@@ -2818,6 +2818,27 @@ class _TrustGlobalIssueClosureHarnessAdapter(_TrustInferenceHarnessAdapter):
         return payload
 
 
+class _TrustNullReviewRefsHarnessAdapter(_TrustCorroborationHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name == "critic":
+            payload["recommendation_reviews"][1]["verified_evidence_refs"] = None
+        return payload
+
+    def run(self, request):
+        run = super().run(request)
+        if request.role_name != "critic":
+            return run
+        return replace(
+            run,
+            ok=False,
+            error="Schema validation failed.",
+            schema_validation_errors=[
+                "$.recommendation_reviews[1].verified_evidence_refs: expected array"
+            ],
+        )
+
+
 class _TrustGlobalIssueLifecycleHarnessAdapter(_TrustInferenceHarnessAdapter):
     _ISSUE_ID = "AR-001"
 
@@ -5835,6 +5856,104 @@ def test_analysis_review_runner_coerces_scalar_review_refs_to_single_item_lists(
         item["verified_evidence_refs"] == [".github/workflows/codex-cli-release-watch.yml"]
         for item in normalized["recommendation_reviews"]
     )
+
+
+def test_analysis_review_runner_normalizes_null_review_refs_before_schema_revalidation(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustNullReviewRefsHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    critic_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "critic"
+    )
+    assert critic_stage["ok"] is True
+    assert critic_stage.get("failure_kind") is None
+    assert critic_stage.get("schema_validation_errors") in (None, [])
+    assert critic_stage["structured_output"]["recommendation_reviews"][1][
+        "verified_evidence_refs"
+    ] == []
+
+    semantic_payload = load_structured_file(
+        Path(critic_stage["semantic_validation_path"])
+    )
+    assert semantic_payload["ok"] is True
+    assert semantic_payload["skipped"] is False
+    assert semantic_payload["errors"] == []
+
+    run_envelope = load_structured_file(
+        Path(runner.artifacts_dir) / "02_critic" / "run.envelope.json"
+    )
+    assert run_envelope["ok"] is True
+    assert run_envelope.get("failure_kind") is None
+    assert run_envelope.get("schema_validation_errors") in (None, [])
+
+
+def test_analysis_review_runner_drops_current_stage_issue_ids_from_classification_arrays(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+            blocking_class="actionability"
+        ),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
+        blocking_class="actionability"
+    )._payload_for_role("auditor")
+
+    normalized, payload_provenance, warnings = (
+        runner._normalize_analysis_review_payload(
+            payload,
+            role_name="auditor",
+            payload_provenance_mode="payload_hash_and_refs",
+            contract=runner._analysis_contract(),
+            prior_open_issue_records=[],
+            prior_open_topic_records=[],
+        )
+    )
+
+    assert normalized["resolved_issue_ids"] == []
+    assert normalized["carried_forward_issue_ids"] == []
+    assert normalized["waived_issue_ids"] == []
+    assert warnings == [
+        "carried_forward_issue_ids included current-stage issue IDs and they were dropped: AR-001"
+    ]
+    assert payload_provenance["uncovered_global_issue_ids"] == []
 
 
 def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insufficient(

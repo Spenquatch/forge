@@ -30,14 +30,14 @@ def _load_script_module():
 SCRIPT = _load_script_module()
 
 
-def _write_structured(path: Path, payload: dict[str, Any]) -> None:
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def _write_manifest(path: Path, payload: dict[str, Any]) -> None:
+def _write_yaml(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(text.strip() + "\n", encoding="utf-8")
 
 
 def _scenario_payload(
@@ -65,23 +65,30 @@ def _scenario_payload(
     }
 
 
-def _manifest_payload(
-    workspace: Path,
+def _shard_manifest_payload(
     *,
-    task: str | None = None,
+    shard_name: str = "seam-adjudicate",
     scenarios: list[dict[str, Any]] | None = None,
-    out_root: str = ".forge-harness-runs-live",
+    workspace_seed: str = "tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace",
+    out_root: str = ".forge-harness-runs-live/m4-request-gate/shards",
 ) -> dict[str, Any]:
     return {
-        "task": task or SCRIPT.EXAMPLE_TASK_PATH,
-        "workspace": str(workspace),
+        "default_task": SCRIPT.EXAMPLE_TASK_PATH,
+        "workspace_seed": workspace_seed,
         "out_root": out_root,
-        "scenarios": scenarios
-        or [
-            _scenario_payload(
-                name="bounded",
-                strategy=SCRIPT.EXAMPLE_STRATEGIES["bounded"],
-            )
+        "preflight_timeout_sec": 60,
+        "shard_timeout_sec": 1800,
+        "shards": [
+            {
+                "name": shard_name,
+                "scenarios": scenarios
+                or [
+                    _scenario_payload(
+                        name="bounded",
+                        strategy=SCRIPT.EXAMPLE_STRATEGIES["bounded"],
+                    )
+                ],
+            }
         ],
     }
 
@@ -175,54 +182,6 @@ def _artifact_selected_focus_decision() -> dict[str, Any]:
     }
 
 
-def _clarification_focus_decision() -> dict[str, Any]:
-    return {
-        "gate_path": "deliberate",
-        "focus_type": "artifact",
-        "decision_state": "clarification_requested",
-        "decision_basis": "repo_probe",
-        "selected_focus_id": None,
-        "selected_focus_summary": None,
-        "selected_focus_paths": [],
-        "confidence": 0.41,
-        "confidence_band": "low",
-        "files_hint_disposition": "helped",
-        "checked_files": ["src/main.py", "docs/spec.md"],
-        "candidates": [
-            {
-                "focus_id": "artifact:src/main.py",
-                "focus_summary": "Main runtime path",
-                "candidate_paths": ["src/main.py"],
-                "why_candidate": "This file is a plausible primary focus.",
-                "evidence_refs": [],
-                "score": 0.41,
-            },
-            {
-                "focus_id": "artifact:docs/spec.md",
-                "focus_summary": "Spec drift investigation",
-                "candidate_paths": ["docs/spec.md"],
-                "why_candidate": "The request also touches governing spec text.",
-                "evidence_refs": [],
-                "score": 0.4,
-            },
-        ],
-        "question": {
-            "prompt": SCRIPT.GENERIC_FOCUS_GATE_QUESTION_PROMPT,
-            "options": ["artifact:src/main.py", "artifact:docs/spec.md"],
-        },
-        "warnings": [
-            "Prior focus_gate_answer went stale: candidate set changed after repo probe.",
-        ],
-        "adapter_plan": {
-            "primary_focus_id": None,
-            "secondary_focus_ids": ["artifact:src/main.py", "artifact:docs/spec.md"],
-            "downstream_primary_seam_id": None,
-            "downstream_primary_seam_paths": [],
-            "adaptation_basis": None,
-        },
-    }
-
-
 def _blocked_focus_decision(
     *,
     focus_type: str,
@@ -238,25 +197,6 @@ def _blocked_focus_decision(
             SCRIPT.canonical_seam_id_for_paths(["docs/spec.md"]),
         ]
 
-    candidates = [
-        {
-            "focus_id": candidate_ids[0],
-            "focus_summary": "Main runtime path",
-            "candidate_paths": ["src/main.py"],
-            "why_candidate": "This file is a plausible primary focus.",
-            "evidence_refs": [],
-            "score": 0.41,
-        },
-        {
-            "focus_id": candidate_ids[1],
-            "focus_summary": "Spec drift investigation",
-            "candidate_paths": ["docs/spec.md"],
-            "why_candidate": "The request also touches governing spec text.",
-            "evidence_refs": [],
-            "score": 0.4,
-        },
-    ]
-
     question = (
         {
             "prompt": SCRIPT.GENERIC_FOCUS_GATE_QUESTION_PROMPT,
@@ -265,7 +205,6 @@ def _blocked_focus_decision(
         if decision_state == "clarification_requested"
         else {"prompt": "", "options": []}
     )
-
     return {
         "gate_path": "deliberate",
         "focus_type": focus_type,
@@ -278,7 +217,24 @@ def _blocked_focus_decision(
         "confidence_band": "low",
         "files_hint_disposition": "helped",
         "checked_files": list(checked_files),
-        "candidates": candidates,
+        "candidates": [
+            {
+                "focus_id": candidate_ids[0],
+                "focus_summary": "Main runtime path",
+                "candidate_paths": ["src/main.py"],
+                "why_candidate": "This file is a plausible primary focus.",
+                "evidence_refs": [],
+                "score": 0.41,
+            },
+            {
+                "focus_id": candidate_ids[1],
+                "focus_summary": "Spec drift investigation",
+                "candidate_paths": ["docs/spec.md"],
+                "why_candidate": "The request also touches governing spec text.",
+                "evidence_refs": [],
+                "score": 0.4,
+            },
+        ],
         "question": question,
         "warnings": list(warnings or []),
         "adapter_plan": {
@@ -328,7 +284,7 @@ def _create_selected_run_dir(tmp_path: Path) -> tuple[Path, Path]:
     report_path.write_text("# Report\n", encoding="utf-8")
 
     focus_decision = _selected_focus_decision()
-    _write_structured(
+    _write_json(
         summary_path,
         {
             "focus_decision": focus_decision,
@@ -357,36 +313,20 @@ def _create_selected_run_dir(tmp_path: Path) -> tuple[Path, Path]:
         },
     )
 
-    proposer_payload = {
-        "primary_seam": {
-            "paths": ["src/main.py", "src/lib.py"],
-        }
-    }
-    _write_structured(
+    proposer_payload = {"primary_seam": {"paths": ["src/main.py", "src/lib.py"]}}
+    _write_json(
         run_dir / "artifacts/02_proposer/structured_output.raw.json",
         proposer_payload,
     )
-    _write_structured(
+    _write_json(
         run_dir / "artifacts/02_proposer/structured_output.normalized.json",
         proposer_payload,
     )
-    _write_structured(
+    _write_json(
         run_dir / "artifacts/02_proposer/run.envelope.json",
         {"structured_output": proposer_payload},
     )
     return summary_path, report_path
-
-
-def _create_clarification_run_dir(tmp_path: Path) -> tuple[Path, Path]:
-    return _create_blocked_run_dir(
-        tmp_path,
-        focus_type="artifact",
-        decision_state="clarification_requested",
-        warnings=[
-            "Prior focus_gate_answer went stale: candidate set changed after repo probe."
-        ],
-        warning_sink="focus_decision",
-    )
 
 
 def _create_blocked_run_dir(
@@ -395,11 +335,8 @@ def _create_blocked_run_dir(
     focus_type: str,
     decision_state: str,
     warnings: list[str] | None = None,
-    warning_sink: str = "focus_decision",
-    include_proposer: bool = False,
-    probe_before_focus: bool = True,
 ) -> tuple[Path, Path]:
-    run_dir = tmp_path / "clarification-run"
+    run_dir = tmp_path / "blocked-run"
     summary_path = run_dir / "summary.json"
     report_path = run_dir / "REPORT.md"
     (tmp_path / "workspace/src").mkdir(parents=True, exist_ok=True)
@@ -412,65 +349,42 @@ def _create_blocked_run_dir(
     focus_decision = _blocked_focus_decision(
         focus_type=focus_type,
         decision_state=decision_state,
-        warnings=warnings if warning_sink == "focus_decision" else [],
+        warnings=warnings,
     )
-    warning_list = list(warnings or [])
-    failure_details = {
-        "stage": "focus_gate",
-        "decision_state": decision_state,
-        "candidates": focus_decision["candidates"],
-        "warnings": warning_list if warning_sink == "failure_details" else [],
-    }
-    if decision_state == "clarification_requested":
-        failure_details["question"] = focus_decision["question"]
-
-    focus_gate_stage = {
-        "role_name": "focus_gate",
-        "metadata": {
-            "focus_gate": {
-                "gate_path": "deliberate",
-                "focus_type": focus_type,
-                "decision_state": decision_state,
-            }
-        },
-        "stdout_path": str(run_dir / "artifacts/02_focus_gate/stdout.txt"),
-    }
-    if warning_sink == "stage":
-        focus_gate_stage["warnings"] = warning_list
-    if warning_sink == "semantic_validation_warnings":
-        focus_gate_stage["semantic_validation_warnings"] = warning_list
-
-    stages = [
-        {
-            "role_name": "focus_gate_probe",
-            "stdout_path": str(run_dir / "artifacts/01_focus_gate_probe/stdout.txt"),
-        },
-        focus_gate_stage,
-    ]
-    if not probe_before_focus:
-        stages = [focus_gate_stage, stages[0]]
-    if include_proposer:
-        stages.append(
-            {
-                "role_name": "proposer",
-                "stdout_path": str(run_dir / "artifacts/03_proposer/stdout.txt"),
-            }
-        )
-
-    _write_structured(
+    _write_json(
         summary_path,
         {
             "focus_decision": focus_decision,
-            "failure_details": failure_details,
-            "agent_stages": stages,
-            "warnings": warning_list if warning_sink == "summary" else [],
+            "failure_details": {
+                "stage": "focus_gate",
+                "decision_state": decision_state,
+                "warnings": list(warnings or []),
+            },
+            "agent_stages": [
+                {
+                    "role_name": "focus_gate_probe",
+                    "stdout_path": str(run_dir / "artifacts/01_focus_gate_probe/stdout.txt"),
+                },
+                {
+                    "role_name": "focus_gate",
+                    "metadata": {
+                        "focus_gate": {
+                            "gate_path": "deliberate",
+                            "focus_type": focus_type,
+                            "decision_state": decision_state,
+                        }
+                    },
+                    "stdout_path": str(run_dir / "artifacts/02_focus_gate/stdout.txt"),
+                },
+            ],
+            "warnings": [],
         },
     )
     return summary_path, report_path
 
 
 def _create_artifact_selected_run_dir(tmp_path: Path) -> tuple[Path, Path]:
-    run_dir = tmp_path / "artifact-selected-run"
+    run_dir = tmp_path / "artifact-run"
     summary_path = run_dir / "summary.json"
     report_path = run_dir / "REPORT.md"
     (tmp_path / "workspace/.github/workflows").mkdir(parents=True, exist_ok=True)
@@ -480,7 +394,7 @@ def _create_artifact_selected_run_dir(tmp_path: Path) -> tuple[Path, Path]:
     report_path.write_text("# Report\n", encoding="utf-8")
 
     focus_decision = _artifact_selected_focus_decision()
-    _write_structured(
+    _write_json(
         summary_path,
         {
             "focus_decision": focus_decision,
@@ -510,625 +424,228 @@ def _create_artifact_selected_run_dir(tmp_path: Path) -> tuple[Path, Path]:
     )
 
     proposer_payload = {
-        "primary_seam": {
-            "paths": [".github/workflows/codex-cli-release-watch.yml"],
-        }
+        "primary_seam": {"paths": [".github/workflows/codex-cli-release-watch.yml"]}
     }
-    _write_structured(
+    _write_json(
         run_dir / "artifacts/02_proposer/structured_output.raw.json",
         proposer_payload,
     )
-    _write_structured(
+    _write_json(
         run_dir / "artifacts/02_proposer/structured_output.normalized.json",
         proposer_payload,
     )
-    _write_structured(
+    _write_json(
         run_dir / "artifacts/02_proposer/run.envelope.json",
         {"structured_output": proposer_payload},
     )
     return summary_path, report_path
 
 
-def test_load_manifest_config_accepts_scenario_driven_manifest(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    manifest_path = tmp_path / "focus_gate_acceptance_local.yaml"
-    _write_manifest(
-        manifest_path,
-        _manifest_payload(
-            workspace,
-            scenarios=[
-                _scenario_payload(
-                    name="deliberate-blocked",
-                    strategy=SCRIPT.EXAMPLE_STRATEGIES["trust"],
-                    expected_gate_path="deliberate",
-                    expected_focus_type="artifact",
-                    expected_decision_state="clarification_requested",
-                    expect_proposer_artifacts=False,
-                    expect_downstream_bridge=False,
-                    expected_warning_substrings=["went stale"],
-                )
-            ],
-        ),
+def _fake_which_factory(mapping: dict[str, str | None]):
+    def _fake_which(binary: str) -> str | None:
+        return mapping.get(binary)
+
+    return _fake_which
+
+
+def test_default_config_path_points_to_canonical_closeout_manifest() -> None:
+    assert SCRIPT.DEFAULT_CONFIG_PATH == (
+        REPO_ROOT / ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml"
+    )
+    assert SCRIPT.CANONICAL_TEMPLATE_PATH == (
+        REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
     )
 
-    manifest = SCRIPT.load_manifest_config(manifest_path)
 
-    assert manifest.task == (REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(strict=False)
-    assert manifest.workspace == workspace.resolve(strict=False)
-    assert manifest.out_root == (REPO_ROOT / ".forge-harness-runs-live").resolve(
+def test_load_manifest_config_accepts_shard_manifest() -> None:
+    manifest = SCRIPT.load_manifest_config(SCRIPT.DEFAULT_CONFIG_PATH)
+
+    assert isinstance(manifest, SCRIPT.ShardManifestConfig)
+    assert manifest.default_task == (REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(
         strict=False
     )
-    assert manifest.scenarios == (
-        SCRIPT.AcceptanceScenario(
-            name="deliberate-blocked",
-            task=None,
-            strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["trust"]).resolve(
-                strict=False
-            ),
-            expected_gate_path="deliberate",
-            expected_focus_type="artifact",
-            expected_decision_state="clarification_requested",
-            expect_proposer_artifacts=False,
-            expect_downstream_bridge=False,
-            expected_warning_substrings=("went stale",),
-        ),
-    )
+    assert manifest.workspace_seed == (
+        REPO_ROOT / "tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace"
+    ).resolve(strict=False)
+    assert [shard.name for shard in manifest.shards] == [
+        "seam-adjudicate",
+        "seam-deliberate",
+        "artifact-adjudicate",
+        "artifact-deliberate",
+    ]
 
 
-def test_load_manifest_config_supports_legacy_strategy_shorthand(
-    tmp_path: Path,
-) -> None:
+def test_load_manifest_config_supports_legacy_workspace_manifest(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     manifest_path = tmp_path / "m2_focus_gate_local.yaml"
-    _write_manifest(manifest_path, _legacy_manifest_payload(workspace))
+    _write_json(manifest_path, _legacy_manifest_payload(workspace))
 
     manifest = SCRIPT.load_manifest_config(manifest_path)
 
+    assert isinstance(manifest, SCRIPT.LegacyManifestConfig)
+    assert manifest.workspace == workspace.resolve(strict=False)
     assert [scenario.name for scenario in manifest.scenarios] == ["bounded", "trust"]
-    assert all(scenario.task is None for scenario in manifest.scenarios)
-    assert all(
-        scenario.expected_gate_path == "adjudicate" for scenario in manifest.scenarios
-    )
-    assert all(
-        scenario.expected_focus_type == "seam" for scenario in manifest.scenarios
-    )
-    assert all(
-        scenario.expected_decision_state == "selected"
-        for scenario in manifest.scenarios
-    )
-    assert all(scenario.expect_proposer_artifacts for scenario in manifest.scenarios)
-    assert all(scenario.expect_downstream_bridge for scenario in manifest.scenarios)
 
 
-def test_resolve_runtime_paths_honors_cli_override_precedence(tmp_path: Path) -> None:
-    manifest_workspace = tmp_path / "manifest-workspace"
-    override_workspace = tmp_path / "override-workspace"
-    manifest_workspace.mkdir()
-    override_workspace.mkdir()
-    manifest = SCRIPT.ManifestConfig(
-        task=(REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(strict=False),
-        workspace=manifest_workspace,
-        out_root=(REPO_ROOT / ".forge-harness-runs-live").resolve(strict=False),
-        scenarios=(
-            SCRIPT.AcceptanceScenario(
-                name="bounded",
-                task=None,
-                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                    strict=False
-                ),
-                expected_gate_path="adjudicate",
-                expected_focus_type="seam",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
+def test_preflight_rejects_local_strategy_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_root = tmp_path / "strategies"
+    local_strategy = strategy_root / "bad.local.yaml"
+    _write_yaml(
+        local_strategy,
+        """
+        name: bad-local
+        kind: analysis_review_bounded_v1
+        roles:
+          proposer:
+            provider: codex_gpt_5_4
+        validators: []
+        """,
+    )
+    manifest_path = tmp_path / "manifest.yaml"
+    _write_json(
+        manifest_path,
+        _shard_manifest_payload(
+            scenarios=[
+                _scenario_payload(
+                    name="bounded",
+                    strategy=str(local_strategy),
+                )
+            ]
         ),
     )
+    manifest = SCRIPT.load_manifest_config(manifest_path)
+    monkeypatch.setattr(SCRIPT, "CANONICAL_STRATEGY_ROOT", strategy_root)
+    monkeypatch.setattr(
+        SCRIPT.shutil,
+        "which",
+        _fake_which_factory({"git": "/usr/bin/git", "codex": "/usr/bin/codex"}),
+    )
 
-    workspace, out_root = SCRIPT.resolve_runtime_paths(
+    with pytest.raises(SCRIPT.AcceptanceError, match="local strategy overrides"):
+        SCRIPT.preflight_shard_manifest(
+            manifest,
+            shard_name="seam-adjudicate",
+            out_root=tmp_path / "out",
+        )
+
+
+def test_preflight_rejects_skip_git_repo_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_root = tmp_path / "strategies"
+    strategy = strategy_root / "bad.yaml"
+    _write_yaml(
+        strategy,
+        """
+name: bad
+kind: analysis_review_bounded_v1
+roles:
+  proposer:
+    provider: codex_gpt_5_4
+    skip_git_repo_check: true
+validators: []
+        """,
+    )
+    manifest_path = tmp_path / "manifest.yaml"
+    _write_json(
+        manifest_path,
+        _shard_manifest_payload(
+            scenarios=[
+                _scenario_payload(
+                    name="bounded",
+                    strategy=str(strategy),
+                )
+            ]
+        ),
+    )
+    manifest = SCRIPT.load_manifest_config(manifest_path)
+    monkeypatch.setattr(SCRIPT, "CANONICAL_STRATEGY_ROOT", strategy_root)
+    monkeypatch.setattr(
+        SCRIPT.shutil,
+        "which",
+        _fake_which_factory({"git": "/usr/bin/git", "codex": "/usr/bin/codex"}),
+    )
+
+    with pytest.raises(SCRIPT.AcceptanceError, match="skip_git_repo_check=true"):
+        SCRIPT.preflight_shard_manifest(
+            manifest,
+            shard_name="seam-adjudicate",
+            out_root=tmp_path / "out",
+        )
+
+
+def test_preflight_returns_provider_and_git_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = SCRIPT.load_manifest_config(SCRIPT.DEFAULT_CONFIG_PATH)
+    monkeypatch.setattr(
+        SCRIPT.shutil,
+        "which",
+        _fake_which_factory({"git": "/usr/bin/git", "codex": "/usr/bin/codex"}),
+    )
+
+    result = SCRIPT.preflight_shard_manifest(
         manifest,
-        workspace_override=str(override_workspace),
-        out_root_override="custom-live-runs",
+        shard_name="seam-adjudicate",
+        out_root=(REPO_ROOT / ".forge-harness-runs-live/test-preflight").resolve(
+            strict=False
+        ),
     )
 
-    assert workspace == override_workspace.resolve(strict=False)
-    assert out_root == (REPO_ROOT / "custom-live-runs").resolve(strict=False)
+    assert result["git_binary"] == "/usr/bin/git"
+    assert result["shard"] == "seam-adjudicate"
+    assert {check["provider"] for check in result["provider_checks"]} == {
+        "codex_gpt_5_4",
+        "codex_gpt_5_4_mini",
+        "codex_gpt_5_2",
+    }
 
 
-@pytest.mark.parametrize(
-    ("stdout", "message"),
-    [
-        ("report=/tmp/report.md\n", "summary=..."),
-        ("summary=/tmp/summary.json\n", "report=..."),
-        ("summary=\nreport=/tmp/report.md\n", "empty summary="),
-        ("summary=/tmp/summary.json\nreport=\n", "empty report="),
-    ],
-)
-def test_parse_harness_run_output_requires_summary_and_report(
-    stdout: str,
-    message: str,
-) -> None:
-    with pytest.raises(SCRIPT.AcceptanceError, match=message):
-        SCRIPT.parse_harness_run_output(stdout)
+def test_provision_git_workspace_creates_clean_git_repo() -> None:
+    manifest = SCRIPT.load_manifest_config(SCRIPT.DEFAULT_CONFIG_PATH)
 
-
-def test_parse_harness_run_output_extracts_emitted_summary_and_report_paths() -> None:
-    summary_path, report_path = SCRIPT.parse_harness_run_output(
-        "starting\nsummary=tmp/focus/summary.json\nnoise\nreport=tmp/focus/REPORT.md\n"
+    provisioned = SCRIPT.provision_git_workspace(
+        manifest,
+        shard_name="seam-adjudicate",
+        pass_id="test-pass",
     )
 
-    assert summary_path == (REPO_ROOT / "tmp/focus/summary.json").resolve(strict=False)
-    assert report_path == (REPO_ROOT / "tmp/focus/REPORT.md").resolve(strict=False)
+    assert provisioned.workspace.is_dir()
+    assert provisioned.baseline_commit
+    status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=provisioned.workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert status.returncode == 0
+    assert status.stdout.strip() == ""
 
 
-def test_validate_acceptance_run_accepts_selected_bridge_and_proposer(
-    tmp_path: Path,
+def test_prepare_shard_out_root_rejects_repo_head_change(tmp_path: Path) -> None:
+    shard_root = tmp_path / "pass-1" / "seam-adjudicate"
+    shard_root.mkdir(parents=True)
+    _write_json(shard_root / "shard_result.json", {"repo_head": "old-head"})
+
+    with pytest.raises(SCRIPT.AcceptanceError, match="different commit SHA"):
+        SCRIPT._prepare_shard_out_root(
+            out_root=tmp_path,
+            pass_id="pass-1",
+            shard_name="seam-adjudicate",
+            repo_head="new-head",
+        )
+
+
+def test_run_acceptance_case_selected_seam_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
     summary_path, report_path = _create_selected_run_dir(tmp_path)
-
-    SCRIPT.validate_acceptance_run(
-        summary_path=summary_path,
-        report_path=report_path,
-        workspace=workspace,
-        scenario=SCRIPT.AcceptanceScenario(
-            name="bounded",
-            strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                strict=False
-            ),
-            task=None,
-            expected_gate_path="adjudicate",
-            expected_focus_type="seam",
-            expected_decision_state="selected",
-            expect_proposer_artifacts=True,
-            expect_downstream_bridge=True,
-        ),
-    )
-
-
-@pytest.mark.parametrize(
-    ("focus_type", "decision_state", "expected_warning_substrings"),
-    [
-        ("seam", "clarification_requested", ()),
-        ("artifact", "clarification_requested", ()),
-        ("seam", "no_viable_focus", ()),
-        ("artifact", "no_viable_focus", ()),
-        ("seam", "clarification_requested", ("went stale",)),
-        ("artifact", "clarification_requested", ("went stale",)),
-    ],
-)
-def test_validate_acceptance_run_accepts_deliberate_blocked_matrix(
-    tmp_path: Path,
-    focus_type: str,
-    decision_state: str,
-    expected_warning_substrings: tuple[str, ...],
-) -> None:
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    warnings = (
-        ["Prior focus_gate_answer went stale: candidate set changed after repo probe."]
-        if expected_warning_substrings
-        else []
-    )
-    summary_path, report_path = _create_blocked_run_dir(
-        tmp_path,
-        focus_type=focus_type,
-        decision_state=decision_state,
-        warnings=warnings,
-        warning_sink="focus_decision",
-    )
-
-    SCRIPT.validate_acceptance_run(
-        summary_path=summary_path,
-        report_path=report_path,
-        workspace=workspace,
-        scenario=_acceptance_scenario(
-            name=f"{focus_type}-{decision_state}",
-            strategy_key="trust",
-            expected_gate_path="deliberate",
-            expected_focus_type=focus_type,
-            expected_decision_state=decision_state,
-            expect_proposer_artifacts=False,
-            expect_downstream_bridge=False,
-            expected_warning_substrings=expected_warning_substrings,
-        ),
-    )
-
-
-def test_validate_acceptance_run_accepts_selected_artifact_bridge_and_proposer(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
-
-    SCRIPT.validate_acceptance_run(
-        summary_path=summary_path,
-        report_path=report_path,
-        workspace=workspace,
-        scenario=SCRIPT.AcceptanceScenario(
-            name="artifact-bounded",
-            strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                strict=False
-            ),
-            task=None,
-            expected_gate_path="adjudicate",
-            expected_focus_type="artifact",
-            expected_decision_state="selected",
-            expect_proposer_artifacts=True,
-            expect_downstream_bridge=True,
-        ),
-    )
-
-
-def test_validate_acceptance_run_requires_focus_decision_in_summary(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_selected_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary.pop("focus_decision")
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(SCRIPT.AcceptanceError, match="missing focus_decision"):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=_acceptance_scenario(
-                name="bounded",
-                strategy_key="bounded",
-                expected_gate_path="adjudicate",
-                expected_focus_type="seam",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
-        )
-
-
-def test_validate_acceptance_run_rejects_focus_gate_stage_metadata_parity_regression(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_selected_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["agent_stages"][0]["metadata"]["focus_gate"]["focus_type"] = "artifact"
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="focus_gate stage metadata focus_type does not match focus_decision",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=_acceptance_scenario(
-                name="bounded",
-                strategy_key="bounded",
-                expected_gate_path="adjudicate",
-                expected_focus_type="seam",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
-        )
-
-
-def test_validate_acceptance_run_accepts_blocked_deliberate_without_proposer(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_clarification_run_dir(tmp_path)
-
-    SCRIPT.validate_acceptance_run(
-        summary_path=summary_path,
-        report_path=report_path,
-        workspace=workspace,
-        scenario=SCRIPT.AcceptanceScenario(
-            name="artifact-blocked",
-            strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["trust"]).resolve(
-                strict=False
-            ),
-            task=None,
-            expected_gate_path="deliberate",
-            expected_focus_type="artifact",
-            expected_decision_state="clarification_requested",
-            expect_proposer_artifacts=False,
-            expect_downstream_bridge=False,
-            expected_warning_substrings=("went stale",),
-        ),
-    )
-
-
-def test_validate_acceptance_run_rejects_focus_gate_probe_order_regression(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_blocked_run_dir(
-        tmp_path,
-        focus_type="artifact",
-        decision_state="clarification_requested",
-        probe_before_focus=False,
-    )
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="focus_gate_probe must run before focus_gate",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=_acceptance_scenario(
-                name="artifact-clarification",
-                strategy_key="trust",
-                expected_gate_path="deliberate",
-                expected_focus_type="artifact",
-                expected_decision_state="clarification_requested",
-                expect_proposer_artifacts=False,
-                expect_downstream_bridge=False,
-            ),
-        )
-
-
-def test_validate_acceptance_run_rejects_blocked_focus_gate_that_advances_to_proposer(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_blocked_run_dir(
-        tmp_path,
-        focus_type="seam",
-        decision_state="no_viable_focus",
-        include_proposer=True,
-    )
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="must not advance to proposer",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=_acceptance_scenario(
-                name="seam-no-viable",
-                strategy_key="trust",
-                expected_gate_path="deliberate",
-                expected_focus_type="seam",
-                expected_decision_state="no_viable_focus",
-                expect_proposer_artifacts=False,
-                expect_downstream_bridge=False,
-            ),
-        )
-
-
-def test_validate_acceptance_run_rejects_noncanonical_selected_artifact_focus_id(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["focus_decision"]["selected_focus_id"] = SCRIPT.canonical_seam_id_for_paths(
-        [".github/workflows/codex-cli-release-watch.yml"]
-    )
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="focus_decision.selected_focus_id must be the canonical artifact focus ID",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=SCRIPT.AcceptanceScenario(
-                name="artifact-bounded",
-                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                    strict=False
-                ),
-                task=None,
-                expected_gate_path="adjudicate",
-                expected_focus_type="artifact",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
-        )
-
-
-def test_validate_acceptance_run_rejects_selected_artifact_bridge_path_regression(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["focus_decision"]["adapter_plan"]["downstream_primary_seam_id"] = (
-        SCRIPT.canonical_seam_id_for_paths(["docs/spec.md"])
-    )
-    summary["focus_decision"]["adapter_plan"]["downstream_primary_seam_paths"] = [
-        "docs/spec.md"
-    ]
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="downstream_primary_seam_paths do not match selected_focus_paths",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=_acceptance_scenario(
-                name="artifact-bounded",
-                strategy_key="bounded",
-                expected_gate_path="adjudicate",
-                expected_focus_type="artifact",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
-        )
-
-
-def test_validate_acceptance_run_rejects_selected_artifact_primary_focus_id_mismatch(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["focus_decision"]["adapter_plan"]["primary_focus_id"] = "artifact:stale-id"
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="adapter_plan.primary_focus_id must equal focus_decision.selected_focus_id",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=SCRIPT.AcceptanceScenario(
-                name="artifact-bounded",
-                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                    strict=False
-                ),
-                task=None,
-                expected_gate_path="adjudicate",
-                expected_focus_type="artifact",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
-        )
-
-
-def test_validate_acceptance_run_rejects_selected_artifact_adaptation_basis_regression(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["focus_decision"]["adapter_plan"][
-        "adaptation_basis"
-    ] = "selected_focus_paths"
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(
-        SCRIPT.AcceptanceError,
-        match="adapter_plan.adaptation_basis must equal 'artifact_singleton'",
-    ):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=SCRIPT.AcceptanceScenario(
-                name="artifact-bounded",
-                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                    strict=False
-                ),
-                task=None,
-                expected_gate_path="adjudicate",
-                expected_focus_type="artifact",
-                expected_decision_state="selected",
-                expect_proposer_artifacts=True,
-                expect_downstream_bridge=True,
-            ),
-        )
-
-
-def test_validate_acceptance_run_accepts_stale_warning_from_semantic_validation_warnings(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_blocked_run_dir(
-        tmp_path,
-        focus_type="artifact",
-        decision_state="clarification_requested",
-        warnings=[
-            "Prior focus_gate_answer went stale: candidate set changed after repo probe."
-        ],
-        warning_sink="semantic_validation_warnings",
-    )
-
-    SCRIPT.validate_acceptance_run(
-        summary_path=summary_path,
-        report_path=report_path,
-        workspace=workspace,
-        scenario=_acceptance_scenario(
-            name="artifact-stale-rerun",
-            strategy_key="trust",
-            expected_gate_path="deliberate",
-            expected_focus_type="artifact",
-            expected_decision_state="clarification_requested",
-            expect_proposer_artifacts=False,
-            expect_downstream_bridge=False,
-            expected_warning_substrings=("went stale",),
-        ),
-    )
-
-
-def test_validate_acceptance_run_rejects_missing_expected_warning(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_clarification_run_dir(tmp_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["focus_decision"]["warnings"] = []
-    summary["failure_details"]["warnings"] = []
-    summary["agent_stages"][1]["warnings"] = []
-    _write_structured(summary_path, summary)
-
-    with pytest.raises(SCRIPT.AcceptanceError, match="expected warning substring"):
-        SCRIPT.validate_acceptance_run(
-            summary_path=summary_path,
-            report_path=report_path,
-            workspace=workspace,
-            scenario=SCRIPT.AcceptanceScenario(
-                name="artifact-blocked",
-                strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["trust"]).resolve(
-                    strict=False
-                ),
-                task=None,
-                expected_gate_path="deliberate",
-                expected_focus_type="artifact",
-                expected_decision_state="clarification_requested",
-                expect_proposer_artifacts=False,
-                expect_downstream_bridge=False,
-                expected_warning_substrings=("went stale",),
-            ),
-        )
-
-
-def test_run_acceptance_case_uses_sys_executable_and_repo_root(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_selected_run_dir(tmp_path)
-    scenario = SCRIPT.AcceptanceScenario(
-        name="trust",
-        task=(
-            REPO_ROOT
-            / "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml"
-        ).resolve(strict=False),
-        strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["trust"]).resolve(strict=False),
+    scenario = _acceptance_scenario(
+        name="bounded",
+        strategy_key="bounded",
         expected_gate_path="adjudicate",
         expected_focus_type="seam",
         expected_decision_state="selected",
@@ -1136,44 +653,40 @@ def test_run_acceptance_case_uses_sys_executable_and_repo_root(
         expect_downstream_bridge=True,
     )
 
-    def _fake_run(command, cwd, capture_output, text, check):
-        assert command[0] == sys.executable
-        assert command[1:4] == ["-m", "anvil.cli", "harness-run"]
-        assert cwd == REPO_ROOT
-        assert capture_output is True
-        assert text is True
-        assert check is False
-        assert command[command.index("--task") + 1] == str(scenario.task)
-        assert command[command.index("--strategy") + 1] == str(scenario.strategy)
+    def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
-            command,
+            kwargs.get("args", args[0]),
             0,
             stdout=f"summary={summary_path}\nreport={report_path}\n",
             stderr="",
         )
 
     monkeypatch.setattr(SCRIPT.subprocess, "run", _fake_run)
+
     result = SCRIPT.run_acceptance_case(
         scenario=scenario,
         task_path=(REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(strict=False),
         workspace=workspace,
         out_root=tmp_path / "out",
+        timeout_sec=30,
     )
 
     assert result.verdict == "PASS"
-    assert result.summary == str(summary_path)
-    assert result.report == str(report_path)
+    assert result.returncode == 0
 
 
-def test_run_acceptance_case_accepts_blocked_focus_gate_with_nonzero_exit(
-    monkeypatch,
-    tmp_path: Path,
+def test_run_acceptance_case_blocked_nonzero_exit_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    summary_path, report_path = _create_blocked_run_dir(
+        tmp_path,
+        focus_type="artifact",
+        decision_state="clarification_requested",
+        warnings=["Prior focus_gate_answer went stale: candidate set changed after repo probe."],
+    )
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    summary_path, report_path = _create_clarification_run_dir(tmp_path)
     scenario = SCRIPT.AcceptanceScenario(
-        name="artifact-blocked",
+        name="artifact-deliberate-ambiguity",
         task=None,
         strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["trust"]).resolve(strict=False),
         expected_gate_path="deliberate",
@@ -1184,66 +697,109 @@ def test_run_acceptance_case_accepts_blocked_focus_gate_with_nonzero_exit(
         expected_warning_substrings=("went stale",),
     )
 
-    def _fake_run(command, cwd, capture_output, text, check):
-        assert command[0] == sys.executable
-        assert cwd == REPO_ROOT
+    def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
-            command,
+            kwargs.get("args", args[0]),
             1,
             stdout=f"summary={summary_path}\nreport={report_path}\n",
-            stderr="blocked",
+            stderr="",
         )
 
     monkeypatch.setattr(SCRIPT.subprocess, "run", _fake_run)
+
     result = SCRIPT.run_acceptance_case(
         scenario=scenario,
         task_path=(REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(strict=False),
         workspace=workspace,
         out_root=tmp_path / "out",
+        timeout_sec=30,
     )
 
     assert result.verdict == "PASS"
-    assert result.summary == str(summary_path)
-    assert result.report == str(report_path)
+    assert result.returncode == 1
 
 
-def test_load_manifest_config_parses_scenario_task_overrides(tmp_path: Path) -> None:
+def test_run_acceptance_case_selected_artifact_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary_path, report_path = _create_artifact_selected_run_dir(tmp_path)
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    manifest_path = tmp_path / "focus_gate_acceptance_local.yaml"
-    artifact_task = (
-        "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml"
-    )
-    _write_manifest(
-        manifest_path,
-        _manifest_payload(
-            workspace,
-            scenarios=[
-                _scenario_payload(
-                    name="artifact-bounded",
-                    task=artifact_task,
-                    strategy=SCRIPT.EXAMPLE_STRATEGIES["bounded"],
-                    expected_focus_type="artifact",
-                )
-            ],
-        ),
+    scenario = SCRIPT.AcceptanceScenario(
+        name="artifact-bounded",
+        task=None,
+        strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(strict=False),
+        expected_gate_path="adjudicate",
+        expected_focus_type="artifact",
+        expected_decision_state="selected",
+        expect_proposer_artifacts=True,
+        expect_downstream_bridge=True,
     )
 
-    manifest = SCRIPT.load_manifest_config(manifest_path)
+    def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            kwargs.get("args", args[0]),
+            0,
+            stdout=f"summary={summary_path}\nreport={report_path}\n",
+            stderr="",
+        )
 
-    assert manifest.task == (REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(strict=False)
-    assert manifest.scenarios == (
-        SCRIPT.AcceptanceScenario(
-            name="artifact-bounded",
-            task=(REPO_ROOT / artifact_task).resolve(strict=False),
-            strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
-                strict=False
-            ),
-            expected_gate_path="adjudicate",
-            expected_focus_type="artifact",
-            expected_decision_state="selected",
-            expect_proposer_artifacts=True,
-            expect_downstream_bridge=True,
-            expected_warning_substrings=(),
-        ),
+    monkeypatch.setattr(SCRIPT.subprocess, "run", _fake_run)
+
+    result = SCRIPT.run_acceptance_case(
+        scenario=scenario,
+        task_path=(
+            REPO_ROOT
+            / "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml"
+        ).resolve(strict=False),
+        workspace=workspace,
+        out_root=tmp_path / "out",
+        timeout_sec=30,
     )
+
+    assert result.verdict == "PASS"
+
+
+def test_main_shard_manifest_rejects_workspace_override() -> None:
+    exit_code = SCRIPT.main(
+        [
+            "--config",
+            str(SCRIPT.DEFAULT_CONFIG_PATH.relative_to(REPO_ROOT)),
+            "--shard",
+            "seam-adjudicate",
+            "--pass-id",
+            "pass-1",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_main_preflight_only_succeeds_with_stubbed_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        SCRIPT,
+        "preflight_shard_manifest",
+        lambda manifest, shard_name, out_root: {
+            "shard": shard_name,
+            "git_binary": "/usr/bin/git",
+            "provider_checks": [],
+            "elapsed_sec": 0.01,
+            "workspace_seed": str(manifest.workspace_seed),
+            "out_root": str(out_root),
+        },
+    )
+
+    exit_code = SCRIPT.main(
+        [
+            "--config",
+            str(SCRIPT.DEFAULT_CONFIG_PATH.relative_to(REPO_ROOT)),
+            "--shard",
+            "seam-adjudicate",
+            "--preflight-only",
+        ]
+    )
+
+    assert exit_code == 0

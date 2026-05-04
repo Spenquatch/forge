@@ -211,15 +211,54 @@ Those adjudicate example strategies are runnable examples, not by themselves the
 
 Repo-local regression coverage for this surface lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and remains seam-regression-only wiring coverage.
 
-Authoritative focus-gate acceptance uses the canonical local helper:
+Authoritative focus-gate acceptance uses the shard helper. Each shard self-provisions a fresh isolated git-backed workspace from the committed fixture seed, records shard provenance, and writes fresh outputs under one `pass-id`.
+
+Prereqs for the authoritative path:
+
+- `git` on `PATH`
+- `codex` on `PATH`
+- the provider/model entries referenced by `examples/harness/strategies/*.yaml` resolvable via `config/models.yaml`
+
+Canonical manifest:
+
+- `.gstack/m4-request-gate/orch/focus_gate_acceptance.yaml`
+- seed template: `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`
+
+Recommended first step:
 
 ```bash
 poetry run python scripts/run_focus_gate_acceptance.py \
-  --config examples/harness/live_acceptance/focus_gate_acceptance_local.yaml
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard seam-adjudicate \
+  --preflight-only
 ```
 
-Start from `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml` when creating that local manifest.
-That canonical template covers the full seam and artifact M3 acceptance matrix, including adjudicate, deliberate ambiguity, `never_ask`, and stale rerun-answer cases.
+Authoritative shard commands:
+
+```bash
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard seam-adjudicate \
+  --pass-id m4-final-001
+
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard seam-deliberate \
+  --pass-id m4-final-001
+
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard artifact-adjudicate \
+  --pass-id m4-final-001
+
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard artifact-deliberate \
+  --pass-id m4-final-001
+```
+
+All four shards must pass under the same commit SHA and the same `pass-id` for M4 closeout.
+The script provisions its own temporary git workspace; do not pass `--workspace` to the canonical shard path and do not manually prepare `/tmp` workspaces.
 
 The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. It still defaults to `examples/harness/live_acceptance/m2_focus_gate_local.yaml` and still accepts the older `strategies:` shorthand manifest surface.
 
@@ -274,7 +313,7 @@ poetry run python scripts/check_seam_parity.py \
   --out ./seam_parity_report.json
 ```
 
-For focus-gate acceptance specifically, do not treat the example commands above as the full acceptance gate. Use `scripts/run_focus_gate_acceptance.py` with a local manifest based on `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml` against the external workspace. That canonical manifest template now covers the full seam and artifact M3 matrix. The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains for compatibility, and the fixture wiring under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` stays seam-regression-only wiring coverage.
+For focus-gate acceptance specifically, do not treat the example commands above as the full acceptance gate. Use the four shard commands above with `.gstack/m4-request-gate/orch/focus_gate_acceptance.yaml`. The canonical shard path owns workspace provisioning, git initialization, baseline commit creation, and preflight validation. The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains for compatibility only, and the fixture wiring under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` stays seam-regression-only wiring coverage.
 
 Across bounded and trust modes, the runner-owned `analysis_review_status.recommendation_admissibility` status records `final_answer_recommendation_indices`, `partial_only_recommendation_indices`, `excluded_recommendation_indices`, and `reasons_by_recommendation_index` using only the canonical reasons `accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`. The field is canonical in both modes and keeps the same shape in both modes. In bounded mode, accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices` unless they are topic-blocked, and bounded mode keeps `partial_only_recommendation_indices` empty. In trust mode, `FINAL_ANSWER.*` is all-or-nothing. Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode, and `PARTIAL_ANSWER.*` is the explicit scoped fallback: its candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations, while whole-artifact promotion still reuses the existing partial gates together with provenance binding, global topic blockers, and minimum-threshold fallout checks.
 

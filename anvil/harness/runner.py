@@ -3725,6 +3725,56 @@ class HarnessRunner:
             prior_open_topic_records = [dict(item) for item in prior_open_topic_records]
 
         if canonical_role_name in {"critic", "auditor"}:
+            prior_open_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in prior_open_issue_records
+                if str(item.get("issue_id") or "").strip()
+            }
+            current_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in normalized.get("issues", []) or []
+                if isinstance(item, dict) and str(item.get("issue_id") or "").strip()
+            }
+            for field_name in (
+                "resolved_issue_ids",
+                "carried_forward_issue_ids",
+                "waived_issue_ids",
+            ):
+                raw_ids = normalized.get(field_name)
+                if isinstance(raw_ids, list):
+                    normalized_ids: list[str] = []
+                    dropped_current_stage_ids: list[str] = []
+                    dropped_unknown_ids: list[str] = []
+                    for raw_issue_id in raw_ids:
+                        issue_id = str(raw_issue_id or "").strip()
+                        if not issue_id:
+                            continue
+                        if issue_id in prior_open_issue_ids:
+                            normalized_ids.append(issue_id)
+                            continue
+                        if issue_id in current_issue_ids:
+                            dropped_current_stage_ids.append(issue_id)
+                            continue
+                        dropped_unknown_ids.append(issue_id)
+                    normalized[field_name] = self._dedupe_preserving_order(
+                        normalized_ids
+                    )
+                    if dropped_current_stage_ids:
+                        warnings.append(
+                            f"{field_name} included current-stage issue IDs and they were dropped: "
+                            + ", ".join(
+                                self._dedupe_preserving_order(dropped_current_stage_ids)
+                            )
+                        )
+                    if dropped_unknown_ids and prior_open_issue_ids:
+                        warnings.append(
+                            f"{field_name} included unknown prior-open issue IDs and they were dropped: "
+                            + ", ".join(
+                                self._dedupe_preserving_order(dropped_unknown_ids)
+                            )
+                        )
+                elif field_name in normalized or not prior_open_issue_ids:
+                    normalized[field_name] = []
             prior_open_topics_exist = bool(prior_open_topic_records)
             for field_name in ("issue_closure_reviews", "topic_closure_reviews"):
                 if field_name not in normalized:
@@ -3842,6 +3892,7 @@ class HarnessRunner:
                     values = self._normalize_workspace_ref_list(item.get(field_name))
                     if values:
                         values = self._dedupe_preserving_order(values)
+                    if field_name in item:
                         item[field_name] = values
                         normalized_refs[
                             f"recommendation_reviews[{index}].{field_name}"
@@ -3923,6 +3974,7 @@ class HarnessRunner:
                     )
                     if values:
                         values = self._dedupe_preserving_order(values)
+                    if ref_field_name in item:
                         item[ref_field_name] = values
                         normalized_refs[f"{field_name}[{index}].{ref_field_name}"] = (
                             values
@@ -3963,6 +4015,7 @@ class HarnessRunner:
                     values = self._normalize_workspace_ref_list(item.get(field_name))
                     if values:
                         values = self._dedupe_preserving_order(values)
+                    if field_name in item:
                         item[field_name] = values
                         normalized_refs[f"recommendations[{index}].{field_name}"] = (
                             values
@@ -3975,6 +4028,7 @@ class HarnessRunner:
                         )
                         if values:
                             values = self._dedupe_preserving_order(values)
+                        if field_name in review_surface:
                             review_surface[field_name] = values
                             normalized_refs[
                                 f"recommendations[{index}].review_surface.{field_name}"

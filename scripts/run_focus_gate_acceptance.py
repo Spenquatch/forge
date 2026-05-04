@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -14,28 +18,33 @@ REPO_ROOT = SCRIPT_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from anvil.harness.files import load_structured_file
 from anvil.harness.contracts import (
     canonical_artifact_focus_id,
     canonical_seam_id_for_paths,
 )
+from anvil.harness.files import load_structured_file
 from anvil.harness.types import (
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
     canonical_seam_path_list,
 )
 
-DEFAULT_CONFIG_PATH = (
-    REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance_local.yaml"
+DEFAULT_CONFIG_PATH = REPO_ROOT / ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml"
+CANONICAL_TEMPLATE_PATH = (
+    REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
 )
 LEGACY_DEFAULT_CONFIG_PATH = (
     REPO_ROOT / "examples/harness/live_acceptance/m2_focus_gate_local.yaml"
 )
 DEFAULT_OUT_ROOT = ".forge-harness-runs-live"
+DEFAULT_PREFLIGHT_TIMEOUT_SEC = 60
+DEFAULT_SHARD_TIMEOUT_SEC = 12 * 60
 EXAMPLE_TASK_PATH = "examples/harness/tasks/recommend_automation_improvements.yaml"
 EXAMPLE_STRATEGIES = {
     "bounded": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
     "trust": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
 }
+CANONICAL_STRATEGY_ROOT = REPO_ROOT / "examples/harness/strategies"
+MODELS_CONFIG_PATH = REPO_ROOT / "config/models.yaml"
 LEGACY_SCENARIO_DEFAULTS = {
     "bounded": {
         "expected_gate_path": "adjudicate",
@@ -88,11 +97,35 @@ class AcceptanceScenario:
 
 
 @dataclass(frozen=True)
-class ManifestConfig:
+class AcceptanceShard:
+    name: str
+    scenarios: tuple[AcceptanceScenario, ...]
+
+
+@dataclass(frozen=True)
+class ShardManifestConfig:
+    default_task: Path
+    workspace_seed: Path
+    out_root: Path
+    shards: tuple[AcceptanceShard, ...]
+    preflight_timeout_sec: int
+    shard_timeout_sec: int
+
+
+@dataclass(frozen=True)
+class LegacyManifestConfig:
     task: Path
     workspace: Path
     out_root: Path
     scenarios: tuple[AcceptanceScenario, ...]
+
+
+@dataclass(frozen=True)
+class ProvisionedWorkspace:
+    temp_root: Path
+    workspace: Path
+    baseline_commit: str
+    verification: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -102,6 +135,12 @@ class CaseResult:
     summary: str
     report: str
     error: str | None = None
+    returncode: int | None = None
+    command: tuple[str, ...] = ()
+    duration_sec: float = 0.0
+
+
+ManifestConfig = ShardManifestConfig | LegacyManifestConfig
 
 
 def _parse_args(
@@ -111,21 +150,34 @@ def _parse_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run scenario-driven focus-gate acceptance checks against harness-run output."
+            "Run shard-based focus-gate acceptance checks against harness-run output."
         )
     )
     parser.add_argument(
         "--config",
         default=str(default_config_path.relative_to(REPO_ROOT)),
-        help="Path to the local focus-gate acceptance manifest.",
+        help="Path to the focus-gate acceptance manifest.",
+    )
+    parser.add_argument(
+        "--shard",
+        help="Shard name to execute for the canonical shard manifest.",
+    )
+    parser.add_argument(
+        "--pass-id",
+        help="Pass identifier used to group shard outputs for one final closeout pass.",
+    )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Run prereq checks only and exit before provisioning or shard execution.",
     )
     parser.add_argument(
         "--workspace",
-        help="Absolute workspace override. Overrides the manifest workspace.",
+        help="Legacy-only absolute workspace override. Unsupported for the shard manifest.",
     )
     parser.add_argument(
         "--out-root",
-        help="Output-root override. Overrides the manifest out_root.",
+        help="Optional output-root override.",
     )
     return parser.parse_args(argv)
 
@@ -144,6 +196,13 @@ def _resolve_existing_file(path_value: str | Path, *, field_name: str) -> Path:
     return path
 
 
+def _resolve_existing_dir(path_value: str | Path, *, field_name: str) -> Path:
+    path = _resolve_repo_path(path_value)
+    if not path.is_dir():
+        raise ValueError(f"{field_name} must point to an existing directory.")
+    return path
+
+
 def _resolve_workspace_path(path_value: str | Path, *, field_name: str) -> Path:
     workspace = Path(path_value).expanduser()
     if not workspace.is_absolute():
@@ -154,8 +213,8 @@ def _resolve_workspace_path(path_value: str | Path, *, field_name: str) -> Path:
     return workspace
 
 
-def _resolve_out_root_path(path_value: str | Path | None) -> Path:
-    raw_value = DEFAULT_OUT_ROOT if path_value in {None, ""} else path_value
+def _resolve_out_root_path(path_value: str | Path | None, *, default: str) -> Path:
+    raw_value = default if path_value in {None, ""} else path_value
     out_root = Path(str(raw_value)).expanduser()
     if not out_root.is_absolute():
         out_root = REPO_ROOT / out_root
@@ -188,6 +247,25 @@ def _parse_enum(value: Any, *, field_name: str, allowed: set[str]) -> str:
         allowed_values = ", ".join(sorted(allowed))
         raise ValueError(f"{field_name} must be one of: {allowed_values}.")
     return text
+
+
+def _parse_positive_int(
+    value: Any,
+    *,
+    field_name: str,
+    default: int,
+) -> int:
+    if value in {None, ""}:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer.")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer.") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be greater than zero.")
+    return parsed
 
 
 def _legacy_scenario_defaults(name: str) -> dict[str, Any]:
@@ -297,19 +375,76 @@ def _load_scenarios(payload: dict[str, Any]) -> tuple[AcceptanceScenario, ...]:
     return scenarios
 
 
+def _parse_shard(payload: Any, *, index: int) -> AcceptanceShard:
+    if not isinstance(payload, dict):
+        raise ValueError("shards entries must be mappings.")
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError(f"shards[{index}].name must be a non-empty string.")
+    raw_scenarios = payload.get("scenarios")
+    if not isinstance(raw_scenarios, list) or not raw_scenarios:
+        raise ValueError(f"shards[{index}].scenarios must be a non-empty list.")
+    scenarios = tuple(
+        _parse_scenario(item, index=scenario_index)
+        for scenario_index, item in enumerate(raw_scenarios)
+    )
+    scenario_names = [scenario.name for scenario in scenarios]
+    if len(set(scenario_names)) != len(scenario_names):
+        raise ValueError(f"shard {name!r} must not repeat scenario names.")
+    return AcceptanceShard(name=name, scenarios=scenarios)
+
+
 def load_manifest_config(path_value: str | Path) -> ManifestConfig:
     manifest_path = _resolve_repo_path(path_value)
     payload = load_structured_file(manifest_path)
+
+    if "shards" in payload:
+        default_task = _resolve_existing_file(
+            str(payload.get("default_task") or payload.get("task") or ""),
+            field_name="default_task",
+        )
+        workspace_seed = _resolve_existing_dir(
+            str(payload.get("workspace_seed") or ""),
+            field_name="workspace_seed",
+        )
+        out_root = _resolve_out_root_path(
+            payload.get("out_root"),
+            default=".forge-harness-runs-live/m4-request-gate/shards",
+        )
+        raw_shards = payload.get("shards")
+        if not isinstance(raw_shards, list) or not raw_shards:
+            raise ValueError("shards must be a non-empty list.")
+        shards = tuple(
+            _parse_shard(item, index=index) for index, item in enumerate(raw_shards)
+        )
+        shard_names = [shard.name for shard in shards]
+        if len(set(shard_names)) != len(shard_names):
+            raise ValueError("shard names must be unique.")
+        return ShardManifestConfig(
+            default_task=default_task,
+            workspace_seed=workspace_seed,
+            out_root=out_root,
+            shards=shards,
+            preflight_timeout_sec=_parse_positive_int(
+                payload.get("preflight_timeout_sec"),
+                field_name="preflight_timeout_sec",
+                default=DEFAULT_PREFLIGHT_TIMEOUT_SEC,
+            ),
+            shard_timeout_sec=_parse_positive_int(
+                payload.get("shard_timeout_sec"),
+                field_name="shard_timeout_sec",
+                default=DEFAULT_SHARD_TIMEOUT_SEC,
+            ),
+        )
 
     task = _resolve_existing_file(str(payload.get("task") or ""), field_name="task")
     workspace = _resolve_workspace_path(
         str(payload.get("workspace") or ""),
         field_name="workspace",
     )
-    out_root = _resolve_out_root_path(payload.get("out_root"))
+    out_root = _resolve_out_root_path(payload.get("out_root"), default=DEFAULT_OUT_ROOT)
     scenarios = _load_scenarios(payload)
-
-    return ManifestConfig(
+    return LegacyManifestConfig(
         task=task,
         workspace=workspace,
         out_root=out_root,
@@ -318,7 +453,7 @@ def load_manifest_config(path_value: str | Path) -> ManifestConfig:
 
 
 def resolve_runtime_paths(
-    manifest: ManifestConfig,
+    manifest: LegacyManifestConfig,
     *,
     workspace_override: str | None,
     out_root_override: str | None,
@@ -329,7 +464,7 @@ def resolve_runtime_paths(
         else manifest.workspace
     )
     out_root = (
-        _resolve_out_root_path(out_root_override)
+        _resolve_out_root_path(out_root_override, default=str(manifest.out_root))
         if out_root_override
         else manifest.out_root
     )
@@ -677,15 +812,268 @@ def validate_acceptance_run(
         )
 
 
+def _run_subprocess(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout_sec: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            list(command),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AcceptanceError(
+            f"command timed out after {timeout_sec} seconds: {' '.join(command)}"
+        ) from exc
+
+
+def _git_stdout(command: Sequence[str], *, cwd: Path) -> str:
+    result = _run_subprocess(command, cwd=cwd)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise AcceptanceError(
+            f"git command failed ({' '.join(command)}): {stderr or result.returncode}"
+        )
+    return result.stdout.strip()
+
+
+def _select_shard(manifest: ShardManifestConfig, shard_name: str) -> AcceptanceShard:
+    for shard in manifest.shards:
+        if shard.name == shard_name:
+            return shard
+    available = ", ".join(shard.name for shard in manifest.shards)
+    raise AcceptanceError(f"unknown shard {shard_name!r}; expected one of: {available}")
+
+
+def _provider_checks_for_strategy(
+    strategy_path: Path,
+    *,
+    providers: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not strategy_path.is_relative_to(CANONICAL_STRATEGY_ROOT):
+        raise AcceptanceError(
+            "authoritative shard execution requires committed canonical strategies "
+            f"under {CANONICAL_STRATEGY_ROOT.relative_to(REPO_ROOT)}."
+        )
+    if strategy_path.name.endswith(".local.yaml"):
+        raise AcceptanceError(
+            f"authoritative shard execution forbids local strategy overrides: {strategy_path}"
+        )
+
+    strategy_payload = load_structured_file(strategy_path)
+    roles = strategy_payload.get("roles")
+    if not isinstance(roles, dict) or not roles:
+        raise AcceptanceError(f"strategy {strategy_path} must define roles.")
+
+    checks: list[dict[str, Any]] = []
+    seen_provider_names: set[str] = set()
+    for role_name, role_payload in roles.items():
+        if not isinstance(role_payload, dict):
+            raise AcceptanceError(f"strategy role {role_name!r} must be a mapping.")
+        if role_payload.get("skip_git_repo_check") is True:
+            raise AcceptanceError(
+                "authoritative shard execution forbids skip_git_repo_check=true "
+                f"({strategy_path}, role {role_name})."
+            )
+        provider_name = str(role_payload.get("provider") or "").strip()
+        if not provider_name:
+            raise AcceptanceError(f"strategy role {role_name!r} must define provider.")
+        provider_cfg = providers.get(provider_name)
+        if not isinstance(provider_cfg, dict):
+            raise AcceptanceError(
+                f"provider {provider_name!r} referenced by {strategy_path} is not configured."
+            )
+        if provider_name in seen_provider_names:
+            continue
+        seen_provider_names.add(provider_name)
+
+        provider_type = str(provider_cfg.get("type") or "").strip()
+        provider_check: dict[str, Any] = {
+            "provider": provider_name,
+            "type": provider_type,
+        }
+        if provider_type == "cli":
+            binary = str(provider_cfg.get("binary") or "").strip()
+            if not binary:
+                raise AcceptanceError(
+                    f"CLI provider {provider_name!r} must define binary in config/models.yaml."
+                )
+            resolved_binary = shutil.which(binary)
+            if resolved_binary is None:
+                raise AcceptanceError(
+                    f"required CLI binary {binary!r} for provider {provider_name!r} was not found on PATH."
+                )
+            provider_check["binary"] = binary
+            provider_check["resolved_binary"] = resolved_binary
+        elif provider_type == "api":
+            key_env = str(provider_cfg.get("key_env") or "").strip()
+            if not key_env:
+                raise AcceptanceError(
+                    f"API provider {provider_name!r} must define key_env in config/models.yaml."
+                )
+            if not os.environ.get(key_env):
+                raise AcceptanceError(
+                    f"required environment variable {key_env!r} for provider {provider_name!r} is not set."
+                )
+            provider_check["key_env"] = key_env
+        elif provider_type == "local":
+            model_path_value = provider_cfg.get("model_path") or provider_cfg.get(
+                "model_name"
+            )
+            if isinstance(model_path_value, str) and (
+                model_path_value.startswith("models/") or "/" in model_path_value
+            ):
+                model_path = _resolve_repo_path(model_path_value)
+                if not model_path.exists():
+                    raise AcceptanceError(
+                        f"required local model path for provider {provider_name!r} does not exist: {model_path}"
+                    )
+                provider_check["model_path"] = str(model_path)
+        checks.append(provider_check)
+    return checks
+
+
+def preflight_shard_manifest(
+    manifest: ShardManifestConfig,
+    *,
+    shard_name: str,
+    out_root: Path,
+) -> dict[str, Any]:
+    start = time.monotonic()
+    git_binary = shutil.which("git")
+    if git_binary is None:
+        raise AcceptanceError("git is required for shard execution and was not found on PATH.")
+    if not manifest.workspace_seed.is_dir():
+        raise AcceptanceError(
+            f"workspace_seed is missing or not a directory: {manifest.workspace_seed}"
+        )
+    out_root.mkdir(parents=True, exist_ok=True)
+    if not out_root.is_dir():
+        raise AcceptanceError(f"out_root is not a directory: {out_root}")
+
+    models_payload = load_structured_file(MODELS_CONFIG_PATH)
+    providers = models_payload.get("providers")
+    if not isinstance(providers, dict):
+        raise AcceptanceError("config/models.yaml is missing providers.")
+
+    shard = _select_shard(manifest, shard_name)
+    provider_checks: list[dict[str, Any]] = []
+    for scenario in shard.scenarios:
+        provider_checks.extend(
+            _provider_checks_for_strategy(scenario.strategy, providers=providers)
+        )
+
+    elapsed = time.monotonic() - start
+    if elapsed > manifest.preflight_timeout_sec:
+        raise AcceptanceError(
+            "preflight exceeded the configured timeout "
+            f"({elapsed:.2f}s > {manifest.preflight_timeout_sec}s)."
+        )
+
+    return {
+        "git_binary": git_binary,
+        "workspace_seed": str(manifest.workspace_seed),
+        "out_root": str(out_root),
+        "shard": shard.name,
+        "provider_checks": provider_checks,
+        "elapsed_sec": round(elapsed, 3),
+    }
+
+
+def provision_git_workspace(
+    manifest: ShardManifestConfig,
+    *,
+    shard_name: str,
+    pass_id: str,
+) -> ProvisionedWorkspace:
+    temp_root = Path(
+        tempfile.mkdtemp(prefix=f"forge-focus-gate-{shard_name}-{pass_id}-")
+    ).resolve(strict=False)
+    workspace = temp_root / "workspace"
+    shutil.copytree(manifest.workspace_seed, workspace)
+    copied_git_dir = workspace / ".git"
+    if copied_git_dir.exists():
+        shutil.rmtree(copied_git_dir)
+
+    _git_stdout(["git", "init"], cwd=workspace)
+    _git_stdout(
+        ["git", "config", "user.name", "forge-acceptance"],
+        cwd=workspace,
+    )
+    _git_stdout(
+        ["git", "config", "user.email", "forge-acceptance@example.invalid"],
+        cwd=workspace,
+    )
+    _git_stdout(["git", "add", "."], cwd=workspace)
+    _git_stdout(["git", "commit", "-m", "baseline fixture seed"], cwd=workspace)
+
+    is_work_tree = _git_stdout(["git", "rev-parse", "--is-inside-work-tree"], cwd=workspace)
+    status_short = _git_stdout(["git", "status", "--short"], cwd=workspace)
+    baseline_commit = _git_stdout(["git", "rev-parse", "HEAD"], cwd=workspace)
+    if is_work_tree != "true":
+        raise AcceptanceError("provisioned workspace did not become a git work tree.")
+    if status_short:
+        raise AcceptanceError("provisioned workspace is not clean after baseline commit.")
+
+    verification = {
+        "temp_root": str(temp_root),
+        "workspace": str(workspace),
+        "seed_source": str(manifest.workspace_seed),
+        "git_is_work_tree": is_work_tree,
+        "git_status_short": status_short,
+        "baseline_commit": baseline_commit,
+    }
+    return ProvisionedWorkspace(
+        temp_root=temp_root,
+        workspace=workspace,
+        baseline_commit=baseline_commit,
+        verification=verification,
+    )
+
+
+def _repo_head() -> str:
+    return _git_stdout(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT)
+
+
+def _prepare_shard_out_root(
+    *,
+    out_root: Path,
+    pass_id: str,
+    shard_name: str,
+    repo_head: str,
+) -> Path:
+    shard_root = out_root / pass_id / shard_name
+    metadata_path = shard_root / "shard_result.json"
+    if metadata_path.is_file():
+        existing = _load_json(metadata_path)
+        existing_head = str(existing.get("repo_head") or "").strip()
+        if existing_head and existing_head != repo_head:
+            raise AcceptanceError(
+                "existing shard metadata for this pass-id was produced from a "
+                "different commit SHA; start a new pass-id."
+            )
+    if shard_root.exists():
+        shutil.rmtree(shard_root)
+    shard_root.mkdir(parents=True, exist_ok=True)
+    return shard_root
+
+
 def run_acceptance_case(
     *,
     scenario: AcceptanceScenario,
     task_path: Path,
     workspace: Path,
     out_root: Path,
+    timeout_sec: int | None = None,
 ) -> CaseResult:
     effective_task_path = scenario.task or task_path
-    command = [
+    command = (
         sys.executable,
         "-m",
         "anvil.cli",
@@ -698,15 +1086,31 @@ def run_acceptance_case(
         str(workspace),
         "--out-root",
         str(out_root),
-    ]
-    result = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
     )
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            list(command),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        duration_sec = time.monotonic() - started
+        return CaseResult(
+            case=scenario.name,
+            verdict="FAIL",
+            summary="",
+            report="",
+            error=f"harness-run timed out after {timeout_sec} seconds.",
+            returncode=None,
+            command=command,
+            duration_sec=duration_sec,
+        )
 
+    duration_sec = time.monotonic() - started
     summary_path = ""
     report_path = ""
     parse_error: str | None = None
@@ -724,6 +1128,9 @@ def run_acceptance_case(
             summary=summary_path,
             report=report_path,
             error=parse_error,
+            returncode=result.returncode,
+            command=command,
+            duration_sec=duration_sec,
         )
 
     if (
@@ -736,6 +1143,9 @@ def run_acceptance_case(
             summary=summary_path,
             report=report_path,
             error=f"harness-run exited with {result.returncode}.",
+            returncode=result.returncode,
+            command=command,
+            duration_sec=duration_sec,
         )
 
     try:
@@ -752,6 +1162,9 @@ def run_acceptance_case(
             summary=summary_path,
             report=report_path,
             error=str(exc),
+            returncode=result.returncode,
+            command=command,
+            duration_sec=duration_sec,
         )
 
     return CaseResult(
@@ -759,6 +1172,9 @@ def run_acceptance_case(
         verdict="PASS",
         summary=summary_path,
         report=report_path,
+        returncode=result.returncode,
+        command=command,
+        duration_sec=duration_sec,
     )
 
 
@@ -778,24 +1194,123 @@ def _print_case_result(result: CaseResult) -> None:
         print(result.error, file=sys.stderr)
 
 
-def main(
-    argv: Sequence[str] | None = None,
-    *,
-    default_config_path: Path = DEFAULT_CONFIG_PATH,
-) -> int:
-    args = _parse_args(argv, default_config_path=default_config_path)
-    try:
-        manifest = load_manifest_config(args.config)
-        workspace, out_root = resolve_runtime_paths(
-            manifest,
-            workspace_override=args.workspace,
-            out_root_override=args.out_root,
-        )
-    except (AcceptanceError, ValueError, RuntimeError) as exc:
-        print(str(exc), file=sys.stderr)
-        print(json.dumps({"overall": "FAIL"}, separators=(",", ":")))
-        return 1
+def _case_result_payload(result: CaseResult) -> dict[str, Any]:
+    return {
+        "case": result.case,
+        "verdict": result.verdict,
+        "summary": result.summary,
+        "report": result.report,
+        "error": result.error,
+        "returncode": result.returncode,
+        "command": list(result.command),
+        "duration_sec": round(result.duration_sec, 3),
+    }
 
+
+def run_shard(
+    manifest: ShardManifestConfig,
+    *,
+    shard_name: str,
+    pass_id: str,
+    out_root: Path,
+) -> int:
+    shard = _select_shard(manifest, shard_name)
+    preflight = preflight_shard_manifest(manifest, shard_name=shard_name, out_root=out_root)
+    if not pass_id.strip():
+        raise AcceptanceError("--pass-id must be a non-empty string.")
+    repo_head = _repo_head()
+    shard_root = _prepare_shard_out_root(
+        out_root=out_root,
+        pass_id=pass_id,
+        shard_name=shard.name,
+        repo_head=repo_head,
+    )
+    provisioned = provision_git_workspace(manifest, shard_name=shard.name, pass_id=pass_id)
+
+    started_at = time.time()
+    deadline = time.monotonic() + manifest.shard_timeout_sec
+    overall_pass = True
+    case_results: list[CaseResult] = []
+    for scenario in shard.scenarios:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            timeout_result = CaseResult(
+                case=scenario.name,
+                verdict="FAIL",
+                summary="",
+                report="",
+                error=(
+                    "shard wall-clock limit expired before the scenario could start."
+                ),
+            )
+            case_results.append(timeout_result)
+            _print_case_result(timeout_result)
+            overall_pass = False
+            break
+
+        result = run_acceptance_case(
+            scenario=scenario,
+            task_path=manifest.default_task,
+            workspace=provisioned.workspace,
+            out_root=shard_root,
+            timeout_sec=remaining,
+        )
+        case_results.append(result)
+        _print_case_result(result)
+        if result.verdict != "PASS":
+            overall_pass = False
+
+    final_workspace_status = _git_stdout(
+        ["git", "status", "--short"],
+        cwd=provisioned.workspace,
+    )
+    metadata = {
+        "mode": "shard",
+        "shard": shard.name,
+        "pass_id": pass_id,
+        "repo_head": repo_head,
+        "started_at_epoch_sec": started_at,
+        "completed_at_epoch_sec": time.time(),
+        "overall": "PASS" if overall_pass else "FAIL",
+        "workspace_prep_method": "copy-seed-then-git-init-baseline-commit",
+        "workspace_seed": str(manifest.workspace_seed),
+        "workspace": str(provisioned.workspace),
+        "temp_root": str(provisioned.temp_root),
+        "baseline_workspace_commit": provisioned.baseline_commit,
+        "workspace_verification": provisioned.verification,
+        "final_workspace_git_status_short": final_workspace_status,
+        "out_root": str(shard_root),
+        "preflight": preflight,
+        "scenarios": [_case_result_payload(result) for result in case_results],
+    }
+    metadata_path = shard_root / "shard_result.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+    print(
+        json.dumps(
+            {
+                "overall": metadata["overall"],
+                "shard": shard.name,
+                "pass_id": pass_id,
+                "metadata": str(metadata_path),
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0 if overall_pass else 1
+
+
+def _run_legacy_manifest(
+    manifest: LegacyManifestConfig,
+    *,
+    workspace_override: str | None,
+    out_root_override: str | None,
+) -> int:
+    workspace, out_root = resolve_runtime_paths(
+        manifest,
+        workspace_override=workspace_override,
+        out_root_override=out_root_override,
+    )
     overall_pass = True
     for scenario in manifest.scenarios:
         result = run_acceptance_case(
@@ -815,6 +1330,79 @@ def main(
         )
     )
     return 0 if overall_pass else 1
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    default_config_path: Path = DEFAULT_CONFIG_PATH,
+) -> int:
+    args = _parse_args(argv, default_config_path=default_config_path)
+    try:
+        manifest = load_manifest_config(args.config)
+        if isinstance(manifest, ShardManifestConfig):
+            if args.workspace:
+                raise AcceptanceError(
+                    "--workspace is unsupported for the shard manifest; shard runs provision their own isolated git-backed workspace."
+                )
+            if not args.shard:
+                raise AcceptanceError("--shard is required for the shard manifest.")
+            effective_out_root = (
+                _resolve_out_root_path(
+                    args.out_root,
+                    default=str(manifest.out_root),
+                )
+                if args.out_root
+                else manifest.out_root
+            )
+            if args.preflight_only:
+                preflight = preflight_shard_manifest(
+                    manifest,
+                    shard_name=args.shard,
+                    out_root=effective_out_root,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "overall": "PASS",
+                            "mode": "preflight",
+                            "shard": args.shard,
+                            "preflight": preflight,
+                        },
+                        separators=(",", ":"),
+                    )
+                )
+                return 0
+            if not args.pass_id:
+                raise AcceptanceError("--pass-id is required for the shard manifest.")
+            return run_shard(
+                manifest,
+                shard_name=args.shard,
+                pass_id=args.pass_id,
+                out_root=effective_out_root,
+            )
+
+        if args.shard:
+            raise AcceptanceError(
+                "--shard is only supported by the shard manifest, not the legacy compatibility manifest."
+            )
+        if args.pass_id:
+            raise AcceptanceError(
+                "--pass-id is only supported by the shard manifest, not the legacy compatibility manifest."
+            )
+        if args.preflight_only:
+            raise AcceptanceError(
+                "--preflight-only is only supported by the shard manifest."
+            )
+        return _run_legacy_manifest(
+            manifest,
+            workspace_override=args.workspace,
+            out_root_override=args.out_root,
+        )
+    except (AcceptanceError, ValueError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        print(json.dumps({"overall": "FAIL"}, separators=(",", ":")))
+        return 1
 
 
 if __name__ == "__main__":
