@@ -9,7 +9,10 @@ from anvil.harness.contracts import (
     default_blocking_class_for_kind,
 )
 from anvil.harness.files import load_structured_file
-from anvil.harness.schemas import analysis_review_schema
+from anvil.harness.schemas import (
+    analysis_review_schema,
+    bounded_attestation_input_schema,
+)
 from anvil.harness.types import ReviewLoopPolicy, StrategyConfig, TaskSpec
 
 
@@ -122,6 +125,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     assert contract.bounded_review.require_scope_escape_justification is True
     assert contract.trust_review.require_taxonomy_override_reason is False
     assert contract.trust_review.max_evidence_refs_per_recommendation == 3
+    assert contract.trust_review.execution_mode == "legacy_full_review"
     assert contract.trust_review.require_verified_evidence_refs_subset is False
     assert contract.trust_review.require_affected_file_coverage is False
     assert contract.trust_review.payload_provenance_mode == "none"
@@ -148,6 +152,7 @@ def test_build_analysis_review_contract_uses_task_and_strategy_requirements():
     }
     assert serialized["trust_review"] == {
         "max_evidence_refs_per_recommendation": 3,
+        "execution_mode": "legacy_full_review",
         "require_taxonomy_override_reason": False,
         "require_verified_evidence_refs_subset": False,
         "require_affected_file_coverage": False,
@@ -182,6 +187,7 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
 
     assert legacy.mode == "bounded"
     assert legacy.strategy_kind == "analysis_review_v1"
+    assert legacy.to_dict()["trust_review"]["execution_mode"] == "legacy_full_review"
     assert legacy.to_dict()["effective_strategy"] == {
         "kind": "analysis_review_v1",
         "mode": "bounded",
@@ -189,6 +195,7 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
 
     assert trust.mode == "trust"
     assert trust.strategy_kind == "analysis_review_trust_v1"
+    assert trust.trust_review.execution_mode == "legacy_full_review"
     assert trust.trust_review.require_taxonomy_override_reason is True
     assert trust.trust_review.max_evidence_refs_per_recommendation is None
     assert trust.trust_review.require_verified_evidence_refs_subset is True
@@ -200,6 +207,7 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
     assert (
         trust.to_dict()["trust_review"]["max_evidence_refs_per_recommendation"] is None
     )
+    assert trust.to_dict()["trust_review"]["execution_mode"] == "legacy_full_review"
     assert trust.to_dict()["effective_strategy"] == {
         "kind": "analysis_review_trust_v1",
         "mode": "trust",
@@ -429,6 +437,63 @@ def test_analysis_review_schema_requires_files_reviewed_and_closure_review_array
         "verified_evidence_refs",
         "summary",
     ]
+    assert "bounded_attestation_input" not in schema["properties"]
+
+
+def test_bounded_attestation_input_schema_freezes_m1_handoff_shape():
+    schema = bounded_attestation_input_schema()
+
+    assert schema["required"] == [
+        "schema_version",
+        "source",
+        "focus_decision",
+        "contract",
+        "bounded_analysis",
+        "review_surface",
+        "ledgers",
+        "provenance_context",
+    ]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == (
+        "analysis_review_bounded_attestation_input_v1"
+    )
+    assert schema["properties"]["source"]["additionalProperties"] is False
+    assert schema["properties"]["source"]["properties"]["mode"]["enum"] == ["bounded"]
+    assert schema["properties"]["focus_decision"]["anyOf"][1] == {"type": "null"}
+    assert (
+        schema["properties"]["focus_decision"]["anyOf"][0]["additionalProperties"]
+        is False
+    )
+    assert schema["properties"]["contract"]["additionalProperties"] is False
+    assert schema["properties"]["contract"]["properties"]["trust_execution_mode"][
+        "enum"
+    ] == ["legacy_full_review", "attestation_over_bounded"]
+    assert schema["properties"]["bounded_analysis"]["additionalProperties"] is False
+    assert schema["properties"]["bounded_analysis"]["properties"]["recommendations"][
+        "minItems"
+    ] == 1
+    assert schema["properties"]["review_surface"]["additionalProperties"] is False
+    assert schema["properties"]["review_surface"]["properties"]["review_stages"][
+        "type"
+    ] == "array"
+    assert schema["properties"]["ledgers"]["additionalProperties"] is False
+    assert schema["properties"]["ledgers"]["properties"]["issue_ledger"]["type"] == "array"
+    assert schema["properties"]["ledgers"]["properties"]["topic_ledger"]["type"] == "array"
+    assert (
+        schema["properties"]["provenance_context"]["additionalProperties"] is False
+    )
+    assert (
+        schema["properties"]["provenance_context"]["properties"][
+            "recommendation_evidence_index"
+        ]["additionalProperties"]
+        is False
+    )
+    assert (
+        schema["properties"]["provenance_context"]["properties"][
+            "recommendation_evidence_index"
+        ]["patternProperties"]["^[0-9]+$"]["items"]
+        == {"type": "string"}
+    )
 
 
 def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():
@@ -569,6 +634,12 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
     contract_doc = Path("docs/analysis_review_contract.md").read_text(encoding="utf-8")
 
     assert "analysis_review_v1_contract_v10" in contract_doc
+    assert "`bounded_attestation_input` is runner-owned." in contract_doc
+    assert "It is not a public deliverable." in contract_doc
+    assert "It intentionally excludes final publication truth" in contract_doc
+    assert "M1 emits `bounded_attestation_input`, M2 consumes it." in contract_doc
+    assert "`analysis_review_schema()` remains unchanged in M1" in contract_doc
+    assert "`bounded_attestation_input_schema()` helper" in contract_doc
     assert 'the only allowed singleton values are `["seam"]` and `["artifact"]`' in contract_doc
     assert 'mixed-type lists such as `["seam", "artifact"]` are rejected explicitly' in contract_doc
     assert '"focus_type": "seam | artifact"' in contract_doc
