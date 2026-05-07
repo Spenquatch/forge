@@ -14,6 +14,8 @@ from typing import Any, Iterable
 
 from .contracts import (
     AnalysisReviewContract,
+    BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+    TRUST_EXECUTION_MODE_VALUES,
     canonical_artifact_focus_id,
     canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
@@ -34,13 +36,8 @@ _FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
 BOUNDED_ATTESTATION_INPUT_KEY = "bounded_attestation_input"
-BOUNDED_ATTESTATION_SCHEMA_VERSION = (
-    "analysis_review_bounded_attestation_input_v1"
-)
-ALLOWED_TRUST_EXECUTION_MODES = {
-    "legacy_full_review",
-    "attestation_over_bounded",
-}
+BOUNDED_ATTESTATION_SCHEMA_VERSION = BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION
+ALLOWED_TRUST_EXECUTION_MODES = set(TRUST_EXECUTION_MODE_VALUES)
 _FORBIDDEN_BOUNDED_ATTESTATION_FIELDS = {
     "analysis_review_status",
     "publishability",
@@ -223,7 +220,6 @@ def validate_bounded_attestation_input_payload(
         result,
         review_surface=review_surface,
         bounded_analysis=bounded_analysis,
-        recommendation_count=len(bounded_recommendations),
     )
     _validate_bounded_attestation_ledgers(result, ledgers=payload.get("ledgers"))
     _validate_bounded_attestation_provenance_context(
@@ -2306,7 +2302,6 @@ def _validate_bounded_attestation_review_surface(
     *,
     review_surface: Any,
     bounded_analysis: Any,
-    recommendation_count: int,
 ) -> None:
     if not isinstance(review_surface, dict):
         result.errors.append("review_surface must be an object.")
@@ -2405,12 +2400,6 @@ def _validate_bounded_attestation_review_surface(
             result.errors.append(
                 "review_surface.scope_escape_count must equal bounded_analysis.scope_escapes plus per-stage scope_escape_count totals."
             )
-
-    if recommendation_count != actual_recommendation_count:
-        result.errors.append(
-            "review_surface validation observed recommendation ordering drift relative to bounded_analysis."
-        )
-
 
 def _validate_bounded_attestation_ledgers(
     result: SemanticValidationResult,

@@ -8414,6 +8414,31 @@ def test_bounded_attestation_input_builder_returns_none_for_trust_mode(tmp_path)
     )
 
 
+def test_bounded_attestation_input_builder_returns_none_without_finalized_bounded_analysis(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    runner._analysis_contract()
+
+    assert (
+        runner._build_bounded_attestation_input(
+            {
+                "analysis_review_contract": runner.analysis_review_contract.to_dict(),
+                "bounded_review_summary": {
+                    "recommendation_count": 0,
+                    "recommendations_with_review_surface": 0,
+                    "review_stages": [],
+                    "scope_escape_count": 0,
+                },
+            }
+        )
+        is None
+    )
+
+
 def test_bounded_attestation_input_hash_is_deterministic_for_identical_input(
     tmp_path,
     monkeypatch,
@@ -8544,5 +8569,51 @@ def test_bounded_attestation_input_validation_failure_blocks_run(
     with pytest.raises(
         RuntimeError,
         match="bounded_attestation_input semantic validation failed",
+    ):
+        runner.run()
+
+
+def test_bounded_attestation_input_schema_validation_failure_blocks_run(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+    original_builder = HarnessRunner._build_bounded_review_summary
+
+    def _malformed_bounded_review_summary(self, run_details):
+        summary = original_builder(self, run_details)
+        assert summary is not None
+        summary["review_stages"] = [
+            {
+                "role_name": "critic",
+                "round_index": 0,
+                "scope_escape_count": 0,
+            }
+        ]
+        return summary
+
+    monkeypatch.setattr(
+        HarnessRunner,
+        "_build_bounded_review_summary",
+        _malformed_bounded_review_summary,
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="bounded_attestation_input schema validation failed",
     ):
         runner.run()

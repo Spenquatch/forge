@@ -16,6 +16,7 @@ from anvil.orchestrator import reload_config
 
 from .contracts import (
     AnalysisReviewContract,
+    BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
     PartialAcceptancePolicy,
     RecommendationAdmissibilityStatus,
     build_analysis_review_contract,
@@ -50,6 +51,7 @@ from .reporting import apply_final_artifacts
 from .schemas import (
     analysis_output_schema,
     analysis_review_schema,
+    bounded_attestation_input_schema,
     falsifier_schema,
     focus_gate_output_schema,
     focus_gate_probe_output_schema,
@@ -60,7 +62,6 @@ from .schemas import (
 from .selection import extract_drafts_from_summary, select_best_draft
 from .semantic_validation import (
     BOUNDED_ATTESTATION_INPUT_KEY,
-    BOUNDED_ATTESTATION_SCHEMA_VERSION,
     validate_bounded_attestation_input_payload,
     validate_stage_output,
 )
@@ -1768,6 +1769,11 @@ class HarnessRunner:
             if isinstance(contract_dict.get("trust_review"), dict)
             else {}
         )
+        trust_execution_mode = str(trust_review.get("execution_mode") or "").strip()
+        if not trust_execution_mode:
+            raise HarnessError(
+                "bounded_attestation_input requires trust_review.execution_mode in bounded mode."
+            )
         recommendation_evidence_index = (
             self._build_bounded_attestation_recommendation_evidence_index(
                 bounded_analysis.get("recommendations") or []
@@ -1783,7 +1789,7 @@ class HarnessRunner:
         for refs in recommendation_evidence_index.values():
             flattened_refs.extend(refs)
         payload = {
-            "schema_version": BOUNDED_ATTESTATION_SCHEMA_VERSION,
+            "schema_version": BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
             "source": {
                 "strategy_kind": str(
                     contract_dict.get("strategy_kind") or self.strategy.kind
@@ -1803,9 +1809,7 @@ class HarnessRunner:
                 "strategy_kind": str(
                     contract_dict.get("strategy_kind") or self.strategy.kind
                 ),
-                "trust_execution_mode": str(
-                    trust_review.get("execution_mode") or "legacy_full_review"
-                ),
+                "trust_execution_mode": trust_execution_mode,
             },
             "bounded_analysis": bounded_analysis,
             "review_surface": {
@@ -1834,12 +1838,22 @@ class HarnessRunner:
             },
         }
 
+        schema_validation_errors = _soft_validate_schema(
+            payload,
+            bounded_attestation_input_schema(),
+        )
+        if schema_validation_errors:
+            raise HarnessError(
+                "bounded_attestation_input schema validation failed: "
+                + "; ".join(schema_validation_errors)
+            )
+        workspace_paths = capture_workspace_file_inventory(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
         validation_result = validate_bounded_attestation_input_payload(
             payload,
-            workspace_paths=capture_workspace_file_inventory(
-                self.workspace,
-                ignored_rel_paths=self.policy_ignored_rel_paths,
-            ),
+            workspace_paths=workspace_paths,
         )
         if not validation_result.ok:
             raise HarnessError(
