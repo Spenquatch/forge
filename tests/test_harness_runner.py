@@ -16,6 +16,7 @@ from anvil.harness.providers import ForgeProviderAdapter, _soft_validate_schema
 from anvil.harness.runner import HarnessRunner
 from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
+from anvil.harness.semantic_validation import BOUNDED_ATTESTATION_INPUT_KEY
 from anvil.harness.types import ProviderRun
 
 _PRIMARY_SEAM_PATHS = [
@@ -181,6 +182,19 @@ def _assert_summary_json_mirrors_analysis_review_status(
     nested_status = summary_json["run_details"].get("analysis_review_status")
     if isinstance(nested_status, dict):
         assert nested_status == summary_json["analysis_review_status"]
+
+
+def _assert_summary_json_mirrors_bounded_attestation_input(
+    runner: HarnessRunner,
+    summary: dict[str, object],
+) -> None:
+    summary_json = _load_run_summary_json(runner)
+    assert summary_json[BOUNDED_ATTESTATION_INPUT_KEY] == summary[
+        BOUNDED_ATTESTATION_INPUT_KEY
+    ]
+    assert summary_json["run_details"][BOUNDED_ATTESTATION_INPUT_KEY] == summary[
+        BOUNDED_ATTESTATION_INPUT_KEY
+    ]
 
 
 def _canonical_seam_context(summary: dict[str, object]) -> dict[str, object]:
@@ -8340,3 +8354,266 @@ def test_bounded_review_summary_ignores_empty_final_analysis_and_recovers_from_s
     )
     assert resolved_analysis["status"] == "revised"
     assert resolved_analysis["issue_resolution_map"][0]["issue_id"] == "AR-001"
+
+
+def test_bounded_attestation_input_persists_and_mirrors_summary_json(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    runner, summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _BoundedCorroborationHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_bounded_v1",
+        specs_dir_name="attestation_specs",
+        runs_dir_name="attestation_runs",
+    )
+
+    payload = summary[BOUNDED_ATTESTATION_INPUT_KEY]
+    assert payload == summary["run_details"][BOUNDED_ATTESTATION_INPUT_KEY]
+    assert payload["review_surface"]["recommendation_count"] == summary[
+        "bounded_review_summary"
+    ]["recommendation_count"]
+    assert payload["review_surface"]["recommendations_with_review_surface"] == summary[
+        "bounded_review_summary"
+    ]["recommendations_with_review_surface"]
+    assert payload["review_surface"]["review_stages"] == summary[
+        "bounded_review_summary"
+    ]["review_stages"]
+    assert payload["review_surface"]["scope_escape_count"] == summary[
+        "bounded_review_summary"
+    ]["scope_escape_count"]
+    assert payload["bounded_analysis"] == {
+        "summary": summary["run_details"]["final_analysis"]["summary"],
+        "recommendations": summary["run_details"]["final_analysis"]["recommendations"],
+        "files_reviewed": summary["run_details"]["final_analysis"]["files_reviewed"],
+        "primary_seam": summary["run_details"]["final_analysis"]["primary_seam"],
+        "secondary_seams_considered": summary["run_details"]["final_analysis"][
+            "secondary_seams_considered"
+        ],
+        "scope_escapes": summary["run_details"]["final_analysis"]["scope_escapes"],
+    }
+    assert payload["contract"]["trust_execution_mode"] == "legacy_full_review"
+    _assert_summary_json_mirrors_bounded_attestation_input(runner, summary)
+
+
+def test_bounded_attestation_input_builder_returns_none_for_trust_mode(tmp_path):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+    runner._analysis_contract()
+
+    assert (
+        runner._build_bounded_attestation_input(
+            {"analysis_review_contract": runner.analysis_review_contract.to_dict()}
+        )
+        is None
+    )
+
+
+def test_bounded_attestation_input_builder_returns_none_without_finalized_bounded_analysis(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    runner._analysis_contract()
+
+    assert (
+        runner._build_bounded_attestation_input(
+            {
+                "analysis_review_contract": runner.analysis_review_contract.to_dict(),
+                "bounded_review_summary": {
+                    "recommendation_count": 0,
+                    "recommendations_with_review_surface": 0,
+                    "review_stages": [],
+                    "scope_escape_count": 0,
+                },
+            }
+        )
+        is None
+    )
+
+
+def test_bounded_attestation_input_hash_is_deterministic_for_identical_input(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    runner, summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _BoundedCorroborationHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_bounded_v1",
+        specs_dir_name="deterministic_attestation_specs",
+        runs_dir_name="deterministic_attestation_runs",
+    )
+    run_details = dict(summary["run_details"])
+    run_details.pop(BOUNDED_ATTESTATION_INPUT_KEY, None)
+
+    payload_a = runner._build_bounded_attestation_input(run_details)
+    payload_b = runner._build_bounded_attestation_input(run_details)
+
+    assert payload_a is not None
+    assert payload_b is not None
+    assert payload_a == payload_b
+    assert payload_a["source"]["bounded_payload_sha256"] == payload_b["source"][
+        "bounded_payload_sha256"
+    ]
+
+
+def test_bounded_attestation_input_uses_latest_finalized_bounded_analysis_stage_when_final_analysis_missing(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    runner._analysis_contract()
+    adapter = _PartialAcceptanceHarnessAdapter()
+    proposer_payload = adapter._base_analysis(revised=False)
+    reviser_payload = adapter._payload_for_role("reviser_round_1")
+    runner.agent_stages = [
+        {
+            "stage_index": 1,
+            "role_name": "proposer",
+            "ok": True,
+            "structured_output": proposer_payload,
+        },
+        {
+            "stage_index": 2,
+            "role_name": "critic",
+            "ok": True,
+            "structured_output": adapter._payload_for_role("critic"),
+        },
+        {
+            "stage_index": 3,
+            "role_name": "reviser_round_1",
+            "ok": True,
+            "structured_output": reviser_payload,
+        },
+    ]
+    run_details = {
+        "analysis_review_contract": runner.analysis_review_contract.to_dict(),
+        "bounded_review_summary": runner._build_bounded_review_summary(
+            {
+                "analysis_review_contract": runner.analysis_review_contract.to_dict(),
+                "final_analysis": {},
+            }
+        ),
+        "final_analysis": {},
+    }
+
+    payload = runner._build_bounded_attestation_input(run_details)
+
+    assert payload is not None
+    assert payload["bounded_analysis"]["summary"] == reviser_payload["summary"]
+    assert payload["bounded_analysis"]["recommendations"] == reviser_payload[
+        "recommendations"
+    ]
+    assert payload["source"]["analysis_stage_role_name"] == "reviser_round_1"
+    assert payload["source"]["analysis_stage_index"] == 3
+
+
+def test_bounded_attestation_input_validation_failure_blocks_run(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+
+    original_builder = HarnessRunner._build_bounded_review_summary
+
+    def _malformed_bounded_review_summary(self, run_details):
+        summary = original_builder(self, run_details)
+        assert summary is not None
+        summary["recommendation_count"] = 1
+        return summary
+
+    monkeypatch.setattr(
+        HarnessRunner,
+        "_build_bounded_review_summary",
+        _malformed_bounded_review_summary,
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="bounded_attestation_input semantic validation failed",
+    ):
+        runner.run()
+
+
+def test_bounded_attestation_input_schema_validation_failure_blocks_run(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+    original_builder = HarnessRunner._build_bounded_review_summary
+
+    def _malformed_bounded_review_summary(self, run_details):
+        summary = original_builder(self, run_details)
+        assert summary is not None
+        summary["review_stages"] = [
+            {
+                "role_name": "critic",
+                "round_index": 0,
+                "scope_escape_count": 0,
+            }
+        ]
+        return summary
+
+    monkeypatch.setattr(
+        HarnessRunner,
+        "_build_bounded_review_summary",
+        _malformed_bounded_review_summary,
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="bounded_attestation_input schema validation failed",
+    ):
+        runner.run()

@@ -7,11 +7,15 @@ checks that need runtime context, such as minimum recommendation counts,
 per-stage issue-ledger coverage, and required analysis sections.
 """
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from .contracts import (
     AnalysisReviewContract,
+    BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+    TRUST_EXECUTION_MODE_VALUES,
     canonical_artifact_focus_id,
     canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
@@ -31,6 +35,19 @@ _FOCUS_ADAPTATION_BASES = {"selected_focus_paths", "artifact_singleton"}
 _FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
+BOUNDED_ATTESTATION_INPUT_KEY = "bounded_attestation_input"
+BOUNDED_ATTESTATION_SCHEMA_VERSION = BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION
+ALLOWED_TRUST_EXECUTION_MODES = set(TRUST_EXECUTION_MODE_VALUES)
+_FORBIDDEN_BOUNDED_ATTESTATION_FIELDS = {
+    "analysis_review_status",
+    "publishability",
+    "recommendation_admissibility",
+    "final_answer_publishable",
+    "final_answer",
+    "artifacts",
+    "report_md",
+    "summary_json",
+}
 
 
 @dataclass
@@ -131,6 +148,86 @@ def validate_stage_output(
                 payload_provenance=payload_provenance,
             )
         )
+    return result
+
+
+def validate_bounded_attestation_input_payload(
+    payload: dict[str, Any] | None,
+    *,
+    workspace_paths: Iterable[str] | None = None,
+) -> SemanticValidationResult:
+    result = SemanticValidationResult()
+    if not isinstance(payload, dict) or not payload:
+        result.errors.append("bounded_attestation_input payload must be a non-empty object.")
+        return result
+
+    required_top_level_fields = {
+        "schema_version",
+        "source",
+        "focus_decision",
+        "contract",
+        "bounded_analysis",
+        "review_surface",
+        "ledgers",
+        "provenance_context",
+    }
+    missing_top_level_fields = [
+        field for field in required_top_level_fields if field not in payload
+    ]
+    for field_name in sorted(missing_top_level_fields):
+        result.errors.append(f"bounded_attestation_input is missing required field: {field_name}")
+
+    _validate_bounded_attestation_forbidden_fields(
+        result,
+        value=payload,
+        field_name=BOUNDED_ATTESTATION_INPUT_KEY,
+    )
+
+    schema_version = str(payload.get("schema_version") or "").strip()
+    if schema_version != BOUNDED_ATTESTATION_SCHEMA_VERSION:
+        result.errors.append(
+            "schema_version must equal "
+            f"{BOUNDED_ATTESTATION_SCHEMA_VERSION}; got {schema_version or '(missing)'}."
+        )
+
+    workspace_path_set = _workspace_path_set(workspace_paths)
+    source = payload.get("source")
+    bounded_analysis = payload.get("bounded_analysis")
+    review_surface = payload.get("review_surface")
+    provenance_context = payload.get("provenance_context")
+
+    _validate_bounded_attestation_source(
+        result,
+        source=source,
+        bounded_analysis=bounded_analysis,
+    )
+    _validate_bounded_attestation_focus_decision(
+        result,
+        focus_decision=payload.get("focus_decision"),
+        workspace_paths=workspace_path_set,
+    )
+    _validate_bounded_attestation_contract(
+        result,
+        contract=payload.get("contract"),
+        source=source,
+    )
+    bounded_recommendations = _validate_bounded_attestation_analysis(
+        result,
+        bounded_analysis=bounded_analysis,
+        workspace_paths=workspace_path_set,
+    )
+    _validate_bounded_attestation_review_surface(
+        result,
+        review_surface=review_surface,
+        bounded_analysis=bounded_analysis,
+    )
+    _validate_bounded_attestation_ledgers(result, ledgers=payload.get("ledgers"))
+    _validate_bounded_attestation_provenance_context(
+        result,
+        provenance_context=provenance_context,
+        recommendations=bounded_recommendations,
+        workspace_paths=workspace_path_set,
+    )
     return result
 
 
@@ -1878,6 +1975,536 @@ def _validate_review_payload_provenance(
     result.errors.append(
         "trust review payload introduced or classified issues/topics without structured closure proof; files_reviewed alone is not sufficient, so provide recommendation_reviews checked_files/verified_evidence_refs for recommendation-linked closures and issue_closure_reviews/topic_closure_reviews for recommendation_index=null global closures."
     )
+
+
+def _validate_bounded_attestation_forbidden_fields(
+    result: SemanticValidationResult,
+    *,
+    value: Any,
+    field_name: str,
+) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in _FORBIDDEN_BOUNDED_ATTESTATION_FIELDS:
+                result.errors.append(
+                    f"{field_name} must not contain forbidden publication field '{key}'."
+                )
+            _validate_bounded_attestation_forbidden_fields(
+                result,
+                value=nested,
+                field_name=f"{field_name}.{key}",
+            )
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value, start=1):
+            _validate_bounded_attestation_forbidden_fields(
+                result,
+                value=item,
+                field_name=f"{field_name}[{index}]",
+            )
+
+
+def _validate_bounded_attestation_source(
+    result: SemanticValidationResult,
+    *,
+    source: Any,
+    bounded_analysis: Any,
+) -> None:
+    if not isinstance(source, dict):
+        result.errors.append("source must be an object.")
+        return
+
+    if not str(source.get("strategy_kind") or "").strip():
+        result.errors.append("source.strategy_kind must be non-empty.")
+    mode = str(source.get("mode") or "").strip()
+    if not mode:
+        result.errors.append("source.mode is required.")
+    elif mode != "bounded":
+        result.errors.append(f"source.mode must equal bounded; got {mode}.")
+    if not str(source.get("analysis_stage_role_name") or "").strip():
+        result.errors.append("source.analysis_stage_role_name must be non-empty.")
+
+    stage_index = source.get("analysis_stage_index")
+    if not isinstance(stage_index, int) or isinstance(stage_index, bool) or stage_index < 0:
+        result.errors.append("source.analysis_stage_index must be an integer >= 0.")
+
+    payload_hash = str(source.get("bounded_payload_sha256") or "").strip()
+    if not payload_hash:
+        result.errors.append("source.bounded_payload_sha256 must be non-empty.")
+    elif not _is_sha256_hex(payload_hash):
+        result.errors.append(
+            "source.bounded_payload_sha256 must be a lowercase 64-character SHA-256 hex digest."
+        )
+    elif isinstance(bounded_analysis, dict):
+        expected_hash = _sha256_hex_for_json(bounded_analysis)
+        if payload_hash != expected_hash:
+            result.errors.append(
+                "source.bounded_payload_sha256 must match the canonical SHA-256 of bounded_analysis."
+            )
+
+
+def _validate_bounded_attestation_focus_decision(
+    result: SemanticValidationResult,
+    *,
+    focus_decision: Any,
+    workspace_paths: set[str],
+) -> None:
+    if focus_decision is None:
+        return
+    if not isinstance(focus_decision, dict):
+        result.errors.append("focus_decision must be an object or null.")
+        return
+    for field_name in ("checked_files", "selected_focus_paths"):
+        if field_name in focus_decision:
+            _validated_checked_files(
+                result,
+                checked_files=focus_decision.get(field_name),
+                field_name=f"focus_decision.{field_name}",
+                require_non_empty=False,
+                workspace_paths=workspace_paths,
+            )
+    for index, candidate in enumerate(focus_decision.get("candidates") or [], start=1):
+        if not isinstance(candidate, dict):
+            result.errors.append(f"focus_decision.candidates[{index}] must be an object.")
+            continue
+        _validated_checked_files(
+            result,
+            checked_files=candidate.get("candidate_paths"),
+            field_name=f"focus_decision.candidates[{index}].candidate_paths",
+            require_non_empty=False,
+            workspace_paths=workspace_paths,
+        )
+        _validated_checked_files(
+            result,
+            checked_files=candidate.get("evidence_refs"),
+            field_name=f"focus_decision.candidates[{index}].evidence_refs",
+            require_non_empty=False,
+            workspace_paths=workspace_paths,
+        )
+    adapter_plan = focus_decision.get("adapter_plan")
+    if isinstance(adapter_plan, dict) and "downstream_primary_seam_paths" in adapter_plan:
+        _validated_checked_files(
+            result,
+            checked_files=adapter_plan.get("downstream_primary_seam_paths"),
+            field_name="focus_decision.adapter_plan.downstream_primary_seam_paths",
+            require_non_empty=False,
+            workspace_paths=workspace_paths,
+        )
+
+
+def _validate_bounded_attestation_contract(
+    result: SemanticValidationResult,
+    *,
+    contract: Any,
+    source: Any,
+) -> None:
+    if not isinstance(contract, dict):
+        result.errors.append("contract must be an object.")
+        return
+
+    contract_version = str(contract.get("contract_version") or "").strip()
+    if not contract_version:
+        result.errors.append("contract.contract_version must be non-empty.")
+    strategy_kind = str(contract.get("strategy_kind") or "").strip()
+    if not strategy_kind:
+        result.errors.append("contract.strategy_kind must be non-empty.")
+    elif isinstance(source, dict):
+        source_strategy_kind = str(source.get("strategy_kind") or "").strip()
+        if source_strategy_kind and source_strategy_kind != strategy_kind:
+            result.errors.append(
+                "contract.strategy_kind must match source.strategy_kind."
+            )
+    execution_mode = str(contract.get("trust_execution_mode") or "").strip()
+    if not execution_mode:
+        result.errors.append("contract.trust_execution_mode is required.")
+    elif execution_mode not in ALLOWED_TRUST_EXECUTION_MODES:
+        result.errors.append(
+            "contract.trust_execution_mode must be one of "
+            f"{sorted(ALLOWED_TRUST_EXECUTION_MODES)}; got {execution_mode}."
+        )
+
+
+def _validate_bounded_attestation_analysis(
+    result: SemanticValidationResult,
+    *,
+    bounded_analysis: Any,
+    workspace_paths: set[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(bounded_analysis, dict):
+        result.errors.append("bounded_analysis must be an object.")
+        return []
+
+    if not str(bounded_analysis.get("summary") or "").strip():
+        result.errors.append("bounded_analysis.summary must be non-empty.")
+
+    raw_files_reviewed = bounded_analysis.get("files_reviewed")
+    if not isinstance(raw_files_reviewed, list):
+        result.errors.append("bounded_analysis.files_reviewed must be a list.")
+        files_reviewed: list[str] = []
+    else:
+        files_reviewed = _canonical_workspace_paths(raw_files_reviewed)
+        if raw_files_reviewed != files_reviewed:
+            result.errors.append(
+                "bounded_analysis.files_reviewed must contain canonical normalized refs in stable order."
+            )
+        if not files_reviewed:
+            result.errors.append(
+                "bounded_analysis.files_reviewed must contain at least one non-empty path."
+            )
+        unknown_files_reviewed = sorted(set(files_reviewed) - workspace_paths)
+        if unknown_files_reviewed:
+            result.errors.append(
+                "bounded_analysis.files_reviewed contains path(s) not present in the workspace snapshot: "
+                + ", ".join(unknown_files_reviewed)
+            )
+
+    files_reviewed_set = set(files_reviewed)
+    _validate_seam_entry(
+        result,
+        seam=bounded_analysis.get("primary_seam"),
+        field_name="bounded_analysis.primary_seam",
+        reason_field="why_primary",
+        files_reviewed=files_reviewed_set,
+        workspace_paths=workspace_paths,
+    )
+    secondary_seams = bounded_analysis.get("secondary_seams_considered")
+    if not isinstance(secondary_seams, list):
+        result.errors.append("bounded_analysis.secondary_seams_considered must be a list.")
+    else:
+        for index, item in enumerate(secondary_seams, start=1):
+            _validate_seam_entry(
+                result,
+                seam=item,
+                field_name=f"bounded_analysis.secondary_seams_considered[{index}]",
+                reason_field="why_not_primary",
+                files_reviewed=files_reviewed_set,
+                workspace_paths=workspace_paths,
+            )
+
+    scope_escapes = _validate_scope_escapes(
+        result,
+        scope_escapes=bounded_analysis.get("scope_escapes"),
+        require_reason=True,
+    )
+    for index, item in enumerate(scope_escapes, start=1):
+        path = str(item.get("path") or "").strip()
+        if path and path not in workspace_paths:
+            result.errors.append(
+                f"bounded_analysis.scope_escapes[{index}].path contains path(s) not present in the workspace snapshot: {path}"
+            )
+
+    recommendations = bounded_analysis.get("recommendations")
+    if not isinstance(recommendations, list):
+        result.errors.append("bounded_analysis.recommendations must be a list.")
+        return []
+    if not recommendations:
+        result.errors.append("bounded_analysis.recommendations must contain at least one item.")
+        return []
+
+    validated_recommendations: list[dict[str, Any]] = []
+    for index, recommendation in enumerate(recommendations, start=1):
+        if not isinstance(recommendation, dict):
+            result.errors.append(
+                f"bounded_analysis.recommendations[{index}] must be an object."
+            )
+            continue
+        evidence = recommendation.get("evidence")
+        if not isinstance(evidence, list):
+            result.errors.append(
+                f"bounded_analysis.recommendations[{index}].evidence must be a list."
+            )
+            evidence_items: list[str] = []
+        else:
+            evidence_items = _canonical_workspace_paths(evidence)
+            if evidence != evidence_items:
+                result.errors.append(
+                    f"bounded_analysis.recommendations[{index}].evidence must contain canonical normalized refs in stable order."
+                )
+            _validate_recommendation_evidence(
+                result,
+                evidence_items=evidence_items,
+                recommendation_index=index,
+                files_reviewed=files_reviewed_set,
+                workspace_paths=workspace_paths,
+            )
+        review_surface = recommendation.get("review_surface")
+        if isinstance(review_surface, dict):
+            _validate_bounded_attestation_recommendation_review_surface(
+                result,
+                review_surface=review_surface,
+                recommendation_index=index,
+                files_reviewed=files_reviewed_set,
+                workspace_paths=workspace_paths,
+            )
+        validated_recommendations.append(recommendation)
+    return validated_recommendations
+
+
+def _validate_bounded_attestation_recommendation_review_surface(
+    result: SemanticValidationResult,
+    *,
+    review_surface: dict[str, Any],
+    recommendation_index: int,
+    files_reviewed: set[str],
+    workspace_paths: set[str],
+) -> None:
+    must_check_raw = review_surface.get("must_check_files")
+    optional_raw = review_surface.get("optional_check_files")
+    if not isinstance(must_check_raw, list):
+        result.errors.append(
+            f"bounded_analysis.recommendations[{recommendation_index}].review_surface.must_check_files must be a list."
+        )
+        must_check_items: list[str] = []
+    else:
+        must_check_items = _canonical_workspace_paths(must_check_raw)
+        if must_check_raw != must_check_items:
+            result.errors.append(
+                f"bounded_analysis.recommendations[{recommendation_index}].review_surface.must_check_files must contain canonical normalized refs in stable order."
+            )
+    if not isinstance(optional_raw, list):
+        result.errors.append(
+            f"bounded_analysis.recommendations[{recommendation_index}].review_surface.optional_check_files must be a list."
+        )
+        optional_items: list[str] = []
+    else:
+        optional_items = _canonical_workspace_paths(optional_raw)
+        if optional_raw != optional_items:
+            result.errors.append(
+                f"bounded_analysis.recommendations[{recommendation_index}].review_surface.optional_check_files must contain canonical normalized refs in stable order."
+            )
+    if not str(review_surface.get("scope_note") or "").strip():
+        result.errors.append(
+            f"bounded_analysis.recommendations[{recommendation_index}].review_surface.scope_note must be non-empty."
+        )
+
+    missing_must_check_files = sorted(set(must_check_items) - files_reviewed)
+    if missing_must_check_files:
+        result.errors.append(
+            f"bounded_analysis.recommendations[{recommendation_index}].review_surface.must_check_files must be a subset of files_reviewed: "
+            + ", ".join(missing_must_check_files)
+        )
+    unknown_must_check_files = sorted(set(must_check_items) - workspace_paths)
+    if unknown_must_check_files:
+        result.errors.append(
+            f"bounded_analysis.recommendations[{recommendation_index}].review_surface.must_check_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_must_check_files)
+        )
+    unknown_optional_check_files = sorted(set(optional_items) - workspace_paths)
+    if unknown_optional_check_files:
+        result.errors.append(
+            f"bounded_analysis.recommendations[{recommendation_index}].review_surface.optional_check_files contains path(s) not present in the workspace snapshot: "
+            + ", ".join(unknown_optional_check_files)
+        )
+
+
+def _validate_bounded_attestation_review_surface(
+    result: SemanticValidationResult,
+    *,
+    review_surface: Any,
+    bounded_analysis: Any,
+) -> None:
+    if not isinstance(review_surface, dict):
+        result.errors.append("review_surface must be an object.")
+        return
+    if not isinstance(bounded_analysis, dict):
+        return
+
+    actual_recommendation_count = len(
+        bounded_analysis.get("recommendations")
+        if isinstance(bounded_analysis.get("recommendations"), list)
+        else []
+    )
+    declared_recommendation_count = review_surface.get("recommendation_count")
+    if (
+        not isinstance(declared_recommendation_count, int)
+        or isinstance(declared_recommendation_count, bool)
+        or declared_recommendation_count < 0
+    ):
+        result.errors.append("review_surface.recommendation_count must be an integer >= 0.")
+    elif declared_recommendation_count != actual_recommendation_count:
+        result.errors.append(
+            "review_surface.recommendation_count must equal len(bounded_analysis.recommendations)."
+        )
+
+    declared_review_surface_count = review_surface.get(
+        "recommendations_with_review_surface"
+    )
+    if (
+        not isinstance(declared_review_surface_count, int)
+        or isinstance(declared_review_surface_count, bool)
+        or declared_review_surface_count < 0
+    ):
+        result.errors.append(
+            "review_surface.recommendations_with_review_surface must be an integer >= 0."
+        )
+    else:
+        actual_review_surface_count = sum(
+            1
+            for item in bounded_analysis.get("recommendations") or []
+            if isinstance(item, dict) and isinstance(item.get("review_surface"), dict)
+        )
+        if declared_review_surface_count != actual_review_surface_count:
+            result.errors.append(
+                "review_surface.recommendations_with_review_surface must match the serialized recommendation review_surface count."
+            )
+
+    review_stages = review_surface.get("review_stages")
+    if not isinstance(review_stages, list):
+        result.errors.append("review_surface.review_stages must be a list.")
+        review_stages = []
+    total_stage_scope_escapes = 0
+    for index, stage in enumerate(review_stages, start=1):
+        if not isinstance(stage, dict):
+            result.errors.append(f"review_surface.review_stages[{index}] must be an object.")
+            continue
+        if not str(stage.get("role_name") or "").strip():
+            result.errors.append(
+                f"review_surface.review_stages[{index}].role_name must be non-empty."
+            )
+        round_index = stage.get("round_index")
+        if (
+            not isinstance(round_index, int)
+            or isinstance(round_index, bool)
+            or round_index < 0
+        ):
+            result.errors.append(
+                f"review_surface.review_stages[{index}].round_index must be an integer >= 0."
+            )
+        scope_escape_count = stage.get("scope_escape_count")
+        if (
+            not isinstance(scope_escape_count, int)
+            or isinstance(scope_escape_count, bool)
+            or scope_escape_count < 0
+        ):
+            result.errors.append(
+                f"review_surface.review_stages[{index}].scope_escape_count must be an integer >= 0."
+            )
+        else:
+            total_stage_scope_escapes += scope_escape_count
+
+    declared_scope_escape_count = review_surface.get("scope_escape_count")
+    if (
+        not isinstance(declared_scope_escape_count, int)
+        or isinstance(declared_scope_escape_count, bool)
+        or declared_scope_escape_count < 0
+    ):
+        result.errors.append("review_surface.scope_escape_count must be an integer >= 0.")
+    else:
+        analysis_scope_escapes = bounded_analysis.get("scope_escapes")
+        analysis_scope_escape_count = (
+            len(analysis_scope_escapes) if isinstance(analysis_scope_escapes, list) else 0
+        )
+        if declared_scope_escape_count != (
+            analysis_scope_escape_count + total_stage_scope_escapes
+        ):
+            result.errors.append(
+                "review_surface.scope_escape_count must equal bounded_analysis.scope_escapes plus per-stage scope_escape_count totals."
+            )
+
+def _validate_bounded_attestation_ledgers(
+    result: SemanticValidationResult,
+    *,
+    ledgers: Any,
+) -> None:
+    if not isinstance(ledgers, dict):
+        result.errors.append("ledgers must be an object.")
+        return
+    if not isinstance(ledgers.get("issue_ledger"), list):
+        result.errors.append("ledgers.issue_ledger must be a list.")
+    if not isinstance(ledgers.get("topic_ledger"), list):
+        result.errors.append("ledgers.topic_ledger must be a list.")
+
+
+def _validate_bounded_attestation_provenance_context(
+    result: SemanticValidationResult,
+    *,
+    provenance_context: Any,
+    recommendations: list[dict[str, Any]],
+    workspace_paths: set[str],
+) -> None:
+    if not isinstance(provenance_context, dict):
+        result.errors.append("provenance_context must be an object.")
+        return
+
+    evidence_index = provenance_context.get("recommendation_evidence_index")
+    if not isinstance(evidence_index, dict):
+        result.errors.append("provenance_context.recommendation_evidence_index must be an object.")
+        evidence_index = {}
+
+    actual_keys = list(evidence_index.keys())
+    expected_keys = [str(index) for index in range(1, len(recommendations) + 1)]
+    if actual_keys != expected_keys:
+        result.errors.append(
+            "provenance_context.recommendation_evidence_index keys must be dense 1-based recommendation indices in order."
+        )
+
+    flattened_refs: list[str] = []
+    for index, recommendation in enumerate(recommendations, start=1):
+        key = str(index)
+        raw_refs = evidence_index.get(key)
+        if not isinstance(raw_refs, list):
+            result.errors.append(
+                f"provenance_context.recommendation_evidence_index[{key}] must be a list."
+            )
+            continue
+        normalized_refs = _canonical_workspace_paths(raw_refs)
+        if raw_refs != normalized_refs:
+            result.errors.append(
+                f"provenance_context.recommendation_evidence_index[{key}] must contain canonical normalized refs in stable order."
+            )
+        unknown_refs = sorted(set(normalized_refs) - workspace_paths)
+        if unknown_refs:
+            result.errors.append(
+                f"provenance_context.recommendation_evidence_index[{key}] contains path(s) not present in the workspace snapshot: "
+                + ", ".join(unknown_refs)
+            )
+        expected_refs = _canonical_workspace_paths(recommendation.get("evidence"))
+        if normalized_refs != expected_refs:
+            result.errors.append(
+                "provenance_context.recommendation_evidence_index must preserve bounded_analysis recommendation evidence order without drift."
+            )
+        flattened_refs.extend(normalized_refs)
+
+    expected_normalized_ref_count = len(_dedupe_preserving_order(flattened_refs))
+    normalized_ref_count = provenance_context.get("normalized_ref_count")
+    if (
+        not isinstance(normalized_ref_count, int)
+        or isinstance(normalized_ref_count, bool)
+        or normalized_ref_count < 0
+    ):
+        result.errors.append("provenance_context.normalized_ref_count must be an integer >= 0.")
+    elif normalized_ref_count != expected_normalized_ref_count:
+        result.errors.append(
+            "provenance_context.normalized_ref_count must match the unique normalized evidence refs derived from recommendation_evidence_index."
+        )
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _sha256_hex_for_json(value: Any) -> str:
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
 def _canonical_workspace_paths(values: Any) -> list[str]:
