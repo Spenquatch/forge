@@ -28,12 +28,17 @@ AnalysisReviewMode = Literal["bounded", "trust"]
 PayloadProvenanceMode = Literal["none", "payload_hash_and_refs"]
 LateAuditorPolicy = Literal["error", "warn"]
 GroundingMode = Literal["direct", "mixed", "inferred"]
+TrustExecutionMode = Literal["legacy_full_review", "attestation_over_bounded"]
 RecommendationAdmissibilityReason = Literal[
     "accepted_with_caveat",
     "inferred_grounding",
     "not_accepted",
     "topic_blocked",
 ]
+
+BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION = (
+    "analysis_review_bounded_attestation_input_v1"
+)
 
 
 CONFIDENCE_RUBRIC_LINES: tuple[str, ...] = (
@@ -66,6 +71,10 @@ ANALYSIS_REVIEW_MODE_BY_STRATEGY_KIND: dict[str, AnalysisReviewMode] = {
 }
 
 GROUNDING_MODE_VALUES: tuple[GroundingMode, ...] = ("direct", "mixed", "inferred")
+TRUST_EXECUTION_MODE_VALUES: tuple[TrustExecutionMode, ...] = (
+    "legacy_full_review",
+    "attestation_over_bounded",
+)
 RECOMMENDATION_ADMISSIBILITY_REASON_VALUES: tuple[RecommendationAdmissibilityReason, ...] = (
     "accepted_with_caveat",
     "inferred_grounding",
@@ -165,6 +174,7 @@ class BoundedReviewPolicy:
 @dataclass
 class TrustReviewPolicy:
     max_evidence_refs_per_recommendation: int | None = None
+    execution_mode: TrustExecutionMode = "legacy_full_review"
     require_taxonomy_override_reason: bool = True
     require_verified_evidence_refs_subset: bool = True
     require_affected_file_coverage: bool = True
@@ -307,6 +317,7 @@ def build_analysis_review_contract(
             max_evidence_refs_per_recommendation=(
                 None if mode == "trust" else BoundedReviewPolicy().max_evidence_refs_per_recommendation
             ),
+            execution_mode="legacy_full_review",
             require_taxonomy_override_reason=(mode == "trust"),
             require_verified_evidence_refs_subset=(mode == "trust"),
             require_affected_file_coverage=(mode == "trust"),

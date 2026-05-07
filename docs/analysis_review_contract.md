@@ -60,6 +60,14 @@ The trust policy covers:
 - whether inference-backed acceptance should be downgraded to a caveated acceptance
 - whether late auditor medium-or-higher issues are treated as errors or warnings
 
+## `bounded_attestation_input` handoff
+
+`bounded_attestation_input` is runner-owned. It is not a public deliverable.
+
+This M1 payload exists to freeze the future trust-attestation review object emitted from a finalized bounded run. It intentionally excludes final publication truth such as `analysis_review_status`, `publishability`, `recommendation_admissibility`, and `final_answer_publishable`.
+
+Milestone timing is explicit: M1 emits `bounded_attestation_input`, M2 consumes it. `analysis_review_schema()` remains unchanged in M1, and the handoff uses its own `bounded_attestation_input_schema()` helper.
+
 ## Focus-gate contract
 
 The contract version is now `analysis_review_v1_contract_v10`. Focus gating remains part of the shared analysis-review contract family, but v10 changes the typed public surface enough that the version bump is mandatory.

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import GROUNDING_MODE_VALUES
+from .contracts import (
+    BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+    GROUNDING_MODE_VALUES,
+    TRUST_EXECUTION_MODE_VALUES,
+)
 from .types import VALID_SINGLETON_FOCUS_TYPES
 
 ISSUE_SCHEMA: dict[str, Any] = {
@@ -325,6 +329,137 @@ def _seam_schema(*, reason_field: str) -> dict[str, Any]:
     }
 
 
+NULLABLE_INT_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "null"},
+    ]
+}
+
+
+NULLABLE_RECOMMENDATION_INDEX_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "null"},
+    ]
+}
+
+
+BOUNDED_ATTESTATION_REVIEW_STAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "role_name": {"type": "string"},
+        "round_index": {"type": "integer", "minimum": 0},
+        "issue_count": {"type": "integer", "minimum": 0},
+        "issue_cap": NULLABLE_INT_SCHEMA,
+        "missing_topic_count": {"type": "integer", "minimum": 0},
+        "missing_topic_cap": NULLABLE_INT_SCHEMA,
+        "new_topic_count": {"type": "integer", "minimum": 0},
+        "new_topic_cap": NULLABLE_INT_SCHEMA,
+        "resolved_topic_count": {"type": "integer", "minimum": 0},
+        "carried_forward_topic_count": {"type": "integer", "minimum": 0},
+        "waived_topic_count": {"type": "integer", "minimum": 0},
+        "open_topic_count": {"type": "integer", "minimum": 0},
+        "new_medium_or_higher_issue_count": {"type": "integer", "minimum": 0},
+        "topic_ledger_count": {"type": "integer", "minimum": 0},
+        "new_medium_or_higher_issue_cap": NULLABLE_INT_SCHEMA,
+        "scope_escape_count": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "role_name",
+        "round_index",
+        "issue_count",
+        "issue_cap",
+        "missing_topic_count",
+        "missing_topic_cap",
+        "new_topic_count",
+        "new_topic_cap",
+        "resolved_topic_count",
+        "carried_forward_topic_count",
+        "waived_topic_count",
+        "open_topic_count",
+        "new_medium_or_higher_issue_count",
+        "topic_ledger_count",
+        "new_medium_or_higher_issue_cap",
+        "scope_escape_count",
+    ],
+    "additionalProperties": False,
+}
+
+
+BOUNDED_ATTESTATION_ISSUE_LEDGER_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "issue_id": {"type": "string"},
+        "source_stage_id": {"type": "string"},
+        "first_seen_round": NULLABLE_INT_SCHEMA,
+        "last_seen_round": NULLABLE_INT_SCHEMA,
+        "severity": {"type": "string"},
+        "kind": {"type": "string"},
+        "blocking_class": {"type": "string"},
+        "recommendation_index": NULLABLE_RECOMMENDATION_INDEX_SCHEMA,
+        "title": {"type": "string"},
+        "evidence": {"type": "string"},
+        "repair_hint": {"type": "string"},
+        "why_not_raised_earlier": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        },
+        "resolution_status": {"type": "string"},
+        "resolution_note": {"type": "string"},
+    },
+    "required": [
+        "issue_id",
+        "source_stage_id",
+        "first_seen_round",
+        "last_seen_round",
+        "severity",
+        "kind",
+        "blocking_class",
+        "recommendation_index",
+        "title",
+        "evidence",
+        "repair_hint",
+        "why_not_raised_earlier",
+        "resolution_status",
+        "resolution_note",
+    ],
+    "additionalProperties": False,
+}
+
+
+BOUNDED_ATTESTATION_TOPIC_LEDGER_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "topic_id": {"type": "string"},
+        "title": {"type": "string"},
+        "severity": {"type": "string"},
+        "evidence": {"type": "string"},
+        "recommendation_index": NULLABLE_RECOMMENDATION_INDEX_SCHEMA,
+        "introduced_by": {"type": "string"},
+        "introduced_in_stage_index": NULLABLE_INT_SCHEMA,
+        "resolution_status": {"type": "string"},
+        "resolution_note": {"type": "string"},
+        "resolved_in_stage_index": NULLABLE_INT_SCHEMA,
+    },
+    "required": [
+        "topic_id",
+        "title",
+        "severity",
+        "evidence",
+        "recommendation_index",
+        "introduced_by",
+        "introduced_in_stage_index",
+        "resolution_status",
+        "resolution_note",
+        "resolved_in_stage_index",
+    ],
+    "additionalProperties": False,
+}
+
+
 FOCUS_GATE_CANDIDATE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -628,6 +763,161 @@ def analysis_review_schema() -> dict[str, Any]:
             "actionability_score",
             "scope_compliance_score",
             "confidence",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def bounded_attestation_input_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "schema_version": {
+                "type": "string",
+                "const": BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+            },
+            "source": {
+                "type": "object",
+                "properties": {
+                    "strategy_kind": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["bounded"]},
+                    "analysis_stage_role_name": {"type": "string"},
+                    "analysis_stage_index": {"type": "integer", "minimum": 0},
+                    "bounded_payload_sha256": {"type": "string"},
+                },
+                "required": [
+                    "strategy_kind",
+                    "mode",
+                    "analysis_stage_role_name",
+                    "analysis_stage_index",
+                    "bounded_payload_sha256",
+                ],
+                "additionalProperties": False,
+            },
+            "focus_decision": {
+                "anyOf": [
+                    focus_gate_output_schema(),
+                    {"type": "null"},
+                ]
+            },
+            "contract": {
+                "type": "object",
+                "properties": {
+                    "contract_version": {"type": "string"},
+                    "strategy_kind": {"type": "string"},
+                    "trust_execution_mode": {
+                        "type": "string",
+                        "enum": list(TRUST_EXECUTION_MODE_VALUES),
+                    },
+                },
+                "required": [
+                    "contract_version",
+                    "strategy_kind",
+                    "trust_execution_mode",
+                ],
+                "additionalProperties": False,
+            },
+            "bounded_analysis": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "recommendations": {
+                        "type": "array",
+                        "items": RECOMMENDATION_SCHEMA,
+                        "minItems": 1,
+                    },
+                    "files_reviewed": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "primary_seam": _seam_schema(reason_field="why_primary"),
+                    "secondary_seams_considered": {
+                        "type": "array",
+                        "items": _seam_schema(reason_field="why_not_primary"),
+                    },
+                    "scope_escapes": {
+                        "type": "array",
+                        "items": SCOPE_ESCAPE_SCHEMA,
+                    },
+                },
+                "required": [
+                    "summary",
+                    "recommendations",
+                    "files_reviewed",
+                    "primary_seam",
+                    "secondary_seams_considered",
+                    "scope_escapes",
+                ],
+                "additionalProperties": False,
+            },
+            "review_surface": {
+                "type": "object",
+                "properties": {
+                    "recommendation_count": {"type": "integer", "minimum": 0},
+                    "recommendations_with_review_surface": {
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "review_stages": {
+                        "type": "array",
+                        "items": BOUNDED_ATTESTATION_REVIEW_STAGE_SCHEMA,
+                    },
+                    "scope_escape_count": {"type": "integer", "minimum": 0},
+                },
+                "required": [
+                    "recommendation_count",
+                    "recommendations_with_review_surface",
+                    "review_stages",
+                    "scope_escape_count",
+                ],
+                "additionalProperties": False,
+            },
+            "ledgers": {
+                "type": "object",
+                "properties": {
+                    "issue_ledger": {
+                        "type": "array",
+                        "items": BOUNDED_ATTESTATION_ISSUE_LEDGER_ITEM_SCHEMA,
+                    },
+                    "topic_ledger": {
+                        "type": "array",
+                        "items": BOUNDED_ATTESTATION_TOPIC_LEDGER_ITEM_SCHEMA,
+                    },
+                },
+                "required": ["issue_ledger", "topic_ledger"],
+                "additionalProperties": False,
+            },
+            "provenance_context": {
+                "type": "object",
+                "properties": {
+                    "normalized_ref_count": {"type": "integer", "minimum": 0},
+                    "recommendation_evidence_index": {
+                        "type": "object",
+                        "patternProperties": {
+                            "^[0-9]+$": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            }
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "required": [
+                    "normalized_ref_count",
+                    "recommendation_evidence_index",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "required": [
+            "schema_version",
+            "source",
+            "focus_decision",
+            "contract",
+            "bounded_analysis",
+            "review_surface",
+            "ledgers",
+            "provenance_context",
         ],
         "additionalProperties": False,
     }
