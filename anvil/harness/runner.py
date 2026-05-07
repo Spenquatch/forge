@@ -58,7 +58,12 @@ from .schemas import (
     single_pass_schema,
 )
 from .selection import extract_drafts_from_summary, select_best_draft
-from .semantic_validation import validate_stage_output
+from .semantic_validation import (
+    BOUNDED_ATTESTATION_INPUT_KEY,
+    BOUNDED_ATTESTATION_SCHEMA_VERSION,
+    validate_bounded_attestation_input_payload,
+    validate_stage_output,
+)
 from .topic_lifecycle import (
     partial_accept_topic_eligibility,
     topic_ids_for_status_name,
@@ -305,6 +310,9 @@ class HarnessRunner:
         bounded_review_summary = self._build_bounded_review_summary(run_details)
         if bounded_review_summary is not None:
             run_details["bounded_review_summary"] = bounded_review_summary
+        bounded_attestation_input = self._build_bounded_attestation_input(run_details)
+        if bounded_attestation_input is not None:
+            run_details[BOUNDED_ATTESTATION_INPUT_KEY] = bounded_attestation_input
         analysis_review_status = run_details.get("analysis_review_status")
         if isinstance(analysis_review_status, dict) and analysis_review_status:
             run_details["analysis_review_status"] = analysis_review_status
@@ -388,6 +396,8 @@ class HarnessRunner:
         }
         if bounded_review_summary is not None:
             summary["bounded_review_summary"] = bounded_review_summary
+        if bounded_attestation_input is not None:
+            summary[BOUNDED_ATTESTATION_INPUT_KEY] = bounded_attestation_input
         drafts = extract_drafts_from_summary(summary)
         summary["drafts"] = drafts
         best_draft = select_best_draft(drafts)
@@ -1700,6 +1710,144 @@ class HarnessRunner:
             "scope_escapes": scope_escapes,
         }
 
+    # Freeze the finalized bounded analysis handoff once, then validate it
+    # before it enters summary persistence.
+    def _build_bounded_attestation_input(
+        self, run_details: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        contract_dict = run_details.get("analysis_review_contract")
+        if not isinstance(contract_dict, dict):
+            if self.analysis_review_contract is None:
+                return None
+            contract_dict = self.analysis_review_contract.to_dict()
+        if str(contract_dict.get("mode") or "").strip() != "bounded":
+            return None
+
+        bounded_review_summary = run_details.get("bounded_review_summary")
+        if not isinstance(bounded_review_summary, dict):
+            raise HarnessError(
+                "bounded_attestation_input requires bounded_review_summary in bounded mode."
+            )
+
+        final_analysis = self._resolve_bounded_review_analysis_payload(run_details)
+        final_analysis_stage = self._resolve_final_analysis_stage()
+        if (
+            not isinstance(final_analysis, dict)
+            or not final_analysis
+            or final_analysis_stage is None
+        ):
+            return None
+        analysis_stage_role_name = str(
+            (final_analysis_stage or {}).get("role_name") or ""
+        ).strip()
+        analysis_stage_index = (final_analysis_stage or {}).get("stage_index")
+        if (
+            not isinstance(analysis_stage_index, int)
+            or isinstance(analysis_stage_index, bool)
+            or analysis_stage_index < 0
+        ):
+            analysis_stage_index = self._analysis_stage_round_index(
+                analysis_stage_role_name
+            )
+
+        bounded_analysis = {
+            "summary": str(final_analysis.get("summary") or ""),
+            "recommendations": deepcopy(final_analysis.get("recommendations") or []),
+            "files_reviewed": deepcopy(final_analysis.get("files_reviewed") or []),
+            "primary_seam": deepcopy(final_analysis.get("primary_seam") or {}),
+            "secondary_seams_considered": deepcopy(
+                final_analysis.get("secondary_seams_considered") or []
+            ),
+            "scope_escapes": deepcopy(
+                self._canonical_analysis_scope_escapes(final_analysis)
+            ),
+        }
+        bounded_payload_sha256 = self._sha256_hex_for_json(bounded_analysis)
+        trust_review = (
+            contract_dict.get("trust_review")
+            if isinstance(contract_dict.get("trust_review"), dict)
+            else {}
+        )
+        recommendation_evidence_index = (
+            self._build_bounded_attestation_recommendation_evidence_index(
+                bounded_analysis.get("recommendations") or []
+            )
+        )
+        issue_ledger = run_details.get("issue_ledger")
+        if not isinstance(issue_ledger, list):
+            issue_ledger = self._serialized_issue_ledger()
+        topic_ledger = run_details.get("topic_ledger")
+        if not isinstance(topic_ledger, list):
+            topic_ledger = self._serialized_topic_ledger()
+        flattened_refs: list[str] = []
+        for refs in recommendation_evidence_index.values():
+            flattened_refs.extend(refs)
+        payload = {
+            "schema_version": BOUNDED_ATTESTATION_SCHEMA_VERSION,
+            "source": {
+                "strategy_kind": str(
+                    contract_dict.get("strategy_kind") or self.strategy.kind
+                ),
+                "mode": "bounded",
+                "analysis_stage_role_name": analysis_stage_role_name,
+                "analysis_stage_index": analysis_stage_index,
+                "bounded_payload_sha256": bounded_payload_sha256,
+            },
+            "focus_decision": (
+                deepcopy(run_details.get("focus_decision"))
+                if isinstance(run_details.get("focus_decision"), dict)
+                else None
+            ),
+            "contract": {
+                "contract_version": str(contract_dict.get("contract_version") or ""),
+                "strategy_kind": str(
+                    contract_dict.get("strategy_kind") or self.strategy.kind
+                ),
+                "trust_execution_mode": str(
+                    trust_review.get("execution_mode") or "legacy_full_review"
+                ),
+            },
+            "bounded_analysis": bounded_analysis,
+            "review_surface": {
+                "recommendation_count": bounded_review_summary.get(
+                    "recommendation_count"
+                ),
+                "recommendations_with_review_surface": bounded_review_summary.get(
+                    "recommendations_with_review_surface"
+                ),
+                "review_stages": deepcopy(
+                    bounded_review_summary.get("review_stages") or []
+                ),
+                "scope_escape_count": bounded_review_summary.get(
+                    "scope_escape_count"
+                ),
+            },
+            "ledgers": {
+                "issue_ledger": deepcopy(issue_ledger),
+                "topic_ledger": deepcopy(topic_ledger),
+            },
+            "provenance_context": {
+                "normalized_ref_count": len(
+                    self._dedupe_preserving_order(flattened_refs)
+                ),
+                "recommendation_evidence_index": recommendation_evidence_index,
+            },
+        }
+
+        validation_result = validate_bounded_attestation_input_payload(
+            payload,
+            workspace_paths=capture_workspace_file_inventory(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            ),
+        )
+        if not validation_result.ok:
+            raise HarnessError(
+                "bounded_attestation_input semantic validation failed: "
+                + "; ".join(validation_result.errors)
+            )
+        return payload
+
     def _resolve_bounded_review_analysis_payload(
         self, run_details: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1726,6 +1874,31 @@ class HarnessRunner:
             if stage.get("ok") and isinstance(payload, dict) and payload:
                 return payload
         return {}
+
+    def _build_bounded_attestation_recommendation_evidence_index(
+        self, recommendations: list[dict[str, Any]]
+    ) -> dict[str, list[str]]:
+        evidence_index: dict[str, list[str]] = {}
+        for index, recommendation in enumerate(recommendations, start=1):
+            evidence_index[str(index)] = self._dedupe_preserving_order(
+                self._normalize_workspace_ref_list(
+                    recommendation.get("evidence") if isinstance(recommendation, dict) else []
+                )
+            )
+        return evidence_index
+
+    @staticmethod
+    def _canonical_json_bytes(value: Any) -> bytes:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+    @classmethod
+    def _sha256_hex_for_json(cls, value: Any) -> str:
+        return hashlib.sha256(cls._canonical_json_bytes(value)).hexdigest()
 
     @staticmethod
     def _count_medium_or_higher_review_issues(issues: list[dict[str, Any]]) -> int:
@@ -3750,6 +3923,12 @@ class HarnessRunner:
                         if not issue_id:
                             continue
                         if issue_id in prior_open_issue_ids:
+                            normalized_ids.append(issue_id)
+                            continue
+                        if not prior_open_issue_ids:
+                            if issue_id in current_issue_ids:
+                                dropped_current_stage_ids.append(issue_id)
+                                continue
                             normalized_ids.append(issue_id)
                             continue
                         if issue_id in current_issue_ids:

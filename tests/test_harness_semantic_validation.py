@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,8 +12,10 @@ from anvil.harness.contracts import (
 )
 from anvil.harness.schemas import focus_gate_output_schema
 from anvil.harness.semantic_validation import (
+    BOUNDED_ATTESTATION_SCHEMA_VERSION,
     validate_analysis_output_payload,
     validate_analysis_review_payload,
+    validate_bounded_attestation_input_payload,
     validate_focus_decision_payload,
     validate_stage_output,
 )
@@ -261,6 +264,140 @@ def _focus_decision_payload(
             "adaptation_basis": None,
         }
     return payload
+
+
+def _sha256_hex(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _bounded_attestation_input_payload() -> dict:
+    bounded_analysis = {
+        "summary": "Review the workflow seam and keep recommendations bounded.",
+        "recommendations": [
+            {
+                "classification": "recommendation",
+                "priority": "high",
+                "title": "Align release-watch issue handling",
+                "rationale": "The governing workflow should match the parity spec.",
+                "evidence": [
+                    ".github/workflows/codex-cli-release-watch.yml",
+                    ".github/workflows/claude-code-release-watch.yml",
+                ],
+                "proposed_change": "Align issue handling across the release-watch seam.",
+                "confidence": 0.9,
+                "review_surface": {
+                    "must_check_files": [
+                        ".github/workflows/codex-cli-release-watch.yml",
+                    ],
+                    "optional_check_files": [
+                        ".github/workflows/claude-code-release-watch.yml",
+                    ],
+                    "scope_note": "Stay on the release-watch seam.",
+                },
+            },
+            {
+                "classification": "risk",
+                "priority": "medium",
+                "title": "Document snapshot timeout parity",
+                "rationale": "Timeout settings drift between sibling workflows.",
+                "evidence": [
+                    ".github/workflows/release.yml",
+                ],
+                "proposed_change": "Document the intended timeout parity.",
+                "confidence": 0.72,
+                "review_surface": {
+                    "must_check_files": [
+                        ".github/workflows/release.yml",
+                    ],
+                    "optional_check_files": [
+                        ".github/workflows/nightly.yml",
+                    ],
+                    "scope_note": "Use the sibling workflow only as a parity check.",
+                },
+            },
+        ],
+        "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+            ".github/workflows/release.yml",
+            ".github/workflows/nightly.yml",
+        ],
+        "primary_seam": {
+            "seam_id": canonical_seam_id_for_paths(
+                [".github/workflows/codex-cli-release-watch.yml"]
+            ),
+            "summary": "Primary release-watch seam.",
+            "why_primary": "It is the governing workflow for the requested review.",
+            "paths": [".github/workflows/codex-cli-release-watch.yml"],
+        },
+        "secondary_seams_considered": [
+            {
+                "seam_id": canonical_seam_id_for_paths(
+                    [".github/workflows/claude-code-release-watch.yml"]
+                ),
+                "summary": "Sibling release-watch seam.",
+                "why_not_primary": "It is corroborating parity context only.",
+                "paths": [".github/workflows/claude-code-release-watch.yml"],
+            }
+        ],
+        "scope_escapes": [],
+    }
+    recommendation_evidence_index = {
+        "1": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+        ],
+        "2": [".github/workflows/release.yml"],
+    }
+    return {
+        "schema_version": BOUNDED_ATTESTATION_SCHEMA_VERSION,
+        "source": {
+            "strategy_kind": "analysis_review_bounded_v1",
+            "mode": "bounded",
+            "analysis_stage_role_name": "reviser_round_1",
+            "analysis_stage_index": 3,
+            "bounded_payload_sha256": _sha256_hex(bounded_analysis),
+        },
+        "focus_decision": _focus_decision_payload("selected"),
+        "contract": {
+            "contract_version": "analysis_review_contract_v1",
+            "strategy_kind": "analysis_review_bounded_v1",
+            "trust_execution_mode": "legacy_full_review",
+        },
+        "bounded_analysis": bounded_analysis,
+        "review_surface": {
+            "recommendation_count": 2,
+            "recommendations_with_review_surface": 2,
+            "review_stages": [
+                {
+                    "role_name": "critic",
+                    "round_index": 0,
+                    "scope_escape_count": 0,
+                },
+                {
+                    "role_name": "auditor",
+                    "round_index": 1,
+                    "scope_escape_count": 0,
+                },
+            ],
+            "scope_escape_count": 0,
+        },
+        "ledgers": {
+            "issue_ledger": [],
+            "topic_ledger": [],
+        },
+        "provenance_context": {
+            "normalized_ref_count": 3,
+            "recommendation_evidence_index": recommendation_evidence_index,
+        },
+    }
 
 
 def test_focus_gate_output_schema_exposes_v10_focus_decision_surface():
@@ -2422,3 +2559,174 @@ def test_review_semantic_validation_requires_review_stage_files_reviewed():
 
     assert result.ok is False
     assert "files_reviewed must contain at least 1 non-empty path(s)." in result.errors
+
+
+def test_bounded_attestation_input_semantic_validation_accepts_valid_payload():
+    result = validate_bounded_attestation_input_payload(
+        _bounded_attestation_input_payload(),
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_missing_required_fields():
+    payload = _bounded_attestation_input_payload()
+    payload.pop("schema_version")
+    payload.pop("contract")
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "bounded_attestation_input is missing required field: schema_version"
+        in result.errors
+    )
+    assert "bounded_attestation_input is missing required field: contract" in result.errors
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_wrong_schema_version():
+    payload = _bounded_attestation_input_payload()
+    payload["schema_version"] = "analysis_review_bounded_attestation_input_v0"
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "schema_version must equal analysis_review_bounded_attestation_input_v1; got analysis_review_bounded_attestation_input_v0."
+        in result.errors
+    )
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_invalid_source_mode():
+    payload = _bounded_attestation_input_payload()
+    payload["source"].pop("mode")
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert "source.mode is required." in result.errors
+
+    payload = _bounded_attestation_input_payload()
+    payload["source"]["mode"] = "trust"
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert "source.mode must equal bounded; got trust." in result.errors
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_invalid_trust_execution_mode():
+    payload = _bounded_attestation_input_payload()
+    payload["contract"]["trust_execution_mode"] = "future_mode"
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "contract.trust_execution_mode must be one of ['attestation_over_bounded', 'legacy_full_review']; got future_mode."
+        in result.errors
+    )
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_review_surface_count_mismatch():
+    payload = _bounded_attestation_input_payload()
+    payload["review_surface"]["recommendation_count"] = 1
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "review_surface.recommendation_count must equal len(bounded_analysis.recommendations)."
+        in result.errors
+    )
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_out_of_workspace_refs():
+    payload = _bounded_attestation_input_payload()
+    payload["provenance_context"]["recommendation_evidence_index"]["2"] = [
+        "../outside.py"
+    ]
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "provenance_context.recommendation_evidence_index[2] contains path(s) not present in the workspace snapshot: ../outside.py"
+        in result.errors
+    )
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_forbidden_publication_fields():
+    payload = _bounded_attestation_input_payload()
+    payload["bounded_analysis"]["analysis_review_status"] = {"publishability": "ready"}
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "bounded_attestation_input.bounded_analysis must not contain forbidden publication field 'analysis_review_status'."
+        in result.errors
+    )
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_recommendation_ordering_drift():
+    payload = _bounded_attestation_input_payload()
+    payload["provenance_context"]["recommendation_evidence_index"] = {
+        "1": [".github/workflows/release.yml"],
+        "2": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+        ],
+    }
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "provenance_context.recommendation_evidence_index must preserve bounded_analysis recommendation evidence order without drift."
+        in result.errors
+    )
+
+
+def test_bounded_attestation_input_semantic_validation_rejects_normalized_ref_count_mismatch():
+    payload = _bounded_attestation_input_payload()
+    payload["provenance_context"]["normalized_ref_count"] = 2
+
+    result = validate_bounded_attestation_input_payload(
+        payload,
+        workspace_paths=_workspace_paths(),
+    )
+
+    assert result.ok is False
+    assert (
+        "provenance_context.normalized_ref_count must match the unique normalized evidence refs derived from recommendation_evidence_index."
+        in result.errors
+    )
