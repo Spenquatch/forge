@@ -1,737 +1,392 @@
-# PLAN: Trust Attestation Over Bounded Output, M1 Only
+# PLAN: Trust Attestation Over Bounded Output, M2 Only
 
 Status: ready for implementation
 Branch: `feat/bounded-work-redesign`
 Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260504-211401.md`
-Supersedes: the prior multi-milestone `PLAN.md` on this branch
+Supersedes: the prior M1-only `PLAN.md` on this branch
 
 ## Plan Summary
 
-This plan is only for Milestone 1.
+M1 is closed.
 
-M1 freezes one canonical runner-owned `bounded_attestation_input` payload from an
-already-completed bounded analysis run. The payload exists so a later milestone
-can let trust attest a frozen bounded draft instead of regenerating a second full
-answer lane.
+The repo now has a real `bounded_attestation_input` handoff, but trust still runs
+as a full review lane from raw task + workspace. M2 is the slice that makes the
+new architecture real without touching publication semantics yet:
 
-M1 does not change trust execution, prompts, publication logic, report selection,
-example strategies, or final deliverables. If this slice starts teaching trust
-how to consume the new payload, the scope is wrong.
+- keep `analysis_review_trust_v1` as the public trust strategy kind
+- make `trust_review.execution_mode` a real strategy-level cutover knob
+- for `attestation_over_bounded`, run a bounded producer lane first
+- freeze the producer result into `bounded_attestation_input`
+- run trust as an attestation review over that frozen object
+- keep final artifact selection and publishability logic unchanged for now
+
+If M2 starts rewriting reporting or artifact selection, it is leaking into M3.
+
+## M1 Validation Verdict
+
+M1 landed the right thing.
+
+Evidence from the current branch:
+
+- `build_analysis_review_contract(...)` now serializes
+  `trust_review.execution_mode`, but it is still hardcoded to
+  `legacy_full_review` in [anvil/harness/contracts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:316).
+- bounded runs build and persist the handoff before final summary assembly in
+  [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:311).
+- the handoff builder exists and validates schema + semantics in
+  [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:1716).
+- the handoff is documented as runner-owned and explicitly marked "M1 emits, M2 consumes"
+  in [docs/analysis_review_contract.md](/Users/spensermcconnell/__Active_Code/forge/docs/analysis_review_contract.md:63).
+- trust still does not consume the handoff. The trust path still starts from a raw
+  proposer prompt in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:628).
+
+Validation commands run on this branch:
+
+- `poetry run pytest -q tests/test_harness_runner.py -k "bounded_attestation_input"`
+- `poetry run pytest -q tests/test_harness_semantic_validation.py -k "bounded_attestation_input"`
+- `poetry run pytest -q tests/test_harness_analysis_contract.py -k "bounded_attestation_input or execution_mode or contract_docs_freeze"`
+
+Result: `19 passed`.
 
 ## Success Criteria
 
-M1 is done only when all of these are true:
+M2 is done only when all of these are true:
 
-- bounded analysis runs persist a deterministic `bounded_attestation_input`
-  payload in both `summary["bounded_attestation_input"]` and
-  `summary["run_details"]["bounded_attestation_input"]`
-- the payload is built only from finalized bounded-run state, not from proposer,
-  critic, or partial reviser state
-- the payload has an explicit schema version and deterministic serialization rules
-- repo-local semantic validation fails loudly on missing, contradictory, or
-  out-of-workspace handoff fields
-- existing bounded final artifacts and existing legacy trust behavior remain
-  unchanged
-- no trust execution path reads the new payload yet
+- trust strategies can opt into `trust_review.execution_mode=attestation_over_bounded`
+  without changing the public `analysis_review_trust_v1` strategy kind
+- attestation-mode trust runs produce a bounded source draft internally before trust
+  review begins
+- attestation-mode trust runs persist the frozen `bounded_attestation_input` they
+  actually consumed
+- the final trust run reuses the bounded producer's final analysis payload as the
+  candidate answer source instead of generating a second trust-authored analysis lane
+- trust attestation returns recommendation verdicts, closure proof, and provenance
+  over the bounded draft with dense recommendation coverage
+- legacy trust mode with `execution_mode=legacy_full_review` still behaves exactly
+  like today's trust path
+- `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, `BEST_DRAFT.*`, and
+  `analysis_review_status.publishability` do not require logic changes in M2
 
 ## Step 0: Scope Challenge
 
 ### What already exists
 
-| Sub-problem | Existing code | M1 decision |
+| Sub-problem | Existing code | M2 decision |
 |---|---|---|
-| Shared analysis-review contract | `AnalysisReviewContract` and `TrustReviewPolicy` in `anvil/harness/contracts.py` | Extend the existing contract surface. Do not create a second workflow family. |
-| Final bounded analysis resolution | `Runner._resolve_bounded_review_analysis_payload(...)` in `anvil/harness/runner.py` | Reuse this as the source of truth for finalized bounded output. |
-| Existing bounded review surface summary | `Runner._build_bounded_review_summary(...)` in `anvil/harness/runner.py` | Reuse its finalized-analysis inputs and stage-derived review surface. |
-| Shared review payload schema family | `analysis_review_schema()` in `anvil/harness/schemas.py` | Leave unchanged in M1. Trust output shape is not part of this milestone. |
-| Existing semantic validation helpers | `anvil/harness/semantic_validation.py` | Add one handoff validator here instead of inventing a new validator stack. |
-| Runner summary assembly | final summary construction in `Runner.run()` before `apply_final_artifacts(summary)` | Persist the handoff in the same runner-owned summary assembly path. |
-| Contract docs and doc assertions | `docs/analysis_review_contract.md` and `tests/test_harness_analysis_contract.py` | Document the handoff in the existing contract doc and assert it there. |
-| Strategic backlog intent | `TODOS.md` trust-attestation follow-up | Consume that backlog idea into a concrete M1 implementation slice. |
+| Strategy surface for trust mode | `StrategyConfig` in [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py:645) | Extend strategy parsing so `trust_review.execution_mode` is real input, not dead metadata. |
+| Shared contract field | `TrustReviewPolicy.execution_mode` in [anvil/harness/contracts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:177) | Reuse this exact field. Do not invent a second cutover knob. |
+| Bounded producer lane | `_run_analysis_review_v1(...)` in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:628) | Extract reusable bounded-producer helpers from the current lane instead of building a second producer implementation. |
+| Frozen handoff contract | `_build_bounded_attestation_input(...)` in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:1716) | Reuse the M1 handoff. Do not redesign the payload in M2. |
+| Shared review payload schema | `analysis_review_schema()` in [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:632) | Keep the shared review JSON family. Attestation emits review payloads, not a new review schema family. |
+| Trust prompt guidance | trust policy blocks in [anvil/harness/prompts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:535) | Add attestation-specific prompt builders instead of overloading the bounded proposer/reviser builders with branching prose. |
+| Trust publication truth | `_build_analysis_review_status(...)` and artifact projection in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:2951) and [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py:1470) | Hold this stable in M2. M3 owns publication cutover. |
 
 ### Minimum complete change set
 
-The smallest complete M1 change touches only these surfaces:
+The smallest complete M2 change should touch these surfaces:
 
-1. `anvil/harness/contracts.py`
-2. `anvil/harness/runner.py`
-3. `anvil/harness/schemas.py`
-4. `anvil/harness/semantic_validation.py`
-5. `docs/analysis_review_contract.md`
-6. `tests/test_harness_runner.py`
-7. `tests/test_harness_semantic_validation.py`
-8. `tests/test_harness_analysis_contract.py`
+1. `anvil/harness/types.py`
+2. `anvil/harness/contracts.py`
+3. `anvil/harness/runner.py`
+4. `anvil/harness/prompts.py`
+5. `anvil/harness/semantic_validation.py`
+6. `docs/analysis_review_contract.md`
+7. `examples/harness/strategies/analysis_review_trust_attestation_codex_claude.yaml`
+8. `examples/harness/strategies/analysis_review_trust_attestation_codex_claude_focus_gate_adjudicate.yaml`
+9. `examples/harness/strategies/analysis_review_trust_attestation_codex_claude_focus_gate_deliberate.yaml`
+10. `tests/test_harness_runner.py`
+11. `tests/test_harness_prompt_consistency.py`
+12. `tests/test_harness_semantic_validation.py`
+13. `tests/test_harness_analysis_contract.py`
 
-Do not touch `anvil/harness/prompts.py`, `anvil/harness/report.py`,
-`anvil/harness/reporting.py`, `examples/harness/strategies/`, `README.md`, or
-`tests/test_harness_reporting.py` in M1 unless a failing regression proves this
-plan wrong.
-
-### Complexity check
-
-This slice hits the eight-file smell threshold. That is already enough moving
-parts. The implementation must stay boring:
-
-- one new trust policy field
-- one new schema helper
-- one new runner builder path
-- one new semantic validator entrypoint
-- no new class family
-- no new package
-- no new public artifact file on disk
-
-If the implementation starts growing "attestation managers", "handoff stores",
-or "publication coordinators", stop. That is scope creep disguised as design.
-
-### Search and boring-by-default check
-
-M1 does not need new infrastructure. Reuse:
-
-- the current dataclass-backed contract builder
-- the existing summary assembly path in `Runner.run()`
-- the current schema helper pattern in `anvil/harness/schemas.py`
-- the existing semantic-validation helper style in
-  `anvil/harness/semantic_validation.py`
-- the current pytest organization
-
-This is a harness decomposition slice, not a platform rewrite.
-
-### TODOS cross-reference
-
-`TODOS.md` already contains the relevant strategic follow-up:
-"reshape trust mode into an attestation layer over bounded output." M1 consumes
-that idea. Do not create new TODOs from this plan unless implementation reveals
-follow-up work that is explicitly M2 or M3.
-
-### Completeness check
-
-The complete version is cheap here. Do not ship a half-contract.
-
-M1 must do all of this together:
-
-- build the payload
-- validate it semantically
-- mirror it consistently in summary output
-- document it
-- test deterministic behavior and failure paths
-
-Shipping only the builder without validation, docs, and regression coverage would
-save minutes and cost days later. Not acceptable.
-
-### Distribution check
-
-There is no new binary, package, container, or artifact family in M1.
-Distribution impact is limited to preserving the current CLI and summary output
-shape while adding one new runner-owned payload.
+Avoid touching `anvil/harness/report.py`, `anvil/harness/reporting.py`, and `README.md`
+unless a failing regression proves the plan wrong.
 
 ## Locked Decisions
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| Scope | M1 only, bounded-run handoff freeze | Prevent M2 trust execution work from leaking in early |
-| New contract field | `trust_review.execution_mode` | Minimal diff inside the existing contract surface |
-| Allowed execution-mode literals | `legacy_full_review`, `attestation_over_bounded` | Gives M2 a real cutover knob without inventing a second contract family |
-| Default execution mode | `legacy_full_review` | No behavior change in M1 |
-| Handoff name | `bounded_attestation_input` | Clear, durable, and specific to the future trust handoff |
-| Handoff schema version | `analysis_review_bounded_attestation_input_v1` | Explicit validation and future migration path |
-| Handoff persistence | top-level summary mirror plus `run_details` mirror | Matches existing runner-owned artifact mirroring patterns |
-| New artifact file | none | Keep deliverable vocabulary stable in M1 |
-| Trust consumption | forbidden in M1 | Prevent accidental partial cutover |
-| Publication fields in handoff | forbidden | Runner-owned truth stays runner-owned |
-| README changes | forbidden in M1 | Contract documentation belongs in `docs/analysis_review_contract.md` for this slice |
+| Public trust strategy kind | keep `analysis_review_trust_v1` | Preserve current product surface and examples. |
+| M2 cutover knob | strategy-level `trust_review.execution_mode` | The contract already has this field. Make it real. |
+| Default execution mode | `legacy_full_review` | Existing trust runs must remain stable until the new path is chosen deliberately. |
+| New example strategy shape | add new attestation example YAMLs, leave old trust YAMLs untouched | Compatibility must be explicit, not magical. |
+| Focus gate timing | run once, before bounded production | Trust should attest the same selected focus the bounded producer used. |
+| Producer source of truth | internal bounded producer lane reusing today's bounded flow | One real producer. No duplicate implementation. |
+| Trust attestation output | review payload only, no second trust-authored analysis payload | Trust attests the draft. It does not become a second drafter again. |
+| Final analysis for trust attestation mode | bounded producer `final_analysis` becomes the final answer source | Keeps M2 out of M3 publication and artifact logic. |
+| Handoff persistence | persist `bounded_attestation_input` in attestation-mode trust summaries too | The consumed object must be inspectable after the run. |
+| Publication logic | unchanged in M2 | M3 owns reporting and publication cutover. |
+| Provider surface | no provider wrapper unless the current role request shape truly cannot express attestation prompts | Avoid speculative plumbing. |
 
-## Architecture Overview
+## Runtime Shape
 
-### Runtime shape after M1
-
-```text
-bounded run
-    |
-    v
-final bounded analysis payload
-    |
-    +--> Runner._build_bounded_review_summary(...)
-    |
-    +--> Runner._build_bounded_attestation_input(...)
-             |
-             v
-      run_details["bounded_attestation_input"]
-      summary["bounded_attestation_input"]
-```
-
-Nothing else changes.
-
-Trust still runs exactly the old way in M1.
-
-### Dependency graph
+### Legacy trust path, unchanged
 
 ```text
-contracts.py
-    |
-    v
-runner.py -------> schemas.py
-    |                 |
-    |                 v
-    +----------> semantic_validation.py
-    |
-    v
-summary.json / REPORT.md generation path
+focus gate (optional)
+  ->
+trust proposer
+  ->
+trust critic
+  ->
+trust reviser loop(s)
+  ->
+trust auditor
+  ->
+runner-owned admissibility + publishability
 ```
 
-Important nuance:
-
-- M1 may add the new payload into `summary.json`
-- M1 must not change report selection or publication semantics
-- `apply_final_artifacts(summary)` stays untouched
-
-### Exact runner insertion point
-
-The current final summary path in `Runner.run()` already does this in order:
-
-1. build `bounded_review_summary`
-2. finalize `analysis_review_status` and `focus_decision` into `run_details`
-3. derive `final_answer`
-4. build the `summary` dict
-5. call `apply_final_artifacts(summary)`
-
-M1 inserts the new handoff between steps 1 and 3:
-
-1. build `bounded_review_summary`
-2. build `bounded_attestation_input`
-3. persist `run_details["bounded_attestation_input"]`
-4. build `summary`
-5. mirror `summary["bounded_attestation_input"]`
-6. continue unchanged through `apply_final_artifacts(summary)`
-
-The payload must be built from the same finalized bounded analysis object already
-resolved by `_resolve_bounded_review_analysis_payload(...)`. Do not derive it
-from proposer-only, critic-only, or partial reviser state.
-
-## Canonical `bounded_attestation_input` Contract
-
-### Required top-level shape
+### M2 attestation path
 
 ```text
-bounded_attestation_input
-├── schema_version
-├── source
-├── focus_decision
-├── contract
-├── bounded_analysis
-├── review_surface
-├── ledgers
-└── provenance_context
+focus gate (optional)
+  ->
+bounded producer lane
+  ->
+frozen bounded_attestation_input
+  ->
+trust attestation review
+  ->
+runner-owned admissibility + publishability
 ```
 
-### Required field rules
+### Critical boundary
 
-#### `schema_version`
+The attestation review must not write a second `final_analysis`.
 
-- exact literal: `analysis_review_bounded_attestation_input_v1`
-- centralize this literal in code, do not hand-type it in multiple builders
+In `attestation_over_bounded` mode:
 
-#### `source`
+- `run_details["final_analysis"]` comes from the bounded producer lane
+- `run_details["bounded_attestation_input"]` is the exact frozen object the trust review consumed
+- trust review contributes the final `recommendation_reviews`, `issue_ledger`,
+  `topic_ledger`, provenance, and verdict
 
-- `strategy_kind`
-- `mode`, exact value `bounded`
-- `analysis_stage_role_name`
-- `analysis_stage_index`
-- `bounded_payload_sha256`
-
-`bounded_payload_sha256` is computed from canonical JSON bytes of the
-`bounded_analysis` subsection only, using:
-
-- sorted keys
-- compact separators
-- UTF-8 encoding
-- no dependence on outer summary ordering
-
-#### `focus_decision`
-
-- mirror the runner-normalized `focus_decision` object when present
-- otherwise persist `null`
-- do not re-normalize or re-derive it here
-
-#### `contract`
-
-- `contract_version`
-- `strategy_kind`
-- `trust_execution_mode`
-
-`trust_execution_mode` must serialize the contract field even though M1 never
-consumes it.
-
-#### `bounded_analysis`
-
-Copy from the finalized bounded analysis payload only:
-
-- `summary`
-- `recommendations`
-- `files_reviewed`
-- `primary_seam`
-- `secondary_seams_considered`
-- `scope_escapes`
-
-Recommendation order is canonical here. Do not sort or rewrite it.
-
-#### `review_surface`
-
-Build from the already-computed bounded review summary:
-
-- `recommendation_count`
-- `recommendations_with_review_surface`
-- `review_stages`
-- `scope_escape_count`
-
-Use `bounded_review_summary` as the source of truth for these counts. Do not
-recompute them with a parallel counting implementation unless the summary is
-missing unexpectedly, in which case fail validation instead of silently drifting.
-
-#### `ledgers`
-
-- `issue_ledger`
-- `topic_ledger`
-
-Use `run_details` copies when present. Otherwise reuse the runner's serialized
-ledger helpers.
-
-#### `provenance_context`
-
-- `normalized_ref_count`
-- `recommendation_evidence_index`
-
-`recommendation_evidence_index` is a deterministic mapping from 1-based
-recommendation index string to canonical normalized evidence refs.
-
-Normalization rule:
-
-- use the existing workspace-ref canonicalization path
-- preserve order
-- dedupe preserving order
-
-`normalized_ref_count` is the count of unique normalized refs across the full
-evidence index after order-preserving dedupe.
-
-### Hard invariants
-
-1. Recommendation order is frozen by this payload.
-2. `review_surface.recommendation_count` must equal
-   `len(bounded_analysis.recommendations)`.
-3. `source.mode` must be `bounded`.
-4. `contract.trust_execution_mode` must exist and be one of the allowed literals.
-5. The payload must not contain runner-owned publication state:
-   `analysis_review_status`, `publishability`,
-   `recommendation_admissibility`, `final_answer_publishable`, or any final
-   artifact claim.
-6. The payload must be deterministic for the same finalized bounded analysis
-   input.
-7. For bounded mode, missing or malformed handoff payload is an error, not a
-   warning and not a silent `None`.
+That is the whole game for M2.
 
 ## File-by-File Implementation Plan
 
-### 1. Contract update in `anvil/harness/contracts.py`
+### 1. Strategy parsing in `anvil/harness/types.py`
 
-Add `execution_mode` to `TrustReviewPolicy`:
+Add a small typed strategy config for trust execution:
 
-- allowed values:
+- new `StrategyTrustReviewConfig`
+- allowed key now: `trust_review.execution_mode`
+- allowed literals:
   - `legacy_full_review`
   - `attestation_over_bounded`
-- default value: `legacy_full_review`
 
 Requirements:
 
-- `TrustReviewPolicy.to_dict()` must serialize `execution_mode`
-- `build_analysis_review_contract(...)` must set the field for bounded, trust,
-  and legacy alias strategies
-- `analysis_review_trust_v1` must still resolve `mode == "trust"` in M1
-- `execution_mode` is metadata only in M1, not runtime routing
+- default remains `legacy_full_review`
+- unknown keys under `trust_review` fail loudly
+- `StrategyConfig.to_dict()` round-trips the field
 
-Done when:
+Non-goal:
 
-- contract serialization exposes the field everywhere
-- no existing strategy kind behavior changes
+- do not expose a second task-level trust execution knob in M2
 
-### 2. Schema helper in `anvil/harness/schemas.py`
+### 2. Contract resolution in `anvil/harness/contracts.py`
 
-Add:
-
-- `bounded_attestation_input_schema() -> dict[str, Any]`
+Change `build_analysis_review_contract(...)` so `TrustReviewPolicy.execution_mode`
+comes from the parsed strategy config instead of being hardcoded at
+`legacy_full_review`.
 
 Requirements:
 
-- `additionalProperties = False` at every new object layer
-- `schema_version` required and fixed to the v1 literal
-- `focus_decision` allows `null`
-- `recommendations` must be an array with `minItems = 1`
-- `review_stages`, `issue_ledger`, and `topic_ledger` must always serialize as
-  arrays, even when empty
-- `recommendation_evidence_index` keys are strings and values are string arrays
+- bounded and legacy analysis-review strategies still serialize
+  `legacy_full_review`
+- trust strategies may choose either execution mode
+- `effective_strategy` remains unchanged
 
-Explicit non-goal:
+### 3. Attestation prompt builders in `anvil/harness/prompts.py`
 
-- do not modify `analysis_review_schema()`
+Add dedicated prompt builders for attestation review over the frozen handoff.
 
-### 3. Runner builder in `anvil/harness/runner.py`
+Minimum builder:
 
-Add:
+- `build_trust_attestation_review_prompt(...)`
 
-- `Runner._build_bounded_attestation_input(run_details: dict[str, Any]) -> dict[str, Any] | None`
+Input context must include:
 
-Behavior:
+- `bounded_attestation_input`
+- bounded `focus_decision`
+- bounded review surface summary
+- the current workspace snapshot
+- the trust contract
 
-- return `None` only when there is no contract or `contract.mode != "bounded"`
-- for bounded mode, resolve finalized analysis via
-  `_resolve_bounded_review_analysis_payload(run_details)`
-- consume the existing `bounded_review_summary` from `run_details` if present
-- reuse runner-owned `issue_ledger`, `topic_ledger`, and `focus_decision`
-- derive `recommendation_evidence_index` from finalized recommendation evidence
-- compute `bounded_payload_sha256` from canonical JSON bytes of the
-  `bounded_analysis` subsection
-- validate before persistence
+Prompt rules:
 
-Persistence rules:
+- review the frozen bounded draft, do not regenerate recommendations from scratch
+- return review verdicts for every bounded recommendation index
+- use `recommendation_reviews` as the primary attestation surface
+- use closure-review arrays only for `recommendation_index = null` global proof
+- re-check workspace evidence directly before attesting, do not trust the handoff blindly
+- do not emit a replacement analysis payload
 
-- build the payload once
-- assign the same payload object to `run_details["bounded_attestation_input"]`
-- mirror it into `summary["bounded_attestation_input"]`
-- do not mutate the payload after persistence
+Do not jam this into `build_analysis_critic_prompt(...)`. The jobs are different.
 
-Exact sequencing inside `Runner.run()`:
+### 4. Runner cutover in `anvil/harness/runner.py`
 
-1. build `bounded_review_summary`
-2. write `run_details["bounded_review_summary"]`
-3. build `bounded_attestation_input`
-4. write `run_details["bounded_attestation_input"]`
-5. assemble `summary`
-6. mirror `summary["bounded_attestation_input"]`
-7. continue through draft extraction and `apply_final_artifacts(summary)` unchanged
+Split the current monolithic trust flow into two explicit branches:
+
+- `legacy_full_review` -> existing path
+- `attestation_over_bounded` -> new path
+
+Required extraction:
+
+- one helper for the reusable bounded producer lane
+- one helper for trust attestation review
+
+The new runner shape should look like this:
+
+1. resolve trust contract
+2. run focus gate once
+3. if `legacy_full_review`, keep existing flow
+4. if `attestation_over_bounded`:
+   - derive an internal bounded producer contract
+   - run the bounded producer lane with the existing proposer/critic/reviser/auditor logic
+   - capture its final analysis payload, review summary, and handoff
+   - keep producer stage artifacts logically separate from the final trust attestation stage
+   - reset final trust review state so attestation provenance/status only sees the attestation review stage
+   - run one trust attestation review stage over the frozen handoff
+   - compute final trust `analysis_review_status` from bounded `final_analysis` plus attestation review payload
 
 Guardrails:
 
-- no new public utility module for hashing
-- if a private helper is needed, keep it near
-  `_build_bounded_review_summary(...)`
-- do not change `final_answer`, report rendering, artifact selection, or trust
-  execution branches
+- do not let `_latest_successful_stage(role_names={"critic", "auditor"})` accidentally
+  read bounded-producer review stages as the final trust review stage
+- do not let attestation mode fabricate a second trust-authored `final_analysis`
+- keep `apply_final_artifacts(summary)` untouched in M2
 
-### 4. Semantic validation in `anvil/harness/semantic_validation.py`
+### 5. Semantic validation in `anvil/harness/semantic_validation.py`
 
-Add:
+Add attestation-mode review invariants on top of today's trust validation:
 
-- `validate_bounded_attestation_input_payload(...)`
+- when `contract.mode == "trust"` and
+  `contract.trust_review.execution_mode == "attestation_over_bounded"`:
+  - `recommendation_reviews` must cover every bounded recommendation index densely
+  - no attested recommendation index may exceed the bounded draft length
+  - attestation closure proof must stay scoped to the bounded recommendation universe
+  - provenance refs must still be concrete, normalized, and in-workspace
 
-This validator is for runner-owned persisted state, not model-authored stage
-output. Keep it separate from `validate_stage_output(...)`.
+Validation source of truth:
 
-It must verify:
+- use the bounded handoff's recommendation count and evidence universe
+- do not infer expected coverage from a new trust-authored draft
 
-1. required fields exist
-2. `schema_version` matches the fixed literal
-3. recommendation ordering is dense, stable, and aligned with the bounded
-   analysis list
-4. every evidence ref is normalized and in-workspace
-5. `normalized_ref_count` matches the derived unique normalized refs
-6. every `review_surface` count matches the serialized arrays
-7. forbidden runner-owned publication fields are absent
-8. `source.mode` is `bounded`
-9. `trust_execution_mode` exists and is one of the allowed literals
+### 6. Contract docs in `docs/analysis_review_contract.md`
 
-Failure mode:
+Add one compact subsection for `trust_review.execution_mode`:
 
-- semantic validation error blocks the run and surfaces as a runner failure
-- no best-effort fallback
-- no warning-only mode
+- `legacy_full_review` means today's full trust lane
+- `attestation_over_bounded` means trust reviews the frozen bounded draft
+- the public trust strategy kind does not change
+- M2 keeps publication semantics runner-owned and unchanged
 
-### 5. Contract docs in `docs/analysis_review_contract.md`
+### 7. Example strategies
 
-Add one dedicated subsection for `bounded_attestation_input` that states:
+Add new example strategies instead of mutating the current trust examples:
 
-- it is runner-owned
-- it is not a public deliverable
-- it exists to freeze the future trust-attestation review object
-- it intentionally excludes final publication truth
-- M1 emits it, M2 consumes it
-- `analysis_review_schema()` remains unchanged in M1
+- `analysis_review_trust_attestation_codex_claude.yaml`
+- `analysis_review_trust_attestation_codex_claude_focus_gate_adjudicate.yaml`
+- `analysis_review_trust_attestation_codex_claude_focus_gate_deliberate.yaml`
 
-Do not rewrite broader bounded-vs-trust product docs here. This is a contract
-freeze, not a README storytelling pass.
+Rules:
 
-## Architecture Review
+- same providers and role lineup as current trust examples unless tests prove otherwise
+- set only `trust_review.execution_mode: attestation_over_bounded`
+- leave existing trust YAMLs on `legacy_full_review`
 
-### Module responsibilities
+## Test Plan
 
-| Module | Responsibility in M1 | Must not do |
-|---|---|---|
-| `contracts.py` | declare execution mode and serialize it | route runtime behavior |
-| `schemas.py` | define handoff payload shape | redefine trust review output |
-| `runner.py` | build, validate, and persist the handoff | let trust consume it |
-| `semantic_validation.py` | reject incomplete or contradictory handoffs | silently coerce bad payloads |
-| `docs/analysis_review_contract.md` | explain field ownership and invariants | promise M2 behavior as already landed |
+### Contract and parsing
 
-### Production failure scenario
+Add tests proving:
 
-The real disaster case is recommendation-index drift.
+- strategy parsing accepts and round-trips `trust_review.execution_mode`
+- default remains `legacy_full_review`
+- invalid execution-mode literal fails loudly
 
-If the frozen handoff changes recommendation order, drops evidence refs, or
-serializes mismatched review-surface counts, M2 will later attest the wrong thing
-while looking perfectly structured. That is why M1 treats ordering and evidence
-normalization as hard validation failures, not cleanup work.
+### Runner path coverage
 
-## Code Quality Review
+Add tests proving:
 
-### Guardrails
+- legacy trust strategies still enter the current proposer-first path
+- attestation trust strategies enter bounded producer first
+- attestation trust runs persist `bounded_attestation_input`
+- attestation trust runs reuse bounded `final_analysis`
+- attestation trust provenance/status derives from the attestation review stage, not the bounded producer review stage
 
-- keep the new builder next to `_build_bounded_review_summary(...)`
-- prefer a small private helper over new classes
-- keep naming literal and boring
-- centralize only the truly shared literals that would otherwise drift:
-  `bounded_attestation_input` and
-  `analysis_review_bounded_attestation_input_v1`
-- do not duplicate normalization logic already present in the runner or semantic
-  validator
+### Prompt coverage
 
-### Required implementation rules
+Add tests proving:
 
-1. One canonical builder for `bounded_attestation_input`
-2. One canonical schema helper
-3. One canonical semantic validator entrypoint
-4. No prompt changes in M1
-5. No publication-logic changes in M1
+- attestation prompt text references the frozen handoff explicitly
+- attestation prompt forbids drafting a replacement analysis payload
+- legacy trust prompt text remains unchanged
 
-### Files that may deserve inline ASCII comments
+### Semantic validation
 
-If the builder or validator becomes non-obvious, add a short ASCII pipeline
-comment in:
+Add tests proving:
 
-- `anvil/harness/runner.py` above `_build_bounded_attestation_input(...)`
-- `anvil/harness/semantic_validation.py` above
-  `validate_bounded_attestation_input_payload(...)`
+- missing attestation review coverage for a bounded recommendation fails
+- out-of-range attestation review indices fail
+- malformed closure proof in attestation mode fails
+- legacy trust validation behavior is unchanged
 
-Keep the comments tiny and accurate.
+### Fixture parity matrix
 
-## Test Review
+Minimum parity matrix:
 
-Framework: `pytest`
+1. seam focus, adjudicate path
+2. seam focus, deliberate path
+3. artifact focus, adjudicate path
+4. artifact focus, deliberate path
 
-This repo already has the right test surface. M1 should add targeted coverage,
-not invent a new harness.
+For each case, compare:
 
-### Code path coverage
+- legacy trust
+- attestation trust
 
-```text
-CODE PATH COVERAGE
-==================
-[+] contracts.py
-    |
-    └── TrustReviewPolicy.execution_mode
-        ├── [GAP] default serializes as legacy_full_review
-        ├── [GAP] bounded strategies serialize the field without changing mode
-        └── [GAP] trust strategies serialize the field without changing runtime behavior
+Parity checks:
 
-[+] runner.py
-    |
-    ├── _build_bounded_attestation_input(...)
-    │   ├── [GAP] bounded mode builds payload from finalized analysis
-    │   ├── [GAP] trust mode returns None
-    │   ├── [GAP] focus_decision mirrors normalized runner state or null
-    │   ├── [GAP] top-level and run_details mirrors are byte-equivalent
-    │   └── [GAP] deterministic hash stays stable for identical input
-    |
-    └── summary assembly
-        ├── [GAP] bounded runs persist the new payload before apply_final_artifacts(...)
-        └── [GAP] existing final artifacts stay unchanged
-
-[+] semantic_validation.py
-    |
-    └── validate_bounded_attestation_input_payload(...)
-        ├── [GAP] missing schema_version fails
-        ├── [GAP] invalid trust_execution_mode fails
-        ├── [GAP] review_surface count mismatch fails
-        ├── [GAP] evidence refs outside workspace fail
-        ├── [GAP] forbidden publication fields fail
-        └── [GAP] recommendation ordering drift fails
-
-[+] docs/analysis_review_contract.md
-    |
-    └── contract doc assertions
-        ├── [GAP] new payload is documented as runner-owned
-        └── [GAP] M1 explicitly states analysis_review_schema() is unchanged
-```
-
-### Required test additions
-
-#### `tests/test_harness_runner.py`
-
-Add tests for:
-
-- bounded runs persist `bounded_attestation_input`
-- trust runs do not persist it in M1
-- top-level and `run_details` mirrors are identical when serialized
-- deterministic hashing for identical bounded payloads
-- existing bounded artifact outputs remain unchanged after the new field is added
-- validation failure blocks the run if the builder emits malformed attestation data
-
-#### `tests/test_harness_semantic_validation.py`
-
-Add tests for:
-
-- missing `schema_version`
-- missing `source.mode`
-- non-bounded `source.mode`
-- invalid `trust_execution_mode`
-- recommendation index gaps or reordering
-- mismatched `recommendation_count`
-- mismatched `normalized_ref_count`
-- forbidden publication fields present
-- invalid evidence refs or out-of-workspace normalized refs
-
-#### `tests/test_harness_analysis_contract.py`
-
-Add tests for:
-
-- `trust_review.execution_mode` serializes in bounded, trust, and legacy alias modes
-- the new handoff artifact and its ownership are documented
-- docs explicitly state `analysis_review_schema()` remains unchanged in M1
-
-### Regression rule
-
-Any failure where the new payload changes legacy bounded summary behavior, legacy
-trust behavior, or final artifact selection requires a regression test before the
-change is considered done. No exceptions.
-
-### Test commands
-
-Run at minimum:
-
-```bash
-poetry run pytest -q tests/test_harness_runner.py tests/test_harness_semantic_validation.py tests/test_harness_analysis_contract.py
-```
-
-Then run the full suite before merge:
-
-```bash
-poetry run pytest -q
-```
-
-## Performance Review
-
-This slice is not runtime-heavy, but there are still two ways to make it stupid:
-
-1. re-normalizing evidence refs repeatedly in multiple helpers
-2. serializing large payloads more than once per run just to compute hashes and
-   mirrors
-
-Performance rules:
-
-- canonicalize evidence refs once per attestation build path where possible
-- hash only the `bounded_analysis` subsection, not the whole summary
-- reuse already-resolved final analysis state
-- avoid copying large nested structures more times than necessary
-
-There is no caching work in M1. That would be premature.
+- same `focus_decision`
+- same bounded candidate answer payload
+- same or stricter trust admissibility outcome
+- no regression in final artifact selection
 
 ## Failure Modes Registry
 
-| Surface | Failure mode | Test required | Error handling required | User-visible risk |
-|---|---|---|---|---|
-| Contract | `execution_mode` omitted from serialized contract | yes | fail test | M2 has no trustworthy cutover knob |
-| Builder | handoff built from non-final stage payload | yes | hard fail | later attestation targets the wrong recommendation set |
-| Builder | top-level and `run_details` mirrors diverge | yes | hard fail | debugging becomes unreliable |
-| Validation | recommendation indices drift | yes | hard fail | silent mis-attestation later |
-| Validation | forbidden publishability fields leak into payload | yes | hard fail | runner-owned truth boundary erodes |
-| Validation | evidence refs normalize outside the workspace snapshot | yes | hard fail | future attestation proves the wrong files |
-| Docs | handoff ownership not documented | yes | test failure | later milestones re-litigate the contract |
-
-Critical gap rule:
-
-Any path that allows a malformed handoff to persist without a failing test and a
-failing runtime validation is a release blocker for M1.
-
-## NOT in Scope
-
-- trust prompt changes
-- trust execution path changes
-- `analysis_review_schema()` changes
-- publication logic changes
-- `apply_final_artifacts(...)` changes
-- `REPORT.md` wording changes
-- README storytelling updates
-- example strategy rewiring
-- flipping any default from legacy trust to attestation trust
-- side-by-side parity fixtures between legacy trust and attestation trust
-- removal of the old trust path
-
-Those are M2 or M3. Keep them out.
-
-## Worktree Parallelization Strategy
-
-Sequential implementation would work, but there is one safe parallel window after
-the contract and field names are frozen.
-
-### Dependency table
-
-| Step | Modules touched | Depends on |
+| Failure | Why it matters | M2 defense |
 |---|---|---|
-| A. Lock contract literals and schema shape | `anvil/harness/contracts.py`, `anvil/harness/schemas.py`, `docs/` | — |
-| B. Implement runner builder and summary persistence | `anvil/harness/runner.py` | A |
-| C. Implement validator and validator tests | `anvil/harness/semantic_validation.py`, `tests/` | A |
-| D. Add runner tests and doc assertions, then polish | `tests/`, `docs/`, `anvil/harness/runner.py` | B, C |
+| Execution mode is parsed but ignored | Fake cutover, worst kind of config | explicit branch tests in runner |
+| Attestation path still generates a second trust draft | architecture lie, more complexity not less | forbid second trust-authored `final_analysis` |
+| Bounded producer review stages contaminate final trust provenance | publishability gets computed from the wrong review surface | isolate stage bookkeeping between producer and attestor |
+| Attestation review skips a bounded recommendation index | silent truth gap in final answer eligibility | dense coverage validation |
+| M2 silently changes artifact selection | accidental M3 leak | keep reporting/artifact logic frozen and regression-test it |
 
-### Parallel lanes
+## Not In Scope
 
-- Lane A: Step A, sequential, shared contract and schema surfaces
-- Lane B: Step B, sequential after A, shared runner surface
-- Lane C: Step C, parallel with B after A, mostly validator plus test surface
-- Lane D: Step D, sequential after B and C, final integration and regression pass
+These are explicitly not M2:
 
-### Execution order
+- rewriting `report.py` or `reporting.py`
+- changing `FINAL_ANSWER.*` / `PARTIAL_ANSWER.*` / `BEST_DRAFT.*` semantics
+- changing README product copy
+- retiring the old trust lane
+- removing the M2 compatibility shim from older focus-gate work
+- generalized intent-intake or multi-workflow routing
 
-Launch Lane A first.
+## Done Checklist
 
-Once the field names and schema version are locked, launch Lane B and Lane C in
-parallel worktrees.
+Do not call M2 complete until all of these are true:
 
-Merge B and C, then run Lane D in the main worktree for final test alignment and
-doc assertions.
+- strategy-level `trust_review.execution_mode` is real and tested
+- new attestation example strategies exist
+- attestation-mode trust runs execute bounded producer first
+- attestation-mode trust runs persist and consume `bounded_attestation_input`
+- attestation-mode trust runs do not create a second trust-authored analysis payload
+- legacy trust examples and behavior still work
+- parity matrix covers seam + artifact request-gate cases
+- reporting/artifact selection regressions are absent
 
-### Conflict flags
-
-- Lane A and Lane B both touch `anvil/harness/`, do not parallelize them before
-  the contract names are frozen
-- Lane C and Lane D both touch `tests/test_harness_semantic_validation.py` if D
-  starts too early
-- Lane B and Lane D both touch `tests/test_harness_runner.py`, expect merge
-  pressure if D starts before B settles
-
-## Exit Gate
-
-Do not call M1 complete until all of these are true:
-
-- `TrustReviewPolicy.execution_mode` exists and defaults to
-  `legacy_full_review`
-- `bounded_attestation_input_schema()` exists
-- `Runner._build_bounded_attestation_input(...)` exists and only emits payloads
-  for bounded mode
-- both summary mirrors are identical when serialized
-- semantic validation fails on malformed payloads
-- docs explain ownership and scope correctly
-- targeted tests pass
-- full pytest passes
-- trust execution and publication behavior are unchanged
-
-## Completion Summary
-
-- Step 0: Scope Challenge, scope reduced to M1 only
-- Architecture Review: one new runner-owned handoff, no execution cutover
-- Code Quality Review: no new classes, no new package, no new artifact family
-- Test Review: targeted coverage required in runner, semantic validation, and
-  contract docs
-- Performance Review: minimal overhead, no caching work
-- NOT in scope: written
-- What already exists: written
-- Failure modes: seven concrete failure paths called out
-- Parallelization: four steps, one safe parallel window after contract lock
-
-This is the whole game for M1. Freeze the handoff cleanly, prove it is stable,
-and stop before the trust cutover starts sneaking in.
+That is the exact M2 shape.
