@@ -7,65 +7,64 @@ Supersedes: the prior M1-only `PLAN.md` on this branch
 
 ## Plan Summary
 
-M1 is closed.
+M1 is done. The repo can already emit a runner-owned `bounded_attestation_input`
+payload from bounded runs.
 
-The repo now has a real `bounded_attestation_input` handoff, but trust still runs
-as a full review lane from raw task + workspace. M2 is the slice that makes the
-new architecture real without touching publication semantics yet:
+M2 makes that handoff real for trust mode without changing public strategy kinds,
+artifact semantics, or reporting logic. The entire point is to stop trust from
+behaving like a second full answer generator when the bounded lane already knows
+how to produce the candidate draft.
 
-- keep `analysis_review_trust_v1` as the public trust strategy kind
-- make `trust_review.execution_mode` a real strategy-level cutover knob
-- for `attestation_over_bounded`, run a bounded producer lane first
-- freeze the producer result into `bounded_attestation_input`
-- run trust as an attestation review over that frozen object
-- keep final artifact selection and publishability logic unchanged for now
+This plan keeps one product promise fixed:
 
-If M2 starts rewriting reporting or artifact selection, it is leaking into M3.
+- `analysis_review_trust_v1` remains the public trust strategy kind
+- `trust_review.execution_mode` becomes the internal cutover knob
+- `legacy_full_review` keeps today's trust behavior
+- `attestation_over_bounded` runs bounded production first, freezes the handoff,
+  then runs trust as attestation over that frozen object
+- `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, `BEST_DRAFT.*`, and
+  `analysis_review_status.publishability` remain runner-owned and unchanged in M2
+
+If implementation starts rewriting publication or artifact projection, it has
+left M2 and wandered into M3.
 
 ## M1 Validation Verdict
 
-M1 landed the right thing.
+M1 landed the right prerequisite pieces:
 
-Evidence from the current branch:
+- `build_analysis_review_contract(...)` already serializes
+  `trust_review.execution_mode`, but the value is still effectively fixed at
+  `legacy_full_review`
+- bounded runs already build and persist `bounded_attestation_input`
+- the handoff builder already validates schema plus semantic invariants
+- contract docs already mark the handoff as runner-owned and "M1 emits, M2 consumes"
+- trust still starts from raw task plus workspace and does not consume the handoff yet
 
-- `build_analysis_review_contract(...)` now serializes
-  `trust_review.execution_mode`, but it is still hardcoded to
-  `legacy_full_review` in [anvil/harness/contracts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:316).
-- bounded runs build and persist the handoff before final summary assembly in
-  [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:311).
-- the handoff builder exists and validates schema + semantics in
-  [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:1716).
-- the handoff is documented as runner-owned and explicitly marked "M1 emits, M2 consumes"
-  in [docs/analysis_review_contract.md](/Users/spensermcconnell/__Active_Code/forge/docs/analysis_review_contract.md:63).
-- trust still does not consume the handoff. The trust path still starts from a raw
-  proposer prompt in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:628).
-
-Validation commands run on this branch:
+Validation commands already run on this branch:
 
 - `poetry run pytest -q tests/test_harness_runner.py -k "bounded_attestation_input"`
 - `poetry run pytest -q tests/test_harness_semantic_validation.py -k "bounded_attestation_input"`
 - `poetry run pytest -q tests/test_harness_analysis_contract.py -k "bounded_attestation_input or execution_mode or contract_docs_freeze"`
 
-Result: `19 passed`.
+Result: `19 passed`
 
 ## Success Criteria
 
-M2 is done only when all of these are true:
+M2 is complete only when all of these are true:
 
 - trust strategies can opt into `trust_review.execution_mode=attestation_over_bounded`
-  without changing the public `analysis_review_trust_v1` strategy kind
-- attestation-mode trust runs produce a bounded source draft internally before trust
-  review begins
-- attestation-mode trust runs persist the frozen `bounded_attestation_input` they
-  actually consumed
-- the final trust run reuses the bounded producer's final analysis payload as the
-  candidate answer source instead of generating a second trust-authored analysis lane
-- trust attestation returns recommendation verdicts, closure proof, and provenance
-  over the bounded draft with dense recommendation coverage
-- legacy trust mode with `execution_mode=legacy_full_review` still behaves exactly
-  like today's trust path
-- `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, `BEST_DRAFT.*`, and
-  `analysis_review_status.publishability` do not require logic changes in M2
+  without changing the public `analysis_review_trust_v1` kind
+- attestation-mode trust runs execute the bounded producer lane first
+- the bounded producer lane and the final trust attestation stage remain logically
+  separate in runner state
+- attestation-mode trust runs persist the exact frozen `bounded_attestation_input`
+  they consumed
+- attestation-mode trust uses the bounded producer's `final_analysis` as the final
+  answer source and does not fabricate a second trust-authored analysis payload
+- the final trust review payload contains recommendation verdicts, closure proof,
+  provenance, and final content verdicts over the bounded draft
+- `legacy_full_review` continues to behave exactly like today's trust path
+- final artifact selection and publishability logic remain unchanged in M2
 
 ## Step 0: Scope Challenge
 
@@ -73,34 +72,74 @@ M2 is done only when all of these are true:
 
 | Sub-problem | Existing code | M2 decision |
 |---|---|---|
-| Strategy surface for trust mode | `StrategyConfig` in [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py:645) | Extend strategy parsing so `trust_review.execution_mode` is real input, not dead metadata. |
-| Shared contract field | `TrustReviewPolicy.execution_mode` in [anvil/harness/contracts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/contracts.py:177) | Reuse this exact field. Do not invent a second cutover knob. |
-| Bounded producer lane | `_run_analysis_review_v1(...)` in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:628) | Extract reusable bounded-producer helpers from the current lane instead of building a second producer implementation. |
-| Frozen handoff contract | `_build_bounded_attestation_input(...)` in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:1716) | Reuse the M1 handoff. Do not redesign the payload in M2. |
-| Shared review payload schema | `analysis_review_schema()` in [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py:632) | Keep the shared review JSON family. Attestation emits review payloads, not a new review schema family. |
-| Trust prompt guidance | trust policy blocks in [anvil/harness/prompts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/prompts.py:535) | Add attestation-specific prompt builders instead of overloading the bounded proposer/reviser builders with branching prose. |
-| Trust publication truth | `_build_analysis_review_status(...)` and artifact projection in [anvil/harness/runner.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/runner.py:2951) and [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py:1470) | Hold this stable in M2. M3 owns publication cutover. |
+| Strategy surface for trust mode | `StrategyConfig` in `anvil/harness/types.py` | Extend strategy parsing so `trust_review.execution_mode` is a real input, not dead metadata. |
+| Shared contract field | `TrustReviewPolicy.execution_mode` in `anvil/harness/contracts.py` | Reuse this field. Do not invent a second cutover knob. |
+| Bounded producer lane | `_run_analysis_review_v1(...)` in `anvil/harness/runner.py` | Extract reusable bounded-producer helpers from the current lane instead of building a second producer implementation. |
+| Frozen handoff contract | `_build_bounded_attestation_input(...)` in `anvil/harness/runner.py` | Reuse the M1 handoff unchanged except where M2 must consume it. |
+| Shared review payload schema | `analysis_review_schema()` in `anvil/harness/schemas.py` | Keep the shared review JSON family. Attestation emits a review payload, not a new schema family. |
+| Existing trust review semantics | prompt and validation rules in `anvil/harness/prompts.py` and `anvil/harness/semantic_validation.py` | Reuse the trust review payload shape. Add an attestation-specific prompt builder instead of overloading bounded reviewer prompts. |
+| Runner-owned publication truth | `apply_final_artifacts(...)` in `anvil/harness/reporting.py` plus status assembly in `anvil/harness/runner.py` | Hold this stable in M2. No reporting rewrite. |
 
-### Minimum complete change set
+### Complexity verdict
 
-The smallest complete M2 change should touch these surfaces:
+This slice legitimately touches more than 8 files. That is not scope creep here.
+The cutover crosses config parsing, contract resolution, runner orchestration,
+prompts, validation, examples, docs, and tests. Anything smaller would leave a fake
+knob or an untested branch.
 
-1. `anvil/harness/types.py`
-2. `anvil/harness/contracts.py`
-3. `anvil/harness/runner.py`
-4. `anvil/harness/prompts.py`
-5. `anvil/harness/semantic_validation.py`
-6. `docs/analysis_review_contract.md`
-7. `examples/harness/strategies/analysis_review_trust_attestation_codex_claude.yaml`
-8. `examples/harness/strategies/analysis_review_trust_attestation_codex_claude_focus_gate_adjudicate.yaml`
-9. `examples/harness/strategies/analysis_review_trust_attestation_codex_claude_focus_gate_deliberate.yaml`
-10. `tests/test_harness_runner.py`
-11. `tests/test_harness_prompt_consistency.py`
-12. `tests/test_harness_semantic_validation.py`
-13. `tests/test_harness_analysis_contract.py`
+The constraint is not "few files at any cost." The constraint is "few new moving
+parts." M2 should introduce:
 
-Avoid touching `anvil/harness/report.py`, `anvil/harness/reporting.py`, and `README.md`
-unless a failing regression proves the plan wrong.
+- zero new provider abstractions
+- zero new schema families
+- zero reporting changes
+- at most two new runner-local helper seams
+- one new prompt builder
+
+### Search/build verdict
+
+Use the harness shapes already on disk. Do not roll custom infrastructure where the
+repo already has the primitive:
+
+- contract resolution already exists
+- bounded handoff validation already exists
+- final artifact selection already exists
+- trust review payload validation already exists
+
+This is a refactor of orchestration, not a platform expansion.
+
+### TODOS cross-reference
+
+`TODOS.md` already contains the exact follow-up this slice now implements:
+"reshape trust mode into an attestation layer over bounded output." That item is no
+longer backlog once M2 starts. Other backlog items remain deferred:
+
+- generalized intent-intake
+- trust-vs-bounded product reshaping beyond this single cutover
+- report UX polish
+- richer provenance or audit artifacts
+
+### Completeness verdict
+
+Do the complete M2, not a shortcut. That means:
+
+- real strategy parsing
+- real runner branch cutover
+- real attestation prompt path
+- real semantic validation
+- real regression coverage
+
+What does not count as complete:
+
+- hardcoding attestation mode in examples only
+- attaching bounded payloads to trust summaries without actually consuming them
+- treating the bounded producer as an undocumented subroutine
+
+### Distribution check
+
+No new binary, package, container image, or external distribution surface is
+introduced here. Distribution is unchanged. No CI or publish-pipeline work is needed
+for M2.
 
 ## Locked Decisions
 
@@ -109,18 +148,19 @@ unless a failing regression proves the plan wrong.
 | Public trust strategy kind | keep `analysis_review_trust_v1` | Preserve current product surface and examples. |
 | M2 cutover knob | strategy-level `trust_review.execution_mode` | The contract already has this field. Make it real. |
 | Default execution mode | `legacy_full_review` | Existing trust runs must remain stable until the new path is chosen deliberately. |
-| New example strategy shape | add new attestation example YAMLs, leave old trust YAMLs untouched | Compatibility must be explicit, not magical. |
-| Focus gate timing | run once, before bounded production | Trust should attest the same selected focus the bounded producer used. |
 | Producer source of truth | internal bounded producer lane reusing today's bounded flow | One real producer. No duplicate implementation. |
-| Trust attestation output | review payload only, no second trust-authored analysis payload | Trust attests the draft. It does not become a second drafter again. |
-| Final analysis for trust attestation mode | bounded producer `final_analysis` becomes the final answer source | Keeps M2 out of M3 publication and artifact logic. |
-| Handoff persistence | persist `bounded_attestation_input` in attestation-mode trust summaries too | The consumed object must be inspectable after the run. |
+| Focus gate timing | run once, before bounded production | Trust must attest the same selected focus the producer used. |
+| Attestation review shape | one trust attestation review stage, not a second proposer/reviser/auditor lane | Trust is attesting the frozen draft, not generating a new one. |
+| Final analysis in attestation mode | bounded producer `final_analysis` becomes the final answer source | Keeps M2 out of M3 publication and artifact logic. |
+| Handoff persistence | persist `bounded_attestation_input` in attestation-mode trust summaries | The consumed object must be inspectable after the run. |
 | Publication logic | unchanged in M2 | M3 owns reporting and publication cutover. |
 | Provider surface | no provider wrapper unless the current role request shape truly cannot express attestation prompts | Avoid speculative plumbing. |
 
-## Runtime Shape
+## Architecture Review
 
-### Legacy trust path, unchanged
+### Current runtime shape
+
+Legacy trust today still behaves like a full review lane:
 
 ```text
 focus gate (optional)
@@ -136,7 +176,9 @@ trust auditor
 runner-owned admissibility + publishability
 ```
 
-### M2 attestation path
+That shape is expensive and conceptually wrong for the product distinction we want.
+
+### Target runtime shape for M2
 
 ```text
 focus gate (optional)
@@ -150,18 +192,112 @@ trust attestation review
 runner-owned admissibility + publishability
 ```
 
-### Critical boundary
+### Branch split inside `anvil/harness/runner.py`
 
-The attestation review must not write a second `final_analysis`.
+```text
+_run_analysis_review_v1()
+  |
+  +-- resolve contract
+  +-- run focus gate once
+  +-- if mode != trust:
+  |     -> keep existing bounded path
+  |
+  +-- if mode == trust and execution_mode == legacy_full_review:
+  |     -> keep existing trust full-review path
+  |
+  +-- if mode == trust and execution_mode == attestation_over_bounded:
+        -> derive bounded producer contract
+        -> run bounded producer helper
+        -> freeze/persist bounded_attestation_input
+        -> reset final-review stage selection to attestation phase only
+        -> run trust attestation review helper
+        -> compute final status from bounded final_analysis + attestation review payload
+```
 
-In `attestation_over_bounded` mode:
+### Module boundary plan
 
-- `run_details["final_analysis"]` comes from the bounded producer lane
-- `run_details["bounded_attestation_input"]` is the exact frozen object the trust review consumed
-- trust review contributes the final `recommendation_reviews`, `issue_ledger`,
-  `topic_ledger`, provenance, and verdict
+| Module | Responsibility in M2 | Must stay out of scope |
+|---|---|---|
+| `anvil/harness/types.py` | parse and round-trip `trust_review.execution_mode` | no new task-level knob |
+| `anvil/harness/contracts.py` | resolve execution mode into the contract | no new public strategy kind |
+| `anvil/harness/prompts.py` | build one dedicated attestation review prompt | no branching prose jammed into bounded critic/auditor prompts |
+| `anvil/harness/runner.py` | branch orchestration, bounded producer reuse, stage isolation, final status assembly | no reporting rewrite, no second trust-authored analysis payload |
+| `anvil/harness/semantic_validation.py` | enforce dense attestation coverage and bounded-universe invariants | no new validation model family |
+| `docs/analysis_review_contract.md` | document execution modes and M2 ownership boundaries | no M3 publication redesign |
 
-That is the whole game for M2.
+### Runner-local helper plan
+
+Keep the implementation boring. The runner needs two explicit helper seams:
+
+1. A bounded producer helper that reuses today's proposer/critic/reviser/auditor
+   flow and returns:
+   - bounded `final_analysis`
+   - bounded review summary
+   - frozen `bounded_attestation_input`
+   - stage metadata needed to prevent final-review contamination
+
+2. A trust attestation review helper that:
+   - takes the frozen handoff plus current workspace snapshot
+   - runs one trust attestation review stage
+   - returns the final review payload used to compute trust status
+
+Do not create a generic subgraph framework. Do not create a new runner class.
+This is one branch split inside the existing harness runner.
+
+### Required invariants
+
+These are hard rules, not suggestions:
+
+1. In `attestation_over_bounded`, `run_details["final_analysis"]` must come from the
+   bounded producer result.
+2. In `attestation_over_bounded`, `run_details["bounded_attestation_input"]` must be
+   the exact frozen object passed to the trust attestation review stage.
+3. In `attestation_over_bounded`, the final trust review payload must not include a
+   second trust-authored answer draft.
+4. Final-stage selectors such as `_latest_successful_stage(...)` must not accidentally
+   read bounded producer critic/auditor stages as the final trust review stage.
+5. `apply_final_artifacts(summary)` stays untouched in M2.
+6. Legacy trust mode remains byte-for-byte compatible at the contract and artifact
+   level unless a regression test proves current behavior was already wrong.
+
+### Production failure scenarios to defend
+
+| Codepath | Real failure | Required defense |
+|---|---|---|
+| Strategy parsing | execution mode silently ignored | parser tests plus contract serialization tests |
+| Runner branch cutover | trust still enters proposer-first path in attestation mode | branch-selection runner tests |
+| Stage resolution | bounded producer review stages contaminate final trust provenance | explicit phase tagging or equivalent runner-local filtering |
+| Attestation review | attestor emits verdicts for only a subset of recommendations | dense recommendation coverage validation |
+| Final artifact assembly | summary uses bounded `final_analysis` but trust review from wrong stage | final status regression tests |
+
+## Code Quality Guardrails
+
+### Minimal-diff rules
+
+- Keep new logic inside existing files unless a test fixture becomes impossible to
+  express cleanly.
+- Prefer new small helpers over new classes.
+- Keep naming explicit: "bounded producer", "attestation review", "execution mode".
+  No cute abstractions.
+- Reuse the current review payload shape. Attestation is a different prompt, not a
+  different data family.
+
+### DRY rules
+
+- No duplicate bounded producer implementation.
+- No duplicate execution-mode source of truth.
+- No duplicate artifact-selection logic.
+- No duplicate recommendation-coverage validation logic if the existing trust-mode
+  validators can be reused with bounded-universe inputs.
+
+### File-level expectations
+
+- `anvil/harness/runner.py` may grow new helpers, but the public control flow should
+  remain readable from `_run_analysis_review_v1(...)`.
+- `anvil/harness/prompts.py` should gain a dedicated
+  `build_trust_attestation_review_prompt(...)` builder.
+- Existing critic/auditor builders should not gain mode-specific prose branches for
+  attestation behavior.
 
 ## File-by-File Implementation Plan
 
@@ -170,7 +306,7 @@ That is the whole game for M2.
 Add a small typed strategy config for trust execution:
 
 - new `StrategyTrustReviewConfig`
-- allowed key now: `trust_review.execution_mode`
+- allow `trust_review.execution_mode`
 - allowed literals:
   - `legacy_full_review`
   - `attestation_over_bounded`
@@ -183,80 +319,67 @@ Requirements:
 
 Non-goal:
 
-- do not expose a second task-level trust execution knob in M2
+- do not expose a second task-level trust execution knob
 
 ### 2. Contract resolution in `anvil/harness/contracts.py`
 
-Change `build_analysis_review_contract(...)` so `TrustReviewPolicy.execution_mode`
-comes from the parsed strategy config instead of being hardcoded at
-`legacy_full_review`.
+Change `build_analysis_review_contract(...)` so
+`TrustReviewPolicy.execution_mode` comes from parsed strategy config instead of
+being effectively fixed at `legacy_full_review`.
 
 Requirements:
 
-- bounded and legacy analysis-review strategies still serialize
-  `legacy_full_review`
+- bounded and legacy strategies still serialize `legacy_full_review`
 - trust strategies may choose either execution mode
-- `effective_strategy` remains unchanged
+- `effective_strategy` stays unchanged
 
-### 3. Attestation prompt builders in `anvil/harness/prompts.py`
+### 3. Attestation prompt builder in `anvil/harness/prompts.py`
 
-Add dedicated prompt builders for attestation review over the frozen handoff.
+Add `build_trust_attestation_review_prompt(...)`.
 
-Minimum builder:
-
-- `build_trust_attestation_review_prompt(...)`
-
-Input context must include:
+Required prompt inputs:
 
 - `bounded_attestation_input`
-- bounded `focus_decision`
-- bounded review surface summary
-- the current workspace snapshot
-- the trust contract
+- the bounded `focus_decision`
+- bounded review-surface summary
+- current workspace snapshot
+- the resolved trust contract
 
 Prompt rules:
 
 - review the frozen bounded draft, do not regenerate recommendations from scratch
-- return review verdicts for every bounded recommendation index
-- use `recommendation_reviews` as the primary attestation surface
+- return one `recommendation_reviews` verdict for every bounded recommendation index
 - use closure-review arrays only for `recommendation_index = null` global proof
-- re-check workspace evidence directly before attesting, do not trust the handoff blindly
+- re-check workspace evidence directly before attesting
 - do not emit a replacement analysis payload
-
-Do not jam this into `build_analysis_critic_prompt(...)`. The jobs are different.
 
 ### 4. Runner cutover in `anvil/harness/runner.py`
 
-Split the current monolithic trust flow into two explicit branches:
+Split the current trust path into two explicit branches:
 
 - `legacy_full_review` -> existing path
 - `attestation_over_bounded` -> new path
 
-Required extraction:
-
-- one helper for the reusable bounded producer lane
-- one helper for trust attestation review
-
-The new runner shape should look like this:
+Required shape:
 
 1. resolve trust contract
 2. run focus gate once
 3. if `legacy_full_review`, keep existing flow
 4. if `attestation_over_bounded`:
-   - derive an internal bounded producer contract
-   - run the bounded producer lane with the existing proposer/critic/reviser/auditor logic
-   - capture its final analysis payload, review summary, and handoff
-   - keep producer stage artifacts logically separate from the final trust attestation stage
-   - reset final trust review state so attestation provenance/status only sees the attestation review stage
+   - derive an internal bounded producer contract from the resolved trust contract
+   - run the bounded producer helper with the existing bounded proposer/reviewer loop
+   - capture bounded `final_analysis`, bounded review summary, and the frozen handoff
+   - persist `bounded_attestation_input` on the final trust summary
+   - isolate producer-stage bookkeeping from the final trust attestation stage
    - run one trust attestation review stage over the frozen handoff
-   - compute final trust `analysis_review_status` from bounded `final_analysis` plus attestation review payload
+   - compute final trust `analysis_review_status` from bounded `final_analysis` plus
+     the attestation review payload
 
 Guardrails:
 
-- do not let `_latest_successful_stage(role_names={"critic", "auditor"})` accidentally
-  read bounded-producer review stages as the final trust review stage
+- do not let final stage selectors pick bounded producer review stages
 - do not let attestation mode fabricate a second trust-authored `final_analysis`
-- keep `apply_final_artifacts(summary)` untouched in M2
+- keep `apply_final_artifacts(summary)` untouched
 
 ### 5. Semantic validation in `anvil/harness/semantic_validation.py`
 
@@ -264,15 +387,16 @@ Add attestation-mode review invariants on top of today's trust validation:
 
 - when `contract.mode == "trust"` and
   `contract.trust_review.execution_mode == "attestation_over_bounded"`:
-  - `recommendation_reviews` must cover every bounded recommendation index densely
-  - no attested recommendation index may exceed the bounded draft length
-  - attestation closure proof must stay scoped to the bounded recommendation universe
-  - provenance refs must still be concrete, normalized, and in-workspace
+  - `recommendation_reviews` must densely cover every bounded recommendation index
+  - no attested index may exceed the bounded draft length
+  - closure proof must stay scoped to the bounded recommendation universe
+  - provenance refs must remain concrete, normalized, and in-workspace
 
 Validation source of truth:
 
-- use the bounded handoff's recommendation count and evidence universe
-- do not infer expected coverage from a new trust-authored draft
+- use the frozen handoff's recommendation count and evidence universe
+- do not infer expected coverage from a new trust-authored draft because that draft
+  must not exist
 
 ### 6. Contract docs in `docs/analysis_review_contract.md`
 
@@ -281,7 +405,7 @@ Add one compact subsection for `trust_review.execution_mode`:
 - `legacy_full_review` means today's full trust lane
 - `attestation_over_bounded` means trust reviews the frozen bounded draft
 - the public trust strategy kind does not change
-- M2 keeps publication semantics runner-owned and unchanged
+- publication semantics remain runner-owned and unchanged in M2
 
 ### 7. Example strategies
 
@@ -297,42 +421,114 @@ Rules:
 - set only `trust_review.execution_mode: attestation_over_bounded`
 - leave existing trust YAMLs on `legacy_full_review`
 
-## Test Plan
+## Test Review
 
-### Contract and parsing
+### Test framework and execution
+
+This repo already uses `pytest`. M2 stays inside the existing Python test surface.
+There is no separate external eval harness required for this slice. Prompt behavior
+is locked with prompt-consistency tests, not a new eval subsystem.
+
+### Code path coverage diagram
+
+```text
+CODE PATH COVERAGE
+===========================
+[+] anvil/harness/types.py
+    |
+    └── StrategyConfig trust_review.execution_mode
+        ├── default -> legacy_full_review
+        ├── explicit attestation_over_bounded
+        └── invalid literal / unknown key failure
+
+[+] anvil/harness/contracts.py
+    |
+    └── build_analysis_review_contract(...)
+        ├── bounded strategy -> mode=bounded, execution_mode=legacy_full_review
+        ├── trust strategy + legacy mode
+        └── trust strategy + attestation mode
+
+[+] anvil/harness/runner.py
+    |
+    └── _run_analysis_review_v1(...)
+        ├── bounded mode -> unchanged
+        ├── trust + legacy_full_review -> unchanged
+        └── trust + attestation_over_bounded
+            ├── focus gate once
+            ├── bounded producer helper
+            ├── frozen bounded_attestation_input persisted
+            ├── final_analysis reused from bounded producer
+            ├── trust attestation review stage
+            └── final status/provenance resolves from attestation stage only
+
+[+] anvil/harness/prompts.py
+    |
+    └── build_trust_attestation_review_prompt(...)
+        ├── references frozen handoff explicitly
+        ├── demands dense recommendation verdict coverage
+        └── forbids replacement analysis payload
+
+[+] anvil/harness/semantic_validation.py
+    |
+    └── attestation-mode coverage validation
+        ├── missing recommendation index -> fail
+        ├── out-of-range index -> fail
+        ├── malformed closure proof -> fail
+        └── legacy trust validation -> unchanged
+
+[+] anvil/harness/reporting.py
+    |
+    └── apply_final_artifacts(...)
+        └── regression coverage only, no code changes
+```
+
+### Required tests by file
+
+#### `tests/test_harness_analysis_contract.py`
 
 Add tests proving:
 
 - strategy parsing accepts and round-trips `trust_review.execution_mode`
 - default remains `legacy_full_review`
-- invalid execution-mode literal fails loudly
+- invalid execution-mode literals fail loudly
+- trust strategies may serialize `attestation_over_bounded` without changing
+  `effective_strategy`
 
-### Runner path coverage
-
-Add tests proving:
-
-- legacy trust strategies still enter the current proposer-first path
-- attestation trust strategies enter bounded producer first
-- attestation trust runs persist `bounded_attestation_input`
-- attestation trust runs reuse bounded `final_analysis`
-- attestation trust provenance/status derives from the attestation review stage, not the bounded producer review stage
-
-### Prompt coverage
+#### `tests/test_harness_prompt_consistency.py`
 
 Add tests proving:
 
-- attestation prompt text references the frozen handoff explicitly
-- attestation prompt forbids drafting a replacement analysis payload
+- the attestation prompt references the frozen handoff explicitly
+- the attestation prompt requires dense recommendation coverage
+- the attestation prompt forbids drafting a replacement analysis payload
 - legacy trust prompt text remains unchanged
 
-### Semantic validation
+#### `tests/test_harness_runner.py`
 
-Add tests proving:
+Add runner-path tests proving:
+
+- legacy trust still enters the proposer-first path
+- attestation trust enters bounded producer first
+- attestation trust runs persist `bounded_attestation_input`
+- attestation trust runs reuse bounded `final_analysis`
+- final provenance and final review-stage selection resolve from the attestation
+  stage, not the bounded producer review stages
+
+#### `tests/test_harness_semantic_validation.py`
+
+Add validation tests proving:
 
 - missing attestation review coverage for a bounded recommendation fails
 - out-of-range attestation review indices fail
 - malformed closure proof in attestation mode fails
 - legacy trust validation behavior is unchanged
+
+#### Existing reporting regression coverage
+
+Do not add reporting code changes, but run the existing reporting tests to prove no
+artifact-selection regression slipped in:
+
+- `poetry run pytest -q tests/test_harness_reporting.py -k "apply_final_artifacts"`
 
 ### Fixture parity matrix
 
@@ -355,28 +551,108 @@ Parity checks:
 - same or stricter trust admissibility outcome
 - no regression in final artifact selection
 
+### Validation commands for M2
+
+- `poetry run pytest -q tests/test_harness_analysis_contract.py -k "execution_mode or trust_review"`
+- `poetry run pytest -q tests/test_harness_prompt_consistency.py -k "attestation or trust"`
+- `poetry run pytest -q tests/test_harness_runner.py -k "attestation or bounded_attestation_input"`
+- `poetry run pytest -q tests/test_harness_semantic_validation.py -k "attestation or bounded_attestation_input"`
+- `poetry run pytest -q tests/test_harness_reporting.py -k "apply_final_artifacts"`
+
 ## Failure Modes Registry
 
-| Failure | Why it matters | M2 defense |
-|---|---|---|
-| Execution mode is parsed but ignored | Fake cutover, worst kind of config | explicit branch tests in runner |
-| Attestation path still generates a second trust draft | architecture lie, more complexity not less | forbid second trust-authored `final_analysis` |
-| Bounded producer review stages contaminate final trust provenance | publishability gets computed from the wrong review surface | isolate stage bookkeeping between producer and attestor |
-| Attestation review skips a bounded recommendation index | silent truth gap in final answer eligibility | dense coverage validation |
-| M2 silently changes artifact selection | accidental M3 leak | keep reporting/artifact logic frozen and regression-test it |
+| Failure mode | Test coverage required | Error handling required | User-visible risk if missed |
+|---|---|---|---|
+| Execution mode parses but runner ignores it | runner branch test | explicit branch selection based on contract mode + execution mode | fake cutover, operators think trust changed when it did not |
+| Attestation mode emits a second trust-authored draft | runner test plus prompt-consistency test | hard guard that final analysis comes from bounded producer | architecture drift, more complexity, misleading summaries |
+| Producer review stages contaminate final trust provenance | runner stage-selection test | isolate producer and attestation phases in runner-local stage bookkeeping | wrong publishability decision from the wrong review surface |
+| Attestation reviewer skips one recommendation index | semantic-validation test | dense coverage invariant keyed to bounded handoff length | silent truth gap in final answer eligibility |
+| Attestation review references non-workspace evidence | semantic-validation test | normalized path and evidence subset validation | false provenance claims |
+| M2 changes final artifact selection | reporting regression test | no code changes in reporting path | accidental M3 leak and user-facing artifact drift |
+
+Critical gap rule for M2: any failure mode with no test and no runner-side defense
+blocks completion.
+
+## Performance and Operational Notes
+
+- Token/runtime goal: attestation mode should be cheaper than legacy trust because it
+  removes the second full trust generation lane.
+- Memory/summary goal: the summary should carry one bounded final analysis plus one
+  trust review payload, not two parallel answer drafts.
+- Operational goal: the frozen handoff must be inspectable in saved summaries so
+  replay/debugging can explain exactly what trust attested.
+
+## What Already Exists
+
+Reuse, do not rebuild:
+
+- bounded producer proposer/critic/reviser/auditor loop
+- bounded handoff builder and validator
+- trust review payload schema and most trust validation rules
+- runner-owned final artifact projection
+
+If implementation starts cloning these into new helpers with slightly different
+names, stop. That is duplication, not progress.
 
 ## Not In Scope
 
 These are explicitly not M2:
 
-- rewriting `report.py` or `reporting.py`
-- changing `FINAL_ANSWER.*` / `PARTIAL_ANSWER.*` / `BEST_DRAFT.*` semantics
+- rewriting `anvil/harness/report.py` or `anvil/harness/reporting.py`
+- changing `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, or `BEST_DRAFT.*` semantics
 - changing README product copy
 - retiring the old trust lane
-- removing the M2 compatibility shim from older focus-gate work
 - generalized intent-intake or multi-workflow routing
+- richer provenance artifacts beyond the existing frozen handoff
+- new provider wrappers, orchestration frameworks, or schema families
 
-## Done Checklist
+## Worktree Parallelization Strategy
+
+### Dependency table
+
+| Step | Modules touched | Depends on |
+|---|---|---|
+| 1. Strategy/config surface | `anvil/harness/types.py`, `anvil/harness/contracts.py`, `tests/test_harness_analysis_contract.py` | — |
+| 2. Attestation prompt + validation surface | `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_semantic_validation.py` | Step 1 contract shape |
+| 3. Runner cutover | `anvil/harness/runner.py`, `tests/test_harness_runner.py` | Step 1 contract shape, Step 2 prompt/validation interface |
+| 4. Docs + example strategies | `docs/analysis_review_contract.md`, `examples/harness/strategies/` | Step 1 finalized knob name |
+| 5. Regression sweep | `tests/test_harness_reporting.py` execution only, full pytest selection | Steps 2-4 |
+
+### Parallel lanes
+
+Lane A: Step 1 -> Step 4  
+Sequential because both steps depend on the final knob name and public config shape.
+
+Lane B: Step 2  
+Independent after Step 1. Prompt/validation work can proceed in parallel with docs/examples.
+
+Lane C: Step 3  
+Starts after Step 2 interface is stable. Sequential inside the lane because all real
+orchestration risk is concentrated in `anvil/harness/runner.py`.
+
+Lane D: Step 5  
+Launch after A, B, and C merge. This is the proof lane.
+
+### Execution order
+
+1. Land Step 1 first. It defines the only allowed config surface.
+2. Launch Lane A Step 4 and Lane B Step 2 in parallel worktrees.
+3. Once Step 2 is stable, launch Lane C Step 3.
+4. Merge A + B + C.
+5. Run Lane D as the final regression sweep.
+
+### Conflict flags
+
+- Lane B and Lane C both touch `anvil/harness/` and both influence runner-facing
+  semantics. Coordinate on prompt/validation interfaces before Lane C starts.
+- All runner work belongs in one lane. Do not split `anvil/harness/runner.py` across
+  multiple worktrees.
+- Test files may be edited in parallel only if ownership is explicit:
+  - contract tests -> Step 1 owner
+  - prompt/semantic tests -> Step 2 owner
+  - runner tests -> Step 3 owner
+
+## Definition of Done
 
 Do not call M2 complete until all of these are true:
 
@@ -385,8 +661,9 @@ Do not call M2 complete until all of these are true:
 - attestation-mode trust runs execute bounded producer first
 - attestation-mode trust runs persist and consume `bounded_attestation_input`
 - attestation-mode trust runs do not create a second trust-authored analysis payload
-- legacy trust examples and behavior still work
-- parity matrix covers seam + artifact request-gate cases
+- attestation-mode trust reuse of bounded `final_analysis` is covered by tests
+- parity matrix covers seam + artifact focus-gate cases
 - reporting/artifact selection regressions are absent
+- the final summary still reads like one system, not two partially merged lanes
 
 That is the exact M2 shape.
