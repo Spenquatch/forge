@@ -54,6 +54,21 @@ def _sanitize_run_details_for_report(run_details: dict[str, Any]) -> dict[str, A
                 else None
             ),
         }
+    if "focus_refinement" in sanitized:
+        focus_refinement = sanitized.get("focus_refinement")
+        sanitized["focus_refinement"] = {
+            "rendered_in_report_section": True,
+            "status": (
+                focus_refinement.get("status")
+                if isinstance(focus_refinement, dict)
+                else None
+            ),
+            "trigger_reason": (
+                focus_refinement.get("trigger_reason")
+                if isinstance(focus_refinement, dict)
+                else None
+            ),
+        }
     return sanitized
 
 
@@ -104,6 +119,18 @@ def _focus_decision(summary: dict[str, Any]) -> dict[str, Any]:
     focus_decision = run_details.get("focus_decision")
     if isinstance(focus_decision, dict) and focus_decision:
         return focus_decision
+    return {}
+
+
+def _focus_refinement(summary: dict[str, Any]) -> dict[str, Any]:
+    run_details = summary.get("run_details") or {}
+    focus_refinement = run_details.get("focus_refinement")
+    if isinstance(focus_refinement, dict) and focus_refinement:
+        return focus_refinement
+    failure_details = summary.get("failure_details") or {}
+    focus_refinement = failure_details.get("focus_refinement")
+    if isinstance(focus_refinement, dict) and focus_refinement:
+        return focus_refinement
     return {}
 
 
@@ -672,6 +699,11 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         ranked_candidates[1][1] if len(ranked_candidates) > 1 else None
     )
     adapter_plan = focus_decision.get("adapter_plan") or {}
+    focus_refinement = _focus_refinement(summary)
+    refinement_status = str(focus_refinement.get("status") or "").strip()
+    refinement_trigger_reason = str(
+        focus_refinement.get("trigger_reason") or ""
+    ).strip()
 
     lines.append("## Focus Decision")
     lines.append("")
@@ -694,6 +726,68 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         "- Checked files: "
         + _render_plain_focus_list(focus_decision.get("checked_files"))
     )
+    if refinement_status == "applied":
+        lines.append("- Focus refinement: `auto-refined and continued`")
+    elif refinement_status == "exhausted":
+        lines.append("- Focus refinement: `refinement exhausted`")
+    if refinement_trigger_reason:
+        lines.append(f"- Refinement trigger reason: `{refinement_trigger_reason}`")
+    if refinement_status:
+        lines.append(
+            "- Refinement source focus ID: "
+            + (
+                f"`{focus_refinement.get('source_selected_focus_id')}`"
+                if str(focus_refinement.get("source_selected_focus_id") or "").strip()
+                else "none"
+            )
+        )
+        lines.append(
+            "- Refinement source focus paths: "
+            + _render_plain_focus_list(
+                focus_refinement.get("source_selected_focus_paths")
+            )
+        )
+        lines.append(
+            "- Refinement candidate shortlist: "
+            + _render_plain_focus_list(
+                focus_refinement.get("candidate_shortlist_ids")
+            )
+        )
+        lines.append(
+            "- Refinement attempted candidates: "
+            + _render_plain_focus_list(
+                focus_refinement.get("attempted_candidate_ids")
+            )
+        )
+        rejected_candidates = [
+            item
+            for item in (focus_refinement.get("rejected_candidates") or [])
+            if isinstance(item, dict)
+        ]
+        if rejected_candidates:
+            lines.append("- Refinement rejected candidates:")
+            for item in rejected_candidates:
+                rejected_focus_id = str(item.get("focus_id") or "unknown").strip()
+                rejection_reason = str(item.get("reason") or "unknown").strip()
+                lines.append(
+                    f"  - `{rejected_focus_id}`: `{rejection_reason}`"
+                )
+        else:
+            lines.append("- Refinement rejected candidates: none")
+        lines.append(
+            "- Refinement selected candidate ID: "
+            + (
+                f"`{focus_refinement.get('selected_candidate_id')}`"
+                if str(focus_refinement.get("selected_candidate_id") or "").strip()
+                else "none"
+            )
+        )
+        lines.append(
+            "- Refinement selected candidate paths: "
+            + _render_plain_focus_list(
+                focus_refinement.get("selected_candidate_paths")
+            )
+        )
 
     if decision_state == "selected":
         lines.append(
@@ -739,7 +833,40 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         )
     elif decision_state == "no_viable_focus":
         lines.append("- Viable focus identified: `no`")
-        if stale_warnings:
+        if refinement_status == "exhausted":
+            exhausted_reason = str(
+                focus_refinement.get("exhausted_reason") or ""
+            ).strip()
+            if exhausted_reason:
+                lines.append(f"- Refinement exhausted reason: `{exhausted_reason}`")
+            lines.append(
+                "- Rerun guidance: rerun with one of these files_hint slices"
+            )
+            rerun_guidance = [
+                item
+                for item in (focus_refinement.get("rerun_guidance") or [])
+                if isinstance(item, dict)
+            ]
+            if rerun_guidance:
+                for index, item in enumerate(rerun_guidance, start=1):
+                    focus_id = str(item.get("focus_id") or "unknown").strip()
+                    score = item.get("score")
+                    score_text = ""
+                    if isinstance(score, (int, float)) and not isinstance(score, bool):
+                        score_text = f" (`{float(score):.2f}`)"
+                    candidate_paths = _render_plain_focus_list(
+                        item.get("candidate_paths")
+                    )
+                    why_candidate = str(item.get("why_candidate") or "").strip()
+                    detail = (
+                        f"  - `{index}`. `{focus_id}`{score_text}: {candidate_paths}"
+                    )
+                    if why_candidate:
+                        detail += f" — {why_candidate}"
+                    lines.append(detail)
+            else:
+                lines.append("  - none")
+        elif stale_warnings:
             lines.append(
                 "- Blocking outcome: no clarification question was emitted because the prior rerun answer went stale and the gate could not safely continue."
             )
