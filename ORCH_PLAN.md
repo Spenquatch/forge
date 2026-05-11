@@ -1,4 +1,4 @@
-# ORCH_PLAN: M4 Bounded Work Redesign
+# ORCH_PLAN: Repo Surface Cleanup Pass
 
 ## Summary
 
@@ -6,232 +6,225 @@ Repository: `/Users/spensermcconnell/__Active_Code/forge`
 Base branch: `feat/bounded-work-redesign`  
 Primary source of truth: `/Users/spensermcconnell/__Active_Code/forge/PLAN.md`
 
-This orchestration plan replaces the stale trust-cutover orchestration with the branch-accurate plan for the bounded work redesign.
+This orchestration plan replaces the stale bounded-work `ORCH_PLAN.md` with the
+branch-accurate execution plan for the repo-surface cleanup pass.
 
 What this branch must deliver:
 
-- keep `adjudicate` and `deliberate` public paths unchanged
-- change only initial deliberate seam handling
-- when the probe already surfaced a threshold-valid narrower seam candidate and the selected seam is too broad, the runner should try up to two narrower shortlist candidates from `focus_probe.candidates`
-- continue automatically if one narrowed candidate survives validation
-- stop before proposer with actionable exhausted-refinement `no_viable_focus` plus rerun guidance if none survive
-- preserve ambiguity handling, artifact deliberate behavior, and stale rerun-answer hardening
-- keep the public `focus_decision` contract within `selected | clarification_requested | no_viable_focus`
+- rewrite the canonical docs surfaces
+- add `docs/contributing.md`
+- add `docs/project_management/README.md` plus the required directory scaffold
+- move root historical and future markdown files under
+  `docs/project_management/`
+- update `tests/test_harness_analysis_contract.py` for the moved notes path
+- add `tests/test_docs_surface.py`
+- move `PLAN.md` only in the final cleanup slice
 
-This milestone is `M4A bounded-work redesign`. There is no follow-on `M4B` in this orchestration. The parent agent owns planning, sequencing, contract freeze, integration, conflict resolution, and final verification. The parent is the only integrator.
+This is not a harness/runtime behavior change. The parent agent owns planning,
+sequencing, worker packets, integration, conflict resolution, gate reruns, and
+final acceptance. The parent is the only integrator.
 
 ## Orchestration Runtime Policy
 
 Parent runtime policy:
 
-- Parent owns kickoff, interface freeze, worktree creation, worker packets, gate review, merge decisions, conflict resolution, and final acceptance.
-- Parent is the only integrator.
-- Parent is the only agent allowed to merge, rebase for integration, resolve conflicts, or approve scope changes.
-- Parent keeps the critical path local for the runner contract, all gate reruns, and the final regression sweep.
+- Parent re-reads `PLAN.md` at every phase boundary.
+- Parent freezes lane ownership, authority rules, and verification commands
+  before dispatch.
+- Parent is the only agent allowed to merge, rebase for integration, resolve
+  conflicts, or widen scope.
+- Parent reruns every lane gate in the integration worktree before accepting a
+  merge.
+- Parent keeps the critical path local for moved-path correctness, audit
+  reruns, and final `PLAN.md` relocation.
 
 Worker runtime policy:
 
-- Every worker runs on `GPT-5.4` with `reasoning_effort=high`.
-- Workers execute only their assigned lane, owned files, acceptance commands, and frozen invariants.
-- Workers do not make scope decisions, merge decisions, or public-contract decisions.
+- Only `WS-A` and `WS-B` run as worker lanes.
+- Workers execute only their owned files, frozen invariants, and lane commands.
+- Workers do not move root historical files, touch tests, or change runtime
+  code.
 
 Concurrency policy:
 
 - Maximum concurrent worker lanes: `2`
-- Default concurrency window:
-  - `WS-A` runs first alone
-  - `WS-B` and `WS-C` run in parallel only after `WS-A` is merged and the parent publishes `contract-freeze.md`
-- Final regression is parent-only
+- Parallel window: `WS-A` and `WS-B` only
+- `WS-C`, `WS-D`, and `WS-E` remain parent-local because they are path-coupled,
+  depend on active root `PLAN.md` authority, and require immediate audit reruns
+  in the integration worktree.
 
 ## Hard Guards
 
-1. `PLAN.md` is authoritative. If this file and `PLAN.md` disagree, follow `PLAN.md`.
-2. Scope is limited to deliberate seam bounded refinement on the initial run only.
-3. `adjudicate` behavior must remain unchanged.
-4. `deliberate` public path vocabulary must remain unchanged.
-5. `focus_decision.decision_state` must remain within `selected | clarification_requested | no_viable_focus`.
-6. `focus_decision.question` contract must remain unchanged.
-7. Do not touch `anvil/harness/prompts.py`.
-8. Do not touch `anvil/harness/schemas.py`.
-9. Do not touch `tests/test_harness_semantic_validation.py`.
-10. Do not touch `tests/test_harness_prompt_consistency.py`.
-11. Refinement applies only when all eligibility conditions from `PLAN.md` hold:
-   - `gate_path == deliberate`
-   - `focus_type == seam`
-   - `decision_state == selected`
-   - `focus_gate_answer is None`
-   - `focus_probe` exists and `_resolve_focus_probe_state(...)` returned a threshold-valid winner
-   - `selected_focus_id` already matches the runner-computed valid winner
-   - the selected seam is broad under the locked broadness triggers
-12. True probe ambiguity must stay on the current clarification or `no_viable_focus` path. This milestone does not change probe thresholds or auto-pick from ambiguous shortlists.
-13. Retry budget is hard-capped at `2` narrowed seam attempts.
-14. Refinement candidates must come from `focus_probe.candidates`, not from the public `focus_decision.candidates`, not from a new search, and not from a new provider call.
-15. No second probe stage, no second deliberate prompt, and no recursive search loop may be introduced.
-16. Broadness and ambiguity are separate concepts in both code and docs.
-17. Metadata must stay runner-owned under `run_details.focus_refinement` and, for blocked exhausted runs, mirrored under `failure_details.focus_refinement`.
-18. Exhausted broad-seam refinement must normalize to actionable `no_viable_focus` with ranked rerun guidance, not a fake clarification question.
-19. Artifact deliberate behavior must remain unchanged.
-20. Stale rerun-answer hardening must remain unchanged.
-21. Prompt or schema widening is out of scope. If required, stop and reopen planning.
-22. The parent is the only integrator and the only agent allowed to merge, rebase for integration, resolve conflicts, or change lane ownership.
+1. If this file and `PLAN.md` disagree, follow `PLAN.md`.
+2. Scope is limited to repo-surface cleanup. No runtime behavior changes under
+   `anvil/`.
+3. `README.md` is the canonical front door and must describe current reality
+   only.
+4. `docs/roadmap.md` is the only canonical roadmap body.
+5. root `roadmap.md` must be a short pointer only and must not carry roadmap
+   body prose.
+6. `docs/contributing.md` is the canonical contributor entry point once added.
+7. `docs/project_management/README.md` must explain active plan vs history vs
+   future and must not become a second front door.
+8. Historical docs may receive only light framing or path fixes; no substantive
+   historical rewrites.
+9. Do not touch `docs/project_management/adrs/`.
+10. Do not clean up `archived/`.
+11. Do not rename packages, modules, or the branch.
+12. Do not introduce symlinks, redirect machinery, generated docs tooling, or
+    path shims.
+13. Root `PLAN.md` remains authoritative and stays in place until the final
+    relocation phase.
+14. The only code/test changes in scope are:
+    - `tests/test_harness_analysis_contract.py`
+    - `tests/test_docs_surface.py` (new)
+15. Lane sequencing is locked:
+    - `WS-A` and `WS-B` in parallel
+    - `WS-C` after both are merged
+    - `WS-D` after `WS-C`
+    - `WS-E` last
+16. If any lane needs a runtime change, harness contract change, ADR rewrite,
+    or `archived/` cleanup to pass, stop and reopen planning.
+17. The parent is the only integrator.
 
 ## Parent Critical Path
 
-The parent owns the critical path and advances phases in order.
-
 | Phase | Tasks | Owner | Mode | Exit Gate |
 |---|---|---|---|---|
-| Phase A: Kickoff and Freeze | `task/m4-a1` to `task/m4-a5` | Parent | Strictly serialized | Invariants, state root, worktrees, and launch packets frozen |
-| Phase B: Runner Core and Contract Freeze | `task/m4-b1` | WS-A under parent control | Strictly serialized | `gate/m4a-runner-contract` |
-| Phase C: Parallel Dependent Lanes | `task/m4-c1`, `task/m4-c2` | WS-B and WS-C | Parallel after Phase B | `gate/m4a-reporting`, `gate/m4a-docs-acceptance` |
-| Phase D: Parent Integration | `task/m4-d1` to `task/m4-d4` | Parent | Strictly serialized | Integrated tree matches scope and all lane gates rerun cleanly |
-| Phase E: Final Regression and Acceptance | `task/m4-e1` to `task/m4-e3` | Parent | Strictly serialized | `gate/m4a-targeted-regressions`, `gate/m4a-acceptance`, `gate/m4-complete` |
+| Phase A: Kickoff and Freeze | `task/repo-a1` to `task/repo-a6` | Parent | Strictly serialized | invariants frozen, snapshots captured, state root initialized, worker packets dispatched |
+| Phase B: Parallel Worker Lanes | `task/repo-b1`, `task/repo-b2` | `WS-A`, `WS-B` under parent control | Parallel | `gate/canonical-docs`, `gate/pm-scaffold` |
+| Phase C: Parent Local History/Future Moves | `task/repo-c1` | Parent | Strictly serialized | `gate/history-moves` |
+| Phase D: Parent Local Regression Protection | `task/repo-d1` | Parent | Strictly serialized | `gate/docs-regression` |
+| Phase E: Parent Local Final Plan Relocation | `task/repo-e1`, `task/repo-e2` | Parent | Strictly serialized | `gate/final-root-cleanup`, `gate/repo-surface-complete` |
+
+### Kickoff Tasks
+
+| Task ID | Purpose | Owner | Gate |
+|---|---|---|---|
+| `task/repo-a1-read-authority` | Re-read `PLAN.md`, current `ORCH_PLAN.md`, `README.md`, `docs/roadmap.md`, `AGENTS.md`, and the path-coupled test section | Parent | Parent can restate scope, authority rules, and lane order exactly |
+| `task/repo-a2-freeze-invariants` | Freeze hard guards, file ownership, lane commands, merge order, and blocker protocol | Parent | invariants recorded |
+| `task/repo-a3-capture-snapshots` | Capture `PLAN.md` and the stale pre-replacement `ORCH_PLAN.md` into the orchestration state root | Parent | authoritative inputs preserved |
+| `task/repo-a4-create-state-root` | Create the repo-local orchestration state root and initialize queue/state/sentinel layout | Parent | state root exists |
+| `task/repo-a5-create-worktrees` | Create worker worktrees and branches for `WS-A` and `WS-B` | Parent | worker worktrees exist and are clean |
+| `task/repo-a6-dispatch-workers` | Write and issue narrow worker packets for `WS-A` and `WS-B` | Parent | both workers dispatched |
+
+### Merge and Verification Tasks
+
+| Task ID | Purpose | Owner | Gate |
+|---|---|---|---|
+| `task/repo-b1-canonical-docs` | Canonical docs rewrite lane | `WS-A` | `gate/canonical-docs` |
+| `task/repo-b2-pm-scaffold` | Project-management scaffold lane | `WS-B` | `gate/pm-scaffold` |
+| `task/repo-b3-verify-merge-ws-b` | Parent reruns `WS-B` gate in integration worktree and accepts/merges | Parent | `WS-B` merged |
+| `task/repo-b4-verify-merge-ws-a` | Parent reruns `WS-A` gate in integration worktree and accepts/merges | Parent | `WS-A` merged |
+| `task/repo-c1-history-and-future-moves` | Parent performs moved-file slice and verifies root/path state | Parent | `gate/history-moves` |
+| `task/repo-d1-regression-protection` | Parent updates tests, adds docs-surface regression, and reruns audits | Parent | `gate/docs-regression` |
+| `task/repo-e1-final-plan-relocation` | Parent moves `PLAN.md` last and reruns validations | Parent | `gate/final-root-cleanup` |
+| `task/repo-e2-record-final-verdict` | Parent records green or blocked completion verdict | Parent | `gate/repo-surface-complete` |
 
 ### Launch Order
 
-1. `task/m4-a1-read-authority`
-2. `task/m4-a2-freeze-invariants`
-3. `task/m4-a3-create-state-root`
-4. `task/m4-a4-create-worktrees`
-5. `task/m4-a5-dispatch-ws-a`
-6. `task/m4-b1-runner-refinement-core`
-7. Parent reviews `WS-A`, reruns the gate, merges it, and writes `contract-freeze.md`
-8. Dispatch `WS-B` and `WS-C` in parallel
-9. Merge `WS-B`
-10. Merge `WS-C`
-11. Run parent-only final regression and acceptance sweep
+1. `task/repo-a1-read-authority`
+2. `task/repo-a2-freeze-invariants`
+3. `task/repo-a3-capture-snapshots`
+4. `task/repo-a4-create-state-root`
+5. `task/repo-a5-create-worktrees`
+6. `task/repo-a6-dispatch-workers`
+7. Parent reruns `WS-B` gate in the integration worktree, then merges `WS-B`
+8. Parent reruns `WS-A` gate in the integration worktree, then merges `WS-A`
+9. Parent runs `task/repo-c1-history-and-future-moves`
+10. Parent runs `task/repo-d1-regression-protection`
+11. Parent runs `task/repo-e1-final-plan-relocation`
+12. Parent runs `task/repo-e2-record-final-verdict`
 
 ### Merge Order
 
 The merge order is fixed:
 
-1. `WS-A` runner refinement core
-2. `WS-B` report rendering
-3. `WS-C` docs and acceptance surfaces
-4. Parent-only final regression and acceptance on the integrated tree
+1. `WS-B` project-management scaffold
+2. `WS-A` canonical docs rewrite
+3. parent-local `WS-C` history/future moves
+4. parent-local `WS-D` regression protection
+5. parent-local `WS-E` final `PLAN.md` relocation
 
-### Phase Tasks
+For `WS-A` and `WS-B`, merge acceptance requires:
 
-| Task ID | Purpose | Owner | Gate |
-|---|---|---|---|
-| `task/m4-a1-read-authority` | Re-read `PLAN.md`, current `ORCH_PLAN.md`, and the minimum affected repo surfaces | Parent | Parent can restate branch boundaries exactly |
-| `task/m4-a2-freeze-invariants` | Freeze ownership, forbidden surfaces, retry budget, contract boundary, lane gates, and blocker protocol | Parent | `invariants.md` written |
-| `task/m4-a3-create-state-root` | Create repo-local orchestration state root and sentinel layout | Parent | State root exists and is initialized |
-| `task/m4-a4-create-worktrees` | Create sibling worktrees and branches | Parent | All planned worktrees exist and are clean |
-| `task/m4-a5-dispatch-ws-a` | Write and issue the narrow WS-A handoff packet | Parent | WS-A dispatched |
-| `task/m4-b1-runner-refinement-core` | Land runner helpers, deliberate hardening rewrite, and metadata persistence | WS-A | `gate/m4a-runner-contract` |
-| `task/m4-c1-report-rendering` | Render refined success and exhausted refinement truthfully in `REPORT.md` output | WS-B | `gate/m4a-reporting` |
-| `task/m4-c2-docs-and-acceptance` | Align contract docs, live acceptance manifests, and acceptance tests to the new deliberate behavior | WS-C | `gate/m4a-docs-acceptance` |
-| `task/m4-d1-merge-ws-a` | Merge WS-A and rerun its gate in the integration worktree | Parent | WS-A merged |
-| `task/m4-d2-refresh-ws-b-and-ws-c-if-needed` | Rebase or reopen dependent lanes if merged WS-A changed any frozen strings or scenario names | Parent | Dependent lanes confirmed against merged A |
-| `task/m4-d3-merge-ws-b` | Merge reporting lane and rerun its gate | Parent | WS-B merged |
-| `task/m4-d4-merge-ws-c` | Merge docs/acceptance lane and rerun its gate | Parent | WS-C merged |
-| `task/m4-e1-targeted-regression-sweep` | Run the required targeted validation commands on the integrated tree | Parent | `gate/m4a-targeted-regressions` |
-| `task/m4-e2-acceptance-checklist-review` | Verify the branch against the full acceptance checklist from `PLAN.md` | Parent | `gate/m4a-acceptance` |
-| `task/m4-e3-final-verdict` | Record green or blocked milestone verdict | Parent | `gate/m4-complete` |
+- worker reports ready
+- parent reruns the lane gate in the integration worktree
+- parent confirms owned-file boundaries were respected
+- parent merges only after the rerun passes cleanly
 
 ## Orchestration State and Source of Truth
 
-The parent maintains one repo-local orchestration state root for the full run:
+State root:
 
-- `.runs/m4-bounded-work-redesign-orch/`
+- `.runs/repo-surface-cleanup-orch/`
 
 Required layout:
 
-- `.runs/m4-bounded-work-redesign-orch/queue.md`
-- `.runs/m4-bounded-work-redesign-orch/state.json`
-- `.runs/m4-bounded-work-redesign-orch/invariants.md`
-- `.runs/m4-bounded-work-redesign-orch/contract-freeze.md`
-- `.runs/m4-bounded-work-redesign-orch/session.log`
-- `.runs/m4-bounded-work-redesign-orch/handoffs/`
-- `.runs/m4-bounded-work-redesign-orch/gates/`
-- `.runs/m4-bounded-work-redesign-orch/logs/`
-- `.runs/m4-bounded-work-redesign-orch/sentinels/`
-- `.runs/m4-bounded-work-redesign-orch/acceptance/`
+- `.runs/repo-surface-cleanup-orch/queue.md`
+- `.runs/repo-surface-cleanup-orch/state.json`
+- `.runs/repo-surface-cleanup-orch/invariants.md`
+- `.runs/repo-surface-cleanup-orch/session.log`
+- `.runs/repo-surface-cleanup-orch/inputs/PLAN.snapshot.md`
+- `.runs/repo-surface-cleanup-orch/inputs/ORCH_PLAN.active.md`
+- `.runs/repo-surface-cleanup-orch/inputs/ORCH_PLAN.stale.md`
+- `.runs/repo-surface-cleanup-orch/handoffs/`
+- `.runs/repo-surface-cleanup-orch/gates/`
+- `.runs/repo-surface-cleanup-orch/sentinels/`
+- `.runs/repo-surface-cleanup-orch/acceptance/`
 
 ### File Roles
 
 - `queue.md`
-  - Canonical task table with one row per `task/m4-*`
-  - Tracks owner, state, gate, reopen reason, and merge status
+  - canonical task table for `task/repo-*`
+  - tracks owner, state, gate, blocker status, and merge status
 - `state.json`
-  - Current phase, active lanes, branch names, blockers, merge state, and final verdict
+  - current phase, active lanes, worktree paths, branch names, blockers, and
+    final verdict
 - `invariants.md`
-  - Frozen scope, ownership boundaries, forbidden surfaces, commands, and gate definitions
-- `contract-freeze.md`
-  - Parent-accepted `focus_refinement` payload shape and canonical strings after WS-A gate
-  - Authoritative source for WS-B and WS-C before they start work
+  - frozen hard guards, ownership boundaries, merge order, and exact gate
+    commands
 - `session.log`
-  - Parent-only sequential log of dispatches, readiness, blockers, merges, reopen events, and final decisions
-- `handoffs/task-m4-*.md`
-  - Narrow worker packet plus parent-accepted return summary for each lane
+  - parent-only sequential log of dispatches, ready notices, gate reruns,
+    merges, blockers, and final decisions
+- `inputs/PLAN.snapshot.md`
+  - frozen worker/reference copy of the active root `PLAN.md`
+- `inputs/ORCH_PLAN.active.md`
+  - this orchestration plan as the continuing execution guide after root
+    `ORCH_PLAN.md` leaves the root surface
+- `inputs/ORCH_PLAN.stale.md`
+  - preserved pre-replacement stale orchestration content for later historical
+    archiving
+- `handoffs/task-repo-*.md`
+  - narrow worker packet plus parent-accepted return summary for `WS-A` and
+    `WS-B`
 - `gates/*.md`
-  - Parent gate results with exact commands and verdicts
+  - parent gate results with exact commands, outputs, and green/blocked verdicts
 - `acceptance/`
-  - Final command outputs, acceptance notes, and any rerun guidance wording snapshots used during review
+  - final command outputs, audit results, moved-file verification notes, and
+    completion checklist evidence
 
-### Frozen Contract Snapshot
+### Source-of-Truth Order
 
-`contract-freeze.md` must capture the runner contract that downstream lanes rely on. At minimum it must freeze:
-
-- `focus_refinement` top-level keys
-- accepted `status` values
-- accepted `trigger_reason` values
-- accepted `rejected_candidates.reason` values
-- exhausted rerun-guidance rendering expectations
-- any parent-approved scenario names used by acceptance surfaces
-
-The target shape is the one described in `PLAN.md`:
-
-- `status`
-- `trigger_reason`
-- `source_selected_focus_id`
-- `source_selected_focus_paths`
-- `candidate_shortlist_ids`
-- `attempted_candidate_ids`
-- `rejected_candidates`
-- `selected_candidate_id`
-- `selected_candidate_paths`
-- `exhausted_reason`
-- `rerun_guidance`
+1. root `PLAN.md` in the integration worktree until `WS-E`
+2. `inputs/PLAN.snapshot.md` for worker packets and frozen acceptance criteria
+3. `inputs/ORCH_PLAN.active.md` after root `ORCH_PLAN.md` is removed from the
+   root surface
+4. `inputs/ORCH_PLAN.stale.md` as the preserved stale orchestration file to
+   archive during `WS-C`
 
 ### Sentinel Conventions
 
-Per-task sentinels live under:
+- `task-repo-b1.dispatched|ready|blocked|merged|failed-gate`
+- `task-repo-b2.dispatched|ready|blocked|merged|failed-gate`
 
-- `.runs/m4-bounded-work-redesign-orch/sentinels/`
+Meanings:
 
-Required sentinel names:
-
-- `task-m4-*.dispatched`
-- `task-m4-*.ready`
-- `task-m4-*.blocked`
-- `task-m4-*.merged`
-- `task-m4-*.failed-gate`
-
-Required meanings:
-
-- `.dispatched`
-  - parent has issued the packet and opened the lane
-- `.ready`
-  - worker claims the lane gate is ready for parent verification
-- `.blocked`
-  - worker cannot proceed without a parent decision
-- `.merged`
-  - parent merged the lane and reran the lane gate successfully
-- `.failed-gate`
-  - parent verification failed and the lane is reopened
-
-### Parent Wait Protocol
-
-The parent does not broad-poll worktrees or inspect full worker reasoning transcripts.
-
-The parent waits on:
-
-- sentinel changes
-- narrow handoff completion
-- explicit blocker notes
-- gate reruns in the integration worktree
+- `.dispatched`: parent issued the worker packet
+- `.ready`: worker claims the lane gate is ready for parent verification
+- `.blocked`: worker cannot proceed without a parent decision
+- `.merged`: parent reran the lane gate and merged the lane
+- `.failed-gate`: parent reran the lane gate and reopened the lane
 
 ## Worktree and Branch Plan
 
@@ -243,420 +236,410 @@ Integration worktree:
 
 Sibling worktree root:
 
-- `/Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/`
+- `/Users/spensermcconnell/__Active_Code/forge.worktrees/repo-surface-cleanup/`
 
-Lane worktrees:
+Worker worktrees:
 
 - `WS-A`
-  - Path: `/Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/ws-a-runner-core`
-  - Branch: `feat/bounded-work-redesign-ws-m4a-runner-core`
+  - Path: `/Users/spensermcconnell/__Active_Code/forge.worktrees/repo-surface-cleanup/ws-a-canonical-docs`
+  - Branch: `feat/bounded-work-redesign-ws-a-canonical-docs`
 - `WS-B`
-  - Path: `/Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/ws-b-reporting`
-  - Branch: `feat/bounded-work-redesign-ws-m4a-reporting`
-- `WS-C`
-  - Path: `/Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/ws-c-docs-acceptance`
-  - Branch: `feat/bounded-work-redesign-ws-m4a-docs-acceptance`
+  - Path: `/Users/spensermcconnell/__Active_Code/forge.worktrees/repo-surface-cleanup/ws-b-pm-scaffold`
+  - Branch: `feat/bounded-work-redesign-ws-b-pm-scaffold`
 
-There is no separate worker worktree for final regression. Final regression is parent-only and runs in the integration worktree.
+`WS-C`, `WS-D`, and `WS-E` stay local in the integration worktree because:
 
-### Worktree Creation Commands
+- moved-path correctness is tightly coupled across root and
+  `docs/project_management/`
+- root `PLAN.md` must remain the active authority until the final slice
+- each local phase requires immediate audit reruns against the integrated tree
+- splitting them into more worktrees increases merge churn without adding useful
+  concurrency
+
+## Workstream Plan
+
+### WS-A: Canonical Docs Rewrite
+
+Task ID:
+
+- `task/repo-b1-canonical-docs`
+
+Owner:
+
+- Worker `WS-A`
+- Parent controls dispatch, verification, merge, and reopen decisions
+
+Owned files:
+
+- `README.md`
+- `roadmap.md`
+- `docs/roadmap.md`
+- `docs/contributing.md`
+
+Forbidden surfaces:
+
+- `docs/project_management/**`
+- `tests/**`
+- `anvil/**`
+- root historical/future markdown files
+
+Required changes:
+
+- `README.md` becomes the canonical front door and links only to files that
+  will exist after this branch
+- `README.md` links to `docs/contributing.md`,
+  `docs/analysis_review_contract.md`, and `docs/roadmap.md`
+- `README.md` drops the non-existent docs set listed in `PLAN.md`
+- `docs/roadmap.md` becomes the only roadmap body and is split into
+  `## Current focus` and `## Future directions`
+- root `roadmap.md` becomes a short pointer only
+
+Lane command:
 
 ```bash
-mkdir -p /Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign
-
-git -C /Users/spensermcconnell/__Active_Code/forge worktree add \
-  /Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/ws-a-runner-core \
-  -b feat/bounded-work-redesign-ws-m4a-runner-core \
-  feat/bounded-work-redesign
-
-git -C /Users/spensermcconnell/__Active_Code/forge worktree add \
-  /Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/ws-b-reporting \
-  -b feat/bounded-work-redesign-ws-m4a-reporting \
-  feat/bounded-work-redesign
-
-git -C /Users/spensermcconnell/__Active_Code/forge worktree add \
-  /Users/spensermcconnell/__Active_Code/forge.worktrees/m4-bounded-work-redesign/ws-c-docs-acceptance \
-  -b feat/bounded-work-redesign-ws-m4a-docs-acceptance \
-  feat/bounded-work-redesign
+rg -n "docs/installation\.md|docs/getting_started\.md|docs/architecture_overview\.md|docs/leadership_architecture\.md|docs/configuration_system\.md|docs/provider_system\.md|docs/provider_support\.md|docs/role_based_configuration\.md|docs/testing_guide\.md|docs/checkpointing\.md" README.md roadmap.md docs/roadmap.md docs/contributing.md
 ```
 
-### Worktree Rules
+`gate/canonical-docs` is green only when:
 
-- The parent is the only integrator.
-- Workers never merge peer branches.
-- Workers never rebase peer changes into their own lane without parent instruction.
-- Parent resolves every merge or rebase in the integration worktree only.
-- If a lane needs a peer-owned change, it raises a blocker instead of editing that file.
-- `WS-B` and `WS-C` do not launch until the parent has published `contract-freeze.md`.
-- The critical path stays local in the integration worktree for all gates, merges, and final verification.
+- the lane command returns no hits
+- `README.md` contains the canonical current-doc links
+- root `roadmap.md` is pointer-shaped, not roadmap-body-shaped
+- `docs/roadmap.md` carries the required two-section split
+- no forbidden surfaces were touched
 
-## Blocker, Interface-Change, and Conflict Protocols
+### WS-B: Project-Management Scaffold
+
+Task ID:
+
+- `task/repo-b2-pm-scaffold`
+
+Owner:
+
+- Worker `WS-B`
+- Parent controls dispatch, verification, merge, and reopen decisions
+
+Owned files and directories:
+
+- `docs/project_management/README.md`
+- `docs/project_management/history/`
+- `docs/project_management/history/notes/`
+- `docs/project_management/plans/active/feat-bounded-work-redesign/`
+- `docs/project_management/plans/history/`
+- `docs/project_management/future/`
+
+Forbidden surfaces:
+
+- `README.md`
+- `roadmap.md`
+- `docs/roadmap.md`
+- root historical/future markdown files
+- `tests/**`
+- `anvil/**`
+
+Required changes:
+
+- destination directories exist
+- `docs/project_management/README.md` explains:
+  - current docs live outside this folder
+  - this folder holds preserved history, ADRs, future backlog, and active-plan
+    archival material
+  - the eventual active plan destination is
+    `docs/project_management/plans/active/feat-bounded-work-redesign/PLAN.md`
+- no root files are moved yet
+
+Lane command:
+
+```bash
+test -d docs/project_management/history && test -d docs/project_management/history/notes && test -d docs/project_management/plans/active/feat-bounded-work-redesign && test -d docs/project_management/plans/history && test -d docs/project_management/future && test -f docs/project_management/README.md
+```
+
+`gate/pm-scaffold` is green only when:
+
+- the lane command succeeds
+- `docs/project_management/adrs/` remains untouched
+- `docs/project_management/README.md` defines active vs history vs future
+  clearly
+- no canonical docs, tests, or runtime files were touched
+
+### WS-C: Parent Local History and Future Moves
+
+Task ID:
+
+- `task/repo-c1-history-and-future-moves`
+
+Owner:
+
+- Parent only
+
+Owned files:
+
+- `docs/project_management/history/feature_specification_vnext_roadmap.md`
+- `docs/project_management/history/notes/CLI_PROVIDER_UPDATE_NOTES.md`
+- `docs/project_management/history/notes/FORGE_HARNESS_SURFACE_UPDATE_NOTES.md`
+- `docs/project_management/plans/history/PLAN_M3.md`
+- `docs/project_management/plans/history/ORCH_PLAN.md`
+- `docs/project_management/future/TODOS.md`
+- root deletions of moved copies
+- `docs/project_management/README.md` only if moved-path links require repair
+
+Required changes:
+
+- move `docs/feature_specification_vnext_roadmap.md` under
+  `docs/project_management/history/`
+- move root notes under `docs/project_management/history/notes/`
+- move old plans under `docs/project_management/plans/history/`
+- move `TODOS.md` under `docs/project_management/future/`
+- materialize preserved stale orchestration content at
+  `docs/project_management/plans/history/ORCH_PLAN.md`
+- remove root `ORCH_PLAN.md` from the repo surface after
+  `inputs/ORCH_PLAN.active.md` exists
+- leave root `PLAN.md` in place
+
+Phase commands:
+
+```bash
+test -f PLAN.md
+test -f docs/project_management/history/feature_specification_vnext_roadmap.md
+test -f docs/project_management/history/notes/CLI_PROVIDER_UPDATE_NOTES.md
+test -f docs/project_management/history/notes/FORGE_HARNESS_SURFACE_UPDATE_NOTES.md
+test -f docs/project_management/plans/history/PLAN_M3.md
+test -f docs/project_management/plans/history/ORCH_PLAN.md
+test -f docs/project_management/future/TODOS.md
+test ! -f docs/feature_specification_vnext_roadmap.md
+test ! -f CLI_PROVIDER_UPDATE_NOTES.md
+test ! -f FORGE_HARNESS_SURFACE_UPDATE_NOTES.md
+test ! -f PLAN_M3.md
+test ! -f ORCH_PLAN.md
+test ! -f TODOS.md
+```
+
+`gate/history-moves` is green only when:
+
+- all moved-file existence checks succeed
+- all removed-root-file checks succeed
+- root `PLAN.md` still exists
+- preserved historical files remain substantially verbatim
+- no runtime or test files were modified in this phase
+
+### WS-D: Parent Local Regression Protection
+
+Task ID:
+
+- `task/repo-d1-regression-protection`
+
+Owner:
+
+- Parent only
+
+Owned files:
+
+- `tests/test_harness_analysis_contract.py`
+- `tests/test_docs_surface.py`
+
+Required changes:
+
+- update the hardcoded notes path in `tests/test_harness_analysis_contract.py`
+- add `tests/test_docs_surface.py`
+- run the validation commands from `PLAN.md`
+- fix only stale active-surface references discovered by those audits
+
+Phase commands:
+
+```bash
+poetry run pytest -q tests/test_harness_analysis_contract.py tests/test_docs_surface.py
+poetry run python -m anvil list
+rg -n "docs/installation\.md|docs/getting_started\.md|docs/architecture_overview\.md|docs/leadership_architecture\.md|docs/configuration_system\.md|docs/provider_system\.md|docs/provider_support\.md|docs/role_based_configuration\.md|docs/testing_guide\.md|docs/checkpointing\.md" README.md roadmap.md docs/roadmap.md docs/contributing.md docs/project_management/README.md docs/analysis_review_contract.md examples/README.md scripts/README.md
+rg -n "(^|/)(CLI_PROVIDER_UPDATE_NOTES\.md|FORGE_HARNESS_SURFACE_UPDATE_NOTES\.md|PLAN_M3\.md|ORCH_PLAN\.md|TODOS\.md|feature_specification_vnext_roadmap\.md)" README.md roadmap.md docs/roadmap.md docs/contributing.md docs/project_management/README.md docs/analysis_review_contract.md examples/README.md scripts/README.md tests anvil --glob '!archived/**'
+```
+
+`gate/docs-regression` is green only when:
+
+- targeted pytest passes
+- `poetry run python -m anvil list` still works
+- the first `rg` command returns no hits
+- the second `rg` command returns only intentional
+  `docs/project_management/` references
+- no runtime files were modified
+
+### WS-E: Parent Local Final Plan Relocation
+
+Task ID:
+
+- `task/repo-e1-final-plan-relocation`
+
+Owner:
+
+- Parent only
+
+Owned files:
+
+- `PLAN.md`
+- `docs/project_management/plans/active/feat-bounded-work-redesign/PLAN.md`
+- `docs/project_management/README.md`
+
+Required changes:
+
+- move root `PLAN.md` to
+  `docs/project_management/plans/active/feat-bounded-work-redesign/PLAN.md`
+- update `docs/project_management/README.md` to point at the final active-plan
+  path
+- rerun the same validation commands from `WS-D`
+- verify that root cleanup is complete only after the move
+
+Phase commands:
+
+```bash
+test ! -f PLAN.md
+test -f docs/project_management/plans/active/feat-bounded-work-redesign/PLAN.md
+poetry run pytest -q tests/test_harness_analysis_contract.py tests/test_docs_surface.py
+poetry run python -m anvil list
+rg -n "docs/installation\.md|docs/getting_started\.md|docs/architecture_overview\.md|docs/leadership_architecture\.md|docs/configuration_system\.md|docs/provider_system\.md|docs/provider_support\.md|docs/role_based_configuration\.md|docs/testing_guide\.md|docs/checkpointing\.md" README.md roadmap.md docs/roadmap.md docs/contributing.md docs/project_management/README.md docs/analysis_review_contract.md examples/README.md scripts/README.md
+rg -n "(^|/)(CLI_PROVIDER_UPDATE_NOTES\.md|FORGE_HARNESS_SURFACE_UPDATE_NOTES\.md|PLAN_M3\.md|ORCH_PLAN\.md|TODOS\.md|feature_specification_vnext_roadmap\.md|PLAN\.md)" README.md roadmap.md docs/roadmap.md docs/contributing.md docs/project_management/README.md docs/analysis_review_contract.md examples/README.md scripts/README.md tests anvil --glob '!archived/**'
+```
+
+`gate/final-root-cleanup` is green only when:
+
+- root `PLAN.md` is gone
+- the active plan exists only at
+  `docs/project_management/plans/active/feat-bounded-work-redesign/PLAN.md`
+- the rerun pytest and CLI checks still pass after the move
+- the stale-link audit remains clean
+- the moved-path audit returns only intentional preserved-history references
+
+## Blocker and Conflict Protocols
 
 ### Blocker Protocol
 
-A worker must mark `.blocked` and stop when any of these occur:
+A worker or parent-local phase must stop when:
 
 - it needs a peer-owned file change
-- it detects scope drift beyond its lane
-- it cannot satisfy its lane gate without touching a forbidden surface
-- the runner contract is not frozen and the lane depends on it
-- a failing test suggests public contract widening or prompt/schema edits
+- it detects scope drift beyond repo-surface cleanup
+- it cannot satisfy a gate without touching `anvil/`, `archived/`, or ADR files
+- it would require moving `PLAN.md` before `WS-E`
+- the stale pre-replacement `ORCH_PLAN.md` was not captured before root
+  replacement
 
 Required blocker return:
 
-- exact file or interface requested
+- exact file or interface at issue
 - exact reason
-- exact minimal parent decision needed
-- exact command or test demonstrating the blocker, if relevant
-
-### Interface-Change Protocol
-
-For this milestone, interface changes include:
-
-- changing the public `focus_decision` contract
-- changing any prompt or schema surface
-- changing the accepted `focus_refinement` payload shape after freeze
-- inventing new `trigger_reason`, rejection-reason, or rerun-guidance wording after WS-A freeze
-- changing scenario names consumed by acceptance tests after WS-A freeze without parent approval
-
-Worker behavior:
-
-- do not implement interface changes speculatively
-- raise `.blocked`
-- wait for a revised parent packet
+- smallest parent decision needed
+- exact command or audit output demonstrating the blocker, if relevant
 
 ### Conflict Protocol
 
 Conflict type: textual overlap
 
-- Example: two lanes touch the same test file by accident.
-- Resolution: parent reassigns ownership or serializes the edit.
-- Workers do not self-resolve peer overlap.
+- Resolution: parent reassigns or serializes the edit
+- Workers do not self-resolve peer overlap
 
-Conflict type: contract drift
+Conflict type: authority drift
 
-- Example: WS-B needs a field name or status token that differs from merged WS-A.
-- Resolution: parent compares against `PLAN.md` and `contract-freeze.md`, then reopens the affected lane or rewrites the freeze packet.
-- Workers do not invent fallback heuristics.
+- Example: a lane proposes a second canonical roadmap body or a second
+  contributor front door
+- Resolution: parent rejects the drift and reissues the packet against `PLAN.md`
 
-Conflict type: scope drift
+Conflict type: path-coupled merge drift
 
-- Example: a lane starts modifying ambiguity thresholds, artifact behavior, or stale rerun-answer logic.
-- Resolution: stop immediately, mark blocked, and return the smallest drift summary.
-- Parent either rejects the drift or explicitly re-plans. It does not merge “close enough” drift.
-
-Conflict type: merge drift after WS-A lands
-
-- Example: WS-C started from the frozen contract but WS-A landed with renamed scenario strings.
-- Resolution: parent rebases or reopens WS-C before merge.
-- `WS-B` and `WS-C` do not independently reinterpret merged `WS-A`.
-
-## Workstream Plan
-
-### WS-A: Runner Refinement Core
-
-Task ID:
-
-- `task/m4-b1-runner-refinement-core`
-
-Owner:
-
-- Worker `WS-A`
-- Parent controls dispatch, contract freeze, integration, and acceptance
-
-Owned files:
-
-- `anvil/harness/runner.py`
-- `tests/test_harness_runner.py`
-
-Files explicitly not owned by WS-A:
-
-- `anvil/harness/report.py`
-- `docs/analysis_review_contract.md`
-- `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`
-- `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml`
-- `tests/test_harness_reporting.py`
-- `tests/test_run_focus_gate_acceptance.py`
-- `tests/test_harness_example_strategy_wiring.py`
-- all forbidden surfaces listed in Hard Guards
-
-Required changes:
-
-- add runner-owned private helpers in `runner.py`
-- rewire `_normalize_focus_gate_decision_for_policy(...)` for deliberate seam broadness handling
-- keep stale-answer handling unchanged
-- keep ambiguous probe blocking unchanged
-- keep artifact deliberate blocking unchanged
-- attempt at most two narrowed shortlist candidates from `focus_probe.candidates`
-- replace the selected seam with the narrowed seam on success
-- persist `focus_refinement` metadata into run details and blocked failure details on exhaustion
-- add runner assertions for:
-  - refined success
-  - candidate A failure followed by candidate B success
-  - exhausted refinement
-  - `clarification_policy=never_ask` still auto-refines when no operator input is needed
-  - unchanged ambiguity behavior
-  - unchanged artifact deliberate behavior
-  - unchanged stale-answer hardening
-
-Lane command:
-
-```bash
-poetry run pytest -q tests/test_harness_runner.py -k "focus_gate"
-```
-
-`gate/m4a-runner-contract` is green only when all of these are true:
-
-- the lane command is green
-- no forbidden surfaces were touched
-- no second provider call or recursive refinement loop exists
-- broadness and ambiguity remain separate code paths
-- retry budget is hard-capped at `2`
-- selected narrowed seams replace the canonical selected `focus_decision`
-- exhausted refinement produces runner-owned rerun guidance under `focus_refinement`
-- the parent can write `contract-freeze.md` with the actual landed payload shape and canonical string tokens
-
-### WS-B: Report Rendering
-
-Task ID:
-
-- `task/m4-c1-report-rendering`
-
-Owner:
-
-- Worker `WS-B`
-- Parent controls dispatch, integration, and acceptance
-
-Owned files:
-
-- `anvil/harness/report.py`
-- `tests/test_harness_reporting.py`
-
-Files explicitly not owned by WS-B:
-
-- `anvil/harness/runner.py`
-- `docs/analysis_review_contract.md`
-- `examples/harness/live_acceptance/`
-- `tests/test_harness_runner.py`
-- `tests/test_run_focus_gate_acceptance.py`
-- `tests/test_harness_example_strategy_wiring.py`
-
-Required changes:
-
-- render when deliberate auto-refined and continued
-- render trigger reason and relevant attempted or rejected candidates when useful
-- render exhausted refinement as actionable rerun guidance
-- never render a fake clarification prompt for exhausted refinement
-- preserve correct stale `no_viable_focus` rendering
-- source rendering from persisted `focus_refinement` metadata, not from heuristic inference
-
-Lane command:
-
-```bash
-poetry run pytest -q tests/test_harness_reporting.py -k "focus_decision or no_viable_focus or clarification"
-```
-
-`gate/m4a-reporting` is green only when all of these are true:
-
-- the lane command is green
-- rendering matches `contract-freeze.md`
-- refined success reads as intentional and explicit
-- exhausted refinement reads as actionable and truthful
-- stale or true-ambiguity rendering is not regressed
-
-### WS-C: Docs and Acceptance Surfaces
-
-Task ID:
-
-- `task/m4-c2-docs-and-acceptance`
-
-Owner:
-
-- Worker `WS-C`
-- Parent controls dispatch, integration, and acceptance
-
-Owned files:
-
-- `docs/analysis_review_contract.md`
-- `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`
-- `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml`
-- `tests/test_run_focus_gate_acceptance.py`
-- `tests/test_harness_example_strategy_wiring.py`
-
-Files explicitly not owned by WS-C:
-
-- `anvil/harness/runner.py`
-- `anvil/harness/report.py`
-- `tests/test_harness_runner.py`
-- `tests/test_harness_reporting.py`
-- all forbidden surfaces listed in Hard Guards
-
-Required changes:
-
-- describe deliberate seam behavior precisely as:
-  - probe
-  - deliberate decision
-  - bounded internal broad-seam refinement
-  - exhausted rerun-guidance fallback
-- add acceptance expectations for one refined-success seam deliberate scenario
-- add acceptance expectations for one exhausted-refinement seam deliberate scenario
-- keep artifact deliberate acceptance expectations unchanged
-- align scenario names and rerun-guidance wording to `contract-freeze.md`
-- keep wiring tests honest with the updated acceptance surfaces
-
-Lane commands:
-
-```bash
-poetry run pytest -q tests/test_run_focus_gate_acceptance.py
-poetry run pytest -q tests/test_harness_example_strategy_wiring.py
-```
-
-`gate/m4a-docs-acceptance` is green only when all of these are true:
-
-- both lane commands are green
-- docs describe the deliberate behavior precisely and do not imply every block is a clarification prompt
-- acceptance manifests cover refined success and exhausted refinement
-- artifact deliberate expectations remain unchanged
-- WS-C did not invent contract strings or scenario names outside `contract-freeze.md`
+- Example: root removals and moved-path tests no longer line up after worker
+  merges
+- Resolution: parent handles the fix locally in `WS-C` or `WS-D`
+- This is one reason the final three phases stay local
 
 ## Context-Control Rules
 
-### Parent Live Context Policy
+Parent live-context policy:
 
-Parent keeps only a narrow live set of artifacts in active context:
+- Keep only `PLAN.md`, frozen invariants, current lane packet, and current gate
+  results live.
+- Re-open `PLAN.md` before each phase transition instead of trusting memory.
+- Continue execution from `inputs/ORCH_PLAN.active.md` after root `ORCH_PLAN.md`
+  leaves the root.
 
-- `PLAN.md`
-- `ORCH_PLAN.md`
-- `invariants.md`
-- `contract-freeze.md`
-- `queue.md`
-- `state.json`
-- the active lane handoff packet
-- the active lane’s narrow diff summary
-- the active gate result being reviewed
+Worker packet policy:
 
-Parent does not keep full worker transcripts in live context once a narrow handoff has been accepted.
+- Each worker packet includes:
+  - task id
+  - owned files
+  - forbidden surfaces
+  - exact exit criteria
+  - exact lane command
+  - only the relevant excerpt from `PLAN.md`
+- Do not pass the full repo history or unrelated roadmap prose into worker
+  context.
 
-### Worker Packet Policy
+Worker return policy:
 
-Each worker packet contains only:
+- Return only:
+  - changed files
+  - commands run and results
+  - blockers
+  - any gate-relevant ambiguity
 
-- task ID
-- owned file list
-- relevant `PLAN.md` excerpt for that lane
-- exact acceptance commands
-- frozen contract or naming decisions already made by the parent
-- forbidden surfaces list
-- blocker protocol
+Parent review policy:
 
-Worker packets do not include:
-
-- unrelated repo summaries
-- other lanes’ transcripts
-- full milestone prose outside the relevant excerpt
-
-### Worker Return Policy
-
-Each worker returns only:
-
-- changed files
-- commands run
-- pass or fail status
-- exact blocker, if any
-
-Workers do not return:
-
-- long freeform transcripts
-- speculative redesign notes
-- peer-lane reviews
-
-### Parent Review Policy
-
-Parent reviews:
-
-- worker summary
-- narrow diff in owned files
-- lane gate output
-
-Parent does not review:
-
-- full worker reasoning transcript
-- broad repo-wide diff for a lane that only owns a few files
-- peer lane internals unless a blocker requires it
+- Parent reviews owned-file boundaries first.
+- Parent reruns every worker gate in the integration worktree before merge
+  acceptance.
+- Parent does the only final acceptance sweep.
 
 ## Repo Tests and Acceptance
 
-### 1. Targeted Regression Sweep
+### Acceptance Checklist
 
-Run on the integrated tree.
+- [ ] `README.md` links only to existing files
+- [ ] `README.md` no longer links to the non-existent docs set
+- [ ] `docs/contributing.md` exists and is linked from `README.md`
+- [ ] `docs/roadmap.md` is canonical and split into current focus vs future
+      directions
+- [ ] root `roadmap.md` is a pointer only
+- [ ] `docs/project_management/README.md` explains active plan vs history vs
+      future
+- [ ] history notes moved under `docs/project_management/history/notes/`
+- [ ] old plans moved under `docs/project_management/plans/history/`
+- [ ] `TODOS.md` moved under `docs/project_management/future/`
+- [ ] `tests/test_harness_analysis_contract.py` updated to the moved notes path
+- [ ] `tests/test_docs_surface.py` added and passing
+- [ ] `poetry run python -m anvil list` still works
+- [ ] grep audits show no stale active-surface references to removed paths
+- [ ] root `PLAN.md` moved only after all earlier validation passes
 
-Required commands:
+### Final Green / Blocked Protocol
 
-```bash
-poetry run pytest -q tests/test_harness_runner.py -k "focus_gate"
-poetry run pytest -q tests/test_harness_reporting.py -k "focus_decision or no_viable_focus or clarification"
-poetry run pytest -q tests/test_run_focus_gate_acceptance.py
-poetry run pytest -q tests/test_harness_example_strategy_wiring.py
-```
+If a gate fails:
 
-`gate/m4a-targeted-regressions` is green only when every command above passes.
+- parent records a `blocked` verdict in `state.json`
+- parent writes the failing command, output, affected files, and reopen reason
+  to `gates/<gate-name>.md`
+- parent appends the blocker and next required action to `session.log`
+- no later phase starts until the failed gate is resolved or planning is
+  reopened
 
-### 2. Acceptance Checklist
+If the run completes:
 
-The branch is done only when all of these are true:
+- parent records a `green` verdict in `state.json`
+- parent writes final gate results and checklist completion to `acceptance/`
+- parent appends the completion summary and final validation commands to
+  `session.log`
 
-- deliberate seam refinement can continue automatically on a narrowed shortlisted seam
-- candidate A failure can still fall through to candidate B success
-- exhausted refinement stops before proposer with ranked rerun guidance
-- exhausted refinement renders as actionable `no_viable_focus`, not a fake clarification question
-- close-contest ambiguity still blocks under the existing rules
-- artifact deliberate still blocks
-- stale rerun-answer hardening still blocks
-- `REPORT.md` tells the truth in both refined-success and exhausted-refinement cases
-- contract docs describe the new deliberate behavior precisely
-- the targeted regression commands are green
+### Green Conditions
 
-### 3. Parent Acceptance Review
+`gate/repo-surface-complete` is green only when:
 
-Parent acceptance review must also verify:
-
-- only the minimum complete implementation surfaces from `PLAN.md` changed:
-  - `anvil/harness/runner.py`
-  - `anvil/harness/report.py`
-  - `docs/analysis_review_contract.md`
-  - `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`
-  - `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml`
-  - `tests/test_harness_runner.py`
-  - `tests/test_harness_reporting.py`
-  - `tests/test_run_focus_gate_acceptance.py`
-  - `tests/test_harness_example_strategy_wiring.py`
-- no forbidden surfaces changed
-- no public contract widening slipped in through tests or docs
-- rerun guidance is copyable and grounded in ranked shortlist candidates
-- the integrated diff still matches the branch goal of deliberate seam bounded refinement only
-
-### 4. Green Conditions
-
-`gate/m4-complete` is green only when all of these are true:
-
-- `gate/m4a-runner-contract` is green
-- `gate/m4a-reporting` is green
-- `gate/m4a-docs-acceptance` is green
-- `gate/m4a-targeted-regressions` is green
-- `gate/m4a-acceptance` is green
-- the integrated tree preserved:
-  - unchanged ambiguity thresholds
-  - unchanged artifact deliberate behavior
-  - unchanged stale rerun-answer hardening
-  - unchanged public `focus_decision` contract
+- every prior gate is green
+- no hard guard was violated
+- the final repo root surface matches the `PLAN.md` success criteria
+- the acceptance checklist is fully checked off
+- the parent has recorded the final command results under
+  `.runs/repo-surface-cleanup-orch/acceptance/`
 
 ## Assumptions
 
-- The working integration branch remains `feat/bounded-work-redesign` for the duration of the run.
-- `PLAN.md` remains the single authoritative product and implementation spec.
-- `focus_probe.candidates` already carries enough shortlist data to rank narrowed seam attempts without a new provider call.
-- The required implementation remains confined to the nine surfaces listed in `PLAN.md`.
-- Live acceptance manifests are test and documentation surfaces for this milestone, not a reason to widen runtime behavior.
-- Parent has permission to create sibling worktrees under `/Users/spensermcconnell/__Active_Code/forge.worktrees/` and local run state under `.runs/`.
-- If unexpected overlap appears outside the declared lane ownership, the parent will serialize the work rather than expand scope.
-- The targeted validation commands from `PLAN.md` are the required milestone gate. Broader repo validation is optional unless those commands expose bleed outside this slice.
+- The parent will capture the stale pre-replacement root `ORCH_PLAN.md` into
+  `inputs/ORCH_PLAN.stale.md` before writing this new file.
+- The parent will snapshot the current modified root `PLAN.md` before
+  dispatching workers, because worker worktrees may not include that in-progress
+  worktree state.
+- `docs/project_management/adrs/` already exists and remains read-only context
+  for this pass.
