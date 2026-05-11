@@ -91,6 +91,7 @@ _PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
 _FOCUS_MAX_CANDIDATES = 3
 _FOCUS_MAX_CHECKED_FILES = 6
 _FOCUS_MAX_EVIDENCE_REFS = 2
+_FOCUS_MAX_REFINEMENT_ATTEMPTS = 2
 _FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
 _TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST = {
     "strengths contains both concrete items and none_reason; prefer one or the other.",
@@ -637,6 +638,7 @@ class HarnessRunner:
         focus_gate_cfg = self._focus_gate_role_config()
 
         focus_decision: dict[str, Any] | None = None
+        focus_refinement: dict[str, Any] | None = None
         if contract.focus_gate.enabled:
             focus_gate_outcome = self._run_focus_gate(
                 contract=contract,
@@ -654,6 +656,7 @@ class HarnessRunner:
                     contract=contract,
                 )
             focus_decision = focus_gate_outcome["focus_decision"]
+            focus_refinement = focus_gate_outcome.get("focus_refinement")
 
         if (
             contract.mode == "trust"
@@ -681,6 +684,8 @@ class HarnessRunner:
                 "topic_ledger": self._serialized_topic_ledger(),
                 "focus_decision": focus_decision,
             }
+            if isinstance(focus_refinement, dict) and focus_refinement:
+                bounded_run_details["focus_refinement"] = focus_refinement
             bounded_review_summary = self._build_bounded_review_summary(
                 bounded_run_details
             )
@@ -773,6 +778,7 @@ class HarnessRunner:
                     "accepted_recommendation_count": accepted_recommendation_count,
                     "analysis_review_status": analysis_review_status,
                     "focus_decision": focus_decision,
+                    "focus_refinement": focus_refinement,
                     "review_loop_exercised": True,
                     "bounded_review_summary": bounded_review_summary,
                     BOUNDED_ATTESTATION_INPUT_KEY: bounded_attestation_input,
@@ -836,6 +842,7 @@ class HarnessRunner:
                 "accepted_recommendation_count": accepted_recommendation_count,
                 "analysis_review_status": analysis_review_status,
                 "focus_decision": focus_decision,
+                "focus_refinement": focus_refinement,
                 "review_loop_exercised": True,
             },
         }
@@ -5318,6 +5325,268 @@ class HarnessRunner:
             "dominant_candidate_score": probe_state.get("top_candidate_score"),
         }
 
+    def _focus_refinement_trigger_reason(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any],
+    ) -> str | None:
+        selected_focus_paths = self._normalize_workspace_ref_list(
+            focus_decision.get("selected_focus_paths")
+        )
+        selected_focus_path_set = set(selected_focus_paths)
+        if len(selected_focus_path_set) <= 1:
+            return None
+
+        checked_file_set = set(
+            self._normalize_workspace_ref_list(focus_probe.get("checked_files"))
+        )
+        if checked_file_set and selected_focus_path_set == checked_file_set:
+            return "umbrella_selected_checked_files"
+
+        for candidate in focus_probe.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            score = candidate.get("score")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or float(score) < 0.55
+            ):
+                continue
+            candidate_paths = set(
+                self._normalize_workspace_ref_list(candidate.get("candidate_paths"))
+            )
+            if candidate_paths and candidate_paths < selected_focus_path_set:
+                return "collapsed_narrower_subset"
+        return None
+
+    def _rank_focus_refinement_candidates(
+        self,
+        *,
+        focus_probe: dict[str, Any],
+        selected_focus_paths: list[str],
+    ) -> list[dict[str, Any]]:
+        selected_focus_path_set = set(selected_focus_paths)
+        seam_adapter = focus_type_adapter("seam")
+        representatives_by_focus_id: dict[str, dict[str, Any]] = {}
+
+        for probe_index, candidate in enumerate(focus_probe.get("candidates") or []):
+            if not isinstance(candidate, dict):
+                continue
+            focus_id = str(candidate.get("focus_id") or "").strip()
+            score = candidate.get("score")
+            candidate_paths = self._normalize_workspace_ref_list(
+                candidate.get("candidate_paths")
+            )
+            candidate_path_set = set(candidate_paths)
+            if (
+                not focus_id
+                or not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not candidate_paths
+                or not candidate_path_set
+                or not candidate_path_set < selected_focus_path_set
+            ):
+                continue
+            canonical_focus_id = seam_adapter.canonical_focus_id_for_paths(
+                candidate_paths
+            )
+            if not canonical_focus_id:
+                continue
+            normalized_candidate = {
+                "focus_id": focus_id,
+                "canonical_focus_id": canonical_focus_id,
+                "score": float(score),
+                "candidate_paths": candidate_paths,
+                "focus_summary": str(candidate.get("focus_summary") or "").strip(),
+                "why_candidate": str(candidate.get("why_candidate") or "").strip(),
+                "original_probe_index": probe_index,
+                "raw_candidate": deepcopy(candidate),
+            }
+            existing = representatives_by_focus_id.get(canonical_focus_id)
+            if existing is None or normalized_candidate["score"] > existing["score"]:
+                representatives_by_focus_id[canonical_focus_id] = normalized_candidate
+
+        return sorted(
+            representatives_by_focus_id.values(),
+            key=lambda item: (
+                -float(item["score"]),
+                len(item["candidate_paths"]),
+                int(item["original_probe_index"]),
+            ),
+        )
+
+    def _refine_selected_focus_from_probe_candidate(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        selected_focus_paths = self._normalize_workspace_ref_list(
+            focus_decision.get("selected_focus_paths")
+        )
+        candidate_paths = self._normalize_workspace_ref_list(
+            candidate.get("candidate_paths")
+        )
+        if not set(candidate_paths) < set(selected_focus_paths):
+            return None, "not_proper_subset"
+
+        canonical_focus_id = focus_type_adapter("seam").canonical_focus_id_for_paths(
+            candidate_paths
+        )
+        candidate_focus_id = str(candidate.get("focus_id") or "").strip()
+        if not canonical_focus_id or candidate_focus_id != canonical_focus_id:
+            return None, "canonical_drift"
+
+        refined_candidates = [
+            deepcopy(item)
+            for item in (focus_probe.get("candidates") or [])
+            if isinstance(item, dict)
+        ]
+        secondary_focus_ids = self._dedupe_preserving_order(
+            [
+                str(item.get("focus_id") or "").strip()
+                for item in refined_candidates
+                if str(item.get("focus_id") or "").strip()
+                and str(item.get("focus_id") or "").strip() != canonical_focus_id
+            ]
+        )
+        adapter_plan = focus_type_adapter("seam").build_adapter_plan(
+            selected_focus_id=canonical_focus_id,
+            selected_focus_paths=candidate_paths,
+            secondary_focus_ids=secondary_focus_ids,
+        ).to_dict()
+        if (
+            str(adapter_plan.get("downstream_primary_seam_id") or "").strip()
+            != canonical_focus_id
+            or self._normalize_workspace_ref_list(
+                adapter_plan.get("downstream_primary_seam_paths")
+            )
+            != candidate_paths
+        ):
+            return None, "downstream_bridge_drift"
+
+        refined_decision = deepcopy(focus_decision)
+        refined_decision["selected_focus_id"] = canonical_focus_id
+        refined_decision["selected_focus_summary"] = (
+            str(candidate.get("focus_summary") or "").strip()
+            or str(refined_decision.get("selected_focus_summary") or "").strip()
+            or None
+        )
+        refined_decision["selected_focus_paths"] = candidate_paths
+        refined_decision["confidence"] = float(candidate.get("score"))
+        refined_decision["confidence_band"] = self._focus_confidence_band(
+            float(candidate.get("score"))
+        )
+        refined_decision["candidates"] = refined_candidates
+        refined_decision["adapter_plan"] = adapter_plan
+        return refined_decision, None
+
+    def _attempt_focus_refinement(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any],
+        trigger_reason: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        source_selected_focus_id = str(
+            focus_decision.get("selected_focus_id") or ""
+        ).strip()
+        source_selected_focus_paths = self._normalize_workspace_ref_list(
+            focus_decision.get("selected_focus_paths")
+        )
+        ranked_candidates = self._rank_focus_refinement_candidates(
+            focus_probe=focus_probe,
+            selected_focus_paths=source_selected_focus_paths,
+        )
+        rerun_guidance = [
+            {
+                "focus_id": str(candidate.get("canonical_focus_id") or "").strip(),
+                "score": float(candidate["score"]),
+                "candidate_paths": list(candidate["candidate_paths"]),
+                "why_candidate": str(candidate.get("why_candidate") or "").strip(),
+            }
+            for candidate in ranked_candidates
+        ]
+        attempted_candidate_ids: list[str] = []
+        rejected_candidates: list[dict[str, Any]] = []
+        candidate_shortlist_ids = [
+            str(candidate.get("canonical_focus_id") or "").strip()
+            for candidate in ranked_candidates
+            if str(candidate.get("canonical_focus_id") or "").strip()
+        ]
+
+        for candidate in ranked_candidates[:_FOCUS_MAX_REFINEMENT_ATTEMPTS]:
+            canonical_focus_id = str(candidate.get("canonical_focus_id") or "").strip()
+            if canonical_focus_id:
+                attempted_candidate_ids.append(canonical_focus_id)
+            refined_decision, rejection_reason = (
+                self._refine_selected_focus_from_probe_candidate(
+                    focus_decision=focus_decision,
+                    focus_probe=focus_probe,
+                    candidate=candidate,
+                )
+            )
+            if refined_decision is not None:
+                return refined_decision, {
+                    "status": "applied",
+                    "trigger_reason": trigger_reason,
+                    "source_selected_focus_id": source_selected_focus_id,
+                    "source_selected_focus_paths": source_selected_focus_paths,
+                    "candidate_shortlist_ids": candidate_shortlist_ids,
+                    "attempted_candidate_ids": attempted_candidate_ids,
+                    "rejected_candidates": rejected_candidates,
+                    "selected_candidate_id": str(
+                        refined_decision.get("selected_focus_id") or ""
+                    ).strip()
+                    or None,
+                    "selected_candidate_paths": self._normalize_workspace_ref_list(
+                        refined_decision.get("selected_focus_paths")
+                    ),
+                    "exhausted_reason": None,
+                    "rerun_guidance": rerun_guidance,
+                }
+            rejected_candidates.append(
+                {
+                    "focus_id": canonical_focus_id
+                    or str(candidate.get("focus_id") or "").strip(),
+                    "reason": rejection_reason or "downstream_bridge_drift",
+                }
+            )
+
+        exhausted_decision = deepcopy(focus_decision)
+        exhausted_decision["candidates"] = [
+            deepcopy(candidate.get("raw_candidate"))
+            for candidate in ranked_candidates
+            if isinstance(candidate.get("raw_candidate"), dict)
+        ]
+        exhausted_decision = self._normalized_focus_gate_no_viable_decision(
+            exhausted_decision,
+            warning=(
+                "Selected repo-probe focus remained too broad after bounded "
+                "refinement; rerun with one of the narrower files_hint slices."
+            ),
+        )
+        return exhausted_decision, {
+            "status": "exhausted",
+            "trigger_reason": trigger_reason,
+            "source_selected_focus_id": source_selected_focus_id,
+            "source_selected_focus_paths": source_selected_focus_paths,
+            "candidate_shortlist_ids": candidate_shortlist_ids,
+            "attempted_candidate_ids": attempted_candidate_ids,
+            "rejected_candidates": rejected_candidates,
+            "selected_candidate_id": None,
+            "selected_candidate_paths": [],
+            "exhausted_reason": (
+                "no_ranked_narrower_candidates"
+                if not ranked_candidates
+                else "no_candidate_survived_validation"
+            ),
+            "rerun_guidance": rerun_guidance,
+        }
+
     def _normalize_focus_gate_decision_for_policy(
         self,
         *,
@@ -5326,7 +5595,7 @@ class HarnessRunner:
         focus_probe: dict[str, Any] | None,
         focus_gate_answer: dict[str, Any] | None,
         stale_answer_context: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         effective_stale_answer_context = stale_answer_context
         if effective_stale_answer_context is None:
             effective_stale_answer_context = (
@@ -5342,11 +5611,14 @@ class HarnessRunner:
             and isinstance(focus_probe, dict)
             and focus_probe
         ):
-            return self._stale_focus_gate_decision_from_probe(
-                focus_probe=focus_probe,
-                focus_gate_answer=focus_gate_answer,
-                stale_answer_context=effective_stale_answer_context,
-                clarification_policy=contract.focus_gate.clarification_policy,
+            return (
+                self._stale_focus_gate_decision_from_probe(
+                    focus_probe=focus_probe,
+                    focus_gate_answer=focus_gate_answer,
+                    stale_answer_context=effective_stale_answer_context,
+                    clarification_policy=contract.focus_gate.clarification_policy,
+                ),
+                None,
             )
 
         decision_state = str(focus_decision.get("decision_state") or "").strip()
@@ -5363,12 +5635,15 @@ class HarnessRunner:
                 probe_state.get("valid_winner_focus_id") or ""
             ).strip()
             if not valid_winner_focus_id:
-                return self._probe_blocked_focus_gate_decision_from_probe(
-                    focus_probe=focus_probe,
-                    clarification_policy=contract.focus_gate.clarification_policy,
-                    decision_basis="repo_probe",
-                    warning=str(probe_state.get("ambiguity_reason") or "").strip()
-                    or None,
+                return (
+                    self._probe_blocked_focus_gate_decision_from_probe(
+                        focus_probe=focus_probe,
+                        clarification_policy=contract.focus_gate.clarification_policy,
+                        decision_basis="repo_probe",
+                        warning=str(probe_state.get("ambiguity_reason") or "").strip()
+                        or None,
+                    ),
+                    None,
                 )
             selected_focus_id = str(
                 focus_decision.get("selected_focus_id") or ""
@@ -5379,11 +5654,14 @@ class HarnessRunner:
                     "runner-computed admissible probe focus: "
                     f"{valid_winner_focus_id}."
                 )
-                return self._probe_blocked_focus_gate_decision_from_probe(
-                    focus_probe=focus_probe,
-                    clarification_policy=contract.focus_gate.clarification_policy,
-                    decision_basis="repo_probe",
-                    warning=warning,
+                return (
+                    self._probe_blocked_focus_gate_decision_from_probe(
+                        focus_probe=focus_probe,
+                        clarification_policy=contract.focus_gate.clarification_policy,
+                        decision_basis="repo_probe",
+                        warning=warning,
+                    ),
+                    None,
                 )
             if str(focus_decision.get("focus_type") or "").strip() == "artifact":
                 warning = (
@@ -5391,44 +5669,31 @@ class HarnessRunner:
                     "confirmation; adjudicate remains the only automatic "
                     "selection path for obvious artifact requests."
                 )
-                return self._probe_blocked_focus_gate_decision_from_probe(
-                    focus_probe=focus_probe,
-                    clarification_policy=contract.focus_gate.clarification_policy,
-                    decision_basis="repo_probe",
-                    warning=warning,
+                return (
+                    self._probe_blocked_focus_gate_decision_from_probe(
+                        focus_probe=focus_probe,
+                        clarification_policy=contract.focus_gate.clarification_policy,
+                        decision_basis="repo_probe",
+                        warning=warning,
+                    ),
+                    None,
                 )
             selected_focus_paths = set(
                 self._normalize_workspace_ref_list(
                     focus_decision.get("selected_focus_paths")
                 )
             )
-            checked_file_set = set(
-                self._normalize_workspace_ref_list(focus_probe.get("checked_files"))
+            trigger_reason = self._focus_refinement_trigger_reason(
+                focus_decision=focus_decision,
+                focus_probe=focus_probe,
             )
-            candidate_count = len(
-                [
-                    item
-                    for item in (focus_decision.get("candidates") or [])
-                    if isinstance(item, dict)
-                ]
-            )
-            if (
-                str(focus_decision.get("focus_type") or "").strip() == "seam"
-                and candidate_count <= 1
-                and len(selected_focus_paths) > 1
-                and checked_file_set
-                and selected_focus_paths == checked_file_set
-            ):
-                warning = (
-                    "Selected repo-probe focus remained a broad umbrella seam "
-                    "without a narrower shortlist."
-                )
-                return self._probe_blocked_focus_gate_decision_from_probe(
+            if trigger_reason is not None:
+                refined_decision, focus_refinement = self._attempt_focus_refinement(
+                    focus_decision=focus_decision,
                     focus_probe=focus_probe,
-                    clarification_policy=contract.focus_gate.clarification_policy,
-                    decision_basis="repo_probe",
-                    warning=warning,
+                    trigger_reason=trigger_reason,
                 )
+                return refined_decision, focus_refinement
             if selected_focus_paths:
                 for candidate in focus_decision.get("candidates") or []:
                     if not isinstance(candidate, dict):
@@ -5456,11 +5721,14 @@ class HarnessRunner:
                             "Selected repo-probe focus collapsed multiple narrower "
                             "viable candidates into one umbrella seam."
                         )
-                        return self._probe_blocked_focus_gate_decision_from_probe(
-                            focus_probe=focus_probe,
-                            clarification_policy=contract.focus_gate.clarification_policy,
-                            decision_basis="repo_probe",
-                            warning=warning,
+                        return (
+                            self._probe_blocked_focus_gate_decision_from_probe(
+                                focus_probe=focus_probe,
+                                clarification_policy=contract.focus_gate.clarification_policy,
+                                decision_basis="repo_probe",
+                                warning=warning,
+                            ),
+                            None,
                         )
         if (
             decision_state == "clarification_requested"
@@ -5471,11 +5739,14 @@ class HarnessRunner:
                 reason = str(effective_stale_answer_context.get("reason") or "").strip()
                 if reason:
                     warning = f"Prior focus_gate_answer went stale: {reason}."
-            return self._normalized_focus_gate_no_viable_decision(
-                focus_decision,
-                warning=warning,
+            return (
+                self._normalized_focus_gate_no_viable_decision(
+                    focus_decision,
+                    warning=warning,
+                ),
+                None,
             )
-        return focus_decision
+        return focus_decision, None
 
     @staticmethod
     def _focus_gate_stage_metadata(
@@ -5529,6 +5800,7 @@ class HarnessRunner:
         *,
         contract: AnalysisReviewContract,
         focus_decision: dict[str, Any],
+        focus_refinement: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         decision_state = str(focus_decision.get("decision_state") or "").strip()
         if decision_state == "clarification_requested":
@@ -5546,26 +5818,32 @@ class HarnessRunner:
                 },
                 "details": {
                     "focus_decision": focus_decision,
+                    "focus_refinement": focus_refinement,
                     "review_loop_exercised": False,
                     "analysis_review_contract": contract.to_dict(),
                 },
             }
+        failure_details = {
+            "stage": "focus_gate",
+            "decision_state": "no_viable_focus",
+            "candidates": focus_decision.get("candidates"),
+            "warnings": focus_decision.get("warnings"),
+        }
+        details = {
+            "focus_decision": focus_decision,
+            "focus_refinement": focus_refinement,
+            "review_loop_exercised": False,
+            "analysis_review_contract": contract.to_dict(),
+        }
+        if isinstance(focus_refinement, dict) and focus_refinement:
+            failure_details["focus_refinement"] = focus_refinement
         return {
             "run_verdict": "no_viable_focus",
             "content_verdict": "no_viable_focus",
             "validator_verdict": "not_run",
             "final_summary": "Focus gate could not identify a viable focus target.",
-            "failure_details": {
-                "stage": "focus_gate",
-                "decision_state": "no_viable_focus",
-                "candidates": focus_decision.get("candidates"),
-                "warnings": focus_decision.get("warnings"),
-            },
-            "details": {
-                "focus_decision": focus_decision,
-                "review_loop_exercised": False,
-                "analysis_review_contract": contract.to_dict(),
-            },
+            "failure_details": failure_details,
+            "details": details,
         }
 
     def _execute_focus_gate_probe_stage(
@@ -5697,12 +5975,14 @@ class HarnessRunner:
                     "stage_label": "focus_gate",
                 }
 
-            focus_decision = self._normalize_focus_gate_decision_for_policy(
-                contract=contract,
-                focus_decision=focus_gate_run.structured_output or {},
-                focus_probe=focus_probe,
-                focus_gate_answer=focus_gate_answer,
-                stale_answer_context=stale_answer_context,
+            focus_decision, focus_refinement = (
+                self._normalize_focus_gate_decision_for_policy(
+                    contract=contract,
+                    focus_decision=focus_gate_run.structured_output or {},
+                    focus_probe=focus_probe,
+                    focus_gate_answer=focus_gate_answer,
+                    stale_answer_context=stale_answer_context,
+                )
             )
             self._sync_persisted_focus_gate_stage(focus_decision=focus_decision)
             if str(focus_decision.get("decision_state") or "").strip() in {
@@ -5714,9 +5994,14 @@ class HarnessRunner:
                     "outcome": self._build_focus_gate_blocked_outcome(
                         contract=contract,
                         focus_decision=focus_decision,
+                        focus_refinement=focus_refinement,
                     ),
                 }
-            return {"kind": "selected", "focus_decision": focus_decision}
+            return {
+                "kind": "selected",
+                "focus_decision": focus_decision,
+                "focus_refinement": focus_refinement,
+            }
 
         focus_gate_run = self._execute_focus_gate_stage(
             contract=contract,
@@ -5734,12 +6019,14 @@ class HarnessRunner:
                 "run": focus_gate_run,
                 "stage_label": "focus_gate",
             }
-        focus_decision = self._normalize_focus_gate_decision_for_policy(
-            contract=contract,
-            focus_decision=focus_gate_run.structured_output or {},
-            focus_probe=None,
-            focus_gate_answer=None,
-            stale_answer_context=None,
+        focus_decision, focus_refinement = (
+            self._normalize_focus_gate_decision_for_policy(
+                contract=contract,
+                focus_decision=focus_gate_run.structured_output or {},
+                focus_probe=None,
+                focus_gate_answer=None,
+                stale_answer_context=None,
+            )
         )
         self._sync_persisted_focus_gate_stage(focus_decision=focus_decision)
         if str(focus_decision.get("decision_state") or "").strip() in {
@@ -5751,9 +6038,14 @@ class HarnessRunner:
                 "outcome": self._build_focus_gate_blocked_outcome(
                     contract=contract,
                     focus_decision=focus_decision,
+                    focus_refinement=focus_refinement,
                 ),
             }
-        return {"kind": "selected", "focus_decision": focus_decision}
+        return {
+            "kind": "selected",
+            "focus_decision": focus_decision,
+            "focus_refinement": focus_refinement,
+        }
 
     def _emit_task_strategy_warnings(self) -> None:
         if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
