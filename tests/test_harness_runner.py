@@ -1062,6 +1062,143 @@ class _ArtifactInitialSelectionHarnessAdapter(_ArtifactFocusGateHarnessAdapter):
         )
 
 
+class _BoundedRefinementFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
+    selected_focus_paths = [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/codex-cli-update-snapshot.yml",
+    ]
+    selected_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
+    narrowed_primary_paths = [
+        ".github/workflows/codex-cli-release-watch.yml",
+    ]
+    narrowed_primary_id = canonical_seam_id_for_paths(narrowed_primary_paths)
+    narrowed_secondary_paths = [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+    ]
+    narrowed_secondary_id = canonical_seam_id_for_paths(narrowed_secondary_paths)
+    probe_checked_files = list(selected_focus_paths)
+
+    def _focus_gate_candidate_summary(self, focus_id: str) -> str:
+        summaries = {
+            self.selected_focus_id: "Broad release automation umbrella seam.",
+            self.narrowed_primary_id: "Codex release-watch seam.",
+            self.narrowed_secondary_id: "Claude snapshot seam.",
+        }
+        return summaries[focus_id]
+
+    def _probe_candidates(self) -> list[dict[str, object]]:
+        return [
+            {
+                "focus_id": self.selected_focus_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.selected_focus_id
+                ),
+                "candidate_paths": list(self.selected_focus_paths),
+                "why_candidate": "The full release automation cluster is the dominant probe winner.",
+                "evidence_refs": list(self.probe_checked_files[:2]),
+                "score": 0.92,
+            },
+            {
+                "focus_id": self.narrowed_primary_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.narrowed_primary_id
+                ),
+                "candidate_paths": list(self.narrowed_primary_paths),
+                "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+                "evidence_refs": [self.narrowed_primary_paths[0]],
+                "score": 0.74,
+            },
+            {
+                "focus_id": self.narrowed_secondary_id,
+                "focus_summary": self._focus_gate_candidate_summary(
+                    self.narrowed_secondary_id
+                ),
+                "candidate_paths": list(self.narrowed_secondary_paths),
+                "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+                "evidence_refs": list(self.narrowed_secondary_paths),
+                "score": 0.71,
+            },
+        ]
+
+    def _focus_gate_payload(self, prompt_text: str) -> dict[str, object]:
+        del prompt_text
+        return self._selected_focus_decision(
+            gate_path="deliberate",
+            decision_basis="repo_probe",
+            checked_files=list(self.probe_checked_files),
+            files_hint_disposition="helped",
+        )
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["files_reviewed"] = list(self.selected_focus_paths)
+        return payload
+
+    def _selected_focus_from_proposer_prompt(self) -> tuple[str, list[str], str]:
+        prompt_text = self.prompt_texts["proposer"][-1]
+        focus_map = {
+            self.narrowed_primary_id: (
+                self.narrowed_primary_paths,
+                "The refined Codex release-watch seam.",
+            ),
+            self.narrowed_secondary_id: (
+                self.narrowed_secondary_paths,
+                "The refined Claude snapshot seam.",
+            ),
+            self.selected_focus_id: (
+                self.selected_focus_paths,
+                "The broad release automation umbrella seam.",
+            ),
+        }
+        for focus_id, (paths, summary) in focus_map.items():
+            if f"selected_focus_id: {focus_id}" in prompt_text:
+                return focus_id, list(paths), summary
+        raise AssertionError(f"Unexpected proposer prompt: {prompt_text}")
+
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        focus_id, paths, summary = self._selected_focus_from_proposer_prompt()
+        return {
+            "seam_id": focus_id,
+            "summary": summary,
+            "why_primary": "The runner-refined focus gate selection is the governing seam for this run.",
+            "paths": paths,
+        }
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        del payload
+        focus_id, _, _ = self._selected_focus_from_proposer_prompt()
+        remaining = [
+            (self.narrowed_primary_id, self.narrowed_primary_paths),
+            (self.narrowed_secondary_id, self.narrowed_secondary_paths),
+            (self.selected_focus_id, self.selected_focus_paths),
+        ]
+        return [
+            {
+                "seam_id": seam_id,
+                "summary": self._focus_gate_candidate_summary(seam_id),
+                "why_not_primary": "It remained available but was not the final refined focus.",
+                "paths": list(paths),
+            }
+            for seam_id, paths in remaining
+            if seam_id != focus_id
+        ][:1]
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        del recommendation_index, payload
+        focus_id, _, _ = self._selected_focus_from_proposer_prompt()
+        return (focus_id, "")
+
+
 class _ThresholdValidRerunWinnerHarnessAdapter(_FocusGateHarnessAdapter):
     def _probe_candidates(self) -> list[dict[str, object]]:
         return [
@@ -1255,6 +1392,101 @@ class _NeverAskUmbrellaSeamHarnessAdapter(_FocusGateHarnessAdapter):
                 ],
             ),
         }
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        payload["files_reviewed"] = list(self.selected_focus_paths)
+        return payload
+
+    def _selected_focus_from_proposer_prompt(self) -> tuple[str, list[str], str]:
+        prompt_text = self.prompt_texts["proposer"][-1]
+        focus_map = {
+            self.selected_focus_id: (
+                self.selected_focus_paths,
+                "The broad release automation umbrella seam.",
+            ),
+            self.secondary_focus_id: (
+                [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "The refined scheduled release-watch seam.",
+            ),
+            canonical_seam_id_for_paths(
+                [
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ]
+            ): (
+                [
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+                "The refined snapshot-update seam.",
+            ),
+        }
+        for focus_id, (paths, summary) in focus_map.items():
+            if f"selected_focus_id: {focus_id}" in prompt_text:
+                return focus_id, list(paths), summary
+        raise AssertionError(f"Unexpected proposer prompt: {prompt_text}")
+
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        del payload
+        focus_id, paths, summary = self._selected_focus_from_proposer_prompt()
+        return {
+            "seam_id": focus_id,
+            "summary": summary,
+            "why_primary": "The runner-refined umbrella selection became the governing seam for this run.",
+            "paths": paths,
+        }
+
+    def _secondary_seams_considered(
+        self, *, payload: dict[str, object]
+    ) -> list[dict[str, object]]:
+        del payload
+        focus_id, _, _ = self._selected_focus_from_proposer_prompt()
+        candidates = [
+            (
+                self.secondary_focus_id,
+                [
+                    ".github/workflows/claude-code-release-watch.yml",
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+            ),
+            (
+                canonical_seam_id_for_paths(
+                    [
+                        ".github/workflows/claude-code-update-snapshot.yml",
+                        ".github/workflows/codex-cli-update-snapshot.yml",
+                    ]
+                ),
+                [
+                    ".github/workflows/claude-code-update-snapshot.yml",
+                    ".github/workflows/codex-cli-update-snapshot.yml",
+                ],
+            ),
+            (self.selected_focus_id, list(self.selected_focus_paths)),
+        ]
+        return [
+            {
+                "seam_id": seam_id,
+                "summary": "Shortlisted umbrella child seam.",
+                "why_not_primary": "It remained available but was not the final refined focus.",
+                "paths": list(paths),
+            }
+            for seam_id, paths in candidates
+            if seam_id != focus_id
+        ][:1]
+
+    def _recommendation_seam_binding(
+        self,
+        *,
+        recommendation_index: int,
+        payload: dict[str, object],
+    ) -> tuple[str, str]:
+        del recommendation_index, payload
+        focus_id, _, _ = self._selected_focus_from_proposer_prompt()
+        return (focus_id, "")
 
 
 class _AdjudicateDirectorySeamHarnessAdapter(_FocusGateHarnessAdapter):
@@ -4059,6 +4291,259 @@ def test_analysis_review_runner_focus_gate_probe_dedupes_duplicate_canonical_can
     assert probe_stage["ok"] is True
 
 
+def test_analysis_review_runner_focus_gate_refined_success_replaces_selected_seam_and_continues(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _BoundedRefinementFocusGateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    focus_refinement = summary["run_details"]["focus_refinement"]
+
+    assert summary["verdict"] == "accepted"
+    assert [stage["role_name"] for stage in summary["agent_stages"][:3]] == [
+        "focus_gate_probe",
+        "focus_gate",
+        "proposer",
+    ]
+    assert focus_decision["decision_state"] == "selected"
+    assert focus_decision["selected_focus_id"] == adapter.narrowed_primary_id
+    assert focus_decision["selected_focus_paths"] == adapter.narrowed_primary_paths
+    assert (
+        summary["analysis_review_status"]["primary_seam"]["seam_id"]
+        == adapter.narrowed_primary_id
+    )
+    assert focus_refinement == {
+        "status": "applied",
+        "trigger_reason": "umbrella_selected_checked_files",
+        "source_selected_focus_id": adapter.selected_focus_id,
+        "source_selected_focus_paths": adapter.selected_focus_paths,
+        "candidate_shortlist_ids": [
+            adapter.narrowed_primary_id,
+            adapter.narrowed_secondary_id,
+        ],
+        "attempted_candidate_ids": [adapter.narrowed_primary_id],
+        "rejected_candidates": [],
+        "selected_candidate_id": adapter.narrowed_primary_id,
+        "selected_candidate_paths": adapter.narrowed_primary_paths,
+        "exhausted_reason": None,
+        "rerun_guidance": [
+            {
+                "focus_id": adapter.narrowed_primary_id,
+                "score": 0.74,
+                "candidate_paths": adapter.narrowed_primary_paths,
+                "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+            },
+            {
+                "focus_id": adapter.narrowed_secondary_id,
+                "score": 0.71,
+                "candidate_paths": adapter.narrowed_secondary_paths,
+                "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+            },
+        ],
+    }
+    assert (
+        f"selected_focus_id: {adapter.narrowed_primary_id}"
+        in adapter.prompt_texts["proposer"][-1]
+    )
+
+
+def test_analysis_review_runner_focus_gate_refinement_tries_second_candidate_after_first_failure(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _BoundedRefinementFocusGateHarnessAdapter()
+    original_refine = HarnessRunner._refine_selected_focus_from_probe_candidate
+
+    def _fail_first_candidate(self, *, focus_decision, focus_probe, candidate):
+        if str(candidate.get("canonical_focus_id") or "").strip() == adapter.narrowed_primary_id:
+            return None, "downstream_bridge_drift"
+        return original_refine(
+            self,
+            focus_decision=focus_decision,
+            focus_probe=focus_probe,
+            candidate=candidate,
+        )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+    monkeypatch.setattr(
+        HarnessRunner,
+        "_refine_selected_focus_from_probe_candidate",
+        _fail_first_candidate,
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_refinement = summary["run_details"]["focus_refinement"]
+
+    assert summary["verdict"] == "accepted"
+    assert summary["focus_decision"]["selected_focus_id"] == adapter.narrowed_secondary_id
+    assert summary["focus_decision"]["selected_focus_paths"] == adapter.narrowed_secondary_paths
+    assert focus_refinement["status"] == "applied"
+    assert focus_refinement["attempted_candidate_ids"] == [
+        adapter.narrowed_primary_id,
+        adapter.narrowed_secondary_id,
+    ]
+    assert focus_refinement["rejected_candidates"] == [
+        {
+            "focus_id": adapter.narrowed_primary_id,
+            "reason": "downstream_bridge_drift",
+        }
+    ]
+    assert focus_refinement["selected_candidate_id"] == adapter.narrowed_secondary_id
+    assert (
+        f"selected_focus_id: {adapter.narrowed_secondary_id}"
+        in adapter.prompt_texts["proposer"][-1]
+    )
+
+
+def test_analysis_review_runner_focus_gate_exhausted_refinement_blocks_with_no_viable_focus(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _BoundedRefinementFocusGateHarnessAdapter()
+
+    def _reject_all_candidates(self, *, focus_decision, focus_probe, candidate):
+        del focus_decision, focus_probe
+        focus_id = str(candidate.get("canonical_focus_id") or "").strip()
+        if focus_id == adapter.narrowed_primary_id:
+            return None, "downstream_bridge_drift"
+        return None, "canonical_drift"
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+    monkeypatch.setattr(
+        HarnessRunner,
+        "_refine_selected_focus_from_probe_candidate",
+        _reject_all_candidates,
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+    focus_decision = summary["focus_decision"]
+    focus_refinement = summary["run_details"]["focus_refinement"]
+
+    assert summary["verdict"] == "no_viable_focus"
+    assert focus_decision["decision_state"] == "no_viable_focus"
+    assert focus_decision["decision_basis"] == "repo_probe"
+    assert focus_decision["question"] == {"prompt": "", "options": []}
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == [
+        "focus_gate_probe",
+        "focus_gate",
+    ]
+    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert focus_refinement["status"] == "exhausted"
+    assert focus_refinement["attempted_candidate_ids"] == [
+        adapter.narrowed_primary_id,
+        adapter.narrowed_secondary_id,
+    ]
+    assert focus_refinement["rejected_candidates"] == [
+        {
+            "focus_id": adapter.narrowed_primary_id,
+            "reason": "downstream_bridge_drift",
+        },
+        {
+            "focus_id": adapter.narrowed_secondary_id,
+            "reason": "canonical_drift",
+        },
+    ]
+    assert focus_refinement["selected_candidate_id"] is None
+    assert focus_refinement["selected_candidate_paths"] == []
+    assert focus_refinement["exhausted_reason"] == "no_candidate_survived_validation"
+    assert focus_refinement["rerun_guidance"] == [
+        {
+            "focus_id": adapter.narrowed_primary_id,
+            "score": 0.74,
+            "candidate_paths": adapter.narrowed_primary_paths,
+            "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+        },
+        {
+            "focus_id": adapter.narrowed_secondary_id,
+            "score": 0.71,
+            "candidate_paths": adapter.narrowed_secondary_paths,
+            "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+        },
+    ]
+    assert summary["failure_details"]["focus_refinement"] == focus_refinement
+    assert any(
+        "bounded refinement" in warning for warning in focus_decision["warnings"]
+    )
+
+
+def test_analysis_review_runner_focus_gate_never_ask_auto_refines_without_operator_input(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        task_focus_gate=_task_focus_gate_block(clarification_policy="never_ask"),
+        strategy_focus_gate=_strategy_focus_gate_block(default_path="deliberate"),
+    )
+
+    adapter = _BoundedRefinementFocusGateHarnessAdapter()
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr("anvil.harness.runner.get_provider", lambda name: adapter)
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    assert summary["focus_decision"]["selected_focus_id"] == adapter.narrowed_primary_id
+    assert summary["run_details"]["focus_refinement"]["status"] == "applied"
+    assert "proposer" in [stage["role_name"] for stage in summary["agent_stages"]]
+
+
 def test_analysis_review_runner_focus_gate_clarification_dedupes_decision_candidates(
     tmp_path,
     monkeypatch,
@@ -4422,6 +4907,7 @@ def test_analysis_review_runner_focus_gate_stale_rerun_never_ask_blocks_without_
         warning.startswith("Prior focus_gate_answer went stale:")
         for warning in focus_decision["warnings"]
     )
+    assert summary["run_details"].get("focus_refinement") is None
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
     assert len(adapter.prompt_texts["focus_gate_probe"]) == 1
     assert len(adapter.prompt_texts["focus_gate"]) == 1
@@ -4544,10 +5030,11 @@ def test_analysis_review_runner_focus_gate_hardens_close_repo_probe_selection_to
         "current probe is ambiguous under selection thresholds" in warning
         for warning in focus_decision["warnings"]
     )
+    assert summary["run_details"].get("focus_refinement") is None
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
 
 
-def test_analysis_review_runner_focus_gate_never_ask_blocks_umbrella_repo_probe_selection(
+def test_analysis_review_runner_focus_gate_never_ask_auto_refines_umbrella_repo_probe_selection(
     tmp_path,
     monkeypatch,
 ):
@@ -4571,16 +5058,19 @@ def test_analysis_review_runner_focus_gate_never_ask_blocks_umbrella_repo_probe_
 
     summary = runner.run()
     focus_decision = summary["focus_decision"]
+    focus_refinement = summary["run_details"]["focus_refinement"]
 
-    assert summary["verdict"] == "no_viable_focus"
-    assert focus_decision["decision_state"] == "no_viable_focus"
+    assert summary["verdict"] == "accepted"
+    assert focus_decision["decision_state"] == "selected"
     assert focus_decision["decision_basis"] == "repo_probe"
-    assert focus_decision["question"] == {"prompt": "", "options": []}
-    assert any("umbrella seam" in warning for warning in focus_decision["warnings"])
-    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert focus_decision["selected_focus_id"] == adapter.secondary_focus_id
+    assert focus_refinement["status"] == "applied"
+    assert focus_refinement["trigger_reason"] == "umbrella_selected_checked_files"
+    assert focus_refinement["selected_candidate_id"] == adapter.secondary_focus_id
+    assert "proposer" in [stage["role_name"] for stage in summary["agent_stages"]]
 
 
-def test_analysis_review_runner_focus_gate_blocks_umbrella_repo_probe_selection_with_clarification(
+def test_analysis_review_runner_focus_gate_auto_refines_umbrella_repo_probe_selection_with_clarification_policy_available(
     tmp_path,
     monkeypatch,
 ):
@@ -4604,14 +5094,15 @@ def test_analysis_review_runner_focus_gate_blocks_umbrella_repo_probe_selection_
 
     summary = runner.run()
     focus_decision = summary["focus_decision"]
+    focus_refinement = summary["run_details"]["focus_refinement"]
 
-    assert summary["verdict"] == "blocked_for_clarification"
-    assert focus_decision["decision_state"] == "clarification_requested"
+    assert summary["verdict"] == "accepted"
+    assert focus_decision["decision_state"] == "selected"
     assert focus_decision["decision_basis"] == "repo_probe"
-    assert focus_decision["question"]["prompt"] == _FOCUS_GATE_QUESTION_PROMPT
-    assert _NeverAskUmbrellaSeamHarnessAdapter.selected_focus_id in focus_decision["question"]["options"]
-    assert any("umbrella seam" in warning for warning in focus_decision["warnings"])
-    assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
+    assert focus_decision["selected_focus_id"] == adapter.secondary_focus_id
+    assert focus_refinement["status"] == "applied"
+    assert focus_refinement["selected_candidate_id"] == adapter.secondary_focus_id
+    assert "proposer" in [stage["role_name"] for stage in summary["agent_stages"]]
 
 
 def test_analysis_review_runner_focus_gate_initial_deliberate_artifact_selection_blocks_for_clarification(
@@ -4651,6 +5142,7 @@ def test_analysis_review_runner_focus_gate_initial_deliberate_artifact_selection
         in warning
         for warning in focus_decision["warnings"]
     )
+    assert summary["run_details"].get("focus_refinement") is None
     assert "proposer" not in [stage["role_name"] for stage in summary["agent_stages"]]
 
 
