@@ -373,6 +373,191 @@ def _stale_no_viable_focus_decision() -> dict[str, object]:
     }
 
 
+def _auto_refined_selected_focus_decision() -> dict[str, object]:
+    selected_focus_paths = [".github/workflows/codex-cli-release-watch.yml"]
+    return {
+        "gate_path": "deliberate",
+        "focus_type": "seam",
+        "decision_state": "selected",
+        "decision_basis": "repo_probe",
+        "selected_focus_id": "release-watch-slice",
+        "selected_focus_summary": "Use the narrowed release watch workflow slice as the primary focus.",
+        "selected_focus_paths": selected_focus_paths,
+        "confidence": 0.74,
+        "confidence_band": "medium",
+        "files_hint_disposition": "helped",
+        "checked_files": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/rollback-runbook.md",
+        ],
+        "candidates": [
+            {
+                "focus_id": "release-watch-slice",
+                "focus_summary": "Narrowed release watch workflow slice.",
+                "candidate_paths": selected_focus_paths,
+                "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+                "evidence_refs": selected_focus_paths,
+                "score": 0.74,
+            },
+            {
+                "focus_id": "rollback-runbook-slice",
+                "focus_summary": "Fallback rollback slice.",
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+                "evidence_refs": [".github/workflows/rollback-runbook.md"],
+                "score": 0.71,
+            },
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": "release-watch-slice",
+            "secondary_focus_ids": ["rollback-runbook-slice"],
+            "downstream_primary_seam_id": canonical_seam_id_for_paths(
+                selected_focus_paths
+            ),
+            "downstream_primary_seam_paths": selected_focus_paths,
+            "adaptation_basis": "selected_focus_paths",
+        },
+    }
+
+
+def _applied_focus_refinement() -> dict[str, object]:
+    return {
+        "status": "applied",
+        "trigger_reason": "umbrella_selected_checked_files",
+        "source_selected_focus_id": "release-automation-umbrella",
+        "source_selected_focus_paths": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/rollback-runbook.md",
+        ],
+        "candidate_shortlist_ids": [
+            "release-watch-slice",
+            "rollback-runbook-slice",
+        ],
+        "attempted_candidate_ids": ["release-watch-slice"],
+        "rejected_candidates": [],
+        "selected_candidate_id": "release-watch-slice",
+        "selected_candidate_paths": [
+            ".github/workflows/codex-cli-release-watch.yml",
+        ],
+        "exhausted_reason": None,
+        "rerun_guidance": [
+            {
+                "focus_id": "release-watch-slice",
+                "score": 0.74,
+                "candidate_paths": [
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+            },
+            {
+                "focus_id": "rollback-runbook-slice",
+                "score": 0.71,
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+            },
+        ],
+    }
+
+
+def _exhausted_refinement_no_viable_focus_decision() -> dict[str, object]:
+    return {
+        "gate_path": "deliberate",
+        "focus_type": "seam",
+        "decision_state": "no_viable_focus",
+        "decision_basis": "repo_probe",
+        "selected_focus_id": None,
+        "selected_focus_summary": None,
+        "selected_focus_paths": [],
+        "confidence": 0.18,
+        "confidence_band": "low",
+        "files_hint_disposition": "helped",
+        "checked_files": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/rollback-runbook.md",
+        ],
+        "candidates": [
+            {
+                "focus_id": "release-watch-slice",
+                "focus_summary": "Narrowed release watch workflow slice.",
+                "candidate_paths": [".github/workflows/codex-cli-release-watch.yml"],
+                "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+                "evidence_refs": [".github/workflows/codex-cli-release-watch.yml"],
+                "score": 0.74,
+            },
+            {
+                "focus_id": "rollback-runbook-slice",
+                "focus_summary": "Fallback rollback slice.",
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+                "evidence_refs": [".github/workflows/rollback-runbook.md"],
+                "score": 0.71,
+            },
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [
+            "Selected repo-probe focus remained too broad after bounded refinement; rerun with one of the narrower files_hint slices.",
+        ],
+        "adapter_plan": {
+            "primary_focus_id": None,
+            "secondary_focus_ids": [],
+            "downstream_primary_seam_id": None,
+            "downstream_primary_seam_paths": [],
+            "adaptation_basis": None,
+        },
+    }
+
+
+def _exhausted_focus_refinement() -> dict[str, object]:
+    return {
+        "status": "exhausted",
+        "trigger_reason": "collapsed_narrower_subset",
+        "source_selected_focus_id": "release-automation-umbrella",
+        "source_selected_focus_paths": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/rollback-runbook.md",
+        ],
+        "candidate_shortlist_ids": [
+            "release-watch-slice",
+            "rollback-runbook-slice",
+        ],
+        "attempted_candidate_ids": [
+            "release-watch-slice",
+            "rollback-runbook-slice",
+        ],
+        "rejected_candidates": [
+            {
+                "focus_id": "release-watch-slice",
+                "reason": "downstream_bridge_drift",
+            },
+            {
+                "focus_id": "rollback-runbook-slice",
+                "reason": "canonical_drift",
+            },
+        ],
+        "selected_candidate_id": None,
+        "selected_candidate_paths": [],
+        "exhausted_reason": "no_candidate_survived_validation",
+        "rerun_guidance": [
+            {
+                "focus_id": "release-watch-slice",
+                "score": 0.74,
+                "candidate_paths": [
+                    ".github/workflows/codex-cli-release-watch.yml",
+                ],
+                "why_candidate": "This is the narrowest codex-specific slice of the winning umbrella seam.",
+            },
+            {
+                "focus_id": "rollback-runbook-slice",
+                "score": 0.71,
+                "candidate_paths": [".github/workflows/rollback-runbook.md"],
+                "why_candidate": "This is the next-best bounded slice inside the same winning umbrella seam.",
+            },
+        ],
+    }
+
+
 def _assert_publication_parity(summary: dict[str, object]) -> None:
     expected_publishable = (summary.get("artifacts") or {}).get(
         "final_artifact_kind"
@@ -2720,6 +2905,56 @@ def test_render_report_distinguishes_artifact_focus_from_downstream_seam_bridge(
     assert selected_focus_id != downstream_seam_id
 
 
+def test_render_report_renders_selected_focus_decision_with_applied_focus_refinement():
+    summary = {
+        "verdict": "accepted",
+        "task": {"id": "task-focus-refined", "task_kind": "analysis_review"},
+        "verdicts": {
+            "content_verdict": "accepted",
+            "validator_verdict": "pass",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "focus_decision": _auto_refined_selected_focus_decision(),
+        "run_details": {
+            "focus_decision": _auto_refined_selected_focus_decision(),
+            "focus_refinement": _applied_focus_refinement(),
+        },
+        "workspace_policy_checks": [],
+        "validator_rounds": [],
+        "agent_stages": [],
+        "artifacts": {},
+    }
+
+    report = render_report(summary)
+    section = _top_level_section(report, "## Focus Decision")
+    run_details = _top_level_section(report, "## Run Details")
+
+    assert "- Focus refinement: `auto-refined and continued`" in section
+    assert (
+        "- Refinement trigger reason: `umbrella_selected_checked_files`" in section
+    )
+    assert "- Refinement source focus ID: `release-automation-umbrella`" in section
+    assert (
+        "- Refinement candidate shortlist: `release-watch-slice`, `rollback-runbook-slice`"
+        in section
+    )
+    assert "- Refinement attempted candidates: `release-watch-slice`" in section
+    assert "- Refinement rejected candidates: none" in section
+    assert "- Refinement selected candidate ID: `release-watch-slice`" in section
+    assert (
+        "- Refinement selected candidate paths: `.github/workflows/codex-cli-release-watch.yml`"
+        in section
+    )
+    assert "- Decision state: `selected`" in section
+    assert "- Selected focus ID: `release-watch-slice`" in section
+    assert "- Clarification prompt:" not in section
+    assert '"focus_refinement": {' in run_details
+    assert '"rendered_in_report_section": true' in run_details
+    assert '"status": "applied"' in run_details
+    assert '"trigger_reason": "umbrella_selected_checked_files"' in run_details
+
+
 def test_render_report_renders_no_viable_focus_decision_from_run_details():
     summary = {
         "verdict": "no_viable_focus",
@@ -2759,6 +2994,64 @@ def test_render_report_renders_no_viable_focus_decision_from_run_details():
     assert "- Candidates considered: none" in section
     assert "- Warnings:" in section
     assert "No seam candidate had enough direct workspace evidence." in section
+    assert "- Clarification prompt:" not in section
+    assert "- Clarification options:" not in section
+
+
+def test_render_report_renders_no_viable_focus_decision_with_exhausted_refinement_guidance():
+    summary = {
+        "verdict": "no_viable_focus",
+        "task": {"id": "task-focus-exhausted", "task_kind": "analysis_review"},
+        "verdicts": {
+            "content_verdict": "no_viable_focus",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "focus_decision": _exhausted_refinement_no_viable_focus_decision(),
+        "run_details": {
+            "focus_decision": _exhausted_refinement_no_viable_focus_decision(),
+        },
+        "failure_details": {"focus_refinement": _exhausted_focus_refinement()},
+        "workspace_policy_checks": [],
+        "validator_rounds": [],
+        "agent_stages": [],
+        "artifacts": {},
+    }
+
+    report = render_report(summary)
+    section = _top_level_section(report, "## Focus Decision")
+
+    assert "- Focus refinement: `refinement exhausted`" in section
+    assert "- Refinement trigger reason: `collapsed_narrower_subset`" in section
+    assert (
+        "- Refinement attempted candidates: `release-watch-slice`, `rollback-runbook-slice`"
+        in section
+    )
+    assert "- Refinement rejected candidates:" in section
+    assert "`release-watch-slice`: `downstream_bridge_drift`" in section
+    assert "`rollback-runbook-slice`: `canonical_drift`" in section
+    assert "- Refinement selected candidate ID: none" in section
+    assert (
+        "- Refinement exhausted reason: `no_candidate_survived_validation`" in section
+    )
+    assert "- Rerun guidance: rerun with one of these files_hint slices" in section
+    assert (
+        "  - `1`. `release-watch-slice` (`0.74`): `.github/workflows/codex-cli-release-watch.yml`"
+        in section
+    )
+    assert (
+        "  - `2`. `rollback-runbook-slice` (`0.71`): `.github/workflows/rollback-runbook.md`"
+        in section
+    )
+    assert (
+        "Selected repo-probe focus remained too broad after bounded refinement; rerun with one of the narrower files_hint slices."
+        in section
+    )
+    assert (
+        "- Blocking outcome: no clarification question was emitted because the gate could not identify a viable focus target."
+        not in section
+    )
     assert "- Clarification prompt:" not in section
     assert "- Clarification options:" not in section
 
