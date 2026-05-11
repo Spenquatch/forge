@@ -3,7 +3,6 @@ from pathlib import Path
 
 ROOT = Path(".")
 README = ROOT / "README.md"
-ROOT_ROADMAP = ROOT / "roadmap.md"
 DOCS_ROADMAP = ROOT / "docs" / "roadmap.md"
 CONTRIBUTING = ROOT / "docs" / "contributing.md"
 PM_README = ROOT / "docs" / "project_management" / "README.md"
@@ -32,15 +31,12 @@ def test_readme_links_only_current_canonical_docs():
         assert banned_link not in readme
 
 
-def test_root_roadmap_is_pointer_only():
-    root_roadmap = ROOT_ROADMAP.read_text(encoding="utf-8")
+def test_docs_roadmap_is_canonical():
     docs_roadmap = DOCS_ROADMAP.read_text(encoding="utf-8")
 
-    assert "The canonical roadmap lives in [docs/roadmap.md](docs/roadmap.md)." in root_roadmap
-    assert "## Current focus" not in root_roadmap
-    assert "## Future directions" not in root_roadmap
     assert "## Current focus" in docs_roadmap
     assert "## Future directions" in docs_roadmap
+    assert not (ROOT / "roadmap.md").exists()
 
 
 def test_contributor_and_project_management_indexes_exist():
