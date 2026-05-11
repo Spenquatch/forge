@@ -457,8 +457,56 @@ def test_default_config_path_points_to_canonical_closeout_manifest() -> None:
     )
 
 
+def test_live_acceptance_templates_cover_refined_and_exhausted_seam_deliberate_cases() -> None:
+    canonical_template = SCRIPT.load_structured_file(SCRIPT.CANONICAL_TEMPLATE_PATH)
+    local_template = SCRIPT.load_structured_file(
+        REPO_ROOT
+        / "examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml"
+    )
+
+    canonical_shards = {
+        shard["name"]: shard["scenarios"] for shard in canonical_template["shards"]
+    }
+    seam_deliberate = canonical_shards["seam-deliberate"]
+    assert [scenario["name"] for scenario in seam_deliberate] == [
+        "deliberate-refined-success",
+        "deliberate-refinement-exhausted",
+        "stale-rerun",
+    ]
+    refined_success = seam_deliberate[0]
+    assert refined_success["expected_decision_state"] == "selected"
+    assert refined_success["expect_proposer_artifacts"] is True
+    assert refined_success["expect_downstream_bridge"] is True
+    exhausted = seam_deliberate[1]
+    assert exhausted["task"] == (
+        "examples/harness/tasks/recommend_automation_improvements_never_ask.yaml"
+    )
+    assert exhausted["expected_decision_state"] == "no_viable_focus"
+    assert exhausted["expect_proposer_artifacts"] is False
+    assert exhausted["expect_downstream_bridge"] is False
+
+    local_seam_deliberate = [
+        scenario
+        for scenario in local_template["scenarios"]
+        if scenario["expected_gate_path"] == "deliberate"
+        and scenario["expected_focus_type"] == "seam"
+    ]
+    assert [scenario["name"] for scenario in local_seam_deliberate] == [
+        "deliberate-refined-success",
+        "deliberate-refinement-exhausted",
+        "stale-rerun",
+    ]
+
+    artifact_deliberate = canonical_shards["artifact-deliberate"]
+    assert [scenario["name"] for scenario in artifact_deliberate] == [
+        "artifact-deliberate-ambiguity",
+        "artifact-never-ask",
+        "artifact-stale-rerun",
+    ]
+
+
 def test_load_manifest_config_accepts_shard_manifest() -> None:
-    manifest = SCRIPT.load_manifest_config(SCRIPT.DEFAULT_CONFIG_PATH)
+    manifest = SCRIPT.load_manifest_config(SCRIPT.CANONICAL_TEMPLATE_PATH)
 
     assert isinstance(manifest, SCRIPT.ShardManifestConfig)
     assert manifest.default_task == (REPO_ROOT / SCRIPT.EXAMPLE_TASK_PATH).resolve(
@@ -578,7 +626,7 @@ validators: []
 
 
 def test_preflight_returns_provider_and_git_checks(monkeypatch: pytest.MonkeyPatch) -> None:
-    manifest = SCRIPT.load_manifest_config(SCRIPT.DEFAULT_CONFIG_PATH)
+    manifest = SCRIPT.load_manifest_config(SCRIPT.CANONICAL_TEMPLATE_PATH)
     monkeypatch.setattr(
         SCRIPT.shutil,
         "which",
@@ -603,7 +651,7 @@ def test_preflight_returns_provider_and_git_checks(monkeypatch: pytest.MonkeyPat
 
 
 def test_provision_git_workspace_creates_clean_git_repo() -> None:
-    manifest = SCRIPT.load_manifest_config(SCRIPT.DEFAULT_CONFIG_PATH)
+    manifest = SCRIPT.load_manifest_config(SCRIPT.CANONICAL_TEMPLATE_PATH)
 
     provisioned = SCRIPT.provision_git_workspace(
         manifest,
@@ -763,7 +811,7 @@ def test_main_shard_manifest_rejects_workspace_override() -> None:
     exit_code = SCRIPT.main(
         [
             "--config",
-            str(SCRIPT.DEFAULT_CONFIG_PATH.relative_to(REPO_ROOT)),
+            str(SCRIPT.CANONICAL_TEMPLATE_PATH.relative_to(REPO_ROOT)),
             "--shard",
             "seam-adjudicate",
             "--pass-id",
@@ -795,7 +843,7 @@ def test_main_preflight_only_succeeds_with_stubbed_checks(
     exit_code = SCRIPT.main(
         [
             "--config",
-            str(SCRIPT.DEFAULT_CONFIG_PATH.relative_to(REPO_ROOT)),
+            str(SCRIPT.CANONICAL_TEMPLATE_PATH.relative_to(REPO_ROOT)),
             "--shard",
             "seam-adjudicate",
             "--preflight-only",

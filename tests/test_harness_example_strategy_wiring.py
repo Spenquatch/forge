@@ -24,6 +24,10 @@ def _resolved_execution_mode(strategy_path: Path) -> str:
     return contract.trust_review.execution_mode
 
 
+def _scenario_names(scenarios: list[dict[str, object]]) -> list[str]:
+    return [str(scenario["name"]) for scenario in scenarios]
+
+
 def test_focus_gate_adjudicate_examples_clone_base_analysis_review_strategies():
     cases = [
         (
@@ -196,14 +200,54 @@ def test_focus_gate_live_acceptance_templates_still_target_canonical_trust_examp
     canonical_manifest = load_structured_file(
         Path("examples/harness/live_acceptance/focus_gate_acceptance.template.yaml")
     )
+    local_manifest = load_structured_file(
+        Path("examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml")
+    )
     compatibility_manifest = load_structured_file(
         Path("examples/harness/live_acceptance/m2_focus_gate_local.template.yaml")
     )
+
+    canonical_shards = {
+        shard["name"]: shard["scenarios"] for shard in canonical_manifest["shards"]
+    }
+    seam_deliberate = canonical_shards["seam-deliberate"]
+    assert _scenario_names(seam_deliberate) == [
+        "deliberate-refined-success",
+        "deliberate-refinement-exhausted",
+        "stale-rerun",
+    ]
+    assert seam_deliberate[0]["expected_decision_state"] == "selected"
+    assert seam_deliberate[0]["expect_proposer_artifacts"] is True
+    assert seam_deliberate[0]["expect_downstream_bridge"] is True
+    assert seam_deliberate[1]["task"] == (
+        "examples/harness/tasks/recommend_automation_improvements_never_ask.yaml"
+    )
+    assert seam_deliberate[1]["expected_decision_state"] == "no_viable_focus"
+    assert seam_deliberate[1]["expect_proposer_artifacts"] is False
+    assert seam_deliberate[1]["expect_downstream_bridge"] is False
+    assert _scenario_names(canonical_shards["artifact-deliberate"]) == [
+        "artifact-deliberate-ambiguity",
+        "artifact-never-ask",
+        "artifact-stale-rerun",
+    ]
+
+    local_seam_deliberate = [
+        scenario
+        for scenario in local_manifest["scenarios"]
+        if scenario["expected_gate_path"] == "deliberate"
+        and scenario["expected_focus_type"] == "seam"
+    ]
+    assert _scenario_names(local_seam_deliberate) == [
+        "deliberate-refined-success",
+        "deliberate-refinement-exhausted",
+        "stale-rerun",
+    ]
 
     assert (
         canonical_manifest["default_task"]
         == "examples/harness/tasks/recommend_automation_improvements.yaml"
     )
+    assert local_manifest["task"] == canonical_manifest["default_task"]
     assert compatibility_manifest["task"] == canonical_manifest["default_task"]
     assert compatibility_manifest["strategies"] == {
         "bounded": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",

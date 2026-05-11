@@ -24,14 +24,14 @@ shards:
         expect_downstream_bridge: true
   - name: seam-deliberate
     scenarios:
-      - name: deliberate-ambiguity
+      - name: deliberate-refined-success
         strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
         expected_gate_path: deliberate
         expected_focus_type: seam
-        expected_decision_state: clarification_requested
-        expect_proposer_artifacts: false
-        expect_downstream_bridge: false
-      - name: never-ask
+        expected_decision_state: selected
+        expect_proposer_artifacts: true
+        expect_downstream_bridge: true
+      - name: deliberate-refinement-exhausted
         task: examples/harness/tasks/recommend_automation_improvements_never_ask.yaml
         strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
         expected_gate_path: deliberate
