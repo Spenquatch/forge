@@ -16,3 +16,4 @@ archived
 .gstack
 .worktrees/
 examples/harness/live_acceptance/m2_focus_gate_local.yaml
+.runs

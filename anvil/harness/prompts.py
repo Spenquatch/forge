@@ -24,6 +24,7 @@ __all__ = [
     "build_focus_gate_deliberate_prompt",
     "build_analysis_critic_prompt",
     "build_analysis_auditor_prompt",
+    "build_trust_attestation_review_prompt",
     "build_analysis_reviser_prompt",
 ]
 
@@ -1522,6 +1523,66 @@ Audit round: {round_index}
 {_json_block('Open issue ledger entering this audit', issue_ledger)}
 
 {_json_block('Open topic ledger entering this audit', topic_ledger)}
+
+Validator and advisory results:
+{_validator_block(validation_runs)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
+
+
+def build_trust_attestation_review_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    bounded_attestation_input: dict[str, Any] | None,
+    validation_runs: list[ValidationRun],
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+) -> str:
+    if contract.mode != "trust":
+        raise ValueError("trust attestation review prompt requires trust mode.")
+    if contract.trust_review.execution_mode != "attestation_over_bounded":
+        raise ValueError(
+            "trust attestation review prompt requires execution_mode=attestation_over_bounded."
+        )
+
+    bounded_analysis = (
+        bounded_attestation_input.get("bounded_analysis")
+        if isinstance(bounded_attestation_input, dict)
+        else None
+    )
+    return f"""
+You are the TRUST_ATTESTATION_REVIEW stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Consume the supplied `bounded_attestation_input` handoff exactly as provided; do not rewrite, replace, or regenerate its bounded analysis.
+- This path performs trust attestation over the bounded handoff, not a fresh analysis pass.
+- Return ONLY the JSON object required by the existing trust review schema.
+
+Your job:
+1. Inspect the current workspace directly before you attest to anything.
+2. Use `bounded_attestation_input` as the frozen bounded-analysis handoff for recommendation order, evidence order, review_surface, and prior ledgers.
+3. Return dense `recommendation_reviews` coverage across every bounded recommendation index from 1..N with no gaps.
+4. For each recommendation verdict, directly re-check the bounded workspace evidence and record that re-check in `verified_evidence_refs` plus `checked_files`.
+5. Use `issue_closure_reviews` and `topic_closure_reviews` only for recommendation_index=null closures; recommendation-linked closures must stay attached to the covered recommendation review.
+6. Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path.
+7. Use the shared confidence rubric below when judging whether the bounded recommendations remain acceptable under trust-mode scrutiny.
+
+{_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
+{_trust_review_policy_block(contract)}
+{_trust_recommendation_atomicity_block(contract, role="auditor")}
+{_review_payload_ref_block(contract)}
+{_issue_taxonomy_block(contract)}
+{_mode_acceptance_guidance_block(contract)}
+{_confidence_rubric_block(contract)}
+{_recommendation_review_coverage_block(bounded_analysis)}
+
+{_task_block(task, prompt_preamble)}
+
+{_json_block('bounded_attestation_input', bounded_attestation_input)}
 
 Validator and advisory results:
 {_validator_block(validation_runs)}

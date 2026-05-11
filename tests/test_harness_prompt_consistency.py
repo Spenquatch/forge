@@ -17,6 +17,7 @@ from anvil.harness.prompts import (
     build_focus_gate_adjudicate_prompt,
     build_focus_gate_deliberate_prompt,
     build_focus_probe_prompt,
+    build_trust_attestation_review_prompt,
 )
 from anvil.harness.types import StrategyConfig, TaskSpec
 
@@ -54,47 +55,52 @@ def _task() -> TaskSpec:
     )
 
 
-def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
-    return StrategyConfig.from_dict(
-        {
-            "name": "analysis-review-codex-claude",
-            "kind": kind,
-            "roles": {
-                "proposer": {
-                    "provider": "codex_cli",
-                    "effort": "medium",
-                    "access": "read",
-                },
-                "critic": {
-                    "provider": "claude_code",
-                    "effort": "high",
-                    "access": "read",
-                },
-                "reviser": {
-                    "provider": "codex_cli",
-                    "effort": "high",
-                    "access": "read",
-                },
-                "auditor": {
-                    "provider": "claude_code",
-                    "effort": "high",
-                    "access": "read",
-                },
+def _strategy(
+    kind: str = "analysis_review_bounded_v1",
+    *,
+    trust_execution_mode: str | None = None,
+) -> StrategyConfig:
+    payload = {
+        "name": "analysis-review-codex-claude",
+        "kind": kind,
+        "roles": {
+            "proposer": {
+                "provider": "codex_cli",
+                "effort": "medium",
+                "access": "read",
             },
-            "review_loops": {
-                "min_loops": 1,
-                "max_loops": 3,
-                "always_run_first_revision": True,
-                "stop_when": {
-                    "max_open_medium_issues": 0,
-                    "min_grounding_score": 0.8,
-                    "min_actionability_score": 0.75,
-                    "min_scope_compliance_score": 0.85,
-                },
+            "critic": {
+                "provider": "claude_code",
+                "effort": "high",
+                "access": "read",
             },
-            "validators": [],
-        }
-    )
+            "reviser": {
+                "provider": "codex_cli",
+                "effort": "high",
+                "access": "read",
+            },
+            "auditor": {
+                "provider": "claude_code",
+                "effort": "high",
+                "access": "read",
+            },
+        },
+        "review_loops": {
+            "min_loops": 1,
+            "max_loops": 3,
+            "always_run_first_revision": True,
+            "stop_when": {
+                "max_open_medium_issues": 0,
+                "min_grounding_score": 0.8,
+                "min_actionability_score": 0.75,
+                "min_scope_compliance_score": 0.85,
+            },
+        },
+        "validators": [],
+    }
+    if trust_execution_mode is not None:
+        payload["trust_review"] = {"execution_mode": trust_execution_mode}
+    return StrategyConfig.from_dict(payload)
 
 
 @pytest.mark.parametrize(
@@ -1013,3 +1019,83 @@ def test_non_selected_focus_gate_decision_is_not_injected_into_analysis_prompts(
     )
 
     assert "Focus Gate Decision:" not in proposer
+
+
+def test_trust_attestation_review_prompt_consumes_frozen_bounded_handoff():
+    task = _task()
+    strategy = _strategy(
+        "analysis_review_trust_v1",
+        trust_execution_mode="attestation_over_bounded",
+    )
+    contract = build_analysis_review_contract(task, strategy)
+    contract.trust_review.execution_mode = "attestation_over_bounded"
+    bounded_attestation_input = {
+        "schema_version": "analysis_review_bounded_attestation_input_v1",
+        "source": {
+            "strategy_kind": "analysis_review_bounded_v1",
+            "mode": "bounded",
+            "analysis_stage_role_name": "reviser_round_1",
+            "analysis_stage_index": 3,
+            "bounded_payload_sha256": "abc123",
+        },
+        "focus_decision": None,
+        "contract": {
+            "contract_version": "analysis_review_v1_contract_v10",
+            "strategy_kind": "analysis_review_bounded_v1",
+            "trust_execution_mode": "attestation_over_bounded",
+        },
+        "bounded_analysis": {
+            "summary": "Keep the release-watch review bounded.",
+            "recommendations": [
+                {"title": "Align release-watch issue handling"},
+                {"title": "Document snapshot timeout parity"},
+            ],
+            "files_reviewed": [
+                ".github/workflows/codex-cli-release-watch.yml",
+                ".github/workflows/release.yml",
+            ],
+            "primary_seam": {
+                "seam_id": canonical_seam_id_for_paths(
+                    [".github/workflows/codex-cli-release-watch.yml"]
+                ),
+                "summary": "Primary release-watch seam.",
+                "why_primary": "It is the governing workflow.",
+                "paths": [".github/workflows/codex-cli-release-watch.yml"],
+            },
+            "secondary_seams_considered": [],
+            "scope_escapes": [],
+        },
+        "review_surface": {
+            "recommendation_count": 2,
+            "recommendations_with_review_surface": 0,
+            "review_stages": [],
+            "scope_escape_count": 0,
+        },
+        "ledgers": {"issue_ledger": [], "topic_ledger": []},
+        "provenance_context": {
+            "normalized_ref_count": 2,
+            "recommendation_evidence_index": {
+                "1": [".github/workflows/codex-cli-release-watch.yml"],
+                "2": [".github/workflows/release.yml"],
+            },
+        },
+    }
+
+    prompt = build_trust_attestation_review_prompt(
+        task,
+        strategy.prompt_preamble,
+        bounded_attestation_input,
+        validation_runs=[],
+        git_snapshot=_GIT_SNAPSHOT,
+        contract=contract,
+    )
+
+    assert "You are the TRUST_ATTESTATION_REVIEW stage in an analysis-review harness." in prompt
+    assert "Consume the supplied `bounded_attestation_input` handoff exactly as provided" in prompt
+    assert "Return dense `recommendation_reviews` coverage across every bounded recommendation index from 1..N with no gaps." in prompt
+    assert "For each recommendation verdict, directly re-check the bounded workspace evidence and record that re-check in `verified_evidence_refs` plus `checked_files`." in prompt
+    assert "Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path." in prompt
+    assert "bounded_attestation_input:" in prompt
+    assert '"trust_execution_mode": "attestation_over_bounded"' in prompt
+    assert "Align release-watch issue handling" in prompt
+    assert "Document snapshot timeout parity" in prompt

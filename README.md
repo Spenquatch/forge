@@ -206,6 +206,7 @@ poetry run python -m anvil.cli harness-run   --task examples/harness/tasks/recom
 ```
 
 For the alternate trust-oriented mode, swap in `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
+That canonical `analysis_review_trust_*` entrypoint is attestation-first in M3A. Use `analysis_review_trust_legacy_*` files only for explicit `legacy_full_review` compatibility checks.
 
 Those adjudicate example strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 
@@ -260,7 +261,7 @@ poetry run python scripts/run_focus_gate_acceptance.py \
 All four shards must pass under the same commit SHA and the same `pass-id` for M4 closeout.
 The script provisions its own temporary git workspace; do not pass `--workspace` to the canonical shard path and do not manually prepare `/tmp` workspaces.
 
-The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. It still defaults to `examples/harness/live_acceptance/m2_focus_gate_local.yaml` and still accepts the older `strategies:` shorthand manifest surface.
+The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. It still defaults to `examples/harness/live_acceptance/m2_focus_gate_local.yaml` and still accepts the older `strategies:` shorthand manifest surface, but its trust slot should still point at the canonical attestation-first `analysis_review_trust_*` strategy unless you are intentionally running a `legacy_full_review` compatibility check with an explicit `analysis_review_trust_legacy_*` file.
 
 For analysis-review tasks, `review_requirements.evidence_cap_policy` defaults to `trim_to_cap`, which canonicalizes path-like refs and trims oversize evidence lists before semantic validation. Set it to `strict` when you want fail-fast bounded-review enforcement instead.
 

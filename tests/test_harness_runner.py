@@ -947,6 +947,96 @@ class _ArtifactFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
         return (_SIMPLE_PRIMARY_CANONICAL_SEAM_ID, "")
 
 
+class _TrustFocusGateHarnessAdapter(_FocusGateHarnessAdapter):
+    @staticmethod
+    def _trust_metadata() -> dict[int, dict[str, object]]:
+        return {
+            1: {
+                "verified_evidence_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
+                "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "affected_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "grounding_mode": "direct",
+            },
+            2: {
+                "verified_evidence_refs": [
+                    ".github/workflows/claude-code-release-watch.yml"
+                ],
+                "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+                "affected_files": [".github/workflows/claude-code-release-watch.yml"],
+                "grounding_mode": "direct",
+            },
+        }
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        return _apply_trust_grounding_metadata(
+            payload,
+            metadata_by_index=self._trust_metadata(),
+        )
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "proposer":
+            return self._base_analysis(revised=False)
+        if role_name == "reviser_round_1":
+            return self._base_analysis(revised=True)
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"} and isinstance(payload, dict):
+            for item in payload["recommendation_reviews"]:
+                metadata = self._trust_metadata()[int(item["recommendation_index"])]
+                item["checked_files"] = list(metadata["checked_files"])
+                item["verified_evidence_refs"] = list(
+                    metadata["verified_evidence_refs"]
+                )
+        return payload
+
+
+class _TrustArtifactFocusGateHarnessAdapter(_ArtifactFocusGateHarnessAdapter):
+    @staticmethod
+    def _trust_metadata() -> dict[int, dict[str, object]]:
+        return {
+            1: {
+                "verified_evidence_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
+                "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "affected_files": [".github/workflows/codex-cli-release-watch.yml"],
+                "grounding_mode": "direct",
+            },
+            2: {
+                "verified_evidence_refs": [
+                    ".github/workflows/claude-code-release-watch.yml"
+                ],
+                "checked_files": [".github/workflows/claude-code-release-watch.yml"],
+                "affected_files": [".github/workflows/claude-code-release-watch.yml"],
+                "grounding_mode": "direct",
+            },
+        }
+
+    def _base_analysis(self, *, revised: bool) -> dict:
+        payload = super()._base_analysis(revised=revised)
+        return _apply_trust_grounding_metadata(
+            payload,
+            metadata_by_index=self._trust_metadata(),
+        )
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "proposer":
+            return self._base_analysis(revised=False)
+        if role_name == "reviser_round_1":
+            return self._base_analysis(revised=True)
+        payload = super()._payload_for_role(role_name)
+        if role_name in {"critic", "auditor"} and isinstance(payload, dict):
+            for item in payload["recommendation_reviews"]:
+                metadata = self._trust_metadata()[int(item["recommendation_index"])]
+                item["checked_files"] = list(metadata["checked_files"])
+                item["verified_evidence_refs"] = list(
+                    metadata["verified_evidence_refs"]
+                )
+        return payload
+
+
 class _ArtifactInitialSelectionHarnessAdapter(_ArtifactFocusGateHarnessAdapter):
     def _probe_candidates(self) -> list[dict[str, object]]:
         return [
@@ -1681,6 +1771,37 @@ class _TrustCorroborationHarnessAdapter(_AcceptingHarnessAdapter):
                 )
             return payload
         raise AssertionError(f"Unexpected role: {role_name}")
+
+
+class _TrustAttestationHarnessAdapter(_BoundedCorroborationHarnessAdapter):
+    def run(self, request):
+        if (
+            request.role_name == "auditor"
+            and "TRUST_ATTESTATION_REVIEW" in request.prompt_text
+        ):
+            payload = _build_corroboration_review_payload(
+                summary=(
+                    "The attestation review confirms the bounded draft stays grounded "
+                    "inside the frozen review surface."
+                ),
+                files_reviewed=_corroboration_analysis_files_reviewed(),
+                recommendation_count=len(
+                    _build_corroboration_analysis_payload(revised=False)[
+                        "recommendations"
+                    ]
+                ),
+            )
+            metadata_by_index = _trust_recommendation_metadata(
+                inference_backed_indices={3}
+            )
+            for item in payload["recommendation_reviews"]:
+                metadata = metadata_by_index[int(item["recommendation_index"])]
+                item["checked_files"] = list(metadata["checked_files"])
+                item["verified_evidence_refs"] = list(
+                    metadata["verified_evidence_refs"]
+                )
+            return _successful_provider_run(request, payload=payload)
+        return super().run(request)
 
 
 class _RelabeledTrustCorroborationHarnessAdapter(_TrustCorroborationHarnessAdapter):
@@ -2761,6 +2882,107 @@ class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
         return payload
 
 
+class _TrustAttestationHistoricalIssueReplayHarnessAdapter(_TrustInferenceHarnessAdapter):
+    _ISSUE_ID = "AR-001"
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            payload["verdict"] = "revise"
+            payload["summary"] = "Recommendation 2 still overclaims the bounded evidence."
+            payload["issues"] = [
+                {
+                    "issue_id": self._ISSUE_ID,
+                    "severity": "medium",
+                    "kind": "overclaim",
+                    "blocking_class": "correctness",
+                    "recommendation_index": 2,
+                    "title": "Recommendation 2 overstates the current repo evidence.",
+                    "evidence": "The bounded evidence supports a narrower recommendation 2 claim.",
+                    "repair_hint": "Narrow recommendation 2 to the directly verified workflow evidence.",
+                    "why_not_raised_earlier": None,
+                }
+            ]
+            payload["recommendation_reviews"][1]["verdict"] = "revise"
+            payload["recommendation_reviews"][1]["open_issue_ids"] = [self._ISSUE_ID]
+            return payload
+        if role_name == "reviser_round_1":
+            payload = self._base_analysis(revised=True)
+            payload["issue_resolution_map"] = [
+                {
+                    "issue_id": self._ISSUE_ID,
+                    "status": "addressed",
+                    "change_summary": "Recommendation 2 now stays within the directly verified workflow evidence.",
+                    "residual_risk": "",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            payload = _TrustInferenceHarnessAdapter._payload_for_role(self, role_name)
+            payload["resolved_issue_ids"] = [self._ISSUE_ID]
+            return payload
+        return super()._payload_for_role(role_name)
+
+    def run(self, request):
+        if (
+            request.role_name == "auditor"
+            and "TRUST_ATTESTATION_REVIEW" in request.prompt_text
+        ):
+            payload = _TrustInferenceHarnessAdapter._payload_for_role(self, "auditor")
+            payload["resolved_issue_ids"] = [self._ISSUE_ID]
+            return _successful_provider_run(request, payload=payload)
+        return super().run(request)
+
+
+class _TrustAttestationHistoricalTopicReplayHarnessAdapter(_TrustInferenceHarnessAdapter):
+    _TOPIC_ID = "TOPIC-001"
+
+    def _payload_for_role(self, role_name: str):
+        if role_name == "critic":
+            payload = super()._payload_for_role(role_name)
+            payload["verdict"] = "revise"
+            payload["summary"] = "Recommendation 2 still needs a concrete bounded fallback classification."
+            payload["topics"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "severity": "medium",
+                    "title": "Recommendation 2 needs a concrete fallback classification.",
+                    "evidence": "The bounded workflow evidence still leaves the fallback classification implicit.",
+                    "repair_hint": "Name the fallback classification directly in recommendation 2.",
+                    "recommendation_index": 2,
+                }
+            ]
+            payload["recommendation_reviews"][1]["verdict"] = "revise"
+            return payload
+        if role_name == "reviser_round_1":
+            payload = self._base_analysis(revised=True)
+            payload["topic_resolution_map"] = [
+                {
+                    "topic_id": self._TOPIC_ID,
+                    "status": "addressed",
+                    "recommendation_index": 2,
+                    "change_summary": "Recommendation 2 now includes the fallback classification.",
+                    "residual_risk": "",
+                }
+            ]
+            return payload
+        if role_name == "auditor":
+            payload = _TrustInferenceHarnessAdapter._payload_for_role(self, role_name)
+            payload["resolved_topic_ids"] = [self._TOPIC_ID]
+            return payload
+        return super()._payload_for_role(role_name)
+
+    def run(self, request):
+        if (
+            request.role_name == "auditor"
+            and "TRUST_ATTESTATION_REVIEW" in request.prompt_text
+        ):
+            payload = _TrustInferenceHarnessAdapter._payload_for_role(self, "auditor")
+            payload["resolved_topic_ids"] = [self._TOPIC_ID]
+            return _successful_provider_run(request, payload=payload)
+        return super().run(request)
+
+
 class _TrustSemanticWarningHarnessAdapter(_TrustInferenceHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
@@ -3110,6 +3332,7 @@ def _write_task_and_strategy(
     evidence_cap_policy: str = "trim_to_cap",
     review_max_loops: int | None = None,
     strategy_kind: str = "analysis_review_bounded_v1",
+    trust_execution_mode: str | None = None,
     task_focus_gate: str = "",
     task_focus_gate_answer: str = "",
     strategy_focus_gate: str = "",
@@ -3148,6 +3371,12 @@ review_requirements:
 review_loops:
   max_loops: {review_max_loops}
 """
+    trust_review = ""
+    if trust_execution_mode is not None:
+        trust_review = f"""
+trust_review:
+  execution_mode: {trust_execution_mode}
+"""
     focus_gate_role = ""
     if include_focus_gate_role:
         focus_gate_role = """
@@ -3172,7 +3401,7 @@ roles:
   auditor:
     provider: fake
     access: read
-{focus_gate_role}{strategy_focus_gate}
+{focus_gate_role}{strategy_focus_gate}{trust_review}
 validators: []
 {review_loops}""".strip()
         + "\n",
@@ -3279,6 +3508,7 @@ def _run_analysis_review_summary(
     provider_factory,
     workspace: Path,
     strategy_kind: str,
+    trust_execution_mode: str | None = None,
     specs_dir_name: str,
     runs_dir_name: str,
 ) -> tuple[HarnessRunner, dict[str, object]]:
@@ -3287,6 +3517,7 @@ def _run_analysis_review_summary(
     task_path, strategy_path = _write_task_and_strategy(
         specs_dir,
         strategy_kind=strategy_kind,
+        trust_execution_mode=trust_execution_mode,
     )
     monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
     monkeypatch.setattr("anvil.harness.runner.get_provider", provider_factory)
@@ -5737,6 +5968,7 @@ def test_analysis_review_runner_drops_issue_closure_reviews_without_prior_open_i
             "summary": "This closure review should be dropped when nothing is open yet.",
         }
     ]
+    payload["carried_forward_issue_ids"] = []
 
     normalized, _, warnings = runner._normalize_analysis_review_payload(
         payload,
@@ -5922,9 +6154,19 @@ def test_analysis_review_runner_normalizes_null_review_refs_before_schema_revali
     assert run_envelope.get("schema_validation_errors") in (None, [])
 
 
-def test_analysis_review_runner_drops_current_stage_issue_ids_from_classification_arrays(
+@pytest.mark.parametrize(
+    ("field_name", "issue_id"),
+    [
+        ("resolved_issue_ids", "AR-001"),
+        ("carried_forward_issue_ids", "AR-001"),
+        ("waived_issue_ids", "AR-001"),
+    ],
+)
+def test_analysis_review_runner_drops_issue_classification_ids_without_prior_open_records(
     tmp_path,
     monkeypatch,
+    field_name,
+    issue_id,
 ):
     workspace = _prepare_workspace(tmp_path)
     task_path, strategy_path = _write_task_and_strategy(
@@ -5949,6 +6191,12 @@ def test_analysis_review_runner_drops_current_stage_issue_ids_from_classificatio
     payload = _PartialAcceptanceLocalizedAcceptedIssueHarnessAdapter(
         blocking_class="actionability"
     )._payload_for_role("auditor")
+    for candidate_field_name in (
+        "resolved_issue_ids",
+        "carried_forward_issue_ids",
+        "waived_issue_ids",
+    ):
+        payload[candidate_field_name] = [issue_id] if candidate_field_name == field_name else []
 
     normalized, payload_provenance, warnings = (
         runner._normalize_analysis_review_payload(
@@ -5965,9 +6213,69 @@ def test_analysis_review_runner_drops_current_stage_issue_ids_from_classificatio
     assert normalized["carried_forward_issue_ids"] == []
     assert normalized["waived_issue_ids"] == []
     assert warnings == [
-        "carried_forward_issue_ids included current-stage issue IDs and they were dropped: AR-001"
+        f"{field_name} included IDs but there were no prior-open issue IDs for this stage, so they were dropped: {issue_id}"
     ]
     assert payload_provenance["uncovered_global_issue_ids"] == []
+
+
+@pytest.mark.parametrize(
+    ("field_name", "topic_id"),
+    [
+        ("resolved_topic_ids", "TOPIC-001"),
+        ("carried_forward_topic_ids", "TOPIC-001"),
+        ("waived_topic_ids", "TOPIC-001"),
+    ],
+)
+def test_analysis_review_runner_drops_topic_classification_ids_without_prior_open_records(
+    tmp_path,
+    monkeypatch,
+    field_name,
+    topic_id,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TopicLifecycleHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TopicLifecycleHarnessAdapter()._payload_for_role("auditor")
+    for candidate_field_name in (
+        "resolved_topic_ids",
+        "carried_forward_topic_ids",
+        "waived_topic_ids",
+    ):
+        payload[candidate_field_name] = [topic_id] if candidate_field_name == field_name else []
+
+    normalized, payload_provenance, warnings = (
+        runner._normalize_analysis_review_payload(
+            payload,
+            role_name="auditor",
+            payload_provenance_mode="none",
+            contract=runner._analysis_contract(),
+            prior_open_issue_records=[],
+            prior_open_topic_records=[],
+        )
+    )
+
+    assert normalized["resolved_topic_ids"] == []
+    assert normalized["carried_forward_topic_ids"] == []
+    assert normalized["waived_topic_ids"] == []
+    assert warnings == [
+        f"{field_name} included IDs but there were no prior-open topic IDs for this stage, so they were dropped: {topic_id}"
+    ]
+    assert payload_provenance["uncovered_global_topic_ids"] == []
 
 
 def test_analysis_review_runner_trust_review_marks_top_level_only_refs_as_insufficient(
@@ -6748,6 +7056,10 @@ def test_analysis_review_runner_trust_review_marks_global_topic_closure_as_uncov
         role_name="critic",
         payload_provenance_mode="payload_hash_and_refs",
         contract=runner._analysis_contract(),
+        prior_open_issue_records=[],
+        prior_open_topic_records=[
+            {"topic_id": "TOPIC-001", "recommendation_index": None}
+        ],
     )
 
     assert warnings == []
@@ -6787,6 +7099,10 @@ def test_analysis_review_runner_trust_review_marks_global_issue_closure_as_uncov
         role_name="critic",
         payload_provenance_mode="payload_hash_and_refs",
         contract=runner._analysis_contract(),
+        prior_open_issue_records=[
+            {"issue_id": "AR-001", "recommendation_index": None}
+        ],
+        prior_open_topic_records=[],
     )
 
     assert warnings == []
@@ -6836,6 +7152,10 @@ def test_analysis_review_runner_trust_review_marks_scoped_global_topic_closure_a
         role_name="critic",
         payload_provenance_mode="payload_hash_and_refs",
         contract=runner._analysis_contract(),
+        prior_open_issue_records=[],
+        prior_open_topic_records=[
+            {"topic_id": "TOPIC-001", "recommendation_index": None}
+        ],
     )
 
     assert warnings == []
@@ -6889,6 +7209,10 @@ def test_analysis_review_runner_trust_review_marks_scoped_global_issue_closure_a
         role_name="critic",
         payload_provenance_mode="payload_hash_and_refs",
         contract=runner._analysis_contract(),
+        prior_open_issue_records=[
+            {"issue_id": "AR-001", "recommendation_index": None}
+        ],
+        prior_open_topic_records=[],
     )
 
     assert warnings == []
@@ -8397,6 +8721,250 @@ def test_bounded_attestation_input_persists_and_mirrors_summary_json(
     }
     assert payload["contract"]["trust_execution_mode"] == "legacy_full_review"
     _assert_summary_json_mirrors_bounded_attestation_input(runner, summary)
+
+
+def test_analysis_review_runner_attestation_mode_reuses_bounded_final_analysis_and_persists_handoff(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    runner, summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _TrustAttestationHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_trust_v1",
+        trust_execution_mode="attestation_over_bounded",
+        specs_dir_name="trust_attestation_specs",
+        runs_dir_name="trust_attestation_runs",
+    )
+
+    assert summary["analysis_review_contract"]["mode"] == "trust"
+    assert (
+        summary["analysis_review_contract"]["trust_review"]["execution_mode"]
+        == "attestation_over_bounded"
+    )
+    payload = summary[BOUNDED_ATTESTATION_INPUT_KEY]
+    assert payload == summary["run_details"][BOUNDED_ATTESTATION_INPUT_KEY]
+    assert payload["contract"]["trust_execution_mode"] == "attestation_over_bounded"
+    assert summary["run_details"]["bounded_review_summary"] == summary[
+        "bounded_review_summary"
+    ]
+
+    final_analysis = summary["run_details"]["final_analysis"]
+    assert payload["bounded_analysis"] == {
+        "summary": final_analysis["summary"],
+        "recommendations": final_analysis["recommendations"],
+        "files_reviewed": final_analysis["files_reviewed"],
+        "primary_seam": final_analysis["primary_seam"],
+        "secondary_seams_considered": final_analysis["secondary_seams_considered"],
+        "scope_escapes": final_analysis["scope_escapes"],
+    }
+
+    review_stages = [
+        stage
+        for stage in summary["agent_stages"]
+        if stage["role_name"] in {"critic", "auditor"}
+    ]
+    assert review_stages[0]["role_name"] == "critic"
+    assert review_stages[-1]["role_name"] == "auditor"
+    assert review_stages[-1]["structured_output"] == summary["run_details"]["final_review"]
+    assert review_stages[-1]["semantic_validation_payload_provenance"]["status"] == "bound"
+    assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
+    assert summary["analysis_review_status"]["mode"] == "trust"
+    _assert_summary_json_mirrors_bounded_attestation_input(runner, summary)
+
+
+def test_analysis_review_runner_attestation_mode_drops_replayed_historical_issue_classifications(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    runner, summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _TrustAttestationHistoricalIssueReplayHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_trust_v1",
+        trust_execution_mode="attestation_over_bounded",
+        specs_dir_name="trust_attestation_issue_replay_specs",
+        runs_dir_name="trust_attestation_issue_replay_runs",
+    )
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    final_review = summary["run_details"]["final_review"]
+    assert final_review["resolved_issue_ids"] == []
+    assert final_review["carried_forward_issue_ids"] == []
+    assert final_review["waived_issue_ids"] == []
+    assert any(
+        "resolved_issue_ids included IDs but there were no prior-open issue IDs for this stage"
+        in item["warning"]
+        for item in summary["analysis_review_status"]["semantic_warnings"]
+    )
+    provenance = summary["analysis_review_status"]["provenance"]
+    assert provenance["status"] == "bound"
+    assert provenance["uncovered_global_issue_ids"] == []
+    issue_ledger_by_id = {item["issue_id"]: item for item in summary["issue_ledger"]}
+    assert issue_ledger_by_id["AR-001"]["resolution_status"] == "resolved"
+
+
+def test_analysis_review_runner_attestation_mode_drops_replayed_historical_topic_classifications(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    runner, summary = _run_analysis_review_summary(
+        tmp_path,
+        monkeypatch,
+        provider_factory=lambda name: _TrustAttestationHistoricalTopicReplayHarnessAdapter(),
+        workspace=workspace,
+        strategy_kind="analysis_review_trust_v1",
+        trust_execution_mode="attestation_over_bounded",
+        specs_dir_name="trust_attestation_topic_replay_specs",
+        runs_dir_name="trust_attestation_topic_replay_runs",
+    )
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    final_review = summary["run_details"]["final_review"]
+    assert final_review["resolved_topic_ids"] == []
+    assert final_review["carried_forward_topic_ids"] == []
+    assert final_review["waived_topic_ids"] == []
+    assert any(
+        "resolved_topic_ids included IDs but there were no prior-open topic IDs for this stage"
+        in item["warning"]
+        for item in summary["analysis_review_status"]["semantic_warnings"]
+    )
+    provenance = summary["analysis_review_status"]["provenance"]
+    assert provenance["status"] == "bound"
+    assert provenance["uncovered_global_topic_ids"] == []
+    topic_ledger_by_id = {item["topic_id"]: item for item in summary["topic_ledger"]}
+    assert topic_ledger_by_id["TOPIC-001"]["resolution_status"] == "addressed"
+
+
+@pytest.mark.parametrize(
+    ("adapter_cls", "focus_type", "default_path", "focus_gate_answer", "expect_handoff"),
+    [
+        (
+            _TrustFocusGateHarnessAdapter,
+            "seam",
+            "adjudicate",
+            "",
+            True,
+        ),
+        (
+            _TrustFocusGateHarnessAdapter,
+            "seam",
+            "deliberate",
+            "",
+            False,
+        ),
+        (
+            _TrustArtifactFocusGateHarnessAdapter,
+            "artifact",
+            "adjudicate",
+            "",
+            True,
+        ),
+        (
+            _TrustArtifactFocusGateHarnessAdapter,
+            "artifact",
+            "deliberate",
+            "",
+            False,
+        ),
+    ],
+    ids=[
+        "seam-adjudicate",
+        "seam-deliberate",
+        "artifact-adjudicate",
+        "artifact-deliberate",
+    ],
+)
+def test_analysis_review_runner_attestation_focus_gate_parity_matches_legacy_trust(
+    tmp_path,
+    monkeypatch,
+    adapter_cls,
+    focus_type,
+    default_path,
+    focus_gate_answer,
+    expect_handoff,
+):
+    workspace = _prepare_workspace(tmp_path)
+
+    def _run_mode(
+        mode_name: str,
+        *,
+        trust_execution_mode: str,
+    ) -> dict[str, object]:
+        specs_dir = tmp_path / f"{mode_name}_specs"
+        specs_dir.mkdir()
+        task_path, strategy_path = _write_task_and_strategy(
+            specs_dir,
+            strategy_kind="analysis_review_trust_v1",
+            trust_execution_mode=trust_execution_mode,
+            task_focus_gate=_task_focus_gate_block(allowed_focus_type=focus_type),
+            task_focus_gate_answer=focus_gate_answer,
+            strategy_focus_gate=_strategy_focus_gate_block(default_path=default_path),
+            include_focus_gate_role=True,
+        )
+        monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+        monkeypatch.setattr(
+            "anvil.harness.runner.get_provider",
+            lambda name: adapter_cls(),
+        )
+        runner = HarnessRunner(
+            task_path=task_path,
+            strategy_path=strategy_path,
+            workspace=workspace,
+            out_root=tmp_path / f"{mode_name}_runs",
+        )
+        return runner.run()
+
+    legacy_summary = _run_mode(
+        "legacy",
+        trust_execution_mode="legacy_full_review",
+    )
+    attestation_summary = _run_mode(
+        "attestation",
+        trust_execution_mode="attestation_over_bounded",
+    )
+
+    assert legacy_summary["focus_decision"] == attestation_summary["focus_decision"]
+    assert legacy_summary["verdict"] == attestation_summary["verdict"]
+    assert legacy_summary["artifacts"].get("final_artifact_kind") == (
+        attestation_summary["artifacts"].get("final_artifact_kind")
+    )
+
+    legacy_status = legacy_summary.get("analysis_review_status")
+    attestation_status = attestation_summary.get("analysis_review_status")
+    if legacy_status is None or attestation_status is None:
+        assert legacy_status is None
+        assert attestation_status is None
+        assert BOUNDED_ATTESTATION_INPUT_KEY not in attestation_summary
+        return
+
+    legacy_indices = set(
+        legacy_status["recommendation_admissibility"][
+            "final_answer_recommendation_indices"
+        ]
+    )
+    attestation_indices = set(
+        attestation_status["recommendation_admissibility"][
+            "final_answer_recommendation_indices"
+        ]
+    )
+    assert attestation_indices.issubset(legacy_indices)
+
+    if expect_handoff:
+        assert BOUNDED_ATTESTATION_INPUT_KEY in attestation_summary
+        assert (
+            attestation_summary[BOUNDED_ATTESTATION_INPUT_KEY]["bounded_analysis"][
+                "recommendations"
+            ]
+            == legacy_summary["run_details"]["final_analysis"]["recommendations"]
+        )
+    else:
+        assert BOUNDED_ATTESTATION_INPUT_KEY not in attestation_summary
 
 
 def test_bounded_attestation_input_builder_returns_none_for_trust_mode(tmp_path):

@@ -390,9 +390,19 @@ def _assert_publication_parity(summary: dict[str, object]) -> None:
 
 
 def _assert_report_publication_state(report: str, expected_state: str) -> None:
-    expected_line = f"- Final publication: `{expected_state}`"
+    expected_line = f"- Publication outcome: `{expected_state}`"
     assert expected_line in _top_level_section(report, "## Overview")
     assert expected_line in _top_level_section(report, "## Analysis Review Status")
+
+
+def _assert_report_execution_mode(report: str, expected_mode: str) -> None:
+    expected_line = f"- Execution mode: `{expected_mode}`"
+    assert expected_line in _top_level_section(report, "## Overview")
+    analysis_review_status_section = _top_level_section(
+        report, "## Analysis Review Status"
+    )
+    if analysis_review_status_section:
+        assert expected_line in analysis_review_status_section
 
 
 def test_render_deliverable_markdown_attaches_caveats_to_affected_recommendations():
@@ -2381,7 +2391,8 @@ def test_render_report_renders_publishability_and_compact_provenance_previews():
 
     report = render_report(summary)
 
-    assert "- Final publication: `blocked`" in report
+    _assert_report_execution_mode(report, "trust")
+    assert "- Publication outcome: `blocked`" in report
     assert (
         "- Publication blockers: review topics are carried forward: TOPIC-001" in report
     )
@@ -2440,11 +2451,44 @@ def test_render_report_renders_non_accepted_verdict_blocker():
 
     report = render_report(summary)
 
-    assert "- Final publication: `blocked`" in report
+    _assert_report_execution_mode(report, "trust")
+    assert "- Publication outcome: `blocked`" in report
     assert (
         "- Publication blockers: content verdict is not fully accepted: accepted_partial"
         in report
     )
+
+
+def test_render_report_surfaces_trust_execution_mode_from_contract_without_status():
+    summary = {
+        "verdict": "accepted_with_warnings",
+        "task": {"id": "task-contract-trust-mode"},
+        "verdicts": {
+            "content_verdict": "accepted_with_warnings",
+            "validator_verdict": "not_run",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "validator_summary": {},
+        "run_details": {},
+        "analysis_review_contract": {"mode": "trust", "bounded_review": {}},
+        "analysis_review_coverage": {},
+        "topic_ledger": [],
+        "issue_ledger": [],
+        "agent_stages": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_policy_checks": [],
+        "artifacts": {},
+        "final_answer": {},
+    }
+
+    report = render_report(summary)
+    overview = _top_level_section(report, "## Overview")
+
+    assert "- Execution mode: `trust`" in overview
+    assert "- Publication outcome: `unknown`" in overview
+    assert "## Analysis Review Status" not in report
 
 
 def test_render_report_uses_defensive_publishability_fallback_when_blockers_missing():
@@ -3169,7 +3213,7 @@ def test_apply_final_artifacts_bounded_accepted_emits_final_answer_and_report_sh
     }
     _assert_report_publication_state(report_markdown, "publishable")
     assert (
-        "- Recommendation indices withheld from `FINAL_ANSWER.*`: none"
+        "- Withheld recommendation indices for `FINAL_ANSWER.*`: none"
         in report_markdown
     )
     assert (
@@ -3348,7 +3392,7 @@ def test_apply_final_artifacts_emits_partial_answer_from_surviving_admissible_su
     _assert_report_publication_state(report_markdown, "blocked")
     assert f"- Publication blockers: {payload_blocker}" in report_markdown
     assert (
-        "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`, `3`"
+        "- Withheld recommendation indices for `FINAL_ANSWER.*`: `2`, `3`"
         in report_markdown
     )
     assert (
@@ -3907,7 +3951,7 @@ def test_apply_final_artifacts_bounded_partial_emits_partial_answer_without_part
         in partial_markdown
     )
     assert (
-        "- Recommendation indices withheld from `FINAL_ANSWER.*`: `3`"
+        "- Withheld recommendation indices for `FINAL_ANSWER.*`: `3`"
         in report_markdown
     )
     assert (

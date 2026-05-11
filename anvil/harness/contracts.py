@@ -267,6 +267,11 @@ def build_analysis_review_contract(
     strategy: StrategyConfig,
 ) -> AnalysisReviewContract:
     mode = derive_analysis_review_mode(strategy.kind)
+    trust_execution_mode = (
+        "legacy_full_review"
+        if strategy.trust_review is None
+        else strategy.trust_review.execution_mode
+    )
     min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
     focus_gate = FocusGatePolicy()
     if strategy.focus_gate is not None:
@@ -317,7 +322,7 @@ def build_analysis_review_contract(
             max_evidence_refs_per_recommendation=(
                 None if mode == "trust" else BoundedReviewPolicy().max_evidence_refs_per_recommendation
             ),
-            execution_mode="legacy_full_review",
+            execution_mode=trust_execution_mode,
             require_taxonomy_override_reason=(mode == "trust"),
             require_verified_evidence_refs_subset=(mode == "trust"),
             require_affected_file_coverage=(mode == "trust"),

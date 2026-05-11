@@ -33,6 +33,7 @@ poetry run python -m anvil.cli harness-run \
 ```
 
 Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
+That canonical `analysis_review_trust_*` entrypoint is attestation-first in M3A. Use `analysis_review_trust_legacy_*` only for explicit `legacy_full_review` compatibility checks.
 
 These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 
@@ -75,4 +76,4 @@ poetry run python scripts/run_focus_gate_acceptance.py \
   --pass-id m4-final-001
 ```
 
-The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. Its legacy local config name stays `examples/harness/live_acceptance/m2_focus_gate_local.yaml`, and it still accepts the old `strategies:` shorthand surface.
+The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. Its legacy local config name stays `examples/harness/live_acceptance/m2_focus_gate_local.yaml`, and it still accepts the old `strategies:` shorthand surface, but its trust slot should still point at the canonical attestation-first `analysis_review_trust_*` strategy unless you are intentionally running a `legacy_full_review` compatibility check with an explicit `analysis_review_trust_legacy_*` file.

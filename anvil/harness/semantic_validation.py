@@ -783,11 +783,73 @@ def validate_analysis_review_payload(
     historical_topic_ids: Iterable[str] | None = None,
     expected_recommendation_count: int | None = None,
     payload_provenance: dict[str, Any] | None = None,
+    bounded_attestation_input: dict[str, Any] | None = None,
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     del task  # reserved for future task-specific review checks
     bounded_review = contract.bounded_review
     workspace_path_set = _workspace_path_set(workspace_paths)
+    attestation_evidence_index: dict[int, set[str]] = {}
+    if (
+        contract.mode == "trust"
+        and contract.trust_review.execution_mode == "attestation_over_bounded"
+    ):
+        if not isinstance(bounded_attestation_input, dict) or not bounded_attestation_input:
+            result.errors.append(
+                "bounded_attestation_input is required for trust execution_mode=attestation_over_bounded."
+            )
+        else:
+            result.extend(
+                validate_bounded_attestation_input_payload(
+                    bounded_attestation_input,
+                    workspace_paths=workspace_path_set,
+                )
+            )
+            handoff_execution_mode = str(
+                (
+                    (bounded_attestation_input.get("contract") or {})
+                    if isinstance(bounded_attestation_input.get("contract"), dict)
+                    else {}
+                ).get("trust_execution_mode")
+                or ""
+            ).strip()
+            if handoff_execution_mode != "attestation_over_bounded":
+                result.errors.append(
+                    "bounded_attestation_input.contract.trust_execution_mode must equal attestation_over_bounded for trust attestation review validation."
+                )
+            handoff_recommendations = (
+                (bounded_attestation_input.get("bounded_analysis") or {}).get(
+                    "recommendations"
+                )
+                if isinstance(bounded_attestation_input.get("bounded_analysis"), dict)
+                else []
+            )
+            if isinstance(handoff_recommendations, list):
+                handoff_recommendation_count = len(handoff_recommendations)
+                if expected_recommendation_count is None:
+                    expected_recommendation_count = handoff_recommendation_count
+                elif expected_recommendation_count != handoff_recommendation_count:
+                    result.errors.append(
+                        "expected_recommendation_count must match bounded_attestation_input.bounded_analysis.recommendations."
+                    )
+            evidence_index = (
+                (
+                    bounded_attestation_input.get("provenance_context") or {}
+                ).get("recommendation_evidence_index")
+                if isinstance(
+                    bounded_attestation_input.get("provenance_context"), dict
+                )
+                else {}
+            )
+            if isinstance(evidence_index, dict):
+                for raw_index, refs in evidence_index.items():
+                    try:
+                        recommendation_index = int(raw_index)
+                    except (TypeError, ValueError):
+                        continue
+                    attestation_evidence_index[recommendation_index] = set(
+                        _canonical_workspace_paths(refs if isinstance(refs, list) else [])
+                    )
 
     issues = payload.get("issues") or []
     issue_id_order: list[str] = []
@@ -931,6 +993,13 @@ def validate_analysis_review_payload(
             workspace_paths=workspace_path_set,
             contract=contract,
         )
+        if attestation_evidence_index:
+            _validate_attestation_review_recommendation_metadata(
+                result,
+                recommendation_review=item,
+                review_index=index,
+                bounded_evidence_index=attestation_evidence_index,
+            )
     duplicate_recommendations = sorted(
         {value for value in recommendation_indices if recommendation_indices.count(value) > 1}
     )
@@ -1136,6 +1205,40 @@ def validate_analysis_review_payload(
         )
 
     return result
+
+
+def _validate_attestation_review_recommendation_metadata(
+    result: SemanticValidationResult,
+    *,
+    recommendation_review: dict[str, Any],
+    review_index: int,
+    bounded_evidence_index: dict[int, set[str]],
+) -> None:
+    try:
+        recommendation_index = int(recommendation_review.get("recommendation_index"))
+    except (TypeError, ValueError):
+        return
+
+    bounded_evidence_refs = bounded_evidence_index.get(recommendation_index, set())
+    verified_items = set(
+        _canonical_workspace_paths(
+            (recommendation_review.get("verified_evidence_refs") or [])
+            if isinstance(recommendation_review.get("verified_evidence_refs"), list)
+            else []
+        )
+    )
+    if not verified_items:
+        result.errors.append(
+            f"recommendation_reviews[{review_index}].verified_evidence_refs must directly re-check bounded_attestation_input evidence for recommendation_index {recommendation_index}."
+        )
+        return
+
+    unexpected_verified = sorted(verified_items - bounded_evidence_refs)
+    if unexpected_verified:
+        result.errors.append(
+            f"recommendation_reviews[{review_index}].verified_evidence_refs must stay within bounded_attestation_input.provenance_context.recommendation_evidence_index[{recommendation_index}]: "
+            + ", ".join(unexpected_verified)
+        )
 
 
 def _validate_section(

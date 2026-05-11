@@ -1,610 +1,657 @@
-# PLAN: Trust Attestation Over Bounded Output, M2 Only
+# PLAN: Bounded Work Redesign
 
 Status: ready for implementation
 Branch: `feat/bounded-work-redesign`
-Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260504-211401.md`
-Supersedes: the prior M1-only `PLAN.md` on this branch
+Design source: `/Users/spensermcconnell/.gstack/projects/forge/spensermcconnell-feat-bounded-work-redesign-design-20260510-222342.md`
+Supersedes: the prior trust-attestation `PLAN.md` on this branch and the earlier design draft `spensermcconnell-feat-bounded-work-redesign-design-20260507-082505.md`
 
 ## Plan Summary
 
-M1 is done. The repo can already emit a runner-owned `bounded_attestation_input`
-payload from bounded runs.
+This branch is not a new request-gate architecture. The important split already
+exists:
 
-M2 makes that handoff real for trust mode without changing public strategy kinds,
-artifact semantics, or reporting logic. The entire point is to stop trust from
-behaving like a second full answer generator when the bounded lane already knows
-how to produce the candidate draft.
+- `adjudicate` is the fast direct-selection lane
+- `deliberate` is the probe-backed lane
+- blocked outcomes already terminate before proposer with runner-owned
+  `focus_decision`
 
-This plan keeps one product promise fixed:
+What is still wrong is the product behavior inside initial deliberate seam runs.
+Today `anvil/harness/runner.py` correctly detects unsafe broad seam selections,
+but it converts them straight into `clarification_requested` or
+`no_viable_focus`. That is honest, but it is too eager to hand work back to the
+operator when the probe already surfaced narrower seam candidates.
 
-- `analysis_review_trust_v1` remains the public trust strategy kind
-- `trust_review.execution_mode` becomes the internal cutover knob
-- `legacy_full_review` keeps today's trust behavior
-- `attestation_over_bounded` runs bounded production first, freezes the handoff,
-  then runs trust as attestation over that frozen object
-- `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, `BEST_DRAFT.*`, and
-  `analysis_review_status.publishability` remain runner-owned and unchanged in M2
-
-If implementation starts rewriting publication or artifact projection, it has
-left M2 and wandered into M3.
-
-## M1 Validation Verdict
-
-M1 landed the right prerequisite pieces:
-
-- `build_analysis_review_contract(...)` already serializes
-  `trust_review.execution_mode`, but the value is still effectively fixed at
-  `legacy_full_review`
-- bounded runs already build and persist `bounded_attestation_input`
-- the handoff builder already validates schema plus semantic invariants
-- contract docs already mark the handoff as runner-owned and "M1 emits, M2 consumes"
-- trust still starts from raw task plus workspace and does not consume the handoff yet
-
-Validation commands already run on this branch:
-
-- `poetry run pytest -q tests/test_harness_runner.py -k "bounded_attestation_input"`
-- `poetry run pytest -q tests/test_harness_semantic_validation.py -k "bounded_attestation_input"`
-- `poetry run pytest -q tests/test_harness_analysis_contract.py -k "bounded_attestation_input or execution_mode or contract_docs_freeze"`
-
-Result: `19 passed`
+This plan redefines deliberate seam handling as a bounded runner-owned salvage
+pass. When the model selected a threshold-valid seam but that seam is still too
+broad, the runner should try up to two narrower probe candidates that already
+exist in the live shortlist. If one candidate survives canonical seam and
+downstream bridge validation, the run continues automatically on that narrower
+seam. If none survive, the run still stops before proposer, but it stops as an
+actionable exhausted-refinement block with ranked rerun guidance instead of a
+generic clarification prompt.
 
 ## Success Criteria
 
-M2 is complete only when all of these are true:
-
-- trust strategies can opt into `trust_review.execution_mode=attestation_over_bounded`
-  without changing the public `analysis_review_trust_v1` kind
-- attestation-mode trust runs execute the bounded producer lane first
-- the bounded producer lane and the final trust attestation stage remain logically
-  separate in runner state
-- attestation-mode trust runs persist the exact frozen `bounded_attestation_input`
-  they consumed
-- attestation-mode trust uses the bounded producer's `final_analysis` as the final
-  answer source and does not fabricate a second trust-authored analysis payload
-- the final trust review payload contains recommendation verdicts, closure proof,
-  provenance, and final content verdicts over the bounded draft
-- `legacy_full_review` continues to behave exactly like today's trust path
-- final artifact selection and publishability logic remain unchanged in M2
+- A deliberate seam run no longer blocks purely because the model chose an
+  umbrella seam when the live probe already exposed a narrower threshold-valid
+  seam candidate.
+- True probe ambiguity remains on the existing clarification path. This slice
+  does not change `_resolve_focus_probe_state(...)` thresholds or auto-pick from
+  an ambiguous shortlist.
+- Exhausted broad-seam refinement produces actionable rerun guidance and a
+  truthful `REPORT.md` explanation, without fabricating a clarification prompt.
+- `adjudicate`, artifact deliberate behavior, and stale rerun-answer hardening
+  remain unchanged unless explicitly called out below.
+- The public `focus_decision` schema stays within the existing
+  `selected | clarification_requested | no_viable_focus` contract.
+- Acceptance coverage proves four cases: refinement success, refinement
+  exhaustion, unchanged close-contest ambiguity, and unchanged artifact/stale
+  guards.
 
 ## Step 0: Scope Challenge
 
 ### What already exists
 
-| Sub-problem | Existing code | M2 decision |
+| Sub-problem | Existing code | Plan decision |
 |---|---|---|
-| Strategy surface for trust mode | `StrategyConfig` in `anvil/harness/types.py` | Extend strategy parsing so `trust_review.execution_mode` is a real input, not dead metadata. |
-| Shared contract field | `TrustReviewPolicy.execution_mode` in `anvil/harness/contracts.py` | Reuse this field. Do not invent a second cutover knob. |
-| Bounded producer lane | `_run_analysis_review_v1(...)` in `anvil/harness/runner.py` | Extract reusable bounded-producer helpers from the current lane instead of building a second producer implementation. |
-| Frozen handoff contract | `_build_bounded_attestation_input(...)` in `anvil/harness/runner.py` | Reuse the M1 handoff unchanged except where M2 must consume it. |
-| Shared review payload schema | `analysis_review_schema()` in `anvil/harness/schemas.py` | Keep the shared review JSON family. Attestation emits a review payload, not a new schema family. |
-| Existing trust review semantics | prompt and validation rules in `anvil/harness/prompts.py` and `anvil/harness/semantic_validation.py` | Reuse the trust review payload shape. Add an attestation-specific prompt builder instead of overloading bounded reviewer prompts. |
-| Runner-owned publication truth | `apply_final_artifacts(...)` in `anvil/harness/reporting.py` plus status assembly in `anvil/harness/runner.py` | Hold this stable in M2. No reporting rewrite. |
+| Probe-backed deliberate lane | `anvil/harness/runner.py` via `_run_focus_gate(...)`, `_execute_focus_gate_probe_stage(...)`, `_execute_focus_gate_stage(...)` | Reuse this flow. No new provider stage and no second model call. |
+| Winner thresholds | `_resolve_focus_probe_state(...)` | Reuse as-is. Do not turn ambiguous probe results into automatic refinement in this slice. |
+| Broad seam hardening | `_normalize_focus_gate_decision_for_policy(...)` | Replace the current umbrella/collapsed-subset immediate block with bounded refinement plus exhausted fallback. |
+| Blocked outcome shaping | `_probe_blocked_focus_gate_decision_from_probe(...)`, `_build_focus_gate_blocked_outcome(...)` | Extend blocked payloads with refinement metadata and rerun guidance. Do not add a new public decision state. |
+| Focus-decision rendering | `anvil/harness/report.py` | Expand `## Focus Decision` to explain refinement success or exhaustion truthfully. |
+| Public contract prose | `docs/analysis_review_contract.md` | Update deliberate semantics and blocked fallback wording. Keep the `focus_decision` enum family stable. |
+| Acceptance surfaces | `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`, `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml` | Update seam-deliberate expectations to cover refined success and exhausted refinement. |
+| Regression coverage | `tests/test_harness_runner.py`, `tests/test_harness_reporting.py`, `tests/test_run_focus_gate_acceptance.py`, `tests/test_harness_example_strategy_wiring.py` | Repoint deliberate seam cases to the new behavior and preserve old non-targeted guards. |
+
+### Minimum change set
+
+The minimum complete implementation touches these areas:
+
+1. `anvil/harness/runner.py`
+2. `anvil/harness/report.py`
+3. `docs/analysis_review_contract.md`
+4. `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`
+5. `examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml`
+6. `tests/test_harness_runner.py`
+7. `tests/test_harness_reporting.py`
+8. `tests/test_run_focus_gate_acceptance.py`
+9. `tests/test_harness_example_strategy_wiring.py`
+
+Anything beyond that is scope creep.
 
 ### Complexity verdict
 
-This slice legitimately touches more than 8 files. That is not scope creep here.
-The cutover crosses config parsing, contract resolution, runner orchestration,
-prompts, validation, examples, docs, and tests. Anything smaller would leave a fake
-knob or an untested branch.
+This is a 9-file branch. That is above the usual smell threshold, but the size is
+coming from required coverage and acceptance surfaces, not architecture sprawl.
+The implementation is still the boring version:
 
-The constraint is not "few files at any cost." The constraint is "few new moving
-parts." M2 should introduce:
+- no new service
+- no new dataclass family
+- no new prompt schema
+- no new public decision state
+- no new orchestrator loop
 
-- zero new provider abstractions
-- zero new schema families
-- zero reporting changes
-- at most two new runner-local helper seams
-- one new prompt builder
+The main smell to avoid is building a "refinement framework" when the actual
+behavior change is a narrow normalization upgrade inside one existing runner
+decision point.
 
 ### Search/build verdict
 
-Use the harness shapes already on disk. Do not roll custom infrastructure where the
-repo already has the primitive:
+Everything needed already exists in the repo:
 
-- contract resolution already exists
-- bounded handoff validation already exists
-- final artifact selection already exists
-- trust review payload validation already exists
+- probe shortlist and scores
+- checked-files normalization
+- canonical seam identity helpers
+- existing downstream seam bridge validation surface
+- current blocked outcome shaping
+- current report rendering surface
+- existing live acceptance manifests
 
-This is a refactor of orchestration, not a platform expansion.
+This is a runner decision and reporting upgrade, not a subsystem build.
 
 ### TODOS cross-reference
 
-`TODOS.md` already contains the exact follow-up this slice now implements:
-"reshape trust mode into an attestation layer over bounded output." That item is no
-longer backlog once M2 starts. Other backlog items remain deferred:
+Relevant deferred work already in `TODOS.md` remains deferred:
 
-- generalized intent-intake
-- trust-vs-bounded product reshaping beyond this single cutover
-- report UX polish
-- richer provenance or audit artifacts
+- generalized intent-intake work is still out of scope
+- trust-attestation follow-ups are still out of scope
+- product-level bounded-vs-trust validation is still out of scope
+
+This branch should add no new TODO unless implementation reveals a real need for
+generic path-cluster synthesis that does not belong in this slice.
 
 ### Completeness verdict
 
-Do the complete M2, not a shortcut. That means:
+The complete version is not "auto-select from any shortlist." The complete
+version is:
 
-- real strategy parsing
-- real runner branch cutover
-- real attestation prompt path
-- real semantic validation
-- real regression coverage
+- refine only when the probe already produced a threshold-valid winner and the
+  only remaining problem is broadness
+- keep true ambiguity on the current clarification path
+- persist runner-owned refinement metadata outside the public `focus_decision`
+  schema
+- render exhausted refinement with copyable rerun guidance
+- cover success, exhaustion, close-contest, artifact, and stale-answer paths
 
-What does not count as complete:
+The shortcut to avoid is a success-only implementation that auto-refines broad
+seams but leaves exhausted runs with the same vague clarification behavior.
 
-- hardcoding attestation mode in examples only
-- attaching bounded payloads to trust summaries without actually consuming them
-- treating the bounded producer as an undocumented subroutine
+### Distribution and DX verdict
 
-### Distribution check
+Forge is a developer tool. Distribution here means the documented and tested
+behavior surface:
 
-No new binary, package, container image, or external distribution surface is
-introduced here. Distribution is unchanged. No CI or publish-pipeline work is needed
-for M2.
+- `docs/analysis_review_contract.md`
+- `REPORT.md`
+- live acceptance manifests
+- regression tests
+
+If code changes but those surfaces still describe deliberate as a generic
+clarification lane, the branch is incomplete.
 
 ## Locked Decisions
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| Public trust strategy kind | keep `analysis_review_trust_v1` | Preserve current product surface and examples. |
-| M2 cutover knob | strategy-level `trust_review.execution_mode` | The contract already has this field. Make it real. |
-| Default execution mode | `legacy_full_review` | Existing trust runs must remain stable until the new path is chosen deliberately. |
-| Producer source of truth | internal bounded producer lane reusing today's bounded flow | One real producer. No duplicate implementation. |
-| Focus gate timing | run once, before bounded production | Trust must attest the same selected focus the producer used. |
-| Attestation review shape | one trust attestation review stage, not a second proposer/reviser/auditor lane | Trust is attesting the frozen draft, not generating a new one. |
-| Final analysis in attestation mode | bounded producer `final_analysis` becomes the final answer source | Keeps M2 out of M3 publication and artifact logic. |
-| Handoff persistence | persist `bounded_attestation_input` in attestation-mode trust summaries | The consumed object must be inspectable after the run. |
-| Publication logic | unchanged in M2 | M3 owns reporting and publication cutover. |
-| Provider surface | no provider wrapper unless the current role request shape truly cannot express attestation prompts | Avoid speculative plumbing. |
+| Public gate paths | Keep `adjudicate` and `deliberate` exactly as-is | This slice changes deliberate behavior, not surface vocabulary. |
+| Refinement scope | Seam-only, initial deliberate pass only | The product gap is broad seam selection, not artifact or rerun-answer behavior. |
+| Refinement trigger | Only after a deliberate `selected` seam survives threshold validation but is still too broad | This preserves current ambiguity thresholds and avoids hidden auto-picks from weak evidence. |
+| Ambiguous probe behavior | Unchanged | If `_resolve_focus_probe_state(...)` says the shortlist is ambiguous, stay on clarification / no-viable behavior. |
+| Retry budget | At most 2 narrowed seam attempts | Enough to salvage obvious shortlist wins without inventing search recursion. |
+| Public contract | Keep `focus_decision` schema and enums unchanged | Avoids dragging `schemas.py`, prompt builders, and semantic-validation fixtures into a protocol migration. |
+| Metadata placement | Add runner-owned refinement metadata under `run_details` and blocked `failure_details`, not as new public `focus_decision` keys | Lowest diff and cleanest contract boundary. |
+| Exhausted fallback | Use actionable blocked output with ranked rerun guidance, not a fake clarification prompt | Broadness exhaustion is not the same thing as operator ambiguity. |
+| Artifact deliberate path | Unchanged | The existing operator-confirmation rule remains correct. |
+| Rerun-answer stale logic | Unchanged | This slice is about first-pass broad seam salvage, not stale operator input. |
+| Prompt/schema files | Do not touch unless the public contract is intentionally widened | That would be a different branch. |
 
 ## Architecture Review
 
-### Current runtime shape
-
-Legacy trust today still behaves like a full review lane:
+### Current deliberate behavior
 
 ```text
-focus gate (optional)
+task + strategy(default_path=deliberate)
   ->
-trust proposer
+focus_gate_probe
   ->
-trust critic
+focus_gate(deliberate)
   ->
-trust reviser loop(s)
+runner hardening
   ->
-trust auditor
-  ->
-runner-owned admissibility + publishability
+selected -> proposer
+or
+clarification_requested / no_viable_focus -> stop
 ```
 
-That shape is expensive and conceptually wrong for the product distinction we want.
-
-### Target runtime shape for M2
+### Current bad product shape
 
 ```text
-focus gate (optional)
+probe finds the right neighborhood
   ->
-bounded producer lane
+model picks a threshold-valid but broad seam
   ->
-frozen bounded_attestation_input
+runner detects umbrella/collapsed-subset shape
   ->
-trust attestation review
-  ->
-runner-owned admissibility + publishability
+run stops immediately
 ```
 
-### Branch split inside `anvil/harness/runner.py`
+That is honest. It is also noisy. The runner already has enough evidence to try
+one more bounded narrowing step before it asks the operator to do the obvious.
+
+### Target behavior
 
 ```text
-_run_analysis_review_v1()
-  |
-  +-- resolve contract
-  +-- run focus gate once
-  +-- if mode != trust:
-  |     -> keep existing bounded path
-  |
-  +-- if mode == trust and execution_mode == legacy_full_review:
-  |     -> keep existing trust full-review path
-  |
-  +-- if mode == trust and execution_mode == attestation_over_bounded:
-        -> derive bounded producer contract
-        -> run bounded producer helper
-        -> freeze/persist bounded_attestation_input
-        -> reset final-review stage selection to attestation phase only
-        -> run trust attestation review helper
-        -> compute final status from bounded final_analysis + attestation review payload
+task + strategy(default_path=deliberate)
+  ->
+focus_gate_probe
+  ->
+focus_gate(deliberate)
+  ->
+runner hardening
+  ->
+if selected seam is broad:
+    try narrowed shortlist candidate A
+    if A invalid, try candidate B
+  ->
+selected narrowed seam -> proposer
+or
+no_viable_focus + rerun guidance -> stop
 ```
 
-### Module boundary plan
+### Contract boundary
 
-| Module | Responsibility in M2 | Must stay out of scope |
-|---|---|---|
-| `anvil/harness/types.py` | parse and round-trip `trust_review.execution_mode` | no new task-level knob |
-| `anvil/harness/contracts.py` | resolve execution mode into the contract | no new public strategy kind |
-| `anvil/harness/prompts.py` | build one dedicated attestation review prompt | no branching prose jammed into bounded critic/auditor prompts |
-| `anvil/harness/runner.py` | branch orchestration, bounded producer reuse, stage isolation, final status assembly | no reporting rewrite, no second trust-authored analysis payload |
-| `anvil/harness/semantic_validation.py` | enforce dense attestation coverage and bounded-universe invariants | no new validation model family |
-| `docs/analysis_review_contract.md` | document execution modes and M2 ownership boundaries | no M3 publication redesign |
+This is the most important implementation constraint.
 
-### Runner-local helper plan
+Do change:
 
-Keep the implementation boring. The runner needs two explicit helper seams:
+- runner normalization behavior in `anvil/harness/runner.py`
+- blocked outcome payload details
+- report rendering
+- contract prose and acceptance expectations
 
-1. A bounded producer helper that reuses today's proposer/critic/reviser/auditor
-   flow and returns:
-   - bounded `final_analysis`
-   - bounded review summary
-   - frozen `bounded_attestation_input`
-   - stage metadata needed to prevent final-review contamination
+Do not change in this slice:
 
-2. A trust attestation review helper that:
-   - takes the frozen handoff plus current workspace snapshot
-   - runs one trust attestation review stage
-   - returns the final review payload used to compute trust status
+- `focus_decision.decision_state` enum
+- `focus_decision.question` contract
+- prompt builders in `anvil/harness/prompts.py`
+- schema definitions in `anvil/harness/schemas.py`
+- semantic-validation expectations in `tests/test_harness_semantic_validation.py`
+- prompt-consistency expectations in `tests/test_harness_prompt_consistency.py`
 
-Do not create a generic subgraph framework. Do not create a new runner class.
-This is one branch split inside the existing harness runner.
+That boundary keeps this branch about runtime behavior, not a wider protocol
+revision.
 
-### Required invariants
+### Refinement eligibility rules
 
-These are hard rules, not suggestions:
+Attempt internal refinement only when all of these are true:
 
-1. In `attestation_over_bounded`, `run_details["final_analysis"]` must come from the
-   bounded producer result.
-2. In `attestation_over_bounded`, `run_details["bounded_attestation_input"]` must be
-   the exact frozen object passed to the trust attestation review stage.
-3. In `attestation_over_bounded`, the final trust review payload must not include a
-   second trust-authored answer draft.
-4. Final-stage selectors such as `_latest_successful_stage(...)` must not accidentally
-   read bounded producer critic/auditor stages as the final trust review stage.
-5. `apply_final_artifacts(summary)` stays untouched in M2.
-6. Legacy trust mode remains byte-for-byte compatible at the contract and artifact
-   level unless a regression test proves current behavior was already wrong.
+1. `gate_path == deliberate`
+2. `focus_type == seam`
+3. `decision_state == selected`
+4. `focus_gate_answer is None`
+5. `focus_probe` exists and `_resolve_focus_probe_state(...)` returned a
+   threshold-valid winner
+6. `selected_focus_id` already matches the runner-computed valid winner
+7. the selected seam is broad under one of the broadness triggers below
 
-### Production failure scenarios to defend
+Do not attempt refinement for:
 
-| Codepath | Real failure | Required defense |
-|---|---|---|
-| Strategy parsing | execution mode silently ignored | parser tests plus contract serialization tests |
-| Runner branch cutover | trust still enters proposer-first path in attestation mode | branch-selection runner tests |
-| Stage resolution | bounded producer review stages contaminate final trust provenance | explicit phase tagging or equivalent runner-local filtering |
-| Attestation review | attestor emits verdicts for only a subset of recommendations | dense recommendation coverage validation |
-| Final artifact assembly | summary uses bounded `final_analysis` but trust review from wrong stage | final status regression tests |
+- `adjudicate`
+- `artifact`
+- stale rerun answers
+- any probe state where `valid_winner_focus_id` is empty
+- any selected result that already points to a narrow seam with no stronger
+  narrower candidate
+
+### Broadness triggers
+
+Refinement is for broadness, not ambiguity.
+
+Trigger refinement when either of these is true:
+
+1. **Umbrella seam**: `selected_focus_paths == checked_files` and the selected
+   seam spans more than one file.
+2. **Collapsed narrower subsets**: a different probe candidate has
+   `score >= 0.55`, non-empty normalized `candidate_paths`, and those paths form
+   a proper subset of the selected seam's normalized path set.
+
+Do not trigger refinement for:
+
+- close contests where the probe has no threshold-valid winner
+- single-candidate shortlists with no narrower subset evidence
+- any case that would require changing the existing winner thresholds
+
+### Candidate ranking and admissibility
+
+Build the refinement pool from `focus_probe.candidates`, not from the public
+`focus_decision.candidates`, because the probe payload is the live shortlist and
+the public payload may already be capped or deduplicated for contract reasons.
+
+Algorithm:
+
+1. Keep only dict candidates with a non-empty `focus_id`, numeric `score`, and
+   non-empty normalized `candidate_paths`.
+2. Keep only candidates whose normalized path set is a proper subset of the
+   selected seam's normalized path set.
+3. Collapse duplicate canonical seam identities. Keep the highest-scoring
+   representative.
+4. Rank the remaining candidates by:
+   - higher `score`
+   - fewer normalized paths
+   - original probe order as final tiebreak
+5. Try at most two candidates in ranked order.
+
+A candidate succeeds only if it:
+
+- still resolves to a proper narrowed subset
+- retains stable canonical seam identity
+- can populate `selected_focus_*` and
+  `adapter_plan.downstream_primary_seam_*` without drift
+- does not require threshold relaxation or prompt re-execution
+
+If candidate A fails, record why, then try candidate B. If both fail, the
+refinement is exhausted.
+
+### Metadata contract
+
+Keep `focus_decision` public shape stable. Persist runner-owned refinement
+details separately.
+
+For successful runs:
+
+```text
+run_details.focus_refinement
+```
+
+For blocked exhausted-refinement runs:
+
+```text
+run_details.focus_refinement
+failure_details.focus_refinement
+```
+
+Proposed metadata shape:
+
+```json
+{
+  "status": "applied | exhausted",
+  "trigger_reason": "umbrella_selected_checked_files | collapsed_narrower_subset",
+  "source_selected_focus_id": "string",
+  "source_selected_focus_paths": ["string"],
+  "candidate_shortlist_ids": ["string"],
+  "attempted_candidate_ids": ["string"],
+  "rejected_candidates": [
+    {
+      "focus_id": "string",
+      "reason": "not_proper_subset | canonical_drift | downstream_bridge_drift"
+    }
+  ],
+  "selected_candidate_id": "string|null",
+  "selected_candidate_paths": ["string"],
+  "exhausted_reason": "string|null",
+  "rerun_guidance": [
+    {
+      "focus_id": "string",
+      "score": 0.0,
+      "candidate_paths": ["string"],
+      "why_candidate": "string"
+    }
+  ]
+}
+```
+
+Notes:
+
+- `rerun_guidance` is runner-owned display metadata, not a new public question
+  format.
+- successful refinement should also replace the canonical selected
+  `focus_decision` with the narrowed seam so downstream proposer behavior stays
+  honest.
+- exhausted refinement should preserve the blocked `focus_decision`, but the
+  block should now carry refinement metadata and rerun guidance.
+
+### Exhausted outcome semantics
+
+This plan intentionally distinguishes **broadness exhaustion** from **user
+clarification**.
+
+- **True ambiguity** stays on existing `clarification_requested` or
+  `no_viable_focus` behavior, depending on `clarification_policy`.
+- **Exhausted broad-seam refinement** should normalize to `no_viable_focus` with
+  non-empty candidate shortlist and runner-owned rerun guidance.
+
+Why this matters:
+
+- `clarification_requested` requires the canonical prompt and options contract
+- exhausted refinement is not asking a new question, it is providing a narrower
+  next move
+- `REPORT.md` must not fake a question when the actual advice is "rerun with one
+  of these narrower `files_hint` slices"
 
 ## Code Quality Guardrails
 
-### Minimal-diff rules
-
-- Keep new logic inside existing files unless a test fixture becomes impossible to
-  express cleanly.
-- Prefer new small helpers over new classes.
-- Keep naming explicit: "bounded producer", "attestation review", "execution mode".
-  No cute abstractions.
-- Reuse the current review payload shape. Attestation is a different prompt, not a
-  different data family.
-
-### DRY rules
-
-- No duplicate bounded producer implementation.
-- No duplicate execution-mode source of truth.
-- No duplicate artifact-selection logic.
-- No duplicate recommendation-coverage validation logic if the existing trust-mode
-  validators can be reused with bounded-universe inputs.
-
-### File-level expectations
-
-- `anvil/harness/runner.py` may grow new helpers, but the public control flow should
-  remain readable from `_run_analysis_review_v1(...)`.
-- `anvil/harness/prompts.py` should gain a dedicated
-  `build_trust_attestation_review_prompt(...)` builder.
-- Existing critic/auditor builders should not gain mode-specific prose branches for
-  attestation behavior.
-
-## File-by-File Implementation Plan
-
-### 1. Strategy parsing in `anvil/harness/types.py`
-
-Add a small typed strategy config for trust execution:
-
-- new `StrategyTrustReviewConfig`
-- allow `trust_review.execution_mode`
-- allowed literals:
-  - `legacy_full_review`
-  - `attestation_over_bounded`
-
-Requirements:
-
-- default remains `legacy_full_review`
-- unknown keys under `trust_review` fail loudly
-- `StrategyConfig.to_dict()` round-trips the field
-
-Non-goal:
-
-- do not expose a second task-level trust execution knob
-
-### 2. Contract resolution in `anvil/harness/contracts.py`
-
-Change `build_analysis_review_contract(...)` so
-`TrustReviewPolicy.execution_mode` comes from parsed strategy config instead of
-being effectively fixed at `legacy_full_review`.
-
-Requirements:
-
-- bounded and legacy strategies still serialize `legacy_full_review`
-- trust strategies may choose either execution mode
-- `effective_strategy` stays unchanged
-
-### 3. Attestation prompt builder in `anvil/harness/prompts.py`
-
-Add `build_trust_attestation_review_prompt(...)`.
-
-Required prompt inputs:
-
-- `bounded_attestation_input`
-- the bounded `focus_decision`
-- bounded review-surface summary
-- current workspace snapshot
-- the resolved trust contract
-
-Prompt rules:
-
-- review the frozen bounded draft, do not regenerate recommendations from scratch
-- return one `recommendation_reviews` verdict for every bounded recommendation index
-- use closure-review arrays only for `recommendation_index = null` global proof
-- re-check workspace evidence directly before attesting
-- do not emit a replacement analysis payload
-
-### 4. Runner cutover in `anvil/harness/runner.py`
-
-Split the current trust path into two explicit branches:
-
-- `legacy_full_review` -> existing path
-- `attestation_over_bounded` -> new path
-
-Required shape:
-
-1. resolve trust contract
-2. run focus gate once
-3. if `legacy_full_review`, keep existing flow
-4. if `attestation_over_bounded`:
-   - derive an internal bounded producer contract from the resolved trust contract
-   - run the bounded producer helper with the existing bounded proposer/reviewer loop
-   - capture bounded `final_analysis`, bounded review summary, and the frozen handoff
-   - persist `bounded_attestation_input` on the final trust summary
-   - isolate producer-stage bookkeeping from the final trust attestation stage
-   - run one trust attestation review stage over the frozen handoff
-   - compute final trust `analysis_review_status` from bounded `final_analysis` plus
-     the attestation review payload
-
-Guardrails:
-
-- do not let final stage selectors pick bounded producer review stages
-- do not let attestation mode fabricate a second trust-authored `final_analysis`
-- keep `apply_final_artifacts(summary)` untouched
-
-### 5. Semantic validation in `anvil/harness/semantic_validation.py`
-
-Add attestation-mode review invariants on top of today's trust validation:
-
-- when `contract.mode == "trust"` and
-  `contract.trust_review.execution_mode == "attestation_over_bounded"`:
-  - `recommendation_reviews` must densely cover every bounded recommendation index
-  - no attested index may exceed the bounded draft length
-  - closure proof must stay scoped to the bounded recommendation universe
-  - provenance refs must remain concrete, normalized, and in-workspace
-
-Validation source of truth:
-
-- use the frozen handoff's recommendation count and evidence universe
-- do not infer expected coverage from a new trust-authored draft because that draft
-  must not exist
-
-### 6. Contract docs in `docs/analysis_review_contract.md`
-
-Add one compact subsection for `trust_review.execution_mode`:
-
-- `legacy_full_review` means today's full trust lane
-- `attestation_over_bounded` means trust reviews the frozen bounded draft
-- the public trust strategy kind does not change
-- publication semantics remain runner-owned and unchanged in M2
-
-### 7. Example strategies
-
-Add new example strategies instead of mutating the current trust examples:
-
-- `analysis_review_trust_attestation_codex_claude.yaml`
-- `analysis_review_trust_attestation_codex_claude_focus_gate_adjudicate.yaml`
-- `analysis_review_trust_attestation_codex_claude_focus_gate_deliberate.yaml`
-
-Rules:
-
-- same providers and role lineup as current trust examples unless tests prove otherwise
-- set only `trust_review.execution_mode: attestation_over_bounded`
-- leave existing trust YAMLs on `legacy_full_review`
+- Keep the implementation inside `anvil/harness/runner.py`. Extract at most a
+  few focused private helpers if they make the refinement path easier to read.
+- Do not introduce a `FocusRefinementService`, `RefinementPlanner`, or similar
+  abstraction. This branch does not need a framework to choose between two seam
+  candidates.
+- Reuse existing workspace-ref normalization, canonical seam identity, and
+  adapter-plan builder logic. Do not fork seam identity rules.
+- Keep broadness and ambiguity as separate concepts in code and prose. That
+  distinction is the whole feature.
+- Preserve current artifact deliberate warning paths exactly.
+- Preserve stale-answer hardening exactly.
+- Keep report language explicit:
+  - `auto-refined and continued`
+  - `refinement exhausted`
+  - `rerun with one of these files_hint slices`
 
 ## Test Review
 
-### Test framework and execution
-
-This repo already uses `pytest`. M2 stays inside the existing Python test surface.
-There is no separate external eval harness required for this slice. Prompt behavior
-is locked with prompt-consistency tests, not a new eval subsystem.
-
-### Code path coverage diagram
+### Code path coverage
 
 ```text
 CODE PATH COVERAGE
 ===========================
-[+] anvil/harness/types.py
+[+] anvil/harness/runner.py deliberate seam path
     |
-    └── StrategyConfig trust_review.execution_mode
-        ├── default -> legacy_full_review
-        ├── explicit attestation_over_bounded
-        └── invalid literal / unknown key failure
+    |-- probe has threshold-valid winner + selected seam is broad
+    |   |-- [GAP] top narrowed candidate survives validation -> selected continues
+    |   `-- [GAP] candidate A fails, candidate B survives -> selected continues
+    |
+    |-- probe has threshold-valid winner + selected seam is broad + no candidate survives
+    |   `-- [GAP] normalized no_viable_focus with rerun guidance
+    |
+    |-- probe is ambiguous under existing thresholds
+    |   |-- [TESTED TODAY] clarification_requested path
+    |   `-- [TESTED TODAY] never_ask -> no_viable_focus path
+    |
+    |-- focus_type=artifact deliberate
+    |   |-- [TESTED TODAY] clarification_requested
+    |   `-- [TESTED TODAY] never_ask -> no_viable_focus
+    |
+    `-- stale rerun-answer handling
+        |-- [TESTED TODAY] stale prompt / vanished option blocks
+        `-- [TESTED TODAY] never_ask stale answer -> no_viable_focus
 
-[+] anvil/harness/contracts.py
+[+] anvil/harness/report.py focus decision rendering
     |
-    └── build_analysis_review_contract(...)
-        ├── bounded strategy -> mode=bounded, execution_mode=legacy_full_review
-        ├── trust strategy + legacy mode
-        └── trust strategy + attestation mode
+    |-- [GAP] refined success renders "auto-refined and continued"
+    |-- [GAP] exhausted refinement renders ranked rerun guidance
+    |-- [GAP] exhausted refinement does not render fake clarification prompt
+    `-- [TESTED TODAY] stale no_viable_focus avoids fake clarification block
 
-[+] anvil/harness/runner.py
+[+] live acceptance manifests
     |
-    └── _run_analysis_review_v1(...)
-        ├── bounded mode -> unchanged
-        ├── trust + legacy_full_review -> unchanged
-        └── trust + attestation_over_bounded
-            ├── focus gate once
-            ├── bounded producer helper
-            ├── frozen bounded_attestation_input persisted
-            ├── final_analysis reused from bounded producer
-            ├── trust attestation review stage
-            └── final status/provenance resolves from attestation stage only
+    |-- [GAP] seam deliberate success scenario expects continuation
+    |-- [GAP] seam deliberate exhausted scenario expects blocked rerun guidance
+    `-- [TESTED TODAY] artifact deliberate remains blocked
 
-[+] anvil/harness/prompts.py
-    |
-    └── build_trust_attestation_review_prompt(...)
-        ├── references frozen handoff explicitly
-        ├── demands dense recommendation verdict coverage
-        └── forbids replacement analysis payload
-
-[+] anvil/harness/semantic_validation.py
-    |
-    └── attestation-mode coverage validation
-        ├── missing recommendation index -> fail
-        ├── out-of-range index -> fail
-        ├── malformed closure proof -> fail
-        └── legacy trust validation -> unchanged
-
-[+] anvil/harness/reporting.py
-    |
-    └── apply_final_artifacts(...)
-        └── regression coverage only, no code changes
+---------------------------------
+COVERAGE TARGET: 100% of new runner branches
+Critical regressions to keep: true ambiguity blocking, artifact deliberate
+blocking, stale-answer blocking, adjudicate direct selection
+---------------------------------
 ```
 
-### Required tests by file
+### User flow coverage
 
-#### `tests/test_harness_analysis_contract.py`
+```text
+USER FLOW COVERAGE
+===========================
+[+] Large repo, broad seam, strong narrowed shortlist
+    |-- [GAP] runner narrows automatically
+    |-- [GAP] proposer executes on the narrowed seam
+    `-- [GAP] report explains what changed
 
-Add tests proving:
+[+] Large repo, broad seam, no narrowed candidate survives validation
+    |-- [GAP] run stops before proposer
+    |-- [GAP] report shows ranked shortlist
+    `-- [GAP] rerun guidance is copyable as files_hint
 
-- strategy parsing accepts and round-trips `trust_review.execution_mode`
-- default remains `legacy_full_review`
-- invalid execution-mode literals fail loudly
-- trust strategies may serialize `attestation_over_bounded` without changing
-  `effective_strategy`
+[+] True shortlist ambiguity
+    |-- [TESTED TODAY] clarification_requested when asking is allowed
+    `-- [TESTED TODAY] no_viable_focus when clarification_policy=never_ask
+```
 
-#### `tests/test_harness_prompt_consistency.py`
+### Required test additions
 
-Add tests proving:
+Update or add coverage in these files:
 
-- the attestation prompt references the frozen handoff explicitly
-- the attestation prompt requires dense recommendation coverage
-- the attestation prompt forbids drafting a replacement analysis payload
-- legacy trust prompt text remains unchanged
+- `tests/test_harness_runner.py`
+  - broad selected seam auto-refines to the top narrowed shortlisted seam
+  - candidate A can fail bridge validation and candidate B still succeed
+  - exhausted refinement normalizes to `no_viable_focus` with rerun guidance
+  - `clarification_policy=never_ask` still auto-refines when no operator input is
+    needed
+  - close-contest ambiguity remains blocked
+  - artifact deliberate behavior remains blocked
+- `tests/test_harness_reporting.py`
+  - refined success renders the refinement note
+  - exhausted refinement renders rerun guidance and ranked shortlist
+  - exhausted refinement does not render a clarification prompt block
+- `tests/test_run_focus_gate_acceptance.py`
+  - seam deliberate success scenario continues through proposer
+  - seam deliberate exhausted scenario blocks with rerun guidance
+- `tests/test_harness_example_strategy_wiring.py`
+  - acceptance template expectations still match the canonical trust entrypoint
+    after seam-deliberate scenario changes
 
-#### `tests/test_harness_runner.py`
+Do not add plan-only smoke tests. Every new branch in the runner needs a real
+assertion path.
 
-Add runner-path tests proving:
+### Validation commands
 
-- legacy trust still enters the proposer-first path
-- attestation trust enters bounded producer first
-- attestation trust runs persist `bounded_attestation_input`
-- attestation trust runs reuse bounded `final_analysis`
-- final provenance and final review-stage selection resolve from the attestation
-  stage, not the bounded producer review stages
+Run at minimum:
 
-#### `tests/test_harness_semantic_validation.py`
+```bash
+poetry run pytest -q tests/test_harness_runner.py -k "focus_gate"
+poetry run pytest -q tests/test_harness_reporting.py -k "focus_decision or no_viable_focus or clarification"
+poetry run pytest -q tests/test_run_focus_gate_acceptance.py
+poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+```
 
-Add validation tests proving:
+## Performance Review
 
-- missing attestation review coverage for a bounded recommendation fails
-- out-of-range attestation review indices fail
-- malformed closure proof in attestation mode fails
-- legacy trust validation behavior is unchanged
-
-#### Existing reporting regression coverage
-
-Do not add reporting code changes, but run the existing reporting tests to prove no
-artifact-selection regression slipped in:
-
-- `poetry run pytest -q tests/test_harness_reporting.py -k "apply_final_artifacts"`
-
-### Fixture parity matrix
-
-Minimum parity matrix:
-
-1. seam focus, adjudicate path
-2. seam focus, deliberate path
-3. artifact focus, adjudicate path
-4. artifact focus, deliberate path
-
-For each case, compare:
-
-- legacy trust
-- attestation trust
-
-Parity checks:
-
-- same `focus_decision`
-- same bounded candidate answer payload
-- same or stricter trust admissibility outcome
-- no regression in final artifact selection
-
-### Validation commands for M2
-
-- `poetry run pytest -q tests/test_harness_analysis_contract.py -k "execution_mode or trust_review"`
-- `poetry run pytest -q tests/test_harness_prompt_consistency.py -k "attestation or trust"`
-- `poetry run pytest -q tests/test_harness_runner.py -k "attestation or bounded_attestation_input"`
-- `poetry run pytest -q tests/test_harness_semantic_validation.py -k "attestation or bounded_attestation_input"`
-- `poetry run pytest -q tests/test_harness_reporting.py -k "apply_final_artifacts"`
+- The refinement pass must stay O(n) in shortlist size. Probe candidate lists are
+  already small, so the runtime cost is tiny next to the model call.
+- Do not add a second probe stage or a second provider invocation.
+- Do not re-run the deliberate prompt after refinement failure.
+- Normalize candidate path sets once per candidate and reuse them during ranking
+  and admissibility checks.
+- No caching layer is needed.
 
 ## Failure Modes Registry
 
-| Failure mode | Test coverage required | Error handling required | User-visible risk if missed |
-|---|---|---|---|
-| Execution mode parses but runner ignores it | runner branch test | explicit branch selection based on contract mode + execution mode | fake cutover, operators think trust changed when it did not |
-| Attestation mode emits a second trust-authored draft | runner test plus prompt-consistency test | hard guard that final analysis comes from bounded producer | architecture drift, more complexity, misleading summaries |
-| Producer review stages contaminate final trust provenance | runner stage-selection test | isolate producer and attestation phases in runner-local stage bookkeeping | wrong publishability decision from the wrong review surface |
-| Attestation reviewer skips one recommendation index | semantic-validation test | dense coverage invariant keyed to bounded handoff length | silent truth gap in final answer eligibility |
-| Attestation review references non-workspace evidence | semantic-validation test | normalized path and evidence subset validation | false provenance claims |
-| M2 changes final artifact selection | reporting regression test | no code changes in reporting path | accidental M3 leak and user-facing artifact drift |
+| Codepath | Real failure | Test cover required | Error handling required | User-visible outcome |
+|---|---|---|---|---|
+| Successful auto-refinement | runner picks a narrowed seam whose canonical or downstream bridge does not match persisted selected state | yes | reject candidate and try the next one | run continues only on a validated narrowed seam |
+| Exhausted refinement | runner has shortlist data but still emits the old vague block text | yes | synthesize rerun guidance from ranked candidates | blocked with copyable next step |
+| Ambiguity drift | runner auto-selects from a genuinely ambiguous shortlist | yes | preserve `_resolve_focus_probe_state(...)` thresholds exactly | clarification or no-viable remains |
+| Artifact drift | seam refinement logic touches artifact deliberate behavior | yes | explicit `focus_type == seam` guard | artifact path stays blocked |
+| Report drift | `REPORT.md` implies the runner asked a question when it actually emitted rerun guidance | yes | render from `focus_refinement` metadata, not inferred prompt text | truthful report |
 
-Critical gap rule for M2: any failure mode with no test and no runner-side defense
-blocks completion.
+Critical gap to avoid: a blocked exhausted-refinement run that has no test, no
+rerun guidance, and no clear operator action. That is the exact product hole this
+branch is fixing.
 
-## Performance and Operational Notes
+## NOT in Scope
 
-- Token/runtime goal: attestation mode should be cheaper than legacy trust because it
-  removes the second full trust generation lane.
-- Memory/summary goal: the summary should carry one bounded final analysis plus one
-  trust review payload, not two parallel answer drafts.
-- Operational goal: the frozen handoff must be inspectable in saved summaries so
-  replay/debugging can explain exactly what trust attested.
+- changing `adjudicate` behavior
+- upgrading ambiguous probe results into automatic refinement
+- artifact deliberate auto-selection
+- stale rerun-answer behavior changes
+- new public `decision_state` or `decision_basis` enums
+- prompt-family rewrites for `focus_gate_probe` or `focus_gate`
+- `focus_decision` schema growth
+- semantic-validation contract rewrites
+- hidden background retries or recursive search
+- generic path-cluster synthesis beyond the live probe shortlist
 
-## What Already Exists
+## Implementation Plan
 
-Reuse, do not rebuild:
+### Step 1: Add runner-owned refinement helpers
 
-- bounded producer proposer/critic/reviser/auditor loop
-- bounded handoff builder and validator
-- trust review payload schema and most trust validation rules
-- runner-owned final artifact projection
+In `anvil/harness/runner.py`:
 
-If implementation starts cloning these into new helpers with slightly different
-names, stop. That is duplication, not progress.
+- add a helper that decides whether a deliberate `selected` seam is:
+  - safely selected
+  - broad and refineable
+  - broad but not refineable
+  - ambiguous and unchanged
+- add a helper that builds the ranked narrowed seam candidate pool from
+  `focus_probe.candidates`
+- add a helper that tries up to two narrowed candidates and returns:
+  - refined `focus_decision` plus `focus_refinement` metadata
+  - or exhausted blocked metadata plus rerun guidance
 
-## Not In Scope
+Done means:
 
-These are explicitly not M2:
+- the helper API is private and local to `runner.py`
+- ambiguity and broadness are separate code paths
+- no new provider call exists anywhere in the branch
 
-- rewriting `anvil/harness/report.py` or `anvil/harness/reporting.py`
-- changing `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, or `BEST_DRAFT.*` semantics
-- changing README product copy
-- retiring the old trust lane
-- generalized intent-intake or multi-workflow routing
-- richer provenance artifacts beyond the existing frozen handoff
-- new provider wrappers, orchestration frameworks, or schema families
+### Step 2: Rewire deliberate hardening
+
+Inside `_normalize_focus_gate_decision_for_policy(...)`:
+
+- keep stale-answer handling first and unchanged
+- keep ambiguous probe blocking unchanged
+- keep initial deliberate artifact blocking unchanged
+- replace the current umbrella/collapsed-subset immediate block with:
+  - classify broadness
+  - attempt narrowed seam refinement
+  - continue on success
+  - normalize to exhausted blocked outcome on failure
+
+Done means:
+
+- broadness no longer immediately becomes generic clarification
+- true ambiguity still does
+- `adjudicate` behavior stays untouched
+
+### Step 3: Persist refinement metadata
+
+In runner success and blocked outcomes:
+
+- persist runner-owned `focus_refinement` metadata under `details`
+- ensure it survives into `summary.run_details.focus_refinement`
+- mirror it into `failure_details.focus_refinement` for blocked exhausted runs
+- keep `focus_decision` itself stable except when a narrowed seam becomes the
+  real selected focus
+
+Done means:
+
+- `summary.focus_decision` still fits the existing contract
+- report rendering has a stable metadata source for both success and exhaustion
+
+### Step 4: Update report rendering
+
+In `anvil/harness/report.py`:
+
+- render whether deliberate auto-refined
+- render the trigger reason
+- render attempted and rejected candidates when useful
+- render rerun guidance as narrowed `files_hint` suggestions when refinement was
+  exhausted
+- never render a fake clarification prompt for exhausted refinement
+
+Done means:
+
+- refined success reads as intentional, not magical
+- exhausted refinement reads as actionable, not vague
+- stale no-viable behavior still renders correctly
+
+### Step 5: Update docs and acceptance surfaces
+
+- update `docs/analysis_review_contract.md` to describe deliberate seam behavior
+  as:
+  - probe
+  - public deliberate decision
+  - bounded internal broad-seam refinement
+  - exhausted rerun guidance fallback
+- update both live acceptance templates so seam deliberate now covers:
+  - one scenario that auto-refines and continues
+  - one scenario that exhausts and blocks with rerun guidance
+- keep artifact deliberate acceptance expectations unchanged
+
+Done means:
+
+- docs, manifests, and tests all tell the same story
+- there is no contract prose implying that every deliberate seam block is a
+  clarification prompt
+
+### Step 6: Lock the regression suite
+
+- add runner coverage first
+- add report coverage second
+- update acceptance manifests and acceptance tests third
+- run the targeted commands last
+
+Done means:
+
+- all new branches are covered before final acceptance expectations are updated
+- regression failures point to the behavior change, not to stale fixtures
 
 ## Worktree Parallelization Strategy
 
@@ -612,58 +659,61 @@ These are explicitly not M2:
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| 1. Strategy/config surface | `anvil/harness/types.py`, `anvil/harness/contracts.py`, `tests/test_harness_analysis_contract.py` | — |
-| 2. Attestation prompt + validation surface | `anvil/harness/prompts.py`, `anvil/harness/semantic_validation.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_semantic_validation.py` | Step 1 contract shape |
-| 3. Runner cutover | `anvil/harness/runner.py`, `tests/test_harness_runner.py` | Step 1 contract shape, Step 2 prompt/validation interface |
-| 4. Docs + example strategies | `docs/analysis_review_contract.md`, `examples/harness/strategies/` | Step 1 finalized knob name |
-| 5. Regression sweep | `tests/test_harness_reporting.py` execution only, full pytest selection | Steps 2-4 |
+| 1. Runner refinement core | `anvil/harness/` | - |
+| 2. Report rendering + report tests | `anvil/harness/`, `tests/` | 1 |
+| 3. Docs + live acceptance manifests + acceptance expectations | `docs/`, `examples/harness/live_acceptance/`, `tests/` | 1 |
+| 4. Final regression sweep | `tests/` | 1, 2, 3 |
 
 ### Parallel lanes
 
-Lane A: Step 1 -> Step 4  
-Sequential because both steps depend on the final knob name and public config shape.
-
-Lane B: Step 2  
-Independent after Step 1. Prompt/validation work can proceed in parallel with docs/examples.
-
-Lane C: Step 3  
-Starts after Step 2 interface is stable. Sequential inside the lane because all real
-orchestration risk is concentrated in `anvil/harness/runner.py`.
-
-Lane D: Step 5  
-Launch after A, B, and C merge. This is the proof lane.
+- Lane A: Step 1
+  Shared modules: `anvil/harness/runner.py`, `tests/test_harness_runner.py`
+- Lane B: Step 2
+  Shared modules: `anvil/harness/report.py`, `tests/test_harness_reporting.py`
+- Lane C: Step 3
+  Shared modules: `docs/analysis_review_contract.md`,
+  `examples/harness/live_acceptance/`,
+  `tests/test_run_focus_gate_acceptance.py`,
+  `tests/test_harness_example_strategy_wiring.py`
+- Lane D: Step 4
+  Shared modules: `tests/`
 
 ### Execution order
 
-1. Land Step 1 first. It defines the only allowed config surface.
-2. Launch Lane A Step 4 and Lane B Step 2 in parallel worktrees.
-3. Once Step 2 is stable, launch Lane C Step 3.
-4. Merge A + B + C.
-5. Run Lane D as the final regression sweep.
+1. Launch Lane A first. It defines the actual refinement semantics and metadata
+   names.
+2. Once Lane A settles the `focus_refinement` payload shape, launch Lane B and
+   Lane C in parallel worktrees.
+3. Merge Lane A.
+4. Rebase Lane B and Lane C onto A if any metadata strings or scenario names
+   shifted.
+5. Run Lane D after B and C both land.
 
 ### Conflict flags
 
-- Lane B and Lane C both touch `anvil/harness/` and both influence runner-facing
-  semantics. Coordinate on prompt/validation interfaces before Lane C starts.
-- All runner work belongs in one lane. Do not split `anvil/harness/runner.py` across
-  multiple worktrees.
-- Test files may be edited in parallel only if ownership is explicit:
-  - contract tests -> Step 1 owner
-  - prompt/semantic tests -> Step 2 owner
-  - runner tests -> Step 3 owner
+- Lane A and Lane B both touch `anvil/harness/`, but the intended ownership
+  split is `runner.py` versus `report.py`.
+- Lane B and Lane C both touch `tests/`, but they should stay on disjoint test
+  files.
+- Lane C must not invent final scenario names or rerun-guidance wording before
+  Lane A settles them.
+- This is not a fully parallel branch. The real parallel window opens only after
+  Lane A defines the runner contract.
 
-## Definition of Done
+## Acceptance Checklist
 
-Do not call M2 complete until all of these are true:
+The branch is done only when all of these are true:
 
-- strategy-level `trust_review.execution_mode` is real and tested
-- new attestation example strategies exist
-- attestation-mode trust runs execute bounded producer first
-- attestation-mode trust runs persist and consume `bounded_attestation_input`
-- attestation-mode trust runs do not create a second trust-authored analysis payload
-- attestation-mode trust reuse of bounded `final_analysis` is covered by tests
-- parity matrix covers seam + artifact focus-gate cases
-- reporting/artifact selection regressions are absent
-- the final summary still reads like one system, not two partially merged lanes
-
-That is the exact M2 shape.
+- deliberate seam refinement can continue automatically on a narrowed shortlisted
+  seam
+- candidate A failure can still fall through to candidate B success
+- exhausted refinement stops before proposer with ranked rerun guidance
+- exhausted refinement renders as actionable `no_viable_focus`, not a fake
+  clarification question
+- close-contest ambiguity still blocks under the existing rules
+- artifact deliberate still blocks
+- stale rerun-answer hardening still blocks
+- `REPORT.md` tells the truth in both refined-success and exhausted-refinement
+  cases
+- contract docs describe the new deliberate behavior precisely
+- the targeted regression commands are green

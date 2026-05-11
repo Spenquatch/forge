@@ -53,36 +53,41 @@ def _task(min_recommendations: int = 2) -> TaskSpec:
     )
 
 
-def _strategy(kind: str = "analysis_review_bounded_v1") -> StrategyConfig:
-    return StrategyConfig.from_dict(
-        {
-            "name": "analysis-review-codex-claude",
-            "kind": kind,
-            "roles": {
-                "proposer": {
-                    "provider": "codex_cli",
-                    "effort": "medium",
-                    "access": "read",
-                },
-                "critic": {
-                    "provider": "claude_code",
-                    "effort": "high",
-                    "access": "read",
-                },
-                "reviser": {
-                    "provider": "codex_cli",
-                    "effort": "high",
-                    "access": "read",
-                },
-                "auditor": {
-                    "provider": "claude_code",
-                    "effort": "high",
-                    "access": "read",
-                },
+def _strategy(
+    kind: str = "analysis_review_bounded_v1",
+    *,
+    trust_execution_mode: str | None = None,
+) -> StrategyConfig:
+    payload = {
+        "name": "analysis-review-codex-claude",
+        "kind": kind,
+        "roles": {
+            "proposer": {
+                "provider": "codex_cli",
+                "effort": "medium",
+                "access": "read",
             },
-            "validators": [],
-        }
-    )
+            "critic": {
+                "provider": "claude_code",
+                "effort": "high",
+                "access": "read",
+            },
+            "reviser": {
+                "provider": "codex_cli",
+                "effort": "high",
+                "access": "read",
+            },
+            "auditor": {
+                "provider": "claude_code",
+                "effort": "high",
+                "access": "read",
+            },
+        },
+        "validators": [],
+    }
+    if trust_execution_mode is not None:
+        payload["trust_review"] = {"execution_mode": trust_execution_mode}
+    return StrategyConfig.from_dict(payload)
 
 
 def _fixture() -> dict:
@@ -397,6 +402,53 @@ def _bounded_attestation_input_payload() -> dict:
             "normalized_ref_count": 3,
             "recommendation_evidence_index": recommendation_evidence_index,
         },
+    }
+
+
+def _attestation_review_payload() -> dict:
+    return {
+        "verdict": "accept_partial",
+        "summary": "The bounded recommendations remain usable with one caveat.",
+        "files_reviewed": [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/release.yml",
+        ],
+        "issues": [],
+        "topics": [],
+        "resolved_issue_ids": [],
+        "carried_forward_issue_ids": [],
+        "waived_issue_ids": [],
+        "resolved_topic_ids": [],
+        "carried_forward_topic_ids": [],
+        "waived_topic_ids": [],
+        "recommendation_reviews": [
+            {
+                "recommendation_index": 1,
+                "verdict": "accept",
+                "open_issue_ids": [],
+                "summary": "Recommendation 1 is still directly supported.",
+                "checked_files": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
+                "verified_evidence_refs": [
+                    ".github/workflows/codex-cli-release-watch.yml"
+                ],
+                "confidence_assessment": "well_calibrated",
+            },
+            {
+                "recommendation_index": 2,
+                "verdict": "accept_with_caveat",
+                "open_issue_ids": [],
+                "summary": "Recommendation 2 still holds but needs caveated rollout language.",
+                "checked_files": [".github/workflows/release.yml"],
+                "verified_evidence_refs": [".github/workflows/release.yml"],
+                "confidence_assessment": "well_calibrated",
+            },
+        ],
+        "issue_closure_reviews": [],
+        "topic_closure_reviews": [],
+        "scope_escapes": [],
+        "warnings": [],
     }
 
 
@@ -2559,6 +2611,145 @@ def test_review_semantic_validation_requires_review_stage_files_reviewed():
 
     assert result.ok is False
     assert "files_reviewed must contain at least 1 non-empty path(s)." in result.errors
+
+
+def test_trust_attestation_review_semantic_validation_accepts_dense_bounded_coverage():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(
+        task,
+        _strategy(
+            "analysis_review_trust_v1",
+            trust_execution_mode="attestation_over_bounded",
+        ),
+    )
+    contract.trust_review.execution_mode = "attestation_over_bounded"
+    payload = _attestation_review_payload()
+    bounded_attestation_input = _bounded_attestation_input_payload()
+    bounded_attestation_input["contract"]["trust_execution_mode"] = (
+        "attestation_over_bounded"
+    )
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=[],
+        payload_provenance={
+            "status": "bound",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 2,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": True,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+        bounded_attestation_input=bounded_attestation_input,
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_trust_attestation_review_semantic_validation_requires_dense_bounded_indices():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(
+        task,
+        _strategy(
+            "analysis_review_trust_v1",
+            trust_execution_mode="attestation_over_bounded",
+        ),
+    )
+    contract.trust_review.execution_mode = "attestation_over_bounded"
+    payload = _attestation_review_payload()
+    payload["recommendation_reviews"] = [payload["recommendation_reviews"][0]]
+    bounded_attestation_input = _bounded_attestation_input_payload()
+    bounded_attestation_input["contract"]["trust_execution_mode"] = (
+        "attestation_over_bounded"
+    )
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=[],
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 1,
+            "recommendation_review_ref_count": 2,
+            "recommendation_review_ref_field_count": 2,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1],
+            "uncovered_recommendation_indices": [2],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+        bounded_attestation_input=bounded_attestation_input,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendation_reviews is missing recommendation indices: 2"
+        in result.errors
+    )
+
+
+def test_trust_attestation_review_semantic_validation_requires_direct_bounded_evidence_rechecks():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(
+        task,
+        _strategy(
+            "analysis_review_trust_v1",
+            trust_execution_mode="attestation_over_bounded",
+        ),
+    )
+    contract.trust_review.execution_mode = "attestation_over_bounded"
+    payload = _attestation_review_payload()
+    payload["recommendation_reviews"][1]["verified_evidence_refs"] = [
+        ".github/workflows/nightly.yml"
+    ]
+    bounded_attestation_input = _bounded_attestation_input_payload()
+    bounded_attestation_input["contract"]["trust_execution_mode"] = (
+        "attestation_over_bounded"
+    )
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths=_workspace_paths(),
+        prior_open_issue_ids=[],
+        prior_open_topic_ids=[],
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 2,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1],
+            "uncovered_recommendation_indices": [2],
+            "uncovered_global_issue_ids": [],
+            "uncovered_global_topic_ids": [],
+        },
+        bounded_attestation_input=bounded_attestation_input,
+    )
+
+    assert result.ok is False
+    assert (
+        "recommendation_reviews[2].verified_evidence_refs must stay within bounded_attestation_input.provenance_context.recommendation_evidence_index[2]: .github/workflows/nightly.yml"
+        in result.errors
+    )
 
 
 def test_bounded_attestation_input_semantic_validation_accepts_valid_payload():

@@ -5,7 +5,7 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 VALID_TASK_KINDS = {"patch", "analysis_review"}
 ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
@@ -26,6 +26,10 @@ VALID_VALIDATOR_RUN_WHEN = {
 }
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
 VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
+VALID_TRUST_REVIEW_EXECUTION_MODES = {
+    "legacy_full_review",
+    "attestation_over_bounded",
+}
 VALID_FOCUS_GATE_DEFAULT_PATHS = {"adjudicate", "deliberate"}
 VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {
     "block_for_clarification",
@@ -244,6 +248,37 @@ class StrategyFocusGateConfig:
             ),
             default_path=normalized_default_path,
         )
+
+
+@dataclass
+class StrategyTrustReviewConfig:
+    execution_mode: Literal[
+        "legacy_full_review", "attestation_over_bounded"
+    ] = "legacy_full_review"
+
+    @classmethod
+    def from_dict(
+        cls, data: dict[str, Any] | None
+    ) -> "StrategyTrustReviewConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("trust_review must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"execution_mode"},
+            field_name="trust_review",
+        )
+        execution_mode = str(
+            data.get("execution_mode", "legacy_full_review")
+        ).strip().lower()
+        if execution_mode not in VALID_TRUST_REVIEW_EXECUTION_MODES:
+            raise ValueError(
+                "trust_review.execution_mode must be one of: "
+                + ", ".join(sorted(VALID_TRUST_REVIEW_EXECUTION_MODES))
+                + "."
+            )
+        return cls(execution_mode=execution_mode)
 
 
 @dataclass
@@ -653,6 +688,7 @@ class StrategyConfig:
     prompt_preamble: str = ""
     review_loops: ReviewLoopPolicy = field(default_factory=ReviewLoopPolicy)
     focus_gate: StrategyFocusGateConfig | None = None
+    trust_review: StrategyTrustReviewConfig | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyConfig":
@@ -680,10 +716,11 @@ class StrategyConfig:
                 data.get("review_loops"), strategy_kind=kind
             ),
             focus_gate=StrategyFocusGateConfig.from_dict(data.get("focus_gate")),
+            trust_review=StrategyTrustReviewConfig.from_dict(data.get("trust_review")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "kind": self.kind,
             "roles": {name: cfg.to_dict() for name, cfg in self.roles.items()},
@@ -695,6 +732,9 @@ class StrategyConfig:
             "review_loops": self.review_loops.to_dict(),
             "focus_gate": None if self.focus_gate is None else asdict(self.focus_gate),
         }
+        if self.trust_review is not None:
+            payload["trust_review"] = asdict(self.trust_review)
+        return payload
 
 
 @dataclass

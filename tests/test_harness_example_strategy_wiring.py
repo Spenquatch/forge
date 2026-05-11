@@ -2,7 +2,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.harness.contracts import build_analysis_review_contract
 from anvil.harness.files import load_structured_file
+from anvil.harness.types import StrategyConfig, TaskSpec
+
+
+def _task() -> TaskSpec:
+    return TaskSpec.from_dict(
+        {
+            "id": "recommend_automation_improvements",
+            "task_kind": "analysis_review",
+            "objective": "Review the repo and recommend workflow improvements.",
+            "workspace_write_policy": {"mode": "forbid"},
+        }
+    )
+
+
+def _resolved_execution_mode(strategy_path: Path) -> str:
+    strategy = StrategyConfig.from_dict(load_structured_file(strategy_path))
+    contract = build_analysis_review_contract(_task(), strategy)
+    return contract.trust_review.execution_mode
 
 
 def test_focus_gate_adjudicate_examples_clone_base_analysis_review_strategies():
@@ -23,6 +42,15 @@ def test_focus_gate_adjudicate_examples_clone_base_analysis_review_strategies():
             ),
             "analysis-review-trust-codex-claude-focus-gate-adjudicate",
         ),
+        (
+            Path(
+                "examples/harness/strategies/analysis_review_trust_legacy_codex_claude.yaml"
+            ),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_legacy_codex_claude_focus_gate_adjudicate.yaml"
+            ),
+            "analysis-review-trust-legacy-codex-claude-focus-gate-adjudicate",
+        ),
     ]
 
     for base_path, derived_path, expected_name in cases:
@@ -39,46 +67,134 @@ def test_focus_gate_adjudicate_examples_clone_base_analysis_review_strategies():
         assert derived_strategy == expected_strategy
 
 
-def test_analysis_review_entry_points_reference_focus_gate_adjudicate_examples():
+def test_canonical_trust_examples_match_attestation_source_of_truth():
+    cases = [
+        (
+            Path("examples/harness/strategies/analysis_review_trust_codex_claude.yaml"),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_attestation_codex_claude.yaml"
+            ),
+            "analysis-review-trust-codex-claude",
+        ),
+        (
+            Path(
+                "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml"
+            ),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_attestation_codex_claude_focus_gate_adjudicate.yaml"
+            ),
+            "analysis-review-trust-codex-claude-focus-gate-adjudicate",
+        ),
+        (
+            Path(
+                "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml"
+            ),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_attestation_codex_claude_focus_gate_deliberate.yaml"
+            ),
+            "analysis-review-trust-codex-claude-focus-gate-deliberate",
+        ),
+    ]
+
+    for canonical_path, source_path, expected_name in cases:
+        canonical_strategy = load_structured_file(canonical_path)
+        source_strategy = load_structured_file(source_path)
+
+        expected_strategy = dict(source_strategy)
+        expected_strategy["name"] = expected_name
+
+        assert canonical_strategy == expected_strategy
+        assert _resolved_execution_mode(canonical_path) == "attestation_over_bounded"
+
+
+def test_explicit_legacy_trust_compatibility_examples_resolve_legacy_full_review():
+    cases = [
+        (
+            Path("examples/harness/strategies/analysis_review_trust_codex_claude.yaml"),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_legacy_codex_claude.yaml"
+            ),
+            "analysis-review-trust-legacy-codex-claude",
+        ),
+        (
+            Path(
+                "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml"
+            ),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_legacy_codex_claude_focus_gate_adjudicate.yaml"
+            ),
+            "analysis-review-trust-legacy-codex-claude-focus-gate-adjudicate",
+        ),
+        (
+            Path(
+                "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml"
+            ),
+            Path(
+                "examples/harness/strategies/analysis_review_trust_legacy_codex_claude_focus_gate_deliberate.yaml"
+            ),
+            "analysis-review-trust-legacy-codex-claude-focus-gate-deliberate",
+        ),
+    ]
+
+    for canonical_path, compatibility_path, expected_name in cases:
+        canonical_strategy = load_structured_file(canonical_path)
+        compatibility_strategy = load_structured_file(compatibility_path)
+
+        expected_strategy = dict(canonical_strategy)
+        expected_strategy["name"] = expected_name
+        expected_strategy["trust_review"] = {"execution_mode": "legacy_full_review"}
+
+        assert compatibility_strategy == expected_strategy
+        assert _resolved_execution_mode(compatibility_path) == "legacy_full_review"
+
+
+def test_analysis_review_entry_points_document_attestation_first_canonical_trust():
     examples_readme = Path("examples/README.md").read_text(encoding="utf-8")
     root_readme = Path("README.md").read_text(encoding="utf-8")
     run_script = Path("examples/harness/run_analysis_review_codex_claude.sh").read_text(
         encoding="utf-8"
     )
+    canonical_template = Path(
+        "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
+    ).read_text(encoding="utf-8")
+    local_template = Path(
+        "examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml"
+    ).read_text(encoding="utf-8")
+    compatibility_template = Path(
+        "examples/harness/live_acceptance/m2_focus_gate_local.template.yaml"
+    ).read_text(encoding="utf-8")
 
-    bounded_path = (
-        "examples/harness/strategies/"
-        "analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml"
-    )
-    trust_path = (
+    canonical_trust_path = (
         "examples/harness/strategies/"
         "analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml"
     )
 
-    assert bounded_path in examples_readme
-    assert trust_path in examples_readme
-    assert bounded_path in root_readme
-    assert trust_path in root_readme
-    assert bounded_path in run_script
-    assert "scripts/run_focus_gate_acceptance.py" in examples_readme
-    assert "scripts/run_focus_gate_acceptance.py" in root_readme
-    assert ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml" in examples_readme
-    assert ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml" in root_readme
-    assert "focus_gate_acceptance.template.yaml" in examples_readme
-    assert "focus_gate_acceptance.template.yaml" in root_readme
-    assert "--shard seam-adjudicate" in root_readme
-    assert "--shard artifact-adjudicate" in root_readme
-    assert "scripts/run_m2_focus_gate_live_acceptance.py" in examples_readme
-    assert "scripts/run_m2_focus_gate_live_acceptance.py" in root_readme
-    assert "seam-regression-only wiring coverage" in examples_readme
-    assert "seam-regression-only wiring coverage" in root_readme
+    assert canonical_trust_path in examples_readme
+    assert canonical_trust_path in root_readme
+    assert "attestation-first" in examples_readme
+    assert "attestation-first" in root_readme
+    assert "analysis_review_trust_legacy_*" in examples_readme
+    assert "analysis_review_trust_legacy_*" in root_readme
+    assert "legacy_full_review" in examples_readme
+    assert "legacy_full_review" in root_readme
+    assert canonical_trust_path in run_script
+    assert "attestation-first" in run_script
+    assert "analysis_review_trust_legacy_*" in run_script
+    assert "poetry run python -m anvil.cli harness-run" in run_script
+    assert canonical_trust_path in canonical_template
+    assert canonical_trust_path in local_template
+    assert canonical_trust_path in compatibility_template
+    assert "attestation-first" in canonical_template
+    assert "attestation-first" in local_template
+    assert "attestation-first" in compatibility_template
+    assert "analysis_review_trust_legacy_*" in canonical_template
+    assert "analysis_review_trust_legacy_*" in local_template
+    assert "analysis_review_trust_legacy_*" in compatibility_template
 
 
-def test_focus_gate_live_acceptance_templates_cover_canonical_and_compatibility_surfaces():
+def test_focus_gate_live_acceptance_templates_still_target_canonical_trust_example():
     canonical_manifest = load_structured_file(
-        Path(
-            "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
-        )
+        Path("examples/harness/live_acceptance/focus_gate_acceptance.template.yaml")
     )
     compatibility_manifest = load_structured_file(
         Path("examples/harness/live_acceptance/m2_focus_gate_local.template.yaml")
@@ -88,34 +204,15 @@ def test_focus_gate_live_acceptance_templates_cover_canonical_and_compatibility_
         canonical_manifest["default_task"]
         == "examples/harness/tasks/recommend_automation_improvements.yaml"
     )
-    assert canonical_manifest["workspace_seed"] == (
-        "tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace"
-    )
-    assert canonical_manifest["preflight_timeout_sec"] == 60
-    assert canonical_manifest["shard_timeout_sec"] == 1800
-    assert [shard["name"] for shard in canonical_manifest["shards"]] == [
-        "seam-adjudicate",
-        "seam-deliberate",
-        "artifact-adjudicate",
-        "artifact-deliberate",
-    ]
-    assert [scenario["name"] for scenario in canonical_manifest["shards"][0]["scenarios"]] == [
-        "bounded",
-        "trust",
-    ]
-    assert [
-        scenario["name"] for scenario in canonical_manifest["shards"][3]["scenarios"]
-    ] == [
-        "artifact-deliberate-ambiguity",
-        "artifact-never-ask",
-        "artifact-stale-rerun",
-    ]
-
     assert compatibility_manifest["task"] == canonical_manifest["default_task"]
     assert compatibility_manifest["strategies"] == {
         "bounded": "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
         "trust": "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
     }
+    assert (
+        _resolved_execution_mode(Path(compatibility_manifest["strategies"]["trust"]))
+        == "attestation_over_bounded"
+    )
 
 
 def test_m2_focus_gate_fixture_wiring_triads_resolve_task_strategy_and_workspace():

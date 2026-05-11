@@ -1,4 +1,4 @@
-name: analysis-review-trust-codex-claude-focus-gate-deliberate
+name: analysis-review-trust-attestation-codex-claude-focus-gate-adjudicate
 kind: analysis_review_trust_v1
 prompt_preamble: |
   You are operating inside Forge's mini-harness surface.
@@ -40,5 +40,5 @@ review_loops:
     min_scope_compliance_score: 0.85
 focus_gate:
   enabled: true
-  default_path: deliberate
+  default_path: adjudicate
 validators: []

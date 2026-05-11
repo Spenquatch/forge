@@ -48,7 +48,10 @@ def _task(
     )
 
 
-def _strategy(focus_gate: dict[str, object] | None = None) -> StrategyConfig:
+def _strategy(
+    focus_gate: dict[str, object] | None = None,
+    trust_review: dict[str, object] | None = None,
+) -> StrategyConfig:
     return StrategyConfig.from_dict(
         {
             "name": "analysis-review-codex-claude",
@@ -88,6 +91,7 @@ def _strategy(focus_gate: dict[str, object] | None = None) -> StrategyConfig:
             },
             "validators": [],
             "focus_gate": focus_gate,
+            "trust_review": trust_review,
         }
     )
 
@@ -224,6 +228,104 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
         "allowed_focus_types": ["seam"],
         "clarification_policy": "block_for_clarification",
     }
+
+
+def test_strategy_trust_review_execution_mode_round_trips_through_to_dict():
+    strategy = _strategy(
+        trust_review={"execution_mode": "attestation_over_bounded"}
+    )
+
+    assert strategy.trust_review is not None
+    assert strategy.trust_review.execution_mode == "attestation_over_bounded"
+    assert strategy.to_dict()["trust_review"] == {
+        "execution_mode": "attestation_over_bounded"
+    }
+
+
+def test_strategy_trust_review_execution_mode_defaults_to_legacy_full_review():
+    strategy = _strategy()
+
+    assert strategy.trust_review is None
+    assert "trust_review" not in strategy.to_dict()
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {"unexpected": True},
+            "trust_review contains unsupported keys: unexpected.",
+        ),
+        (
+            {"execution_mode": "future_mode"},
+            "trust_review.execution_mode must be one of: attestation_over_bounded, legacy_full_review.",
+        ),
+    ],
+)
+def test_strategy_trust_review_rejects_unknown_keys_and_execution_modes(
+    payload: dict[str, object], message: str
+):
+    with pytest.raises(ValueError, match=message):
+        _strategy(trust_review=payload)
+
+
+def test_build_analysis_review_contract_uses_strategy_trust_execution_mode():
+    contract = build_analysis_review_contract(
+        _task(),
+        StrategyConfig.from_dict(
+            {
+                **_strategy(
+                    trust_review={"execution_mode": "attestation_over_bounded"}
+                ).to_dict(),
+                "kind": "analysis_review_trust_v1",
+            }
+        ),
+    )
+
+    assert contract.mode == "trust"
+    assert contract.trust_review.execution_mode == "attestation_over_bounded"
+    assert contract.to_dict()["trust_review"]["execution_mode"] == (
+        "attestation_over_bounded"
+    )
+
+
+@pytest.mark.parametrize(
+    ("strategy_path", "expected_execution_mode"),
+    [
+        (
+            "examples/harness/strategies/analysis_review_trust_codex_claude.yaml",
+            "attestation_over_bounded",
+        ),
+        (
+            "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml",
+            "attestation_over_bounded",
+        ),
+        (
+            "examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml",
+            "attestation_over_bounded",
+        ),
+        (
+            "examples/harness/strategies/analysis_review_trust_legacy_codex_claude.yaml",
+            "legacy_full_review",
+        ),
+        (
+            "examples/harness/strategies/analysis_review_trust_legacy_codex_claude_focus_gate_adjudicate.yaml",
+            "legacy_full_review",
+        ),
+        (
+            "examples/harness/strategies/analysis_review_trust_legacy_codex_claude_focus_gate_deliberate.yaml",
+            "legacy_full_review",
+        ),
+    ],
+)
+def test_example_strategy_trust_review_execution_mode_matches_canonical_vs_legacy_filenames(
+    strategy_path: str, expected_execution_mode: str
+):
+    strategy = StrategyConfig.from_dict(load_structured_file(Path(strategy_path)))
+    contract = build_analysis_review_contract(_task(), strategy)
+
+    assert contract.mode == "trust"
+    assert contract.trust_review.execution_mode == expected_execution_mode
 
 
 def test_analysis_review_contract_resolves_focus_gate_from_strategy_and_task():
@@ -640,6 +742,18 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
     assert "M1 emits `bounded_attestation_input`, M2 consumes it." in contract_doc
     assert "`analysis_review_schema()` remains unchanged in M1" in contract_doc
     assert "`bounded_attestation_input_schema()` helper" in contract_doc
+    assert (
+        "canonical `analysis_review_trust_*.yaml` filenames are attestation-first"
+        in contract_doc
+    )
+    assert (
+        "explicit `analysis_review_trust_legacy_*.yaml` filenames are compatibility-only"
+        in contract_doc
+    )
+    assert (
+        "canonical operator-facing `analysis_review_trust_*.yaml` examples do not rely on that implicit legacy default anymore"
+        in contract_doc
+    )
     assert 'the only allowed singleton values are `["seam"]` and `["artifact"]`' in contract_doc
     assert 'mixed-type lists such as `["seam", "artifact"]` are rejected explicitly' in contract_doc
     assert '"focus_type": "seam | artifact"' in contract_doc

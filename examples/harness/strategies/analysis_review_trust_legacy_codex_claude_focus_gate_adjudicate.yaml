@@ -1,11 +1,11 @@
-name: analysis-review-trust-codex-claude-focus-gate-deliberate
+name: analysis-review-trust-legacy-codex-claude-focus-gate-adjudicate
 kind: analysis_review_trust_v1
 prompt_preamble: |
   You are operating inside Forge's mini-harness surface.
   Keep recommendations concrete, grounded, and scoped to the task.
   Preserve reviewer trust by being explicit about uncertainty and avoiding over-claiming.
 trust_review:
-  execution_mode: attestation_over_bounded
+  execution_mode: legacy_full_review
 roles:
   proposer:
     provider: codex_gpt_5_4_mini
@@ -40,5 +40,5 @@ review_loops:
     min_scope_compliance_score: 0.85
 focus_gate:
   enabled: true
-  default_path: deliberate
+  default_path: adjudicate
 validators: []

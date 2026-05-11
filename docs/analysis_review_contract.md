@@ -60,6 +60,26 @@ The trust policy covers:
 - whether inference-backed acceptance should be downgraded to a caveated acceptance
 - whether late auditor medium-or-higher issues are treated as errors or warnings
 
+For M3A, the public trust strategy kind remains `analysis_review_trust_v1`. The only cutover knob is the optional `trust_review` block on `StrategyConfig`, and that block allows exactly one key:
+
+```yaml
+trust_review:
+  execution_mode: legacy_full_review | attestation_over_bounded
+```
+
+`trust_review.execution_mode` semantics are frozen as:
+
+- `legacy_full_review`: today's trust lane. The trust run executes the existing end-to-end trust review flow.
+- `attestation_over_bounded`: trust attestation over the frozen bounded draft handed off through runner-owned `bounded_attestation_input`.
+
+M3A does not change publication ownership. Publication semantics remain runner-owned and unchanged, including `analysis_review_status.publishability`, `analysis_review_status.recommendation_admissibility`, and final artifact selection.
+
+Example policy for M3A:
+
+- canonical `analysis_review_trust_*.yaml` filenames are attestation-first and opt into `trust_review.execution_mode: attestation_over_bounded`
+- explicit `analysis_review_trust_legacy_*.yaml` filenames are compatibility-only and pin `trust_review.execution_mode: legacy_full_review`
+- additive `analysis_review_trust_attestation_*.yaml` filenames may remain as mirrors of the attestation lane, but they are not the canonical operator-facing entrypoints
+
 ## `bounded_attestation_input` handoff
 
 `bounded_attestation_input` is runner-owned. It is not a public deliverable.
@@ -529,6 +549,31 @@ What trust mode does **not** add in this contract alone:
 - hard read sandboxing
 - a second subgraph
 - a second runner implementation
+
+## Trust execution modes
+
+M3A introduces attestation-first canonical trust entrypoints without changing the public trust strategy kind. `analysis_review_trust_v1` remains the public trust surface for both lanes.
+
+`trust_review.execution_mode` is the only M3A mode switch:
+
+- at the raw config level, omitting `trust_review` still resolves to `legacy_full_review`
+- set `execution_mode: attestation_over_bounded` to run trust attestation against the frozen bounded draft
+- canonical operator-facing `analysis_review_trust_*.yaml` examples do not rely on that implicit legacy default anymore
+- explicit `analysis_review_trust_legacy_*.yaml` examples are the compatibility-only way to stay on `legacy_full_review`
+
+Attestation mode uses the bounded draft handoff already described in this contract:
+
+- the bounded run freezes the draft into runner-owned `bounded_attestation_input`
+- the trust lane consumes that frozen bounded draft rather than regenerating it
+- publication semantics still stay runner-owned and unchanged in M2
+
+This split is intentionally narrow:
+
+- `analysis_review_trust_v1` stays public and unchanged
+- `trust_review.execution_mode` is the only allowed M3A cutover knob
+- canonical `analysis_review_trust_*.yaml` filenames are attestation-first
+- explicit `analysis_review_trust_legacy_*.yaml` filenames are compatibility-only
+- additive `analysis_review_trust_attestation_*.yaml` filenames remain mirrors, not the canonical entrypoints
 
 ## Semantic validation expectations
 

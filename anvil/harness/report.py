@@ -68,6 +68,34 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _execution_mode(summary: dict[str, Any]) -> str:
+    analysis_status = _analysis_review_status(summary)
+    mode = str(analysis_status.get("mode") or "").strip()
+    if mode:
+        return mode
+
+    contract = summary.get("analysis_review_contract")
+    if isinstance(contract, dict):
+        mode = str(contract.get("mode") or "").strip()
+        if mode:
+            return mode
+
+    bounded_review = _bounded_review_summary(summary)
+    mode = str(bounded_review.get("mode") or "").strip()
+    return mode
+
+
+def _publication_outcome(status: dict[str, Any]) -> str:
+    publishability = status.get("publishability")
+    if not isinstance(publishability, dict) or not publishability:
+        return ""
+    return (
+        "publishable"
+        if publishability.get("final_answer_publishable")
+        else "blocked"
+    )
+
+
 def _focus_decision(summary: dict[str, Any]) -> dict[str, Any]:
     focus_decision = summary.get("focus_decision")
     if isinstance(focus_decision, dict) and focus_decision:
@@ -801,20 +829,17 @@ def _append_analysis_review_status_section(
     if not status:
         return
 
+    execution_mode = _execution_mode(summary) or "unknown"
     provenance = status.get("provenance") or {}
     publishability = status.get("publishability") or {}
     lines.append("## Analysis Review Status")
     lines.append("")
-    lines.append(f"- Mode: `{status.get('mode', 'unknown')}`")
+    lines.append(f"- Execution mode: `{execution_mode}`")
     lines.append(f"- Content verdict: `{status.get('content_verdict', 'unknown')}`")
-    if publishability:
+    publication_outcome = _publication_outcome(status)
+    if publication_outcome:
         lines.append(
-            "- Final publication: "
-            + (
-                "`publishable`"
-                if publishability.get("final_answer_publishable")
-                else "`blocked`"
-            )
+            "- Publication outcome: " + f"`{publication_outcome}`"
         )
         blocking_causes = [
             str(item).strip()
@@ -832,6 +857,8 @@ def _append_analysis_review_status_section(
                     else _render_publishability_fallback(status)
                 )
             )
+    elif execution_mode.lower() == "trust":
+        lines.append("- Publication outcome: `unknown`")
     lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
     lines.append(f"- Provenance policy: `{provenance.get('policy_mode', 'none')}`")
     lines.append(f"- Provenance required: `{provenance.get('required', False)}`")
@@ -888,7 +915,7 @@ def _append_analysis_review_status_section(
             recommendation_admissibility
         )
         lines.append(
-            "- Recommendation indices withheld from `FINAL_ANSWER.*`: "
+            "- Withheld recommendation indices for `FINAL_ANSWER.*`: "
             + _render_recommendation_index_list(
                 [item["recommendation_index"] for item in withholding_entries]
             )
@@ -1137,8 +1164,9 @@ def render_report(summary: dict[str, Any]) -> str:
     contract = summary.get("analysis_review_contract") or {}
     review_coverage = summary.get("analysis_review_coverage") or {}
     analysis_status = _analysis_review_status(summary)
+    execution_mode = _execution_mode(summary)
     provenance = analysis_status.get("provenance") or {}
-    publishability = analysis_status.get("publishability") or {}
+    publication_outcome = _publication_outcome(analysis_status)
 
     lines.append("## Overview")
     lines.append("")
@@ -1163,17 +1191,13 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append(f"- Request-gate result: `{focus_decision_state}`")
         if focus_decision_state in _BLOCKED_FOCUS_DECISION_STATES:
             lines.append("- Review loop status: `not_started`")
+    if execution_mode:
+        lines.append(f"- Execution mode: `{execution_mode}`")
+        if publication_outcome:
+            lines.append("- Publication outcome: " + f"`{publication_outcome}`")
+        elif execution_mode.lower() == "trust":
+            lines.append("- Publication outcome: `unknown`")
     if analysis_status:
-        lines.append(f"- Review mode: `{analysis_status.get('mode', 'unknown')}`")
-        if publishability:
-            lines.append(
-                "- Final publication: "
-                + (
-                    "`publishable`"
-                    if publishability.get("final_answer_publishable")
-                    else "`blocked`"
-                )
-            )
         lines.append(f"- Provenance status: `{provenance.get('status', 'unknown')}`")
         downgrade_causes = analysis_status.get("downgrade_causes") or []
         if downgrade_causes:

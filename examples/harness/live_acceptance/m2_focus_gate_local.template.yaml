@@ -1,3 +1,6 @@
+# Compatibility shim manifest shape. Its trust slot still targets the canonical
+# attestation-first analysis_review_trust_*.yaml entrypoint by default.
+# Use analysis_review_trust_legacy_*.yaml only for explicit legacy_full_review checks.
 task: examples/harness/tasks/recommend_automation_improvements.yaml
 workspace: /absolute/path/to/workspace
 out_root: .forge-harness-runs-live

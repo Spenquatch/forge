@@ -1,3 +1,5 @@
+# Canonical trust filenames are attestation-first in M3A.
+# Use analysis_review_trust_legacy_*.yaml only for explicit legacy_full_review compatibility checks.
 default_task: examples/harness/tasks/recommend_automation_improvements.yaml
 workspace_seed: tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace
 out_root: .forge-harness-runs-live/m4-request-gate/shards
