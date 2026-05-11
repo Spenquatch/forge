@@ -642,94 +642,15 @@ def test_analysis_review_defaults_and_example_strategy_are_tuned_for_priority2()
     assert trust_example["review_loops"]["max_loops"] == 3
 
 
-def test_readme_documents_trust_recommendation_admissibility_and_preview_only_markdown():
+def test_readme_points_to_canonical_contract_and_roadmap_docs():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    shared_discovery_phrase = (
-        "Shared repo-local discovery applies to both bounded and trust."
-    )
-    bounded_difference_phrase = "Bounded differs by caps and scope discipline."
-    trust_difference_phrase = (
-        "Trust differs by provenance completeness, evidence completeness, atomicity, and publication."
-    )
-    assert shared_discovery_phrase in readme
-    assert bounded_difference_phrase in readme
-    assert trust_difference_phrase in readme
-    assert (
-        readme.index(shared_discovery_phrase)
-        < readme.index(bounded_difference_phrase)
-        < readme.index(trust_difference_phrase)
-    )
-    assert (
-        "`files_hint` is a starting slice rather than a hard discovery boundary"
-        in readme
-    )
-    assert "same nearest governing spec/manifest or sibling workflow" in readme
-    assert "one-hop repo-local corroboration" in readme
-    assert "existing bounded caps" in readme
-    assert (
-        "prefer nearer governing/spec/workflow evidence over farther plan/runbook prose"
-        in readme
-    )
-    assert (
-        "PARTIAL_ANSWER.json` / `PARTIAL_ANSWER.md` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable"
-        in readme
-    )
-    assert "analysis_review_status.recommendation_admissibility" in readme
-    assert "Across bounded and trust modes" in readme
-    assert "FINAL_ANSWER.*` is all-or-nothing" in readme
-    assert "final_answer_recommendation_indices" in readme
-    assert "partial_only_recommendation_indices" in readme
-    assert "excluded_recommendation_indices" in readme
-    assert "reasons_by_recommendation_index" in readme
-    assert (
-        "`accepted_with_caveat`, `inferred_grounding`, `not_accepted`, and `topic_blocked`"
-        in readme
-    )
-    assert (
-        "accepted recommendations, including `accept_with_caveat`, stay in `final_answer_recommendation_indices`"
-        in readme
-    )
-    assert (
-        "Recommendations outside `final_answer_recommendation_indices` are withheld from `FINAL_ANSWER.*` in trust mode"
-        in readme
-    )
-    assert (
-        "split independently actionable direct or spec-backed guidance from weaker inferred or optional hardening before review"
-        in readme
-    )
-    assert "Reserve `grounding_mode = mixed` for inseparable single actions." in readme
-    assert (
-        "Avoidable mixed-grounding bundles are a prompt/review defect, not a runner-owned admissibility state."
-        in readme
-    )
-    assert (
-        "candidate subset comes from recommendations kept for `FINAL_ANSWER.*` plus the partial-only recommendations"
-        in readme
-    )
-    assert "Recommendation indices included in `PARTIAL_ANSWER.*`: `1`, `2`" in readme
-    assert "Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in readme
-    assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`: none" in readme
-    assert "Those partial-scope lines are frozen only for `PARTIAL_ANSWER.*`." in readme
-    assert (
-        "`REPORT.md` keeps only final-publication / final-withholding wording" in readme
-    )
-    assert "analysis_review_status.publishability" in readme
-    assert "final_answer_publishable" in readme
-    assert "blocking_causes" in readme
-    assert (
-        "Artifact selection finalizes that publishability outcome after artifact projection"
-        in readme
-    )
-    assert "`final_answer_publishable` must agree with `final_artifact_kind`" in readme
-    assert (
-        'summary.json["artifacts"]["final_artifact_kind"] == "final_answer"' in readme
-    )
-    assert "reviewer prose does not decide artifact eligibility" in readme
-    assert "advisory carveout is limited to the exact warning strings" in readme
-    assert "final_artifact`, `final_artifact_json`, `final_artifact_kind`" in readme
-    assert "`Open topics:` and `Carried-forward topics:` as separate labels" in readme
-    assert "Markdown compaction is preview-only and renderer-owned." in readme
+    assert "[Contributing guide](docs/contributing.md)" in readme
+    assert "[Analysis-review contract](docs/analysis_review_contract.md)" in readme
+    assert "[Roadmap](docs/roadmap.md)" in readme
+    assert "docs/installation.md" not in readme
+    assert "docs/getting_started.md" not in readme
+    assert "docs/testing_guide.md" not in readme
 
 
 def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_and_preview_budgets():
@@ -1024,7 +945,9 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
 
 
 def test_surface_update_notes_document_primary_deliverable_artifacts():
-    notes = Path("FORGE_HARNESS_SURFACE_UPDATE_NOTES.md").read_text(encoding="utf-8")
+    notes = Path(
+        "docs/project_management/history/notes/FORGE_HARNESS_SURFACE_UPDATE_NOTES.md"
+    ).read_text(encoding="utf-8")
 
     assert "Primary deliverable artifacts for harness runs" in notes
     assert (
