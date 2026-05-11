@@ -214,6 +214,68 @@ Probe-stage behavior:
 - the later public `focus_gate` stage consumes that probe artifact, plus any rerun answer, and emits the persisted `focus_decision`
 - only the public `focus_gate` stage is copied into `summary.json["focus_decision"]`; the probe remains visible through stage artifacts and metadata
 
+## Deliberate broad-seam refinement
+
+For seam-deliberate runs, the lifecycle is:
+
+- probe
+- deliberate decision
+- bounded internal broad-seam refinement
+- proposer continuation or exhausted rerun-guidance fallback
+
+Refinement is runner-owned behavior. It is not a second public model decision and it does not widen the typed public `focus_decision` shape.
+
+Refinement rules:
+
+- refinement is considered only when `focus_gate.gate_path = deliberate`, `focus_type = seam`, and the public decision stage selected a broad seam
+- the runner may narrow that seam only to candidates already supported by the probe `checked_files` and candidate shortlist
+- the narrowed candidate must be a proper subset of the selected seam, must preserve canonical seam identity rules, and must keep the downstream seam bridge aligned
+- successful refinement updates the canonical `focus_decision.selected_focus_*` and `adapter_plan.downstream_primary_seam_*` before proposer / reviser prompts are built
+- successful refinement is reported as `auto-refined and continued`
+- if no narrowed candidate survives validation, the run terminates as `no_viable_focus` without fabricating a clarification question
+- exhausted refinement is reported as `refinement exhausted`, with guidance to `rerun with one of the narrower files_hint slices`
+
+The runner-owned metadata lives at `run_details.focus_refinement` for successful runs and is mirrored under `failure_details.focus_refinement` for blocked exhausted-refinement runs:
+
+```json
+{
+  "status": "applied | exhausted",
+  "trigger_reason": "umbrella_selected_checked_files | collapsed_narrower_subset",
+  "source_selected_focus_id": "string",
+  "source_selected_focus_paths": ["string"],
+  "candidate_shortlist_ids": ["string"],
+  "attempted_candidate_ids": ["string"],
+  "rejected_candidates": [
+    {
+      "focus_id": "string",
+      "reason": "not_proper_subset | canonical_drift | downstream_bridge_drift"
+    }
+  ],
+  "selected_candidate_id": "string|null",
+  "selected_candidate_paths": ["string"],
+  "exhausted_reason": "string|null",
+  "rerun_guidance": [
+    {
+      "focus_id": "string",
+      "score": 0.0,
+      "candidate_paths": ["string"],
+      "why_candidate": "string"
+    }
+  ]
+}
+```
+
+Metadata rules:
+
+- `status = applied` means the runner narrowed the seam and continued into proposer
+- `status = exhausted` means the runner stopped before proposer and left the public `focus_decision` blocked
+- `trigger_reason` is frozen to `umbrella_selected_checked_files` or `collapsed_narrower_subset`
+- `rejected_candidates[*].reason` is frozen to `not_proper_subset`, `canonical_drift`, or `downstream_bridge_drift`
+- `selected_candidate_id` and `selected_candidate_paths` are populated only for `status = applied`
+- `exhausted_reason` and `rerun_guidance` are populated only for `status = exhausted`
+- `rerun_guidance` is runner-owned display metadata, not a new clarification-question contract
+- exhausted refinement must preserve the distinction between broadness and ambiguity: it is actionable rerun guidance, not a request for user clarification
+
 ## Topic lifecycle artifact contract
 
 Slice A topic lifecycle is exported through the run summary, not inferred ad hoc from stage-local payloads.
