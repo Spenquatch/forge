@@ -8,16 +8,13 @@ These are intentionally **not** the first implementation slice for the current b
 
 - After the request-gate milestone lands, evaluate whether the measured wrong-route, latency, and token deltas justify widening into a generalized intent-intake layer instead of continuing to polish analysis-review-local routing.
 - Defer full M2 compatibility shim retirement until after the request-gate branch proves user-visible value, then decide whether to remove `run_m2_focus_gate_live_acceptance.py`, rename fixture namespaces, and collapse docs onto the canonical focus-gate surface.
-- Evaluate reshaping trust mode into an attestation layer over bounded output, where bounded produces `BEST_DRAFT` and trust re-audits that draft instead of running as a separate proposer flow from scratch.
 - Explore whether bounded and trust should diverge earlier in generation strategy, not just in validation/verdict posture, so the two modes feel operationally distinct.
 - Revisit whether the current single unified runner is still the right long-term shape after the topic-ledger and review-evidence work lands.
 - Validate that bounded vs trust is a product distinction users actually feel, not just an internal contract distinction with cleaner caveat language.
 
 ### Prompt and contract cleanup
 
-- Remove trust-only boilerplate from bounded prompts when every trust flag is effectively false, so bounded mode carries less no-op cognitive overhead.
 - Consider a richer trust contract for line-level review refs once path-level refs are stable and low-noise.
-- Review whether high-priority mixed-grounding recommendations should always require explicit caveat language, even when they are not inference-only.
 - Decide whether late medium-or-higher auditor findings in trust mode should produce more hard failures or fewer caveated accepts before tightening the default policy.
 
 ### Auditability and provenance depth
