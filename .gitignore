@@ -12,4 +12,9 @@ __pycache__/
 .mypy_cache
 .mcp.json
 archived
-.forge-harness-runs
+.forge-harness-run*
+.gstack
+.worktrees/
+examples/harness/live_acceptance/m2_focus_gate_local.yaml
+.runs
+.codex

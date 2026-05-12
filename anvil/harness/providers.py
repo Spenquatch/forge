@@ -28,6 +28,27 @@ ROLE_TO_FORGE_ROLE: dict[str, str] = {
 }
 
 
+def _map_role_name_to_provider_role(role_name: str) -> str:
+    normalized_role_name = str(role_name or "").strip().lower()
+    if normalized_role_name in ROLE_TO_FORGE_ROLE:
+        return ROLE_TO_FORGE_ROLE[normalized_role_name]
+    if normalized_role_name.startswith("reviser") or normalized_role_name.startswith(
+        "patcher"
+    ):
+        return "refine"
+    if normalized_role_name.startswith("critic") or normalized_role_name.startswith(
+        "falsifier"
+    ):
+        return "critique"
+    if normalized_role_name.startswith("auditor"):
+        return "review"
+    if normalized_role_name.startswith("proposer") or normalized_role_name.startswith(
+        "solver"
+    ):
+        return "execute"
+    return "execute"
+
+
 class BaseProviderAdapter:
     name: str
 
@@ -47,7 +68,8 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         schema_path = out_dir / "schema.json"
         stdout_path = out_dir / "response.txt"
         stderr_path = out_dir / "error.txt"
-        output_path = out_dir / "structured_output.json"
+        raw_output_path = out_dir / "structured_output.raw.json"
+        normalized_output_path = out_dir / "structured_output.normalized.json"
 
         write_text(prompt_path, request.prompt_text)
         write_json(schema_path, request.schema)
@@ -75,13 +97,15 @@ class ForgeProviderAdapter(BaseProviderAdapter):
                 prompt_path=str(prompt_path),
                 schema_path=str(schema_path),
                 output_path=None,
+                raw_output_path=None,
+                normalized_output_path=None,
                 structured_output=None,
                 raw_meta={"requested_provider": self.requested_name},
                 error=message,
             )
 
         provider_type = (cfg.type or "").lower()
-        mapped_role = ROLE_TO_FORGE_ROLE.get(request.role_name, "execute")
+        mapped_role = _map_role_name_to_provider_role(request.role_name)
         kwargs = _build_provider_kwargs(request, provider_type)
         prompt_text = _render_prompt_for_provider(
             request.prompt_text,
@@ -92,6 +116,7 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         started = time.monotonic()
         raw_text = ""
         error_text: Optional[str] = None
+        stderr_text: Optional[str] = None
         exit_code = 0
         structured_output: Optional[dict[str, Any]] = None
         failure_kind: Optional[str] = None
@@ -112,13 +137,16 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             if cli_result is not None:
                 exit_code = int(getattr(cli_result, "exit_code", 1) or 1)
                 raw_text = getattr(cli_result, "stdout_text", raw_text) or raw_text
-                error_text = getattr(cli_result, "stderr_text", None) or str(exc)
+                stderr_text = getattr(cli_result, "stderr_text", None) or None
+                error_text = stderr_text or str(exc)
                 command = list(getattr(cli_result, "command", []) or [])
                 raw_meta.update(_cli_result_meta(cli_result))
-                if getattr(cli_result, "structured_output", None) is not None:
-                    maybe_structured = getattr(cli_result, "structured_output")
-                    if isinstance(maybe_structured, dict):
-                        structured_output = maybe_structured
+                try:
+                    maybe_structured = cli_result.structured_output
+                except AttributeError:
+                    maybe_structured = None
+                if isinstance(maybe_structured, dict):
+                    structured_output = maybe_structured
             else:
                 exit_code = 1
                 error_text = str(exc)
@@ -132,8 +160,9 @@ class ForgeProviderAdapter(BaseProviderAdapter):
                 raw_text = getattr(cli_result, "stdout_text", raw_text) or raw_text
                 command = list(getattr(cli_result, "command", []) or command)
                 raw_meta.update(_cli_result_meta(cli_result))
-                if error_text is None:
-                    stderr_text = getattr(cli_result, "stderr_text", "") or ""
+                cli_stderr_text = getattr(cli_result, "stderr_text", "") or ""
+                stderr_text = cli_stderr_text or stderr_text
+                if error_text is None and exit_code != 0:
                     error_text = stderr_text or None
                 maybe_structured = getattr(cli_result, "structured_output", None)
                 if structured_output is None and isinstance(maybe_structured, dict):
@@ -163,13 +192,26 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         else:
             validation_errors = _soft_validate_schema(structured_output, request.schema)
             if validation_errors:
-                error_blob = "\n".join(validation_errors)
-                error_text = (error_text + "\n" if error_text else "") + error_blob
+                error_text = "\n".join(validation_errors)
+
+        if (
+            provider_type == "cli"
+            and exit_code == 0
+            and structured_output is not None
+            and not validation_errors
+            and failure_kind is None
+        ):
+            error_text = None
+            failure_summary = None
 
         write_text(stdout_path, raw_text)
-        write_text(stderr_path, error_text or "")
+        write_text(
+            stderr_path,
+            (stderr_text if provider_type == "cli" else error_text) or "",
+        )
         if structured_output is not None:
-            write_json(output_path, structured_output)
+            write_json(raw_output_path, structured_output)
+            write_json(normalized_output_path, structured_output)
 
         if request.role_config.model and provider_type != "cli":
             raw_meta["model_override_ignored"] = request.role_config.model
@@ -202,7 +244,15 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             stderr_path=str(stderr_path),
             prompt_path=str(prompt_path),
             schema_path=str(schema_path),
-            output_path=str(output_path) if structured_output is not None else None,
+            output_path=(
+                str(normalized_output_path) if structured_output is not None else None
+            ),
+            raw_output_path=(
+                str(raw_output_path) if structured_output is not None else None
+            ),
+            normalized_output_path=(
+                str(normalized_output_path) if structured_output is not None else None
+            ),
             structured_output=structured_output,
             raw_meta=raw_meta,
             error=error_text,
@@ -496,12 +546,44 @@ def _provider_failure_message(
             value = payload.get(field_name)
             if isinstance(value, str) and value.strip():
                 candidate_bits.append(value.strip())
+    candidate_bits.extend(_extract_provider_event_messages(raw_text))
     if error_text and error_text.strip():
         candidate_bits.append(error_text.strip())
     cleaned_raw = raw_text.strip()
     if cleaned_raw and cleaned_raw not in candidate_bits and len(cleaned_raw) <= 400:
         candidate_bits.append(cleaned_raw)
     return next((item for item in candidate_bits if item), "")
+
+
+def _extract_provider_event_messages(raw_text: str) -> list[str]:
+    messages: list[str] = []
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        direct_message = payload.get("message")
+        if isinstance(direct_message, str) and direct_message.strip():
+            messages.append(direct_message.strip())
+
+        nested_error = payload.get("error")
+        if isinstance(nested_error, dict):
+            nested_message = nested_error.get("message")
+            if isinstance(nested_message, str) and nested_message.strip():
+                messages.append(nested_message.strip())
+
+        item = payload.get("item")
+        if isinstance(item, dict):
+            item_message = item.get("message")
+            if isinstance(item_message, str) and item_message.strip():
+                messages.append(item_message.strip())
+    return messages
 
 
 def _format_provider_failure_summary(kind: str, message: str) -> str:
@@ -520,11 +602,14 @@ def _format_provider_failure_summary(kind: str, message: str) -> str:
 def _cli_result_meta(cli_result: Any) -> dict[str, Any]:
     meta = getattr(cli_result, "metadata", None)
     result = dict(meta) if isinstance(meta, Mapping) else {}
-    if getattr(cli_result, "usage", None) is not None:
+    try:
+        usage = cli_result.usage
+    except AttributeError:
+        usage = None
+    if usage is not None:
         try:
-            result["usage"] = asdict(getattr(cli_result, "usage"))
+            result["usage"] = asdict(usage)
         except Exception:
-            usage = getattr(cli_result, "usage")
             result["usage"] = {
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None),

@@ -1,0 +1,97 @@
+# Canonical trust filenames are attestation-first in M3A.
+# Use analysis_review_trust_legacy_*.yaml only for explicit legacy_full_review compatibility checks.
+default_task: examples/harness/tasks/recommend_automation_improvements.yaml
+workspace_seed: tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace
+out_root: .forge-harness-runs-live/m4-request-gate/shards
+preflight_timeout_sec: 60
+shard_timeout_sec: 1800
+shards:
+  - name: seam-adjudicate
+    scenarios:
+      - name: bounded
+        strategy: examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml
+        expected_gate_path: adjudicate
+        expected_focus_type: seam
+        expected_decision_state: selected
+        expect_proposer_artifacts: true
+        expect_downstream_bridge: true
+      - name: trust
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml
+        expected_gate_path: adjudicate
+        expected_focus_type: seam
+        expected_decision_state: selected
+        expect_proposer_artifacts: true
+        expect_downstream_bridge: true
+  - name: seam-deliberate
+    scenarios:
+      - name: deliberate-refined-success
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+        expected_gate_path: deliberate
+        expected_focus_type: seam
+        expected_decision_state: selected
+        expect_proposer_artifacts: true
+        expect_downstream_bridge: true
+      - name: deliberate-refinement-exhausted
+        task: examples/harness/tasks/recommend_automation_improvements_never_ask.yaml
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+        expected_gate_path: deliberate
+        expected_focus_type: seam
+        expected_decision_state: no_viable_focus
+        expect_proposer_artifacts: false
+        expect_downstream_bridge: false
+      - name: stale-rerun
+        task: examples/harness/tasks/recommend_automation_improvements_stale_focus_gate_answer.yaml
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+        expected_gate_path: deliberate
+        expected_focus_type: seam
+        expected_decision_state: clarification_requested
+        expect_proposer_artifacts: false
+        expect_downstream_bridge: false
+        expected_warning_substrings:
+          - went stale
+  - name: artifact-adjudicate
+    scenarios:
+      - name: artifact-bounded
+        task: examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml
+        strategy: examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml
+        expected_gate_path: adjudicate
+        expected_focus_type: artifact
+        expected_decision_state: selected
+        expect_proposer_artifacts: true
+        expect_downstream_bridge: true
+      - name: artifact-trust
+        task: examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml
+        expected_gate_path: adjudicate
+        expected_focus_type: artifact
+        expected_decision_state: selected
+        expect_proposer_artifacts: true
+        expect_downstream_bridge: true
+  - name: artifact-deliberate
+    scenarios:
+      - name: artifact-deliberate-ambiguity
+        task: examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+        expected_gate_path: deliberate
+        expected_focus_type: artifact
+        expected_decision_state: clarification_requested
+        expect_proposer_artifacts: false
+        expect_downstream_bridge: false
+      - name: artifact-never-ask
+        task: examples/harness/tasks/recommend_release_workflow_artifact_improvements_never_ask.yaml
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+        expected_gate_path: deliberate
+        expected_focus_type: artifact
+        expected_decision_state: no_viable_focus
+        expect_proposer_artifacts: false
+        expect_downstream_bridge: false
+      - name: artifact-stale-rerun
+        task: examples/harness/tasks/recommend_release_workflow_artifact_improvements_stale_rerun_answer.yaml
+        strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_deliberate.yaml
+        expected_gate_path: deliberate
+        expected_focus_type: artifact
+        expected_decision_state: clarification_requested
+        expect_proposer_artifacts: false
+        expect_downstream_bridge: false
+        expected_warning_substrings:
+          - went stale

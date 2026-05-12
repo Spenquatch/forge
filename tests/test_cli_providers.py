@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from anvil.cli_agents.codex import _codex_compatible_schema
 from anvil.config_loader import ProviderCfg
+from anvil.harness.schemas import analysis_output_schema
 from anvil.providers import clear_registry, is_provider_available, register_provider_config
 from anvil.providers.claude_code import ClaudeCodeProvider
 from anvil.providers.codex_cli import CodexCliProvider
@@ -161,6 +163,31 @@ async def test_codex_cli_provider_structured_output(fake_cli_bins: dict[str, str
 
     assert json.loads(result) == {"status": "ok", "source": "codex"}
     assert provider.last_structured_output == {"status": "ok", "source": "codex"}
+
+
+def test_codex_output_schema_normalizes_optional_nested_fields() -> None:
+    normalized = _codex_compatible_schema(analysis_output_schema())
+
+    recommendation_schema = normalized["properties"]["recommendations"]["items"]
+    assert set(recommendation_schema["required"]) >= {
+        "classification",
+        "priority",
+        "title",
+        "rationale",
+        "evidence",
+        "proposed_change",
+        "confidence",
+        "verified_evidence_refs",
+        "checked_files",
+        "affected_files",
+        "grounding_mode",
+    }
+    assert recommendation_schema["properties"]["verified_evidence_refs"]["anyOf"][1] == {
+        "type": "null"
+    }
+    assert recommendation_schema["properties"]["grounding_mode"]["anyOf"][1] == {
+        "type": "null"
+    }
 
 
 @pytest.mark.asyncio

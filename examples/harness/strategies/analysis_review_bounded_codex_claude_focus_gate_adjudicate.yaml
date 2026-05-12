@@ -1,0 +1,41 @@
+name: analysis-review-bounded-codex-claude-focus-gate-adjudicate
+kind: analysis_review_bounded_v1
+prompt_preamble: |
+  You are operating inside Forge's mini-harness surface.
+  Keep recommendations concrete, grounded, and scoped to the task.
+roles:
+  proposer:
+    provider: codex_gpt_5_4_mini
+    effort: medium
+    access: read
+    timeout_sec: 1800
+  critic:
+    provider: codex_gpt_5_4
+    effort: high
+    access: read
+    timeout_sec: 1200
+    disable_bare: true
+  reviser:
+    provider: codex_gpt_5_2
+    effort: high
+    access: read
+    timeout_sec: 1800
+  auditor:
+    provider: codex_gpt_5_4
+    effort: high
+    access: read
+    timeout_sec: 1200
+    disable_bare: true
+review_loops:
+  min_loops: 1
+  max_loops: 3
+  always_run_first_revision: true
+  stop_when:
+    max_open_medium_issues: 0
+    min_grounding_score: 0.8
+    min_actionability_score: 0.75
+    min_scope_compliance_score: 0.85
+focus_gate:
+  enabled: true
+  default_path: adjudicate
+validators: []

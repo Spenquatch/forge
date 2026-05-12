@@ -3,12 +3,30 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .contracts import AnalysisReviewContract, confidence_rubric_lines
+from .contracts import (
+    GROUNDING_MODE_VALUES,
+    ISSUE_KIND_DEFAULT_BLOCKING_CLASS,
+    AnalysisReviewContract,
+    confidence_rubric_lines,
+)
 from .git_utils import render_git_snapshot
 from .types import ReviewLoopPolicy, TaskSpec, ValidationRun, WorkspaceWritePolicy
 
-
 MAX_BLOCK_CHARS = 5000
+
+__all__ = [
+    "build_single_pass_prompt",
+    "build_proposer_prompt",
+    "build_falsifier_prompt",
+    "build_patcher_prompt",
+    "build_analysis_proposer_prompt",
+    "build_focus_gate_adjudicate_prompt",
+    "build_focus_gate_deliberate_prompt",
+    "build_analysis_critic_prompt",
+    "build_analysis_auditor_prompt",
+    "build_trust_attestation_review_prompt",
+    "build_analysis_reviser_prompt",
+]
 
 
 def _bullets(items: Iterable[str]) -> str:
@@ -131,6 +149,342 @@ def _json_block(title: str, payload: dict | list | None) -> str:
     return f"{title}:\n{_clip(json.dumps(payload, indent=2, sort_keys=False))}"
 
 
+def _join_prompt_blocks(*blocks: str) -> str:
+    return "\n".join(block for block in blocks if str(block).strip())
+
+
+def _allowed_singleton_focus_type(contract: AnalysisReviewContract) -> str:
+    allowed_focus_types = list(contract.focus_gate.allowed_focus_types or ["seam"])
+    return str(allowed_focus_types[0] or "seam").strip()
+
+
+def _focus_gate_output_rules_block(contract: AnalysisReviewContract) -> str:
+    allowed_focus_type = _allowed_singleton_focus_type(contract)
+    return "\n".join(
+        [
+            "Focus gate output rules:",
+            "- Return a `focus_decision` artifact only; do not draft recommendations or review findings here.",
+            "- Set `gate_path` to exactly `adjudicate` or `deliberate`.",
+            f"- Set `focus_type` to exactly `{allowed_focus_type}`.",
+            (
+                "- Set `decision_state` to exactly one of "
+                "`selected`, `clarification_requested`, or `no_viable_focus`."
+            ),
+            (
+                "- Set `decision_basis` to exactly one of "
+                "`request_only`, `repo_probe`, or `rerun_answer`."
+            ),
+            (
+                "- Set `files_hint_disposition` to exactly one of "
+                "`helped`, `hurt`, `ignored`, or `absent`."
+            ),
+            (
+                "- Every `candidates[*]` item must include a non-empty "
+                "`candidate_paths` array built from concrete workspace paths."
+            ),
+            (
+                "- Candidate `focus_id` values must stay aligned with the canonical "
+                "focus identity implied by their `candidate_paths` and `focus_type`."
+            ),
+            (
+                "- Do not emit multiple candidates whose normalized "
+                "`candidate_paths` collapse to the same canonical focus identity."
+            ),
+            (
+                "- Every `candidates[*]` item must include `why_candidate`, "
+                "`evidence_refs`, and `score`."
+            ),
+            (
+                "- When `focus_type=artifact`, every `candidate_paths` set and "
+                "`selected_focus_paths` must contain exactly one normalized path."
+            ),
+            (
+                "- When `decision_state=selected`, set both "
+                "`selected_focus_id` and `selected_focus_summary`, keep "
+                "`candidates` non-empty, copy the selected candidate's exact path "
+                "set into `selected_focus_paths`, and set "
+                "`adapter_plan.primary_focus_id` equal to `selected_focus_id`."
+            ),
+            (
+                "- When `decision_state=selected`, always populate "
+                "`adapter_plan.downstream_primary_seam_id`, "
+                "`adapter_plan.downstream_primary_seam_paths`, and "
+                "`adapter_plan.adaptation_basis` from `selected_focus_paths`."
+            ),
+            (
+                "- For `focus_type=artifact`, keep `selected_focus_*` "
+                "artifact-shaped; the downstream seam bridge lives only in "
+                "`adapter_plan.downstream_primary_seam_*`."
+            ),
+            (
+                "- When `decision_state=clarification_requested`, keep "
+                "`candidates` non-empty, set `selected_focus_id=null`, "
+                "`selected_focus_summary=null`, serialize "
+                "`selected_focus_paths` as `[]`, and populate "
+                "`question.prompt` plus `question.options` with the exact clarification "
+                "you need."
+            ),
+            (
+                "- When `decision_state=no_viable_focus`, set "
+                "`selected_focus_id=null`, `selected_focus_summary=null`, "
+                "`selected_focus_paths=[]`, "
+                "`adapter_plan.primary_focus_id=null`, "
+                "`adapter_plan.downstream_primary_seam_id=null`, "
+                "`adapter_plan.downstream_primary_seam_paths=[]`, "
+                "`adapter_plan.adaptation_basis=null`, and serialize "
+                '`question` exactly as `{ "prompt": "", "options": [] }`.'
+            ),
+            (
+                "- When not `clarification_requested`, serialize `question` exactly "
+                'as `{ "prompt": "", "options": [] }`.'
+            ),
+            (
+                "- When not `selected`, serialize `selected_focus_paths` exactly "
+                "as `[]`."
+            ),
+            (
+                "- `decision_basis=request_only` requires `gate_path=adjudicate` "
+                "and `checked_files=[]`."
+            ),
+            (
+                "- `decision_basis=repo_probe` and `decision_basis=rerun_answer` "
+                "require `gate_path=deliberate` and non-empty `checked_files`."
+            ),
+            (
+                "- Candidate IDs and adapter secondary IDs must stay consistent with "
+                "the shortlisted focus set you emit."
+            ),
+        ]
+    )
+
+
+def _focus_probe_rules_block(contract: AnalysisReviewContract) -> str:
+    allowed_focus_type = _allowed_singleton_focus_type(contract)
+    return "\n".join(
+        [
+            "Probe rules:",
+            f"- `focus_type` is always `{allowed_focus_type}`.",
+            "- `files_hint_disposition` must be exactly one of `helped`, `hurt`, `ignored`, or `absent`.",
+            "- `checked_files` must contain the concrete repo files the probe inspected.",
+            "- `checked_files` caps at 6.",
+            "- Candidate count caps at 3.",
+            "- Do not emit multiple candidates whose normalized `candidate_paths` collapse to the same canonical focus identity.",
+            "- Every candidate must include `candidate_paths`, `why_candidate`, `evidence_refs`, and `score`.",
+            "- When `focus_type=artifact`, every candidate must point at exactly one normalized path.",
+            "- Each candidate `score` is a float in `[0.0, 1.0]`.",
+            "- Each `evidence_refs` entry must be a path-only ref that also appears in `checked_files`.",
+            "- The probe exists to make ambiguity concrete. If it cannot point to files, it did not do the job.",
+        ]
+    )
+
+
+def _focus_selection_thresholds_block() -> str:
+    return "\n".join(
+        [
+            "Selection thresholds:",
+            "- `high`: `confidence >= 0.80`",
+            "- `medium`: `0.55 <= confidence < 0.80`",
+            "- `low`: `confidence < 0.55`",
+            "- Select directly when the top candidate is `high`.",
+            "- Select directly when the top candidate is `medium` and leads the second candidate by at least `0.15`.",
+            "- Ambiguity remains when the top candidate is `medium` and the lead is `< 0.15`.",
+            "- Ambiguity remains when there is only one `medium` candidate and no second candidate to establish the required lead.",
+            "- Ambiguity remains when the top candidate is `low`.",
+        ]
+    )
+
+
+def _focus_stale_answer_rules_block() -> str:
+    return "\n".join(
+        [
+            "Rerun-answer and stale-answer rules:",
+            "- `focus_gate_answer.question_prompt` must still match the current canonical deliberate question prompt after trimming.",
+            "- `focus_gate_answer.selected_option` must still match one current question option after trimming.",
+            "- The selected option must still appear in the current deliberate probe candidate set.",
+            "- If the recorded question prompt no longer matches the current canonical deliberate question prompt, the answer is stale.",
+            "- If the selected option vanished from the current probe candidate set, the answer is stale.",
+            "- If the current probe has a different threshold-valid winner, the answer is stale.",
+            "- If the current probe is ambiguous under the selection thresholds, the answer is stale.",
+            "- Only auto-accept `decision_basis=rerun_answer` when the selected option is still the current threshold-valid winner.",
+            "- `freeform_answer` remains advisory context, never the primary matcher.",
+            "- When `clarification_policy = never_ask`, emit `no_viable_focus` with a stale-answer warning instead of re-asking.",
+        ]
+    )
+
+
+def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
+    if not isinstance(focus_decision, dict):
+        return ""
+    if str(focus_decision.get("decision_state") or "").strip() != "selected":
+        return ""
+
+    selected_focus_id = str(focus_decision.get("selected_focus_id") or "").strip()
+    selected_focus_summary = str(
+        focus_decision.get("selected_focus_summary") or ""
+    ).strip()
+    selected_focus_paths = [
+        str(path).strip()
+        for path in (focus_decision.get("selected_focus_paths") or [])
+        if str(path).strip()
+    ]
+    candidates = focus_decision.get("candidates")
+    candidate_ids: list[str] = []
+    if isinstance(candidates, list):
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("focus_id") or "").strip()
+            if candidate_id:
+                candidate_ids.append(candidate_id)
+    if not selected_focus_id:
+        return ""
+
+    shortlisted_ids = ", ".join(candidate_ids) if candidate_ids else "(none recorded)"
+    lines = [
+        "Focus Gate Decision:",
+        f"- selected_focus_id: {selected_focus_id}",
+        f"- selected_focus_summary: {selected_focus_summary or '(missing summary)'}",
+        (
+            "- selected_focus_paths: "
+            + (
+                ", ".join(selected_focus_paths)
+                if selected_focus_paths
+                else "(missing paths)"
+            )
+        ),
+        f"- shortlisted_candidate_ids: {shortlisted_ids}",
+        (
+            "- adapter_plan.downstream_primary_seam_id: "
+            + str(
+                ((focus_decision.get("adapter_plan") or {}).get("downstream_primary_seam_id"))
+                or "(missing bridge)"
+            )
+        ),
+        (
+            "- adapter_plan.downstream_primary_seam_paths: "
+            + ", ".join(
+                str(path).strip()
+                for path in (
+                    ((focus_decision.get("adapter_plan") or {}).get(
+                        "downstream_primary_seam_paths"
+                    ) or [])
+                )
+                if str(path).strip()
+            )
+        ),
+        (
+            "- adapter_plan.adaptation_basis: "
+            + str(
+                ((focus_decision.get("adapter_plan") or {}).get("adaptation_basis"))
+                or "(missing basis)"
+            )
+        ),
+        (
+            "- Preserve `selected_focus_*` as the chosen focus surface. "
+            "Use `adapter_plan.downstream_primary_seam_paths` and "
+            "`adapter_plan.downstream_primary_seam_id` as the authoritative "
+            "downstream seam handoff for `primary_seam`."
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def build_focus_probe_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+) -> str:
+    return f"""
+You are the FOCUS_GATE_PROBE stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Return ONLY the JSON object required by the schema.
+- This stage records an internal repo-backed shortlist artifact; it does not emit the final public `focus_decision`.
+
+Your job:
+1. Inspect the task, any `files_hint`/context, and the current workspace snapshot.
+2. Check concrete repo files so the retained shortlist is grounded in current workspace reality.
+3. Emit the internal probe artifact with explicit `checked_files`, scored `candidates`, and `files_hint_disposition`.
+4. Keep ambiguity concrete: if a candidate survives, explain `why_candidate` and cite path-only `evidence_refs`.
+5. Record warnings only as supporting context; warnings do not replace file-backed probe evidence.
+
+{_focus_probe_rules_block(contract)}
+{_focus_selection_thresholds_block()}
+{_analysis_contract_block(contract)}
+
+{_task_block(task, prompt_preamble)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
+
+
+def _focus_gate_deliberate_guidance_block() -> str:
+    return "\n".join(
+        [
+            "Gate-path guidance:",
+            "- Use `deliberate` when the task likely needs shortlist comparison or clarification before a focus can be selected confidently.",
+            "- Prefer `clarification_requested` when multiple plausible focuses remain and the missing distinction is best answered by the operator.",
+            "- Use `selected` only when the ambiguity collapses after comparing the shortlisted focuses against the current repo context.",
+            "- A `Prior focus decision` block, when present, is probe artifact context from an earlier deliberate pass; reuse its shortlist or question only if it still fits the current repo state.",
+            "- A `Focus gate answer` block, when present, is rerun-answer context from the operator.",
+            "- If rerun-answer context arrives without a matching live shortlist or no longer fits the current repo state, treat it as stale-answer context instead of forcing a selection.",
+            "- Keep `candidate_paths` explicit for every shortlisted focus, and when you do select, promote the chosen path set into `selected_focus_paths` unchanged.",
+        ]
+    )
+
+
+def _focus_gate_adjudicate_guidance_block() -> str:
+    return "\n".join(
+        [
+            "Gate-path guidance:",
+            "- Use `adjudicate` when the current task context alone is sufficient to select one focus cleanly.",
+            "- Emit `gate_path=adjudicate` exactly.",
+            "- Emit `decision_basis=request_only` exactly.",
+            "- Emit `files_hint_disposition=absent` exactly.",
+            "- Emit `checked_files=[]` exactly.",
+            "- Emit `evidence_refs=[]` for every candidate exactly.",
+            "- Prefer `selected` over `clarification_requested` when one focus is clearly dominant from the task and repo context.",
+            "- Use `clarification_requested` only when the task itself leaves a real unresolved distinction.",
+            "- Use `no_viable_focus` only when the current task context does not support any defensible focus shortlist.",
+            "- Keep the chosen candidate's `candidate_paths` identical to the emitted `selected_focus_paths`.",
+        ]
+    )
+
+
+def _recommendation_review_coverage_block(prior_output: dict | None) -> str:
+    recommendations: list[dict[str, Any]] = []
+    if isinstance(prior_output, dict):
+        raw_recommendations = prior_output.get("recommendations")
+        if isinstance(raw_recommendations, list):
+            recommendations = [
+                item for item in raw_recommendations if isinstance(item, dict)
+            ]
+    if not recommendations:
+        return (
+            "Recommendation review coverage:\n"
+            "- If the prior analysis includes recommendations, return exactly one "
+            "`recommendation_reviews` item per recommendation index."
+        )
+
+    lines = [
+        "Recommendation review coverage:",
+        (
+            "- The prior analysis contains "
+            f"{len(recommendations)} recommendation(s). Return exactly one "
+            "`recommendation_reviews` item for each recommendation index below."
+        ),
+        "- Do not omit acceptable recommendations. Use verdict=accept or accept_with_caveat when appropriate.",
+        "- Keep the indices aligned with this checklist:",
+    ]
+    for index, item in enumerate(recommendations, start=1):
+        title = str(item.get("title") or "").strip() or "(untitled recommendation)"
+        lines.append(f"{index}. {title}")
+    return "\n".join(lines)
+
+
 def _review_policy_block(review_policy: ReviewLoopPolicy) -> str:
     return "\n".join(
         [
@@ -161,6 +515,8 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
     return "\n".join(
         [
             f"Analysis-review contract: {contract.contract_version}",
+            f"- Effective strategy kind: {contract.strategy_kind}",
+            f"- Mode: {contract.mode}",
             f"- Reviser goal: {contract.reviser_goal}",
             f"- Require issue ledger: {contract.require_issue_ledger}",
             f"- Require recommendation reviews: {contract.require_recommendation_reviews}",
@@ -177,7 +533,551 @@ def _analysis_contract_block(contract: AnalysisReviewContract) -> str:
     )
 
 
-def build_single_pass_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
+def _trust_review_policy_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    trust_evidence_limit = (
+        (
+            str(trust.max_evidence_refs_per_recommendation)
+            if trust.max_evidence_refs_per_recommendation is not None
+            else "uncapped"
+        )
+        if contract.mode == "trust"
+        else "n/a (bounded mode)"
+    )
+    return "\n".join(
+        [
+            "Trust review policy:",
+            (
+                "- Recommendation evidence refs in trust-mode analysis outputs: "
+                f"{trust_evidence_limit}"
+            ),
+            f"- Taxonomy override reason required: {trust.require_taxonomy_override_reason}",
+            (
+                "- verified_evidence_refs must be a subset of evidence refs: "
+                f"{trust.require_verified_evidence_refs_subset}"
+            ),
+            (
+                "- Non-inferred affected_files require evidence or checked-file coverage: "
+                f"{trust.require_affected_file_coverage}"
+            ),
+            f"- Payload provenance mode: {trust.payload_provenance_mode}",
+            (
+                "- Downgrade clean acceptance when semantic warnings remain: "
+                f"{trust.downgrade_on_semantic_warnings}"
+            ),
+            (
+                "- Downgrade inference-backed acceptance to caveated acceptance: "
+                f"{trust.downgrade_on_inferred_acceptance}"
+            ),
+            (
+                "- Late auditor medium-or-higher issue policy: "
+                f"{trust.late_auditor_medium_or_higher_policy}"
+            ),
+        ]
+        + (
+            [
+                (
+                    "- Final-artifact eligibility is runner-owned in trust mode: only "
+                    "accept verdicts with non-inferred grounding and no runner-known per-index "
+                    "topic blocker are clean final-answer candidates."
+                ),
+                (
+                    "- accept_with_caveat and inferred acceptance remain partial-only "
+                    "considerations, and you should not add any extra payload field to encode that."
+                ),
+            ]
+            if contract.mode == "trust"
+            else []
+        )
+    )
+
+
+def _trust_recommendation_atomicity_block(
+    contract: AnalysisReviewContract, *, role: str
+) -> str:
+    if contract.mode != "trust":
+        return ""
+
+    role_lines = {
+        "proposer": [
+            (
+                "- Split a directly grounded or spec-backed action from optional "
+                "inference-backed or parity hardening when they are independently "
+                "actionable."
+            ),
+        ],
+        "critic": [
+            (
+                "- When a recommendation bundles a direct half that could stand "
+                "alone with weaker optional hardening, raise "
+                "`kind=insufficient_specificity` with "
+                "`blocking_class=actionability` and require a split."
+            ),
+            (
+                "- Do not use `missing_evidence` for bundling unless the problem "
+                "is actually absent corroboration."
+            ),
+        ],
+        "reviser": [
+            (
+                "- When splitting one recommendation into two, keep the directly "
+                "grounded action in the original recommendation slot when possible."
+            ),
+            (
+                "- Make the weaker hardening guidance the new adjacent "
+                "recommendation rather than reshuffling unrelated recommendation "
+                "order."
+            ),
+            (
+                "- Preserve issue/topic linkage unless it clearly belongs to the "
+                "new child recommendation."
+            ),
+            (
+                "- Give each split recommendation its own grounding_mode, "
+                "evidence, review_surface, and trust metadata."
+            ),
+        ],
+        "auditor": [
+            (
+                "- When a recommendation bundles a direct half that could stand "
+                "alone with weaker optional hardening, raise "
+                "`kind=insufficient_specificity` with "
+                "`blocking_class=actionability` and require a split."
+            ),
+            (
+                "- Do not use `missing_evidence` for bundling unless the problem "
+                "is actually absent corroboration."
+            ),
+            (
+                "- Do not return clean acceptance while an avoidable "
+                "mixed-grounding bundle remains."
+            ),
+            (
+                "- If the bundle is still present, leave that recommendation "
+                "unresolved and force revision rather than treating a caveat as "
+                "sufficient closure."
+            ),
+        ],
+    }
+    lines = [
+        "Trust recommendation atomicity:",
+        "- In trust mode, recommendations must be atomic by admissibility boundary.",
+        (
+            "- If a directly grounded or spec-backed action is independently "
+            "actionable, emit it as its own recommendation instead of bundling it "
+            "with weaker optional hardening."
+        ),
+        (
+            '- Reserve `grounding_mode="mixed"` for truly inseparable '
+            "single-action recommendations, not convenient bundling of a direct "
+            "half and an inferred half."
+        ),
+        *role_lines[role],
+    ]
+    return "\n".join(lines)
+
+
+def _bounded_review_policy_block(contract: AnalysisReviewContract) -> str:
+    bounded = contract.bounded_review
+    return "\n".join(
+        [
+            "Bounded review policy:",
+            (
+                "- Bounded-mode recommendation evidence refs: "
+                f"1..{bounded.max_evidence_refs_per_recommendation} per recommendation"
+            ),
+            (
+                "- review_surface.must_check_files: "
+                f"1..{bounded.max_must_check_files_per_recommendation} per recommendation"
+            ),
+            (
+                "- review_surface.optional_check_files: "
+                f"0..{bounded.max_optional_check_files_per_recommendation} per recommendation"
+            ),
+            f"- Evidence cap policy: {bounded.evidence_cap_policy}",
+            "- review_surface.must_check_files must be a subset of files_reviewed",
+            f"- Critic issue cap: {bounded.critic_issue_cap}",
+            f"- Critic new-topic cap: {bounded.critic_new_topic_cap}",
+            (
+                "- Auditor new medium-or-higher issue cap after round 0: "
+                f"{bounded.auditor_new_medium_or_higher_issue_cap_after_round0}"
+            ),
+            (
+                "- Scope escapes require non-empty reasons: "
+                f"{bounded.require_scope_escape_justification}"
+            ),
+        ]
+    )
+
+
+def _seam_selection_guidance_block(contract: AnalysisReviewContract) -> str:
+    discovery = contract.discovery_policy
+    lines = [
+        "Seam selection guidance:",
+        "- Use `primary_seam` as the canonical run-context seam.",
+        (
+            "- Treat seam identity as normalized path-set identity: if two seam "
+            "descriptions cover the same normalized paths, they are the same seam "
+            "and should not receive different labels."
+        ),
+        (
+            "- Exhaust the primary seam before expanding; use "
+            "`secondary_seams_considered` only for seams you actually declared "
+            "or inspected beyond the primary seam."
+        ),
+        (
+            "- Bind every recommendation with `recommendations[*].seam_id`; when "
+            "that seam expands beyond the primary seam, populate "
+            "`recommendations[*].seam_expansion_reason`."
+        ),
+        (
+            f"- default bounded cap is "
+            f"{discovery.max_secondary_seams_considered_bounded}; declaring or "
+            "inspecting a third secondary seam requires a recorded "
+            "scope_escape; overflow is never silently normalized away."
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def _role_specific_seam_review_guidance_block(role: str) -> str:
+    role_lines = {
+        "critic": [
+            "- In the critic stage, challenge seam choice before recommendation polish.",
+            (
+                "- In the critic stage, when a recommendation relies on farther "
+                "plan/runbook prose while a nearer governing spec/manifest or "
+                "sibling workflow exists, raise the seam defect before "
+                "polishing wording."
+            ),
+            (
+                "- In the critic stage, in bounded mode, flag secondary-seam "
+                "exploration that silently widened review beyond bounded "
+                "discipline, even if the recommendation text looks reasonable."
+            ),
+            (
+                "- In the critic stage, use `kind=scope_drift` for wrong seam "
+                "selection, unjustified off-primary expansion, and bounded "
+                "widening abuse."
+            ),
+            (
+                "- In the critic stage, use `kind=missing_evidence` only when "
+                "corroboration is actually absent."
+            ),
+        ],
+        "auditor": [
+            (
+                "- In the auditor stage, do not return clean acceptance while "
+                "the wrong seam remains primary."
+            ),
+            (
+                "- In the auditor stage, do not accept off-primary "
+                "recommendations without justified seam expansion."
+            ),
+            (
+                "- In the auditor stage, do not return clean acceptance when "
+                "seam metadata was used to bypass bounded corroboration limits."
+            ),
+            (
+                "- In the auditor stage, use `kind=scope_drift` for wrong seam "
+                "selection, unjustified off-primary expansion, and bounded "
+                "widening abuse."
+            ),
+            (
+                "- In the auditor stage, use `kind=missing_evidence` only when "
+                "corroboration is actually absent."
+            ),
+        ],
+        "reviser": [
+            "- In the reviser stage, return to the higher-ranked seam first.",
+            (
+                "- In the reviser stage, when an open issue shows the current "
+                "seam choice is wrong, update `primary_seam`, "
+                "`secondary_seams_considered`, `recommendations[*].seam_id`, "
+                "`recommendations[*].seam_expansion_reason`, `review_surface`, "
+                "and evidence together."
+            ),
+            (
+                "- In the reviser stage, preserve recommendation order where "
+                "possible while rebinding to the higher-ranked seam."
+            ),
+            (
+                "- In the reviser stage, collapse gratuitous secondary seams "
+                "after rebinding instead of carrying stale seam declarations "
+                "forward."
+            ),
+            (
+                "- In the reviser stage, keep at least one recommendation bound "
+                "to `primary_seam` after rebinding."
+            ),
+        ],
+    }
+    return "\n".join(["Role-specific seam-review guidance:", *role_lines[role]])
+
+
+def _repo_local_discovery_guidance_block(
+    contract: AnalysisReviewContract, *, role: str
+) -> str:
+    bounded = contract.bounded_review
+    bounded_role_lines = {
+        "proposer": (
+            "- In the proposer draft, do not leave governing or sibling "
+            "corroboration for later stages; pull the needed repo-local file into "
+            "`files_reviewed`, `evidence`, and `review_surface` now."
+        ),
+        "critic": (
+            "- In the critic stage, flag missing repo-local corroboration when a "
+            "requirement/spec or parity claim lacks its governing or sibling file "
+            "in `files_reviewed`, `evidence`, or `review_surface`."
+        ),
+        "reviser": (
+            "- In the reviser stage, repair missing corroboration by widening "
+            "`review_surface` within cap before inventing new recommendations."
+        ),
+        "auditor": (
+            "- In the auditor stage, do not call the draft cleanly closed while a "
+            "spec-backed or parity-backed claim still lacks the needed governing "
+            "or sibling corroborating file."
+        ),
+    }
+    trust_role_lines = {
+        "proposer": (
+            "- In the proposer draft, start from the nearer governing or sibling "
+            "repo-local seam and do not lean on farther plan/runbook prose when "
+            "the governing spec, manifest, or workflow already exists in-repo."
+        ),
+        "critic": (
+            "- In the critic stage, flag recommendations that cite farther "
+            "plan/runbook prose while skipping nearer governing or sibling "
+            "repo-local evidence."
+        ),
+        "reviser": (
+            "- In the reviser stage, repair discovery gaps by adding the nearer "
+            "governing or sibling repo-local seam before preserving broader "
+            "plan/runbook prose."
+        ),
+        "auditor": (
+            "- In the auditor stage, do not call the draft cleanly closed while "
+            "nearer governing/spec/workflow evidence is missing or replaced by "
+            "farther plan/runbook prose."
+        ),
+    }
+    lines = [
+        "Repo-local discovery guidance:",
+        (
+            "- Treat `files_hint`, when provided, as a starting slice, not the "
+            "total review universe."
+        ),
+        (
+            "- For requirement, policy, or spec claims, inspect and cite the "
+            "nearest governing repo-local doc or manifest."
+        ),
+        (
+            "- For parity, symmetry, or sibling-workflow claims, inspect and "
+            "cite the sibling implementation or workflow that establishes the "
+            "baseline, and compare the full like-for-like seam rather than one "
+            "convenient step."
+        ),
+        "- Include corroborating files in `files_reviewed`, `evidence`, and `review_surface`.",
+    ]
+    if contract.mode == "bounded":
+        lines.extend(
+            [
+                (
+                    "- In bounded mode, one-hop repo-local corroboration outside "
+                    "`files_hint` is allowed when it is needed to support a "
+                    "recommendation."
+                ),
+                (
+                    "- Keep corroboration inside the current bounded caps: "
+                    "evidence <= "
+                    f"{bounded.max_evidence_refs_per_recommendation} refs, "
+                    "review_surface.must_check_files <= "
+                    f"{bounded.max_must_check_files_per_recommendation}, "
+                    "review_surface.optional_check_files <= "
+                    f"{bounded.max_optional_check_files_per_recommendation}."
+                ),
+                (
+                    "- Use `review_surface.must_check_files` for directly "
+                    "governing corroboration and "
+                    "`review_surface.optional_check_files` for supporting "
+                    "corroboration."
+                ),
+                (
+                    "- Use analysis-stage `scope_escapes` only for the exact "
+                    "third-secondary-seam overflow path in bounded mode; "
+                    "otherwise reserve `scope_escapes` for later review work "
+                    "that truly leaves the declared `review_surface`."
+                ),
+                bounded_role_lines[role],
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                (
+                    "- In trust mode, repo-local discovery still starts from the "
+                    "same governing or sibling seam before any downstream "
+                    "admissibility or publication split."
+                ),
+                (
+                    "- Keep trust corroboration uncapped and complete; record "
+                    "every corroborating file in `files_reviewed`, `evidence`, "
+                    "and `review_surface`."
+                ),
+                (
+                    "- When both exist, prefer nearer governing/spec/workflow "
+                    "evidence over farther plan/runbook prose."
+                ),
+                trust_role_lines[role],
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _recommendation_payload_block(contract: AnalysisReviewContract) -> str:
+    grounding_modes = ", ".join(GROUNDING_MODE_VALUES)
+    trust = contract.trust_review
+    lines = [
+        "Recommendation payload fields:",
+        "- Every recommendation uses the same payload family in both modes.",
+        "- Always populate classification, priority, rationale, evidence, proposed_change, confidence, and review_surface.",
+        "- Evidence refs must be path-only workspace refs. Do not append line numbers or line ranges such as path:12-18.",
+        "- If multiple excerpts come from one file, cite the file once and put line-specific detail in rationale or scope_note.",
+        f"- grounding_mode, when present, must be one of: {grounding_modes}.",
+        "- checked_files should list the concrete files you personally inspected to verify the recommendation.",
+        "- affected_files should name the concrete files the recommendation says are affected.",
+    ]
+    if trust.require_verified_evidence_refs_subset:
+        lines.append(
+            "- In this mode, populate verified_evidence_refs with the evidence refs you directly re-checked; keep it a subset of evidence."
+        )
+    else:
+        lines.append(
+            "- verified_evidence_refs is optional advisory metadata in this mode; keep it a subset of evidence when you provide it."
+        )
+    if trust.require_affected_file_coverage:
+        lines.append(
+            "- In this mode, non-inferred affected_files should be backed by evidence refs or checked_files."
+        )
+    else:
+        lines.append(
+            "- In this mode, affected_files and checked_files are optional scoping metadata rather than strict trust requirements."
+        )
+    if contract.mode == "trust":
+        lines.append(
+            "- In this mode, recommendation evidence is uncapped; include every concrete workspace ref needed to preserve audit completeness."
+        )
+    else:
+        lines.append(
+            "- In this mode, keep recommendation evidence within the bounded-review cap."
+        )
+    return "\n".join(lines)
+
+
+def _analysis_recommendation_scope_line(contract: AnalysisReviewContract) -> str:
+    if contract.mode == "trust":
+        return (
+            "11. Keep each recommendation scoped: include review_surface.must_check_files, "
+            "optional_check_files, and a scope_note, and retain every concrete evidence ref needed for audit completeness."
+        )
+    return (
+        "11. Keep each recommendation bounded: include review_surface.must_check_files, "
+        "optional_check_files, and a scope_note, and keep evidence within the bounded-review cap."
+    )
+
+
+def _reviser_preservation_line(contract: AnalysisReviewContract) -> str:
+    if contract.mode == "trust":
+        return (
+            "7. Preserve each recommendation's evidence list and review_surface unless an open issue or open topic requires changing them; "
+            "do not drop concrete evidence refs just to match a bounded cap."
+        )
+    return "7. Preserve each recommendation's bounded evidence list and review_surface unless an open issue or open topic requires changing them."
+
+
+def _reviser_evidence_guidance_line(contract: AnalysisReviewContract) -> str:
+    if contract.mode == "trust":
+        return "11. Keep each recommendation's evidence list complete for trust-mode auditability; do not trim concrete evidence refs to the bounded-review cap."
+    return "11. Keep each recommendation's evidence list within the bounded-review cap unless the contract explicitly allows more."
+
+
+def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    lines = [
+        "Review payload evidence refs:",
+        "- files_reviewed should list the concrete workspace files you inspected during this review stage.",
+        "- files_reviewed is review context, not proof by itself.",
+        "- recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict.",
+        "- recommendation_reviews[*].verified_evidence_refs should name the concrete evidence refs you directly re-checked for that recommendation verdict.",
+        "- recommendation_reviews prove recommendation-linked issue/topic closures when the closed item has a non-null recommendation_index covered by that recommendation review.",
+        "- Recommendation-linked closures do not need extra scoped proof when their recommendation is covered.",
+        "- issue_closure_reviews[*] prove global issue closures when the closed issue's recommendation_index is null.",
+        "- topic_closure_reviews[*] prove global topic closures when the closed topic's recommendation_index is null.",
+        "- One issue_closure_reviews entry maps to exactly one issue_id, and one topic_closure_reviews entry maps to exactly one topic_id.",
+        "- Unrelated recommendation review refs do not satisfy global issue/topic closure proof.",
+        "- Keep issue_closure_reviews and topic_closure_reviews as empty arrays when there are no recommendation_index=null closures to prove.",
+    ]
+    if trust.payload_provenance_mode == "payload_hash_and_refs":
+        lines.extend(
+            [
+                "- In trust mode, every concrete recommendation_reviews verdict must carry its own checked_files or verified_evidence_refs.",
+                "- In trust mode, recommendation-linked closures must map to the covered recommendation review, and recommendation_index=null closures must map to the matching issue_closure_reviews/topic_closure_reviews entry.",
+            ]
+        )
+    else:
+        lines.append(
+            "- In bounded mode, still keep these refs concrete and scoped to the exact recommendation, issue, or topic they support."
+        )
+    return "\n".join(lines)
+
+
+def _issue_taxonomy_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    defaults = ", ".join(
+        f"{kind}={blocking_class}"
+        for kind, blocking_class in ISSUE_KIND_DEFAULT_BLOCKING_CLASS.items()
+    )
+    lines = [
+        "Issue taxonomy guidance:",
+        f"- Default blocking_class by issue kind: {defaults}.",
+    ]
+    if trust.require_taxonomy_override_reason:
+        lines.append(
+            "- If you intentionally override the default blocking_class for a kind, include blocking_class_override_reason with concrete justification."
+        )
+    else:
+        lines.append(
+            "- blocking_class_override_reason is optional context when you intentionally override the default blocking_class."
+        )
+    return "\n".join(lines)
+
+
+def _mode_acceptance_guidance_block(contract: AnalysisReviewContract) -> str:
+    trust = contract.trust_review
+    lines = ["Mode-specific acceptance guidance:"]
+    if trust.downgrade_on_inferred_acceptance:
+        lines.append(
+            "- In this mode, inference-heavy recommendations should usually receive accept_with_caveat instead of clean accept."
+        )
+    else:
+        lines.append(
+            "- In this mode, clean accept is allowed without the extra trust downgrade rules."
+        )
+    if trust.downgrade_on_semantic_warnings:
+        lines.append(
+            "- In this mode, unresolved semantic warnings are treated as caveats, not clean acceptance."
+        )
+    else:
+        lines.append(
+            "- In this mode, semantic warning handling follows the standard bounded-review flow."
+        )
+    return "\n".join(lines)
+
+
+def build_single_pass_prompt(
+    task: TaskSpec, prompt_preamble: str, git_snapshot: dict
+) -> str:
     return f"""
 You are the SOLVER stage in an external evaluation harness.
 
@@ -198,7 +1098,9 @@ Current workspace snapshot:
 """.strip()
 
 
-def build_proposer_prompt(task: TaskSpec, prompt_preamble: str, git_snapshot: dict) -> str:
+def build_proposer_prompt(
+    task: TaskSpec, prompt_preamble: str, git_snapshot: dict
+) -> str:
     return f"""
 You are the PROPOSER stage in a proposer/falsifier/patcher harness.
 
@@ -312,6 +1214,7 @@ def build_analysis_proposer_prompt(
     prompt_preamble: str,
     git_snapshot: dict,
     contract: AnalysisReviewContract,
+    focus_decision: dict[str, Any] | None = None,
 ) -> str:
     return f"""
 You are the PROPOSER stage in an analysis-review harness.
@@ -329,11 +1232,24 @@ Your job:
 4. Distinguish carefully among confirmed_issue, risk, and recommendation.
 5. Use the shared confidence rubric below. High confidence is appropriate for direct workspace evidence; lower confidence is appropriate for partial inference.
 6. Populate strengths and uncertainties as objects with `items` and `none_reason`.
-7. For strengths/uncertainties: include concrete items when you have them; otherwise leave `items` empty and explain why in `none_reason`.
+7. For strengths/uncertainties: when you have concrete items, put them in `items` and set `none_reason` to `""`; use a non-empty `none_reason` only when `items` is empty.
 8. Populate files_reviewed with the concrete workspace paths you actually inspected in this run.
-9. Use workspace_write_intent=`none` unless you truly changed the repo.
+9. Every evidence ref must be a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+10. Do not cite evidence as `path:line-range`; if line detail matters, put it in rationale or scope_note while citing the file path once.
+{_analysis_recommendation_scope_line(contract)}
+12. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
+13. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
+{_join_prompt_blocks(
+    _seam_selection_guidance_block(contract),
+    _focus_gate_decision_block(focus_decision),
+    _repo_local_discovery_guidance_block(contract, role="proposer"),
+)}
+{_trust_review_policy_block(contract)}
+{_trust_recommendation_atomicity_block(contract, role="proposer")}
+{_recommendation_payload_block(contract)}
 {_confidence_rubric_block(contract)}
 
 {_task_block(task, prompt_preamble)}
@@ -341,6 +1257,138 @@ Your job:
 Current workspace snapshot:
 {render_git_snapshot(git_snapshot)}
 """.strip()
+
+
+def _build_focus_gate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    gate_path: str,
+    focus_probe: dict[str, Any] | None = None,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
+) -> str:
+    normalized_gate_path = str(gate_path or "").strip().lower()
+    if normalized_gate_path not in {"adjudicate", "deliberate"}:
+        raise ValueError("gate_path must be exactly 'adjudicate' or 'deliberate'.")
+
+    gate_specific_guidance = {
+        "adjudicate": _focus_gate_adjudicate_guidance_block(),
+        "deliberate": _focus_gate_deliberate_guidance_block(),
+    }[normalized_gate_path]
+    stage_context_blocks: list[str] = []
+    job_lines = [
+        "Your job:",
+        "1. Inspect the task, any files_hint/context, and the current workspace snapshot.",
+        "2. Decide whether the run can proceed with a selected focus now.",
+        "3. Emit a typed `focus_decision` artifact that matches the fixed schema and state rules.",
+        "4. Keep the shortlisted focus set explicit in `candidates` and `adapter_plan.secondary_focus_ids`.",
+    ]
+    optional_probe_blocks = ""
+    if normalized_gate_path == "deliberate":
+        job_lines.extend(
+            [
+                "5. Reconcile any supplied probe or rerun context against the current repo state before selecting or re-asking.",
+                "6. Ask for clarification only when the missing distinction is real and operator input is required, and follow the stale-answer rules exactly when a prior answer is now stale.",
+            ]
+        )
+        optional_probe_blocks = "\n".join(
+            [
+                _focus_probe_rules_block(contract),
+                _focus_stale_answer_rules_block(),
+            ]
+        )
+        stage_context_blocks.extend(
+            [
+                _json_block("Focus gate probe artifact", focus_probe),
+                _json_block("Prior focus decision", prior_focus_decision),
+                _json_block("Focus gate answer", focus_gate_answer),
+                _json_block("Stale answer context", stale_answer_context),
+            ]
+        )
+    else:
+        job_lines.extend(
+            [
+                "5. If task context is insufficient, stay on `gate_path=adjudicate` and emit `clarification_requested` or `no_viable_focus` instead of switching paths.",
+                "6. Ignore probe-only, rerun-answer, and stale-answer behaviors in this path; they do not apply here.",
+            ]
+        )
+
+    return f"""
+You are the FOCUS_GATE stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Return ONLY the JSON object required by the schema.
+- This stage selects or clarifies the run focus; it does not produce recommendations.
+
+{chr(10).join(job_lines)}
+
+Gate path: {normalized_gate_path}
+{gate_specific_guidance}
+{_focus_gate_output_rules_block(contract)}
+{_focus_selection_thresholds_block()}
+{optional_probe_blocks}
+{_analysis_contract_block(contract)}
+
+{_task_block(task, prompt_preamble)}
+
+{_join_prompt_blocks(*stage_context_blocks)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
+
+
+def build_focus_gate_adjudicate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    focus_probe: dict[str, Any] | None = None,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
+) -> str:
+    return _build_focus_gate_prompt(
+        task,
+        prompt_preamble,
+        git_snapshot,
+        contract,
+        gate_path="adjudicate",
+        focus_probe=focus_probe,
+        focus_gate_answer=focus_gate_answer,
+        prior_focus_decision=prior_focus_decision,
+        stale_answer_context=stale_answer_context,
+    )
+
+
+def build_focus_gate_deliberate_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+    *,
+    focus_probe: dict[str, Any] | None = None,
+    focus_gate_answer: dict[str, Any] | None = None,
+    prior_focus_decision: dict[str, Any] | None = None,
+    stale_answer_context: dict[str, Any] | None = None,
+) -> str:
+    return _build_focus_gate_prompt(
+        task,
+        prompt_preamble,
+        git_snapshot,
+        contract,
+        gate_path="deliberate",
+        focus_probe=focus_probe,
+        focus_gate_answer=focus_gate_answer,
+        prior_focus_decision=prior_focus_decision,
+        stale_answer_context=stale_answer_context,
+    )
 
 
 def build_analysis_critic_prompt(
@@ -363,10 +1411,16 @@ Critical rules:
 
 Your job:
 1. Audit the prior analysis for factual grounding, overclaims, omissions, actionability, and scope discipline.
-2. For every issue you raise, classify both `kind` and `blocking_class`.
-3. Review every recommendation individually and return recommendation-level verdicts.
-4. Use `accept_partial` when a subset of recommendations is already valid even if the overall draft still needs revision.
-5. Use the shared confidence rubric below when judging whether confidence is too high or too low.
+2. Validate each recommendation's cited evidence first, then stay inside its review_surface unless you must leave it.
+3. For every issue you raise, classify both `kind` and `blocking_class`, and follow the contract rule for blocking_class_override_reason when you override the default taxonomy mapping.
+4. Review every recommendation individually and return recommendation-level verdicts.
+5. Use `topics` only for genuinely new bounded-review topics introduced by this review stage, not for open-ended repo exploration.
+6. Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`.
+7. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics. Do not put IDs from this stage's new `topics` array into those classification arrays.
+8. Populate `files_reviewed` with the concrete workspace files you inspected during this review stage.
+9. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
+10. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
+11. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
 Decision guidance:
 - Return verdict=revise when the overall draft still needs more work.
@@ -375,8 +1429,18 @@ Decision guidance:
 - Return verdict=accept_partial when at least one recommendation is sound but the whole draft is not yet fully acceptable.
 
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
+{_seam_selection_guidance_block(contract)}
+{_role_specific_seam_review_guidance_block("critic")}
+{_repo_local_discovery_guidance_block(contract, role="critic")}
+{_trust_review_policy_block(contract)}
+{_trust_recommendation_atomicity_block(contract, role="critic")}
+{_review_payload_ref_block(contract)}
+{_issue_taxonomy_block(contract)}
+{_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
+{_recommendation_review_coverage_block(prior_output)}
 
 {_task_block(task, prompt_preamble)}
 
@@ -400,6 +1464,7 @@ def build_analysis_auditor_prompt(
     review_policy: ReviewLoopPolicy,
     contract: AnalysisReviewContract,
     issue_ledger: list[dict[str, Any]],
+    topic_ledger: list[dict[str, Any]],
     round_index: int,
 ) -> str:
     return f"""
@@ -409,15 +1474,24 @@ Critical rules:
 - Do NOT edit files in this stage.
 - You are not starting from scratch. Your first job is to verify closure of the existing issue ledger.
 - For every previously open issue, you must explicitly classify it as resolved, carried_forward, or waived via the required issue-ID arrays.
+- For every previously open topic, you must explicitly classify it as resolved, carried_forward, or waived via the required topic-ID arrays.
+- Use `topics` only for genuinely new bounded-review topics introduced by this audit stage.
 - If you introduce any new medium-or-higher issue after round 0, include `why_not_raised_earlier`.
 - Return ONLY the JSON object required by the schema.
 
 Your job:
 1. Verify whether the reviser closed the existing blocker set.
 2. Preserve issue IDs for carried-forward issues.
-3. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
-4. Review every recommendation individually and return recommendation-level verdicts.
-5. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+3. Preserve topic IDs for carried-forward or waived prior topics, and emit new topic records only in `topics`.
+4. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
+5. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only for prior open topics. Do not classify IDs from this stage's new `topics` array there.
+6. Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage.
+7. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
+8. Review every recommendation individually and return recommendation-level verdicts.
+9. Stay inside each recommendation's bounded review_surface unless you must leave it.
+10. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
+11. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
+12. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
 
 Decision guidance:
 - Return verdict=accept when the entire draft is acceptable.
@@ -427,8 +1501,18 @@ Decision guidance:
 
 Audit round: {round_index}
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
+{_seam_selection_guidance_block(contract)}
+{_role_specific_seam_review_guidance_block("auditor")}
+{_repo_local_discovery_guidance_block(contract, role="auditor")}
+{_trust_review_policy_block(contract)}
+{_trust_recommendation_atomicity_block(contract, role="auditor")}
+{_review_payload_ref_block(contract)}
+{_issue_taxonomy_block(contract)}
+{_mode_acceptance_guidance_block(contract)}
 {_review_policy_block(review_policy)}
 {_confidence_rubric_block(contract)}
+{_recommendation_review_coverage_block(prior_output)}
 
 {_task_block(task, prompt_preamble)}
 
@@ -437,6 +1521,68 @@ Audit round: {round_index}
 {_json_block('Reviser structured output', reviser_output)}
 
 {_json_block('Open issue ledger entering this audit', issue_ledger)}
+
+{_json_block('Open topic ledger entering this audit', topic_ledger)}
+
+Validator and advisory results:
+{_validator_block(validation_runs)}
+
+Current workspace snapshot:
+{render_git_snapshot(git_snapshot)}
+""".strip()
+
+
+def build_trust_attestation_review_prompt(
+    task: TaskSpec,
+    prompt_preamble: str,
+    bounded_attestation_input: dict[str, Any] | None,
+    validation_runs: list[ValidationRun],
+    git_snapshot: dict,
+    contract: AnalysisReviewContract,
+) -> str:
+    if contract.mode != "trust":
+        raise ValueError("trust attestation review prompt requires trust mode.")
+    if contract.trust_review.execution_mode != "attestation_over_bounded":
+        raise ValueError(
+            "trust attestation review prompt requires execution_mode=attestation_over_bounded."
+        )
+
+    bounded_analysis = (
+        bounded_attestation_input.get("bounded_analysis")
+        if isinstance(bounded_attestation_input, dict)
+        else None
+    )
+    return f"""
+You are the TRUST_ATTESTATION_REVIEW stage in an analysis-review harness.
+
+Critical rules:
+- Do NOT edit files in this stage.
+- Consume the supplied `bounded_attestation_input` handoff exactly as provided; do not rewrite, replace, or regenerate its bounded analysis.
+- This path performs trust attestation over the bounded handoff, not a fresh analysis pass.
+- Return ONLY the JSON object required by the existing trust review schema.
+
+Your job:
+1. Inspect the current workspace directly before you attest to anything.
+2. Use `bounded_attestation_input` as the frozen bounded-analysis handoff for recommendation order, evidence order, review_surface, and prior ledgers.
+3. Return dense `recommendation_reviews` coverage across every bounded recommendation index from 1..N with no gaps.
+4. For each recommendation verdict, directly re-check the bounded workspace evidence and record that re-check in `verified_evidence_refs` plus `checked_files`.
+5. Use `issue_closure_reviews` and `topic_closure_reviews` only for recommendation_index=null closures; recommendation-linked closures must stay attached to the covered recommendation review.
+6. Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path.
+7. Use the shared confidence rubric below when judging whether the bounded recommendations remain acceptable under trust-mode scrutiny.
+
+{_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
+{_trust_review_policy_block(contract)}
+{_trust_recommendation_atomicity_block(contract, role="auditor")}
+{_review_payload_ref_block(contract)}
+{_issue_taxonomy_block(contract)}
+{_mode_acceptance_guidance_block(contract)}
+{_confidence_rubric_block(contract)}
+{_recommendation_review_coverage_block(bounded_analysis)}
+
+{_task_block(task, prompt_preamble)}
+
+{_json_block('bounded_attestation_input', bounded_attestation_input)}
 
 Validator and advisory results:
 {_validator_block(validation_runs)}
@@ -456,6 +1602,8 @@ def build_analysis_reviser_prompt(
     revision_round: int,
     contract: AnalysisReviewContract,
     open_issues: list[dict[str, Any]],
+    open_topics: list[dict[str, Any]],
+    focus_decision: dict[str, Any] | None = None,
 ) -> str:
     return f"""
 You are the REVISER stage in an analysis-review harness.
@@ -470,13 +1618,30 @@ Your job:
 1. Inspect the current workspace directly.
 2. Revise the prior analysis to address every open issue in the issue ledger below.
 3. Return an `issue_resolution_map` entry for every open issue ID, even if you disagree with it.
-4. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema.
-5. Use the shared confidence rubric below when revising confidence values.
-6. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
-7. Use workspace_write_intent=`none` unless you truly changed the repo.
+4. If prior open topics exist in the review context, return a `topic_resolution_map` entry for every open topic ID, even if you disagree with it.
+5. Use `topic_resolution_map` to classify prior open topics. Do not emit `topics` from the reviser stage.
+6. Update strengths and uncertainties using the same `items` plus `none_reason` section shape required by the schema: when a section has concrete items, put them in `items` and set `none_reason` to `""`; use a non-empty `none_reason` only when `items` is empty.
+{_reviser_preservation_line(contract)}
+8. Keep the recommendation payload on the shared JSON family; in trust mode that includes deliberate use of grounding_mode, verified_evidence_refs, checked_files, and affected_files.
+9. Every evidence ref must stay a concrete path-only workspace path you inspected in this run, so every evidence ref must also appear in files_reviewed.
+10. Do not cite evidence as `path:line-range`; if line detail matters, keep the evidence ref at file granularity and move the excerpt detail into rationale or scope_note.
+{_reviser_evidence_guidance_line(contract)}
+12. Use the shared confidence rubric below when revising confidence values.
+13. Do not add new recommendations unless needed to fix a missed issue or satisfy the minimum recommendation count.
+14. Use workspace_write_intent=`none` unless you truly changed the repo.
 
 Revision round: {revision_round}
 {_analysis_contract_block(contract)}
+{_bounded_review_policy_block(contract)}
+{_join_prompt_blocks(
+    _seam_selection_guidance_block(contract),
+    _role_specific_seam_review_guidance_block("reviser"),
+    _focus_gate_decision_block(focus_decision),
+    _repo_local_discovery_guidance_block(contract, role="reviser"),
+)}
+{_trust_review_policy_block(contract)}
+{_trust_recommendation_atomicity_block(contract, role="reviser")}
+{_recommendation_payload_block(contract)}
 {_review_policy_block(contract.stop_policy)}
 {_confidence_rubric_block(contract)}
 
@@ -487,6 +1652,8 @@ Revision round: {revision_round}
 {_json_block('Latest review structured output', critic_output)}
 
 {_json_block('Open issue ledger', open_issues)}
+
+{_json_block('Open topic ledger', open_topics)}
 
 Validator and advisory results:
 {_validator_block(validation_runs)}

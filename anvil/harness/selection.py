@@ -77,6 +77,43 @@ def _accepted_recommendation_count(payload: dict[str, Any]) -> int:
     )
 
 
+def _remaining_topic_counts(payload: dict[str, Any]) -> tuple[int, int, int]:
+    """Return unresolved topic counts for a completed review payload.
+
+    carried_forward_topic_ids represents prior topics that remain unresolved for the
+    current draft, so those IDs must count as remaining topic debt during draft
+    reconstruction and ranking.
+    """
+
+    new_topic_count = len(payload.get("topics", []) or [])
+    if not new_topic_count:
+        new_topic_count = len(payload.get("missing_topics", []) or [])
+    carried_forward_topic_count = len(payload.get("carried_forward_topic_ids", []) or [])
+    return (
+        new_topic_count,
+        carried_forward_topic_count,
+        new_topic_count + carried_forward_topic_count,
+    )
+
+
+def _review_provenance_penalty(payload: dict[str, Any], stage: dict[str, Any]) -> tuple[int, int]:
+    provenance = stage.get("semantic_validation_payload_provenance")
+    if not isinstance(provenance, dict):
+        return (0, 0)
+    policy_mode = str(provenance.get("policy_mode") or "").strip().lower()
+    if policy_mode != "payload_hash_and_refs":
+        return (0, 0)
+    closure_satisfied = bool(provenance.get("closure_provenance_satisfied"))
+    uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or []
+    uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or []
+    uncovered_global_count = len(uncovered_global_issue_ids) + len(uncovered_global_topic_ids)
+    uncovered_recommendation_indices = provenance.get("uncovered_recommendation_indices") or []
+    uncovered_recommendation_count = len(uncovered_recommendation_indices)
+    if closure_satisfied and uncovered_global_count == 0 and uncovered_recommendation_count == 0:
+        return (0, 0)
+    return (1, uncovered_global_count + uncovered_recommendation_count)
+
+
 def _is_candidate_stage(stage: dict[str, Any]) -> bool:
     role_name = str(stage.get("role_name") or "")
     return role_name.startswith(_CANDIDATE_PREFIXES)
@@ -141,6 +178,10 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                 "round_index": round_index,
                 "text_path": str(stage.get("stdout_path") or ""),
                 "json_path": str(stage.get("output_path") or "") or None,
+                "raw_json_path": str(stage.get("raw_output_path") or "") or None,
+                "normalized_json_path": (
+                    str(stage.get("normalized_output_path") or "") or None
+                ),
                 "summary": str(payload.get("summary", "") or ""),
                 "review_status": "candidate",
                 "review_state": "not_evaluated",
@@ -185,13 +226,44 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             review_counts = _count_issue_severities(payload)
             for key, value in review_counts.items():
                 issue_counts[key] = max(int(issue_counts.get(key, 0)), int(value))
+            provenance_incomplete, uncovered_closure_count = _review_provenance_penalty(
+                payload,
+                stage,
+            )
+            new_topic_count, carried_forward_topic_count, open_topic_count = _remaining_topic_counts(
+                payload
+            )
+            issue_counts["topics"] = max(
+                int(issue_counts.get("topics", 0)),
+                open_topic_count,
+            )
             issue_counts["missing_topics"] = max(
                 int(issue_counts.get("missing_topics", 0)),
-                len(payload.get("missing_topics", []) or []),
+                open_topic_count,
+            )
+            issue_counts["new_topics"] = max(
+                int(issue_counts.get("new_topics", 0)),
+                new_topic_count,
+            )
+            issue_counts["carried_forward_topics"] = max(
+                int(issue_counts.get("carried_forward_topics", 0)),
+                carried_forward_topic_count,
+            )
+            issue_counts["open_topics"] = max(
+                int(issue_counts.get("open_topics", 0)),
+                open_topic_count,
             )
             issue_counts["accepted_recommendations"] = max(
                 int(issue_counts.get("accepted_recommendations", 0)),
                 _accepted_recommendation_count(payload),
+            )
+            issue_counts["provenance_incomplete"] = max(
+                int(issue_counts.get("provenance_incomplete", 0)),
+                provenance_incomplete,
+            )
+            issue_counts["uncovered_closure_count"] = max(
+                int(issue_counts.get("uncovered_closure_count", 0)),
+                uncovered_closure_count,
             )
             scores = latest_draft.setdefault("scores", {})
             for field_name in (
@@ -254,6 +326,9 @@ def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
         accepted_recommendations = int(issue_counts.get("accepted_recommendations", 0))
         blocking_medium_plus = int(issue_counts.get("blocking_medium_or_higher", 0))
         medium_plus = int(issue_counts.get("medium_or_higher", 0))
+        open_topics = int(issue_counts.get("open_topics", issue_counts.get("topics", 0)))
+        provenance_incomplete = int(issue_counts.get("provenance_incomplete", 0))
+        uncovered_closure_count = int(issue_counts.get("uncovered_closure_count", 0))
         grounding = float(scores.get("grounding_score", -1.0))
         validator_failures = int(issue_counts.get("required_validator_failures", 0))
         round_index = int(draft.get("round_index", 0))
@@ -262,6 +337,10 @@ def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
             _status_rank(draft),
             0 if blocking_medium_plus == 0 else 1,
             0 if medium_plus == 0 else 1,
+            provenance_incomplete,
+            uncovered_closure_count,
+            0 if open_topics == 0 else 1,
+            open_topics,
             -accepted_recommendations,
             validator_failures,
             -grounding,

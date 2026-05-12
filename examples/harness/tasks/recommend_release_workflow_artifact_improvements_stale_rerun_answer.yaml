@@ -1,0 +1,42 @@
+id: recommend_release_workflow_artifact_improvements_stale_rerun_answer
+task_kind: analysis_review
+objective: >
+  Analyze the governing Codex release workflow file and recommend improvements for that artifact.
+workspace_write_policy:
+  mode: forbid
+  allowed_paths: []
+  denied_paths: []
+  allow_untracked: false
+  allow_renames: false
+  allow_deletions: false
+  max_touched_files: 0
+  require_clean_start: false
+acceptance:
+  - The recommendations should stay grounded in the governing workflow file and closely related evidence.
+  - The run must remain analysis-only and must not modify files in the target workspace.
+constraints:
+  - Treat the governing workflow file as the expected focus unit for the focus gate.
+  - Avoid expanding into unrelated CI/CD seams unless the evidence requires it.
+  - Preserve existing public behavior outside the release-workflow scope.
+context: |
+  Use the repository state in the target workspace as ground truth.
+  This task is intentionally narrow: the focus gate should be able to select a single governing workflow artifact without pretending the user already supplied a multi-file seam unit.
+review_requirements:
+  require_evidence_per_recommendation: true
+  require_classification: true
+  require_priority: true
+  min_recommendations: 2
+  evidence_cap_policy: trim_to_cap
+focus_gate:
+  enabled: true
+  allowed_focus_types: [artifact]
+focus_gate_answer:
+  question_prompt: Which focus should this run prioritize?
+  selected_option: artifact:.github/workflows/stale-release-watch.yml
+  freeform_answer: ""
+files_hint:
+  - .github/workflows/codex-cli-release-watch.yml
+notes: |
+  This task is intentionally analysis-only. The task-level workspace_write_policy should downgrade
+  any write-capable stage to effective read-only access and fail the run if repo files are changed.
+  The analysis_review_bounded_v1 strategy is the preferred fit for this task.

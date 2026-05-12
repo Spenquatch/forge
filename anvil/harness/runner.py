@@ -1,46 +1,102 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import inspect
 import json
+import posixpath
+import re
+from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from anvil.orchestrator import reload_config
+
+from .contracts import (
+    AnalysisReviewContract,
+    BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+    PartialAcceptancePolicy,
+    RecommendationAdmissibilityStatus,
+    build_analysis_review_contract,
+    canonical_seam_id_for_paths,
+    default_blocking_class_for_kind,
+)
 from .files import load_structured_file, slugify, write_json, write_text
+from .focus_types import focus_type_adapter
 from .git_utils import (
     capture_git_snapshot,
     capture_non_git_workspace_state,
+    capture_workspace_file_inventory,
     changed_files,
     evaluate_workspace_write_policy,
     git_snapshot_is_dirty,
 )
-from .contracts import AnalysisReviewContract, build_analysis_review_contract, default_blocking_class_for_kind
 from .prompts import (
     build_analysis_auditor_prompt,
     build_analysis_critic_prompt,
     build_analysis_proposer_prompt,
     build_analysis_reviser_prompt,
     build_falsifier_prompt,
+    build_focus_gate_adjudicate_prompt,
+    build_focus_gate_deliberate_prompt,
+    build_focus_probe_prompt,
     build_patcher_prompt,
     build_proposer_prompt,
     build_single_pass_prompt,
+    build_trust_attestation_review_prompt,
 )
-from .providers import get_provider
+from .providers import _soft_validate_schema, get_provider
 from .reporting import apply_final_artifacts
-from .selection import extract_drafts_from_summary, select_best_draft
-from .semantic_validation import validate_stage_output
 from .schemas import (
     analysis_output_schema,
     analysis_review_schema,
+    bounded_attestation_input_schema,
     falsifier_schema,
+    focus_gate_output_schema,
+    focus_gate_probe_output_schema,
     patcher_schema,
     proposer_schema,
     single_pass_schema,
 )
-from .types import ProviderRun, RoleConfig, StageRequest, StrategyConfig, TaskSpec, ValidationRun
+from .selection import extract_drafts_from_summary, select_best_draft
+from .semantic_validation import (
+    BOUNDED_ATTESTATION_INPUT_KEY,
+    validate_analysis_review_payload,
+    validate_bounded_attestation_input_payload,
+    validate_stage_output,
+)
+from .topic_lifecycle import (
+    partial_accept_topic_eligibility,
+    topic_ids_for_status_name,
+)
+from .types import (
+    ANALYSIS_REVIEW_BOUNDED_KIND,
+    ANALYSIS_REVIEW_LEGACY_KIND,
+    GENERIC_FOCUS_GATE_QUESTION_PROMPT,
+    ProviderRun,
+    RoleConfig,
+    StageRequest,
+    StrategyConfig,
+    TaskSpec,
+    ValidationRun,
+    canonical_seam_path_list,
+    is_analysis_review_strategy_kind,
+    normalize_workspace_ref,
+)
 from .validation import preflight_validators, run_validators
-from anvil.orchestrator import reload_config
+
+_PRIOR_SURFACED_REFS_FIELD = "_prior_surfaced_refs"
+_FOCUS_MAX_CANDIDATES = 3
+_FOCUS_MAX_CHECKED_FILES = 6
+_FOCUS_MAX_EVIDENCE_REFS = 2
+_FOCUS_MAX_REFINEMENT_ATTEMPTS = 2
+_FULLY_ACCEPTED_CONTENT_VERDICTS = {"accepted", "accepted_with_warnings"}
+_TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST = {
+    "strengths contains both concrete items and none_reason; prefer one or the other.",
+    "uncertainties contains both concrete items and none_reason; prefer one or the other.",
+}
 
 
 class HarnessError(RuntimeError):
@@ -51,8 +107,16 @@ class WorkspacePolicyViolationError(HarnessError):
     def __init__(self, checkpoint: str, evaluation: dict[str, Any]) -> None:
         self.checkpoint = checkpoint
         self.evaluation = evaluation
-        message = "; ".join(evaluation.get("violations", [])) or "Workspace write policy violated."
+        message = (
+            "; ".join(evaluation.get("violations", []))
+            or "Workspace write policy violated."
+        )
         super().__init__(f"Workspace write policy violated at {checkpoint}: {message}")
+
+
+_WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(
+    r"^(?P<path>.+?):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
+)
 
 
 class HarnessRunner:
@@ -76,8 +140,15 @@ class HarnessRunner:
         self.config_path = Path(config_path)
         self.thread_id = thread_id
         self.auto_fit_strategy = auto_fit_strategy
-        task_payload = task_data if task_data is not None else load_structured_file(self.task_path)
-        strategy_payload = strategy_data if strategy_data is not None else load_structured_file(self.strategy_path)
+        self._validate_inputs()
+        task_payload = (
+            task_data if task_data is not None else load_structured_file(self.task_path)
+        )
+        strategy_payload = (
+            strategy_data
+            if strategy_data is not None
+            else load_structured_file(self.strategy_path)
+        )
         self.task = TaskSpec.from_dict(task_payload)
         self.strategy = StrategyConfig.from_dict(strategy_payload)
         self.agent_stages: list[dict[str, Any]] = []
@@ -89,9 +160,26 @@ class HarnessRunner:
         self.analysis_review_contract: AnalysisReviewContract | None = None
         self.issue_ledger: list[dict[str, Any]] = []
         self._issue_ledger_by_id: dict[str, dict[str, Any]] = {}
+        self.topic_ledger: list[dict[str, Any]] = []
+        self._topic_ledger_by_id: dict[str, dict[str, Any]] = {}
         self.policy_ignored_rel_paths = self._workspace_ignored_rel_paths()
         self.initial_git_snapshot: dict[str, Any] | None = None
         self.initial_non_git_state: dict[str, Any] | None = None
+
+    def _validate_inputs(self) -> None:
+        for label, path in (
+            ("Task spec", self.task_path),
+            ("Strategy spec", self.strategy_path),
+        ):
+            if not path.exists():
+                raise HarnessError(f"{label} file not found: {path}")
+            if not path.is_file():
+                raise HarnessError(f"{label} path is not a file: {path}")
+
+        if not self.workspace.exists():
+            raise HarnessError(f"Workspace directory not found: {self.workspace}")
+        if not self.workspace.is_dir():
+            raise HarnessError(f"Workspace path is not a directory: {self.workspace}")
 
     def run(self) -> dict[str, Any]:
         reload_config(str(self.config_path))
@@ -123,7 +211,9 @@ class HarnessRunner:
             )
         write_json(self.run_dir / "git.initial.json", self.initial_git_snapshot)
 
-        if self.initial_git_snapshot.get("is_git") and git_snapshot_is_dirty(self.initial_git_snapshot):
+        if self.initial_git_snapshot.get("is_git") and git_snapshot_is_dirty(
+            self.initial_git_snapshot
+        ):
             self.warnings.append(
                 "Workspace is dirty at start. The harness will operate on the existing working tree. "
                 "Use workspace_write_policy.require_clean_start=true to block this."
@@ -132,10 +222,14 @@ class HarnessRunner:
         try:
             self._emit_task_strategy_warnings()
             self._apply_strategy_autofit()
-            if self.strategy.kind == "analysis_review_v1":
-                self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
+            if is_analysis_review_strategy_kind(self.strategy.kind):
+                self.analysis_review_contract = build_analysis_review_contract(
+                    self.task, self.strategy
+                )
             write_json(self.run_dir / "task.effective.json", self.task.to_dict())
-            write_json(self.run_dir / "strategy.effective.json", self.strategy.to_dict())
+            write_json(
+                self.run_dir / "strategy.effective.json", self.strategy.to_dict()
+            )
             if self.analysis_review_contract is not None:
                 write_json(
                     self.run_dir / "analysis_review.contract.effective.json",
@@ -157,10 +251,12 @@ class HarnessRunner:
                     outcome = self._run_single_pass()
                 elif self.strategy.kind == "pfr_v1":
                     outcome = self._run_pfr_v1()
-                elif self.strategy.kind == "analysis_review_v1":
+                elif is_analysis_review_strategy_kind(self.strategy.kind):
                     outcome = self._run_analysis_review_v1()
                 else:
-                    raise HarnessError(f"Unsupported strategy kind: {self.strategy.kind}")
+                    raise HarnessError(
+                        f"Unsupported strategy kind: {self.strategy.kind}"
+                    )
             run_verdict = str(outcome.get("run_verdict", "harness_error"))
             content_verdict = str(outcome.get("content_verdict", run_verdict))
             validator_verdict = str(outcome.get("validator_verdict", "not_run"))
@@ -171,7 +267,9 @@ class HarnessRunner:
         except WorkspacePolicyViolationError as exc:
             run_verdict = "policy_violation"
             content_verdict = "policy_violation"
-            validator_verdict = self._classify_validator_verdict(self._latest_validator_results())
+            validator_verdict = self._classify_validator_verdict(
+                self._latest_validator_results()
+            )
             final_summary = str(exc)
             failure_details = exc.evaluation
             self.warnings.append(str(exc))
@@ -195,7 +293,9 @@ class HarnessRunner:
             checkpoint="final",
         )
         self.workspace_policy_checks.append(final_policy_evaluation)
-        write_json(self.run_dir / "workspace.policy.final.json", final_policy_evaluation)
+        write_json(
+            self.run_dir / "workspace.policy.final.json", final_policy_evaluation
+        )
 
         if final_policy_evaluation.get("violations"):
             policy_verdict = "policy_violation"
@@ -211,13 +311,41 @@ class HarnessRunner:
             else list(final_policy_evaluation.get("touched_files", []))
         )
 
+        bounded_review_summary = run_details.get("bounded_review_summary")
+        if not isinstance(bounded_review_summary, dict):
+            bounded_review_summary = self._build_bounded_review_summary(run_details)
+        if bounded_review_summary is not None:
+            run_details["bounded_review_summary"] = bounded_review_summary
+        bounded_attestation_input = run_details.get(BOUNDED_ATTESTATION_INPUT_KEY)
+        if not isinstance(bounded_attestation_input, dict):
+            bounded_attestation_input = self._build_bounded_attestation_input(
+                run_details
+            )
+        if bounded_attestation_input is not None:
+            run_details[BOUNDED_ATTESTATION_INPUT_KEY] = bounded_attestation_input
+        analysis_review_status = run_details.get("analysis_review_status")
+        if isinstance(analysis_review_status, dict) and analysis_review_status:
+            run_details["analysis_review_status"] = analysis_review_status
+        focus_decision = run_details.get("focus_decision")
+        if isinstance(focus_decision, dict) and focus_decision:
+            run_details["focus_decision"] = focus_decision
+
         final_answer_payload = self._derive_final_answer_payload(run_details)
         recommendation_reviews = list(run_details.get("recommendation_reviews") or [])
-        issue_ledger = list(run_details.get("issue_ledger") or self._serialized_issue_ledger())
+        issue_ledger = list(
+            run_details.get("issue_ledger") or self._serialized_issue_ledger()
+        )
+        topic_ledger = list(
+            run_details.get("topic_ledger") or self._serialized_topic_ledger()
+        )
         analysis_review_contract = (
             run_details.get("analysis_review_contract")
             if isinstance(run_details.get("analysis_review_contract"), dict)
-            else (self.analysis_review_contract.to_dict() if self.analysis_review_contract is not None else None)
+            else (
+                self.analysis_review_contract.to_dict()
+                if self.analysis_review_contract is not None
+                else None
+            )
         )
         analysis_review_coverage = self._analysis_review_coverage()
 
@@ -253,9 +381,21 @@ class HarnessRunner:
             "final_git_snapshot": final_git_snapshot,
             "changed_files": final_changed_files,
             "analysis_review_contract": analysis_review_contract,
+            "analysis_review_status": analysis_review_status,
+            "focus_decision": (
+                focus_decision if isinstance(focus_decision, dict) else None
+            ),
             "analysis_review_coverage": analysis_review_coverage,
             "issue_ledger": issue_ledger,
+            "topic_ledger": topic_ledger,
             "recommendation_reviews": recommendation_reviews,
+            "closure_proof_by_id": (
+                ((analysis_review_status or {}).get("provenance") or {}).get(
+                    "closure_proof_by_id"
+                )
+                if isinstance(analysis_review_status, dict)
+                else {}
+            ),
             "artifacts": {
                 "run_dir": str(self.run_dir),
                 "report_md": str(self.run_dir / "REPORT.md"),
@@ -264,22 +404,36 @@ class HarnessRunner:
             "final_answer": final_answer_payload,
             "created_at": dt.datetime.now(dt.UTC).isoformat(),
         }
+        if bounded_review_summary is not None:
+            summary["bounded_review_summary"] = bounded_review_summary
+        if bounded_attestation_input is not None:
+            summary[BOUNDED_ATTESTATION_INPUT_KEY] = bounded_attestation_input
         drafts = extract_drafts_from_summary(summary)
         summary["drafts"] = drafts
         best_draft = select_best_draft(drafts)
         summary["best_draft_id"] = best_draft.get("draft_id") if best_draft else None
-        summary["selected_draft_id"] = best_draft.get("draft_id") if best_draft else None
+        summary["selected_draft_id"] = (
+            best_draft.get("draft_id") if best_draft else None
+        )
         summary = apply_final_artifacts(summary)
         return summary
 
     def _run_single_pass(self) -> dict[str, Any]:
         role = self.strategy.roles.get("solver") or self.strategy.roles.get("proposer")
         if role is None:
-            raise HarnessError("single_pass strategy requires a solver or proposer role")
+            raise HarnessError(
+                "single_pass strategy requires a solver or proposer role"
+            )
 
-        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
-        prompt = build_single_pass_prompt(self.task, self.strategy.prompt_preamble, git_snapshot)
-        stage = self._run_agent_stage("solver", role.provider, prompt, single_pass_schema(), role)
+        git_snapshot = capture_git_snapshot(
+            self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+        )
+        prompt = build_single_pass_prompt(
+            self.task, self.strategy.prompt_preamble, git_snapshot
+        )
+        stage = self._run_agent_stage(
+            "solver", role.provider, prompt, single_pass_schema(), role
+        )
         if not stage.ok:
             return {
                 "run_verdict": "harness_error",
@@ -304,7 +458,9 @@ class HarnessRunner:
                 "Check the validator configuration."
             )
         return {
-            "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
+            "run_verdict": self._combine_run_verdict(
+                content_verdict, validator_verdict
+            ),
             "content_verdict": content_verdict,
             "validator_verdict": validator_verdict,
             "final_summary": final_summary,
@@ -320,10 +476,18 @@ class HarnessRunner:
         self._require_role("falsifier")
         patcher_cfg = self.strategy.roles.get("patcher")
 
-        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
-        proposer_prompt = build_proposer_prompt(self.task, self.strategy.prompt_preamble, git_snapshot)
+        git_snapshot = capture_git_snapshot(
+            self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+        )
+        proposer_prompt = build_proposer_prompt(
+            self.task, self.strategy.prompt_preamble, git_snapshot
+        )
         proposer_run = self._run_agent_stage(
-            "proposer", proposer_cfg.provider, proposer_prompt, proposer_schema(), proposer_cfg
+            "proposer",
+            proposer_cfg.provider,
+            proposer_prompt,
+            proposer_schema(),
+            proposer_cfg,
         )
         if not proposer_run.ok:
             return {
@@ -376,7 +540,9 @@ class HarnessRunner:
                 proposer_run.structured_output,
                 last_falsifier_run.structured_output,
                 last_validation_runs,
-                capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+                capture_git_snapshot(
+                    self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+                ),
                 repair_round=repair_round,
             )
             patcher_run = self._run_agent_stage(
@@ -390,9 +556,14 @@ class HarnessRunner:
                 return {
                     "run_verdict": "harness_error",
                     "content_verdict": "harness_error",
-                    "validator_verdict": self._classify_validator_verdict(last_validation_runs),
+                    "validator_verdict": self._classify_validator_verdict(
+                        last_validation_runs
+                    ),
                     "final_summary": f"Patcher stage failed: {patcher_run.error or 'unknown error'}",
-                    "failure_details": {"stage": f"patcher_round_{repair_round}", "error": patcher_run.error},
+                    "failure_details": {
+                        "stage": f"patcher_round_{repair_round}",
+                        "error": patcher_run.error,
+                    },
                 }
 
             patch_rounds_executed += 1
@@ -407,9 +578,14 @@ class HarnessRunner:
                     return {
                         "run_verdict": "harness_error",
                         "content_verdict": "harness_error",
-                        "validator_verdict": self._classify_validator_verdict(last_validation_runs),
+                        "validator_verdict": self._classify_validator_verdict(
+                            last_validation_runs
+                        ),
                         "final_summary": f"Falsifier re-run failed: {last_falsifier_run.error or 'unknown error'}",
-                        "failure_details": {"stage": "falsifier_rerun", "error": last_falsifier_run.error},
+                        "failure_details": {
+                            "stage": "falsifier_rerun",
+                            "error": last_falsifier_run.error,
+                        },
                     }
 
         required_failures = self._required_validator_failures(last_validation_runs)
@@ -419,18 +595,20 @@ class HarnessRunner:
 
         if required_failures:
             content_verdict = "rejected"
-            final_summary = (
-                f"Required validators still fail after the repair loop ({len(required_failures)} failure(s))."
-            )
+            final_summary = f"Required validators still fail after the repair loop ({len(required_failures)} failure(s))."
         elif verdict_signal == "reject":
             content_verdict = "needs_manual_review"
             final_summary = "Required validators pass, but the falsifier still recommends rejection."
         elif verdict_signal == "inconclusive":
             content_verdict = "accepted_with_warnings"
-            final_summary = "Required validators pass, but the falsifier remained inconclusive."
+            final_summary = (
+                "Required validators pass, but the falsifier remained inconclusive."
+            )
         else:
             content_verdict = "accepted"
-            final_summary = "Required validators pass and the final falsifier verdict is accept."
+            final_summary = (
+                "Required validators pass and the final falsifier verdict is accept."
+            )
 
         if validator_verdict == "misconfigured":
             final_summary = (
@@ -439,7 +617,9 @@ class HarnessRunner:
             )
 
         return {
-            "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
+            "run_verdict": self._combine_run_verdict(
+                content_verdict, validator_verdict
+            ),
             "content_verdict": content_verdict,
             "validator_verdict": validator_verdict,
             "final_summary": final_summary,
@@ -455,17 +635,238 @@ class HarnessRunner:
 
     def _run_analysis_review_v1(self) -> dict[str, Any]:
         contract = self._analysis_contract()
+        focus_gate_cfg = self._focus_gate_role_config()
+
+        focus_decision: dict[str, Any] | None = None
+        focus_refinement: dict[str, Any] | None = None
+        if contract.focus_gate.enabled:
+            focus_gate_outcome = self._run_focus_gate(
+                contract=contract,
+                role_cfg=focus_gate_cfg,
+            )
+            if focus_gate_outcome["kind"] == "blocked":
+                return focus_gate_outcome["outcome"]
+            if focus_gate_outcome["kind"] == "failed":
+                return self._analysis_stage_failure_outcome(
+                    stage_label="focus_gate",
+                    run=focus_gate_outcome["run"],
+                    validator_verdict="not_run",
+                    review_loop_exercised=False,
+                    final_analysis=None,
+                    contract=contract,
+                )
+            focus_decision = focus_gate_outcome["focus_decision"]
+            focus_refinement = focus_gate_outcome.get("focus_refinement")
+
+        if (
+            contract.mode == "trust"
+            and contract.trust_review.execution_mode == "attestation_over_bounded"
+        ):
+            bounded_strategy_payload = self.strategy.to_dict()
+            bounded_strategy_payload["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
+            bounded_strategy = StrategyConfig.from_dict(bounded_strategy_payload)
+            bounded_contract = build_analysis_review_contract(self.task, bounded_strategy)
+            self.analysis_review_contract = bounded_contract
+            try:
+                bounded_flow = self._execute_analysis_review_flow(
+                    contract=bounded_contract,
+                    focus_decision=focus_decision,
+                )
+            finally:
+                self.analysis_review_contract = contract
+            if "failure_outcome" in bounded_flow:
+                return bounded_flow["failure_outcome"]
+
+            bounded_run_details = {
+                "analysis_review_contract": bounded_contract.to_dict(),
+                "final_analysis": bounded_flow["final_analysis_payload"],
+                "issue_ledger": self._serialized_issue_ledger(),
+                "topic_ledger": self._serialized_topic_ledger(),
+                "focus_decision": focus_decision,
+            }
+            if isinstance(focus_refinement, dict) and focus_refinement:
+                bounded_run_details["focus_refinement"] = focus_refinement
+            bounded_review_summary = self._build_bounded_review_summary(
+                bounded_run_details
+            )
+            if bounded_review_summary is None:
+                raise HarnessError(
+                    "attestation_over_bounded requires a bounded_review_summary before attestation."
+                )
+            bounded_run_details["bounded_review_summary"] = bounded_review_summary
+            bounded_attestation_input = self._build_bounded_attestation_input(
+                bounded_run_details
+            )
+            if bounded_attestation_input is None:
+                raise HarnessError(
+                    "attestation_over_bounded requires bounded_attestation_input before attestation."
+                )
+
+            auditor_cfg = self._role_or_fallback("auditor", ["critic", "falsifier"])
+            attestation_run = self._run_trust_attestation_review(
+                contract=contract,
+                role_cfg=auditor_cfg,
+                bounded_attestation_input=bounded_attestation_input,
+                validation_runs=bounded_flow["validation_runs"],
+                final_analysis_payload=bounded_flow["final_analysis_payload"],
+            )
+            if not attestation_run.ok:
+                return self._analysis_stage_failure_outcome(
+                    stage_label="trust attestation review",
+                    run=attestation_run,
+                    validator_verdict=self._classify_validator_verdict(
+                        bounded_flow["validation_runs"]
+                    ),
+                    review_loop_exercised=True,
+                    final_analysis=bounded_flow["final_analysis_payload"],
+                    contract=contract,
+                    focus_decision=focus_decision,
+                )
+            self._ingest_review_payload(
+                attestation_run.structured_output or {},
+                round_index=bounded_flow["revisions_completed"] + 1,
+                role_name="auditor",
+                reviser_output=None,
+            )
+            final_review_payload = attestation_run.structured_output or {}
+            final_analysis_payload = bounded_flow["final_analysis_payload"]
+            validator_verdict = self._classify_validator_verdict(
+                bounded_flow["validation_runs"]
+            )
+            revisions_completed = bounded_flow["revisions_completed"]
+            max_loops = bounded_flow["max_loops"]
+            accepted_recommendation_count = len(
+                self._accepted_recommendation_reviews(final_review_payload)
+            )
+            content_verdict = self._analysis_content_verdict(
+                final_review_payload,
+                final_analysis_payload=final_analysis_payload,
+                revisions_completed=revisions_completed,
+                max_loops=max_loops,
+            )
+            analysis_review_status = self._build_analysis_review_status(
+                final_analysis_payload=final_analysis_payload,
+                final_review_payload=final_review_payload,
+                content_verdict=content_verdict,
+            )
+            final_summary = self._analysis_final_summary(
+                final_review_payload,
+                final_analysis_payload=final_analysis_payload,
+                content_verdict=content_verdict,
+                revisions_completed=revisions_completed,
+                max_loops=max_loops,
+                validator_verdict=validator_verdict,
+            )
+            return {
+                "run_verdict": self._combine_run_verdict(
+                    content_verdict, validator_verdict
+                ),
+                "content_verdict": content_verdict,
+                "validator_verdict": validator_verdict,
+                "final_summary": final_summary,
+                "details": {
+                    "revisions_completed": revisions_completed,
+                    "review_policy": contract.stop_policy.to_dict(),
+                    "analysis_review_contract": contract.to_dict(),
+                    "final_review": final_review_payload,
+                    "final_analysis": final_analysis_payload,
+                    "issue_ledger": self._serialized_issue_ledger(),
+                    "topic_ledger": self._serialized_topic_ledger(),
+                    "recommendation_reviews": self._recommendation_reviews(
+                        final_review_payload
+                    ),
+                    "accepted_recommendation_count": accepted_recommendation_count,
+                    "analysis_review_status": analysis_review_status,
+                    "focus_decision": focus_decision,
+                    "focus_refinement": focus_refinement,
+                    "review_loop_exercised": True,
+                    "bounded_review_summary": bounded_review_summary,
+                    BOUNDED_ATTESTATION_INPUT_KEY: bounded_attestation_input,
+                },
+            }
+
+        flow = self._execute_analysis_review_flow(
+            contract=contract,
+            focus_decision=focus_decision,
+        )
+        if "failure_outcome" in flow:
+            return flow["failure_outcome"]
+
+        final_review_payload = flow["final_review_payload"]
+        final_analysis_payload = flow["final_analysis_payload"]
+        validator_verdict = self._classify_validator_verdict(flow["validation_runs"])
+        revisions_completed = flow["revisions_completed"]
+        max_loops = flow["max_loops"]
+        content_verdict = self._analysis_content_verdict(
+            final_review_payload,
+            final_analysis_payload=final_analysis_payload,
+            revisions_completed=revisions_completed,
+            max_loops=max_loops,
+        )
+        analysis_review_status = self._build_analysis_review_status(
+            final_analysis_payload=final_analysis_payload,
+            final_review_payload=final_review_payload,
+            content_verdict=content_verdict,
+        )
+
+        final_summary = self._analysis_final_summary(
+            final_review_payload,
+            final_analysis_payload=final_analysis_payload,
+            content_verdict=content_verdict,
+            revisions_completed=revisions_completed,
+            max_loops=max_loops,
+                validator_verdict=validator_verdict,
+        )
+        accepted_recommendation_count = len(
+            self._accepted_recommendation_reviews(final_review_payload)
+        )
+
+        return {
+            "run_verdict": self._combine_run_verdict(
+                content_verdict, validator_verdict
+            ),
+            "content_verdict": content_verdict,
+            "validator_verdict": validator_verdict,
+            "final_summary": final_summary,
+            "details": {
+                "revisions_completed": revisions_completed,
+                "review_policy": contract.stop_policy.to_dict(),
+                "analysis_review_contract": contract.to_dict(),
+                "final_review": final_review_payload,
+                "final_analysis": final_analysis_payload,
+                "issue_ledger": self._serialized_issue_ledger(),
+                "topic_ledger": self._serialized_topic_ledger(),
+                "recommendation_reviews": self._recommendation_reviews(
+                    final_review_payload
+                ),
+                "accepted_recommendation_count": accepted_recommendation_count,
+                "analysis_review_status": analysis_review_status,
+                "focus_decision": focus_decision,
+                "focus_refinement": focus_refinement,
+                "review_loop_exercised": True,
+            },
+        }
+
+    def _execute_analysis_review_flow(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        focus_decision: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         proposer_cfg = self._require_role("proposer")
         critic_cfg = self._role_or_fallback("critic", ["falsifier"])
         reviser_cfg = self._role_or_fallback("reviser", ["patcher", "proposer"])
         auditor_cfg = self._role_or_fallback("auditor", ["critic", "falsifier"])
 
-        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        git_snapshot = capture_git_snapshot(
+            self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+        )
         proposer_prompt = build_analysis_proposer_prompt(
             self.task,
             self.strategy.prompt_preamble,
             git_snapshot,
             contract,
+            focus_decision=focus_decision,
         )
         proposer_run = self._run_agent_stage(
             "proposer",
@@ -473,15 +874,27 @@ class HarnessRunner:
             proposer_prompt,
             analysis_output_schema(),
             proposer_cfg,
-            semantic_context={"contract": contract},
+            semantic_context={
+                "contract": contract,
+                "expected_primary_seam_id": self._downstream_primary_seam_id(
+                    focus_decision
+                ),
+                "expected_primary_seam_paths": self._downstream_primary_seam_paths(
+                    focus_decision
+                ),
+            },
         )
         if not proposer_run.ok:
             return {
-                "run_verdict": "harness_error",
-                "content_verdict": "harness_error",
-                "validator_verdict": self._classify_validator_verdict([]),
-                "final_summary": f"Proposer stage failed: {proposer_run.error or 'unknown error'}",
-                "failure_details": {"stage": "proposer", "error": proposer_run.error},
+                "failure_outcome": self._analysis_stage_failure_outcome(
+                    stage_label="proposer",
+                    run=proposer_run,
+                    validator_verdict=self._classify_validator_verdict([]),
+                    review_loop_exercised=False,
+                    final_analysis=None,
+                    contract=contract,
+                    focus_decision=focus_decision,
+                )
             }
 
         validation_runs = self._run_validator_round(round_index=0)
@@ -495,20 +908,17 @@ class HarnessRunner:
         )
         if not critic_run.ok:
             return {
-                "run_verdict": "harness_error",
-                "content_verdict": "harness_error",
-                "validator_verdict": self._classify_validator_verdict(validation_runs),
-                "final_summary": self._analysis_stage_failure_summary(
-                    "critic",
-                    critic_run,
+                "failure_outcome": self._analysis_stage_failure_outcome(
+                    stage_label="critic",
+                    run=critic_run,
+                    validator_verdict=self._classify_validator_verdict(
+                        validation_runs
+                    ),
                     review_loop_exercised=False,
-                ),
-                "failure_details": self._stage_failure_details(
-                    "critic",
-                    critic_run,
-                    review_loop_exercised=False,
-                ),
-                "details": {"review_loop_exercised": False},
+                    final_analysis=proposer_run.structured_output,
+                    contract=contract,
+                    focus_decision=focus_decision,
+                )
             }
         self._ingest_review_payload(
             critic_run.structured_output or {},
@@ -527,7 +937,9 @@ class HarnessRunner:
         )
 
         while revisions_completed < max_loops:
-            if not self._analysis_needs_revision(latest_review_run.structured_output or {}, revisions_completed):
+            if not self._analysis_needs_revision(
+                latest_review_run.structured_output or {}, revisions_completed
+            ):
                 break
             revisions_completed += 1
             reviser_prompt = build_analysis_reviser_prompt(
@@ -536,16 +948,24 @@ class HarnessRunner:
                 latest_analysis_run.structured_output,
                 latest_review_run.structured_output,
                 validation_runs,
-                capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+                capture_git_snapshot(
+                    self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+                ),
                 revision_round=revisions_completed,
                 contract=contract,
                 open_issues=self._open_issue_records(),
+                open_topics=self._open_topic_records(),
+                focus_decision=focus_decision,
             )
-            latest_analysis_run = self._run_agent_stage(
+            prior_analysis_payload = latest_analysis_run.structured_output
+            next_analysis_run = self._run_agent_stage(
                 f"reviser_round_{revisions_completed}",
                 reviser_cfg.provider,
                 reviser_prompt,
-                analysis_output_schema(require_issue_resolution_map=True),
+                analysis_output_schema(
+                    require_issue_resolution_map=True,
+                    require_topic_resolution_map=bool(self._open_topic_records()),
+                ),
                 reviser_cfg,
                 semantic_context={
                     "contract": contract,
@@ -554,25 +974,34 @@ class HarnessRunner:
                         for item in self._open_issue_records()
                         if str(item.get("issue_id") or "").strip()
                     ],
+                    "expected_open_topic_ids": [
+                        str(item.get("topic_id"))
+                        for item in self._open_topic_records()
+                        if str(item.get("topic_id") or "").strip()
+                    ],
+                    "expected_primary_seam_id": self._downstream_primary_seam_id(
+                        focus_decision
+                    ),
+                    "expected_primary_seam_paths": self._downstream_primary_seam_paths(
+                        focus_decision
+                    ),
                 },
             )
-            if not latest_analysis_run.ok:
+            if not next_analysis_run.ok:
                 return {
-                    "run_verdict": "harness_error",
-                    "content_verdict": "harness_error",
-                    "validator_verdict": self._classify_validator_verdict(validation_runs),
-                    "final_summary": self._analysis_stage_failure_summary(
-                        f"reviser round {revisions_completed}",
-                        latest_analysis_run,
+                    "failure_outcome": self._analysis_stage_failure_outcome(
+                        stage_label=f"reviser round {revisions_completed}",
+                        run=next_analysis_run,
+                        validator_verdict=self._classify_validator_verdict(
+                            validation_runs
+                        ),
                         review_loop_exercised=True,
-                    ),
-                    "failure_details": self._stage_failure_details(
-                        f"reviser_round_{revisions_completed}",
-                        latest_analysis_run,
-                        review_loop_exercised=True,
-                    ),
-                    "details": {"review_loop_exercised": True},
+                        final_analysis=prior_analysis_payload,
+                        contract=contract,
+                        focus_decision=focus_decision,
+                    )
                 }
+            latest_analysis_run = next_analysis_run
 
             latest_review_run = self._run_analysis_reviewer(
                 role_name="auditor",
@@ -584,20 +1013,17 @@ class HarnessRunner:
             )
             if not latest_review_run.ok:
                 return {
-                    "run_verdict": "harness_error",
-                    "content_verdict": "harness_error",
-                    "validator_verdict": self._classify_validator_verdict(validation_runs),
-                    "final_summary": self._analysis_stage_failure_summary(
-                        "auditor",
-                        latest_review_run,
+                    "failure_outcome": self._analysis_stage_failure_outcome(
+                        stage_label="auditor",
+                        run=latest_review_run,
+                        validator_verdict=self._classify_validator_verdict(
+                            validation_runs
+                        ),
                         review_loop_exercised=True,
-                    ),
-                    "failure_details": self._stage_failure_details(
-                        "auditor",
-                        latest_review_run,
-                        review_loop_exercised=True,
-                    ),
-                    "details": {"review_loop_exercised": True},
+                        final_analysis=latest_analysis_run.structured_output,
+                        contract=contract,
+                        focus_decision=focus_decision,
+                    )
                 }
             self._ingest_review_payload(
                 latest_review_run.structured_output or {},
@@ -606,40 +1032,69 @@ class HarnessRunner:
                 reviser_output=latest_analysis_run.structured_output,
             )
 
-        final_review_payload = latest_review_run.structured_output or {}
-        final_analysis_payload = latest_analysis_run.structured_output or {}
-        validator_verdict = self._classify_validator_verdict(validation_runs)
-        content_verdict = self._analysis_content_verdict(
-            final_review_payload,
-            revisions_completed=revisions_completed,
-            max_loops=max_loops,
-        )
-
-        final_summary = self._analysis_final_summary(
-            final_review_payload,
-            revisions_completed=revisions_completed,
-            max_loops=max_loops,
-            validator_verdict=validator_verdict,
-        )
-        accepted_recommendation_count = len(self._accepted_recommendation_reviews(final_review_payload))
-
         return {
-            "run_verdict": self._combine_run_verdict(content_verdict, validator_verdict),
-            "content_verdict": content_verdict,
-            "validator_verdict": validator_verdict,
-            "final_summary": final_summary,
-            "details": {
-                "revisions_completed": revisions_completed,
-                "review_policy": contract.stop_policy.to_dict(),
-                "analysis_review_contract": contract.to_dict(),
-                "final_review": final_review_payload,
-                "final_analysis": final_analysis_payload,
-                "issue_ledger": self._serialized_issue_ledger(),
-                "recommendation_reviews": self._recommendation_reviews(final_review_payload),
-                "accepted_recommendation_count": accepted_recommendation_count,
-                "review_loop_exercised": True,
-            },
+            "validation_runs": validation_runs,
+            "revisions_completed": revisions_completed,
+            "max_loops": max_loops,
+            "final_review_payload": latest_review_run.structured_output or {},
+            "final_analysis_payload": latest_analysis_run.structured_output or {},
         }
+
+    def _run_trust_attestation_review(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        role_cfg: RoleConfig,
+        bounded_attestation_input: dict[str, Any],
+        validation_runs: list[ValidationRun],
+        final_analysis_payload: dict[str, Any],
+    ) -> ProviderRun:
+        git_snapshot = capture_git_snapshot(
+            self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+        )
+        prior_open_issue_records = self._open_issue_records()
+        prior_open_topic_records = self._open_topic_records()
+        prompt = build_trust_attestation_review_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            bounded_attestation_input,
+            validation_runs,
+            git_snapshot,
+            contract,
+        )
+        recommendations = final_analysis_payload.get("recommendations")
+        expected_recommendation_count = (
+            len(recommendations) if isinstance(recommendations, list) else 0
+        )
+        return self._run_agent_stage(
+            "auditor",
+            role_cfg.provider,
+            prompt,
+            analysis_review_schema(),
+            role_cfg,
+            semantic_context={
+                "contract": contract,
+                "prior_open_issue_ids": [
+                    str(item.get("issue_id"))
+                    for item in prior_open_issue_records
+                    if str(item.get("issue_id") or "").strip()
+                ],
+                "prior_open_issue_records": prior_open_issue_records,
+                "prior_open_topic_ids": [
+                    str(item.get("topic_id"))
+                    for item in prior_open_topic_records
+                    if str(item.get("topic_id") or "").strip()
+                ],
+                "prior_open_topic_records": prior_open_topic_records,
+                "historical_topic_ids": [
+                    str(item.get("topic_id"))
+                    for item in self.topic_ledger
+                    if str(item.get("topic_id") or "").strip()
+                ],
+                "expected_recommendation_count": expected_recommendation_count,
+                BOUNDED_ATTESTATION_INPUT_KEY: bounded_attestation_input,
+            },
+        )
 
     def _run_falsifier(
         self,
@@ -653,7 +1108,9 @@ class HarnessRunner:
             self.strategy.prompt_preamble,
             prior_output,
             validation_runs,
-            capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths),
+            capture_git_snapshot(
+                self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+            ),
         )
         return self._run_agent_stage(
             "falsifier",
@@ -674,11 +1131,25 @@ class HarnessRunner:
         reviser_output: dict[str, Any] | None,
     ) -> ProviderRun:
         contract = self._analysis_contract()
-        git_snapshot = capture_git_snapshot(self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths)
+        git_snapshot = capture_git_snapshot(
+            self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+        )
+        prior_open_issue_records = self._open_issue_records()
+        prior_open_topic_records = self._open_topic_records()
         prior_open_issue_ids = [
             str(item.get("issue_id"))
-            for item in self._open_issue_records()
+            for item in prior_open_issue_records
             if str(item.get("issue_id") or "").strip()
+        ]
+        prior_open_topic_ids = [
+            str(item.get("topic_id"))
+            for item in prior_open_topic_records
+            if str(item.get("topic_id") or "").strip()
+        ]
+        historical_topic_ids = [
+            str(item.get("topic_id"))
+            for item in self.topic_ledger
+            if str(item.get("topic_id") or "").strip()
         ]
         expected_recommendation_count = 0
         if isinstance(prior_output, dict):
@@ -686,6 +1157,14 @@ class HarnessRunner:
             if isinstance(recommendations, list):
                 expected_recommendation_count = len(recommendations)
         if role_name == "auditor":
+            prior_open_topic_records = self._auditor_prior_open_topic_records(
+                reviser_output
+            )
+            prior_open_topic_ids = [
+                str(item.get("topic_id"))
+                for item in prior_open_topic_records
+                if str(item.get("topic_id") or "").strip()
+            ]
             prompt = build_analysis_auditor_prompt(
                 self.task,
                 self.strategy.prompt_preamble,
@@ -695,7 +1174,8 @@ class HarnessRunner:
                 git_snapshot,
                 self.strategy.review_loops,
                 contract,
-                self._open_issue_records(),
+                prior_open_issue_records,
+                prior_open_topic_records,
                 round_index,
             )
         else:
@@ -709,6 +1189,9 @@ class HarnessRunner:
                 contract,
             )
             prior_open_issue_ids = []
+            prior_open_topic_ids = []
+            prior_open_issue_records = []
+            prior_open_topic_records = []
         return self._run_agent_stage(
             role_name,
             role_cfg.provider,
@@ -718,6 +1201,10 @@ class HarnessRunner:
             semantic_context={
                 "contract": contract,
                 "prior_open_issue_ids": prior_open_issue_ids,
+                "prior_open_issue_records": prior_open_issue_records,
+                "prior_open_topic_ids": prior_open_topic_ids,
+                "prior_open_topic_records": prior_open_topic_records,
+                "historical_topic_ids": historical_topic_ids,
                 "expected_recommendation_count": expected_recommendation_count,
             },
         )
@@ -730,9 +1217,12 @@ class HarnessRunner:
         schema: dict[str, Any],
         role_config: RoleConfig,
         semantic_context: dict[str, Any] | None = None,
+        *,
+        record_stage: bool = True,
+        record_workspace_policy_check: bool = True,
     ) -> ProviderRun:
-        self.stage_counter += 1
-        stage_dir = self.artifacts_dir / f"{self.stage_counter:02d}_{slugify(role_name)}"
+        stage_index = self.stage_counter + 1
+        stage_dir = self.artifacts_dir / f"{stage_index:02d}_{slugify(role_name)}"
         provider = get_provider(provider_name)
         effective_role_config = self._effective_role_config(role_name, role_config)
         request = StageRequest(
@@ -744,14 +1234,97 @@ class HarnessRunner:
             out_dir=str(stage_dir),
         )
         run = provider.run(request)
+        raw_structured_output = (
+            deepcopy(run.structured_output)
+            if isinstance(run.structured_output, dict)
+            else run.structured_output
+        )
 
         semantic_errors: list[str] = []
         semantic_warnings: list[str] = []
         semantic_validation_path: str | None = None
-        schema_validation_errors = list(run.schema_validation_errors or [])
+        provider_schema_validation_errors = list(run.schema_validation_errors or [])
+        schema_validation_errors = list(provider_schema_validation_errors)
         context = dict(semantic_context or {})
         contract = context.pop("contract", None)
+        normalized_payload: dict[str, Any] | None = None
+        payload_provenance: dict[str, Any] | None = None
+        normalization_warnings: list[str] = []
+        normalized_output_path = run.normalized_output_path or run.output_path
+        raw_output_path = run.raw_output_path
         if isinstance(contract, AnalysisReviewContract):
+            normalization_prior_open_issue_records = context.get(
+                "prior_open_issue_records"
+            )
+            normalization_prior_open_topic_records = context.get(
+                "prior_open_topic_records"
+            )
+            if isinstance(run.structured_output, dict):
+                if role_name == "focus_gate":
+                    normalized_payload = self._normalize_focus_gate_decision_payload(
+                        run.structured_output,
+                        expected_gate_path=context.get("expected_gate_path"),
+                    )
+                    payload_provenance = None
+                    normalization_warnings = []
+                elif role_name == "focus_gate_probe":
+                    normalized_payload = self._normalize_focus_gate_probe_payload(
+                        run.structured_output
+                    )
+                    payload_provenance = None
+                    normalization_warnings = []
+                else:
+                    normalized_payload, payload_provenance, normalization_warnings = (
+                        self._normalize_analysis_review_payload(
+                            run.structured_output,
+                            role_name=role_name,
+                            payload_provenance_mode=contract.trust_review.payload_provenance_mode,
+                            contract=contract,
+                            prior_open_issue_records=normalization_prior_open_issue_records,
+                            prior_open_topic_records=normalization_prior_open_topic_records,
+                        )
+                    )
+                schema_validation_errors = _soft_validate_schema(
+                    normalized_payload, schema
+                )
+                raw_meta = dict(run.raw_meta or {})
+                if payload_provenance is not None:
+                    raw_meta["payload_provenance"] = payload_provenance
+                run = replace(
+                    run,
+                    structured_output=normalized_payload,
+                    raw_meta=raw_meta,
+                )
+            if (
+                provider_schema_validation_errors
+                and not schema_validation_errors
+                and run.failure_kind is None
+            ):
+                run = replace(
+                    run,
+                    ok=(
+                        run.exit_code == 0
+                        and run.structured_output is not None
+                        and run.failure_kind is None
+                    ),
+                    error=None,
+                    failure_summary=None,
+                    schema_validation_errors=[],
+                )
+            elif schema_validation_errors and not run.failure_kind:
+                run = replace(
+                    run,
+                    ok=False,
+                    failure_kind="schema_validation_error",
+                    failure_summary="Schema validation failed.",
+                )
+            context.setdefault(
+                "workspace_paths",
+                capture_workspace_file_inventory(
+                    self.workspace,
+                    ignored_rel_paths=self.policy_ignored_rel_paths,
+                ),
+            )
             semantic_validation_path = str(stage_dir / "semantic_validation.json")
             if run.failure_kind:
                 semantic_payload = {
@@ -760,6 +1333,7 @@ class HarnessRunner:
                     "skipped_reason": f"provider_failure:{run.failure_kind}",
                     "errors": [],
                     "warnings": [],
+                    "payload_provenance": payload_provenance,
                 }
             elif schema_validation_errors:
                 semantic_payload = {
@@ -768,22 +1342,60 @@ class HarnessRunner:
                     "skipped_reason": "schema_validation_failed",
                     "errors": list(schema_validation_errors),
                     "warnings": [],
+                    "payload_provenance": payload_provenance,
                 }
-            elif isinstance(run.structured_output, dict):
-                semantic_result = validate_stage_output(
-                    role_name=role_name,
-                    payload=run.structured_output,
-                    task=self.task,
-                    contract=contract,
-                    **context,
-                )
+            elif isinstance(normalized_payload, dict):
+                if (
+                    role_name == "auditor"
+                    and contract.mode == "trust"
+                    and contract.trust_review.execution_mode
+                    == "attestation_over_bounded"
+                    and isinstance(context.get(BOUNDED_ATTESTATION_INPUT_KEY), dict)
+                ):
+                    semantic_result = validate_analysis_review_payload(
+                        payload=normalized_payload,
+                        role_name="auditor",
+                        task=self.task,
+                        contract=contract,
+                        workspace_paths=context.get("workspace_paths"),
+                        prior_open_issue_ids=context.get("prior_open_issue_ids"),
+                        prior_open_issue_records=context.get(
+                            "prior_open_issue_records"
+                        ),
+                        prior_open_topic_ids=context.get("prior_open_topic_ids"),
+                        prior_open_topic_records=context.get(
+                            "prior_open_topic_records"
+                        ),
+                        historical_topic_ids=context.get("historical_topic_ids"),
+                        expected_recommendation_count=context.get(
+                            "expected_recommendation_count"
+                        ),
+                        payload_provenance=payload_provenance,
+                        bounded_attestation_input=context.get(
+                            BOUNDED_ATTESTATION_INPUT_KEY
+                        ),
+                    )
+                else:
+                    semantic_result = validate_stage_output(
+                        **self._semantic_validation_kwargs(
+                            role_name=role_name,
+                            payload=normalized_payload,
+                            task=self.task,
+                            contract=contract,
+                            context=context,
+                        ),
+                        payload_provenance=payload_provenance,
+                    )
                 semantic_errors = list(semantic_result.errors)
-                semantic_warnings = list(semantic_result.warnings)
+                semantic_warnings = list(normalization_warnings) + list(
+                    semantic_result.warnings
+                )
                 semantic_payload = {
                     "ok": not semantic_errors,
                     "skipped": False,
                     "errors": semantic_errors,
                     "warnings": semantic_warnings,
+                    "payload_provenance": payload_provenance,
                 }
             else:
                 semantic_payload = {
@@ -792,6 +1404,7 @@ class HarnessRunner:
                     "skipped_reason": "structured_output_missing",
                     "errors": [],
                     "warnings": [],
+                    "payload_provenance": payload_provenance,
                 }
 
             write_json(semantic_validation_path, semantic_payload)
@@ -810,17 +1423,33 @@ class HarnessRunner:
                     error=combined_error,
                     raw_meta=raw_meta,
                     failure_kind=run.failure_kind or "semantic_validation_error",
-                    failure_summary=run.failure_summary or "Semantic validation failed.",
+                    failure_summary=run.failure_summary
+                    or "Semantic validation failed.",
                 )
             else:
                 run = replace(run, raw_meta=raw_meta)
             for warning in semantic_warnings:
                 self.warnings.append(f"{role_name}: {warning}")
 
+        if isinstance(raw_structured_output, dict) and raw_output_path:
+            write_json(Path(raw_output_path), raw_structured_output)
+        if isinstance(run.structured_output, dict) and normalized_output_path:
+            write_json(Path(normalized_output_path), run.structured_output)
+        run = replace(
+            run,
+            output_path=normalized_output_path,
+            raw_output_path=raw_output_path,
+            normalized_output_path=normalized_output_path,
+        )
+
+        if record_stage:
+            self.stage_counter = stage_index
         stage_record = asdict(run)
-        stage_record["stage_index"] = self.stage_counter
+        stage_record["stage_index"] = stage_index
         stage_record["requested_access"] = role_config.access
         stage_record["effective_access"] = effective_role_config.access
+        if role_name == "focus_gate":
+            stage_record["round_index"] = 0
         if run.failure_kind:
             stage_record["failure_kind"] = run.failure_kind
         if run.failure_summary:
@@ -835,18 +1464,30 @@ class HarnessRunner:
             stage_record["semantic_validation_warnings"] = semantic_warnings
         if semantic_validation_path:
             stage_record["semantic_validation_path"] = semantic_validation_path
+        if payload_provenance:
+            stage_record["semantic_validation_payload_provenance"] = payload_provenance
         if role_config.access != effective_role_config.access:
-            stage_record[
-                "access_override_reason"
-            ] = "Task-level workspace_write_policy forced this stage to run read-only."
-        self.agent_stages.append(stage_record)
-        write_json(stage_dir / "run.envelope.json", stage_record)
+            stage_record["access_override_reason"] = (
+                "Task-level workspace_write_policy forced this stage to run read-only."
+            )
+        if role_name == "focus_gate" and isinstance(run.structured_output, dict):
+            stage_record["metadata"] = {
+                "focus_gate": {
+                    "gate_path": run.structured_output.get("gate_path"),
+                    "focus_type": run.structured_output.get("focus_type"),
+                    "decision_state": run.structured_output.get("decision_state"),
+                }
+            }
+        if record_stage:
+            self.agent_stages.append(stage_record)
+            write_json(stage_dir / "run.envelope.json", stage_record)
 
-        self._record_workspace_policy_check(
-            checkpoint=f"after_{role_name}",
-            final=False,
-            raise_on_violation=True,
-        )
+        if record_workspace_policy_check:
+            self._record_workspace_policy_check(
+                checkpoint=f"after_{role_name}",
+                final=False,
+                raise_on_violation=True,
+            )
         return run
 
     def _run_validator_round(self, round_index: int) -> list[ValidationRun]:
@@ -883,10 +1524,18 @@ class HarnessRunner:
         )
         return results
 
-    def _required_validator_failures(self, results: list[ValidationRun]) -> list[ValidationRun]:
-        return [item for item in results if item.required and item.status in {"failed", "error"}]
+    def _required_validator_failures(
+        self, results: list[ValidationRun]
+    ) -> list[ValidationRun]:
+        return [
+            item
+            for item in results
+            if item.required and item.status in {"failed", "error"}
+        ]
 
-    def _should_patch(self, validation_runs: list[ValidationRun], falsifier_run: ProviderRun) -> bool:
+    def _should_patch(
+        self, validation_runs: list[ValidationRun], falsifier_run: ProviderRun
+    ) -> bool:
         if self._required_validator_failures(validation_runs):
             return True
         payload = falsifier_run.structured_output or {}
@@ -900,7 +1549,9 @@ class HarnessRunner:
                 return True
         return False
 
-    def _analysis_needs_revision(self, review_payload: dict[str, Any], revisions_completed: int) -> bool:
+    def _analysis_needs_revision(
+        self, review_payload: dict[str, Any], revisions_completed: int
+    ) -> bool:
         policy = self.strategy.review_loops
         if revisions_completed < policy.min_loops:
             return True
@@ -914,23 +1565,31 @@ class HarnessRunner:
             return False
         if review_payload.get("verdict") in {"revise", "reject"}:
             return True
-        return bool(self._blocking_issues(review_payload)) or bool(self._score_threshold_failures(review_payload))
+        return bool(self._blocking_issues(review_payload)) or bool(
+            self._score_threshold_failures(review_payload)
+        )
 
     def _analysis_content_verdict(
         self,
         review_payload: dict[str, Any],
         *,
+        final_analysis_payload: dict[str, Any] | None,
         revisions_completed: int,
         max_loops: int,
     ) -> str:
         if self._analysis_can_fully_accept(review_payload):
-            low_count = self._count_review_issues(review_payload, {"low"})
-            if low_count or review_payload.get("missing_topics") or self._has_recommendation_caveats(review_payload):
+            if self._analysis_warning_causes(
+                review_payload,
+                final_analysis_payload=final_analysis_payload,
+            ):
                 return "accepted_with_warnings"
             return "accepted"
         if self._analysis_can_partially_accept(review_payload):
             return "accepted_partial"
-        if revisions_completed >= max_loops and str(review_payload.get("verdict") or "").lower() == "reject":
+        if (
+            revisions_completed >= max_loops
+            and str(review_payload.get("verdict") or "").lower() == "reject"
+        ):
             return "rejected"
         if revisions_completed >= max_loops:
             return "best_effort_exhausted"
@@ -940,44 +1599,71 @@ class HarnessRunner:
         self,
         review_payload: dict[str, Any],
         *,
+        final_analysis_payload: dict[str, Any] | None,
+        content_verdict: str,
         revisions_completed: int,
         max_loops: int,
         validator_verdict: str,
     ) -> str:
-        verdict = self._analysis_content_verdict(
-            review_payload,
-            revisions_completed=revisions_completed,
-            max_loops=max_loops,
-        )
+        verdict = content_verdict
         parts = [
             f"Analysis-review loop completed after {revisions_completed} revision round(s).",
             f"Final reviewer verdict: {review_payload.get('verdict', 'unknown')}.",
         ]
-        for field_name in ("grounding_score", "actionability_score", "scope_compliance_score"):
+        for field_name in (
+            "grounding_score",
+            "actionability_score",
+            "scope_compliance_score",
+        ):
             if field_name in review_payload:
                 parts.append(f"{field_name}={review_payload[field_name]}")
         issue_count = len(review_payload.get("issues", []))
         if issue_count:
             parts.append(f"Open reviewer issues: {issue_count}.")
-        accepted_recommendation_count = len(self._accepted_recommendation_reviews(review_payload))
+        open_topic_ids = self._topic_ids_for_status({"open"})
+        carried_forward_topic_ids = self._topic_ids_for_status({"carried_forward"})
+        waived_topic_ids = self._topic_ids_for_status({"waived"})
+        disagreed_topic_ids = self._topic_ids_for_status({"disagree"})
+        if open_topic_ids:
+            parts.append("Open reviewer topics: " + ", ".join(open_topic_ids) + ".")
+        if carried_forward_topic_ids:
+            parts.append(
+                "Carried-forward topic IDs: "
+                + ", ".join(carried_forward_topic_ids)
+                + "."
+            )
+        if waived_topic_ids:
+            parts.append("Waived topic IDs: " + ", ".join(waived_topic_ids) + ".")
+        if disagreed_topic_ids:
+            parts.append("Disagreed topic IDs: " + ", ".join(disagreed_topic_ids) + ".")
+        accepted_recommendation_count = len(
+            self._accepted_recommendation_reviews(review_payload)
+        )
         if accepted_recommendation_count:
             parts.append(f"Accepted recommendations: {accepted_recommendation_count}.")
-        if review_payload.get("missing_topics"):
-            parts.append(
-                "Missing topics: " + ", ".join(str(x) for x in review_payload.get("missing_topics", []))
-            )
         if validator_verdict == "misconfigured":
             parts.append(
                 "Required validators were not applicable to this workspace. Check validator configuration."
             )
         if verdict == "accepted_with_warnings":
-            parts.append("The content is usable, but the auditor still left low-severity warnings.")
+            downgrade_causes = self._analysis_warning_causes(
+                review_payload,
+                final_analysis_payload=final_analysis_payload,
+            )
+            if downgrade_causes:
+                parts.append("Downgrade causes: " + "; ".join(downgrade_causes) + ".")
+            else:
+                parts.append(
+                    "The content is usable, but the auditor still left low-severity warnings."
+                )
         elif verdict == "accepted_partial":
             parts.append(
                 "The run reached a partial acceptance outcome. Only the accepted recommendation subset is included in the final deliverable."
             )
         elif verdict == "best_effort_exhausted":
-            parts.append("The harness used its available review loops but still did not meet the stop criteria.")
+            parts.append(
+                "The harness used its available review loops but still did not meet the stop criteria."
+            )
         return " ".join(parts)
 
     def _analysis_stage_failure_summary(
@@ -1009,12 +1695,51 @@ class HarnessRunner:
             parts.append("Review loop not exercised.")
         return " ".join(parts)
 
+    def _analysis_stage_failure_outcome(
+        self,
+        *,
+        stage_label: str,
+        run: ProviderRun,
+        validator_verdict: str,
+        review_loop_exercised: bool,
+        final_analysis: dict[str, Any] | None,
+        contract: AnalysisReviewContract | None,
+        focus_decision: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        details = self._stage_failure_details(
+            stage_label,
+            run,
+            review_loop_exercised=review_loop_exercised,
+            final_analysis=final_analysis,
+            contract=contract,
+            issue_ledger=self._serialized_issue_ledger(),
+            topic_ledger=self._serialized_topic_ledger(),
+        )
+        if isinstance(focus_decision, dict) and focus_decision:
+            details["focus_decision"] = focus_decision
+        return {
+            "run_verdict": "harness_error",
+            "content_verdict": "harness_error",
+            "validator_verdict": validator_verdict,
+            "final_summary": self._analysis_stage_failure_summary(
+                stage_label,
+                run,
+                review_loop_exercised=review_loop_exercised,
+            ),
+            "failure_details": details,
+            "details": details,
+        }
+
     @staticmethod
     def _stage_failure_details(
         stage_label: str,
         run: ProviderRun,
         *,
         review_loop_exercised: bool | None = None,
+        final_analysis: dict[str, Any] | None = None,
+        contract: AnalysisReviewContract | None = None,
+        issue_ledger: list[dict[str, Any]] | None = None,
+        topic_ledger: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         details: dict[str, Any] = {
             "stage": stage_label,
@@ -1029,6 +1754,14 @@ class HarnessRunner:
             details["schema_validation_errors"] = list(run.schema_validation_errors)
         if review_loop_exercised is not None:
             details["review_loop_exercised"] = review_loop_exercised
+        if isinstance(final_analysis, dict) and final_analysis:
+            details["final_analysis"] = final_analysis
+        if contract is not None:
+            details["analysis_review_contract"] = contract.to_dict()
+        if issue_ledger is not None:
+            details["issue_ledger"] = issue_ledger
+        if topic_ledger is not None:
+            details["topic_ledger"] = topic_ledger
         return details
 
     def _analysis_review_coverage(self) -> dict[str, Any]:
@@ -1052,7 +1785,8 @@ class HarnessRunner:
                     "stage_index": stage.get("stage_index"),
                     "role_name": role_name,
                     "failure_kind": stage.get("failure_kind"),
-                    "failure_summary": stage.get("failure_summary") or stage.get("error"),
+                    "failure_summary": stage.get("failure_summary")
+                    or stage.get("error"),
                 }
             )
 
@@ -1063,17 +1797,580 @@ class HarnessRunner:
             "failed_review_stages": failed,
         }
 
+    def _build_bounded_review_summary(
+        self, run_details: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        contract_dict = run_details.get("analysis_review_contract")
+        if not isinstance(contract_dict, dict):
+            if self.analysis_review_contract is None:
+                return None
+            contract_dict = self.analysis_review_contract.to_dict()
+
+        bounded_policy = contract_dict.get("bounded_review")
+        if not isinstance(bounded_policy, dict):
+            return None
+
+        final_analysis = self._resolve_bounded_review_analysis_payload(run_details)
+        recommendations = (
+            final_analysis.get("recommendations")
+            if isinstance(final_analysis, dict)
+            else []
+        )
+        if not isinstance(recommendations, list):
+            recommendations = []
+        final_analysis_scope_escapes = self._canonical_analysis_scope_escapes(
+            final_analysis
+        )
+        final_analysis_stage = self._resolve_final_analysis_stage()
+
+        issue_ledger = run_details.get("issue_ledger")
+        if not isinstance(issue_ledger, list):
+            issue_ledger = self._serialized_issue_ledger()
+        topic_ledger = run_details.get("topic_ledger")
+        if not isinstance(topic_ledger, list):
+            topic_ledger = self._serialized_topic_ledger()
+
+        review_stages: list[dict[str, Any]] = []
+        scope_escapes: list[dict[str, Any]] = []
+        next_auditor_round = 1
+
+        if final_analysis_scope_escapes:
+            role_name = str((final_analysis_stage or {}).get("role_name") or "proposer")
+            round_index = self._analysis_stage_round_index(role_name)
+            for escape in final_analysis_scope_escapes:
+                scope_escapes.append(
+                    {
+                        "role_name": role_name,
+                        "round_index": round_index,
+                        "path": str(escape.get("path") or "").strip(),
+                        "reason": str(escape.get("reason") or "").strip(),
+                    }
+                )
+
+        for stage in self.agent_stages:
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if role_name not in {"critic", "auditor"}:
+                continue
+            payload = stage.get("structured_output")
+            if (
+                not stage.get("ok")
+                or not isinstance(payload, dict)
+                or "verdict" not in payload
+            ):
+                continue
+
+            if role_name == "critic":
+                round_index = 0
+            else:
+                round_index = next_auditor_round
+                next_auditor_round += 1
+
+            issues = [
+                item
+                for item in payload.get("issues", []) or []
+                if isinstance(item, dict)
+            ]
+            topics = [
+                item
+                for item in payload.get("topics", []) or []
+                if isinstance(item, dict)
+            ]
+            new_topic_ids = [
+                str(item.get("topic_id") or "").strip()
+                for item in topics
+                if str(item.get("topic_id") or "").strip()
+            ]
+            resolved_topic_ids = [
+                str(item).strip()
+                for item in payload.get("resolved_topic_ids", []) or []
+                if str(item).strip()
+            ]
+            carried_forward_topic_ids = [
+                str(item).strip()
+                for item in payload.get("carried_forward_topic_ids", []) or []
+                if str(item).strip()
+            ]
+            waived_topic_ids = [
+                str(item).strip()
+                for item in payload.get("waived_topic_ids", []) or []
+                if str(item).strip()
+            ]
+
+            stage_scope_escapes: list[dict[str, Any]] = []
+            for escape in payload.get("scope_escapes", []) or []:
+                if not isinstance(escape, dict):
+                    continue
+                path = str(escape.get("path") or "").strip()
+                reason = str(escape.get("reason") or "").strip()
+                if not path and not reason:
+                    continue
+                escape_entry = {
+                    "role_name": role_name,
+                    "round_index": round_index,
+                    "path": path,
+                    "reason": reason,
+                }
+                stage_scope_escapes.append(escape_entry)
+                scope_escapes.append(escape_entry)
+
+            review_stages.append(
+                {
+                    "role_name": role_name,
+                    "round_index": round_index,
+                    "issue_count": len(issues),
+                    "issue_cap": (
+                        bounded_policy.get("critic_issue_cap")
+                        if role_name == "critic"
+                        else None
+                    ),
+                    "missing_topic_count": len(new_topic_ids),
+                    "missing_topic_cap": (
+                        bounded_policy.get("critic_new_topic_cap")
+                        if role_name == "critic"
+                        else None
+                    ),
+                    "new_topic_count": len(new_topic_ids),
+                    "new_topic_cap": (
+                        bounded_policy.get("critic_new_topic_cap")
+                        if role_name == "critic"
+                        else None
+                    ),
+                    "resolved_topic_count": len(resolved_topic_ids),
+                    "carried_forward_topic_count": len(carried_forward_topic_ids),
+                    "waived_topic_count": len(waived_topic_ids),
+                    "open_topic_count": len(new_topic_ids)
+                    + len(carried_forward_topic_ids),
+                    "new_medium_or_higher_issue_count": self._count_new_medium_or_higher_review_issues(
+                        role_name=role_name,
+                        round_index=round_index,
+                        issues=issues,
+                        issue_ledger=issue_ledger,
+                    ),
+                    "topic_ledger_count": len(topic_ledger),
+                    "new_medium_or_higher_issue_cap": (
+                        bounded_policy.get(
+                            "auditor_new_medium_or_higher_issue_cap_after_round0"
+                        )
+                        if role_name == "auditor" and round_index > 0
+                        else None
+                    ),
+                    "scope_escape_count": len(stage_scope_escapes),
+                }
+            )
+
+        return {
+            "mode": "recommendation_review_surface",
+            "policy": bounded_policy,
+            "recommendation_count": len(recommendations),
+            "recommendations_with_review_surface": sum(
+                1
+                for item in recommendations
+                if isinstance(item, dict)
+                and isinstance(item.get("review_surface"), dict)
+            ),
+            "review_stages": review_stages,
+            "scope_escape_count": len(scope_escapes),
+            "scope_escapes": scope_escapes,
+        }
+
+    # Freeze the finalized bounded analysis handoff once, then validate it
+    # before it enters summary persistence.
+    def _build_bounded_attestation_input(
+        self, run_details: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        contract_dict = run_details.get("analysis_review_contract")
+        if not isinstance(contract_dict, dict):
+            if self.analysis_review_contract is None:
+                return None
+            contract_dict = self.analysis_review_contract.to_dict()
+        if str(contract_dict.get("mode") or "").strip() != "bounded":
+            return None
+
+        bounded_review_summary = run_details.get("bounded_review_summary")
+        if not isinstance(bounded_review_summary, dict):
+            raise HarnessError(
+                "bounded_attestation_input requires bounded_review_summary in bounded mode."
+            )
+
+        final_analysis = self._resolve_bounded_review_analysis_payload(run_details)
+        final_analysis_stage = self._resolve_final_analysis_stage()
+        if (
+            not isinstance(final_analysis, dict)
+            or not final_analysis
+            or final_analysis_stage is None
+        ):
+            return None
+        analysis_stage_role_name = str(
+            (final_analysis_stage or {}).get("role_name") or ""
+        ).strip()
+        analysis_stage_index = (final_analysis_stage or {}).get("stage_index")
+        if (
+            not isinstance(analysis_stage_index, int)
+            or isinstance(analysis_stage_index, bool)
+            or analysis_stage_index < 0
+        ):
+            analysis_stage_index = self._analysis_stage_round_index(
+                analysis_stage_role_name
+            )
+
+        bounded_analysis = {
+            "summary": str(final_analysis.get("summary") or ""),
+            "recommendations": deepcopy(final_analysis.get("recommendations") or []),
+            "files_reviewed": deepcopy(final_analysis.get("files_reviewed") or []),
+            "primary_seam": deepcopy(final_analysis.get("primary_seam") or {}),
+            "secondary_seams_considered": deepcopy(
+                final_analysis.get("secondary_seams_considered") or []
+            ),
+            "scope_escapes": deepcopy(
+                self._canonical_analysis_scope_escapes(final_analysis)
+            ),
+        }
+        bounded_payload_sha256 = self._sha256_hex_for_json(bounded_analysis)
+        trust_review = (
+            contract_dict.get("trust_review")
+            if isinstance(contract_dict.get("trust_review"), dict)
+            else {}
+        )
+        trust_execution_mode = str(trust_review.get("execution_mode") or "").strip()
+        if not trust_execution_mode:
+            raise HarnessError(
+                "bounded_attestation_input requires trust_review.execution_mode in bounded mode."
+            )
+        recommendation_evidence_index = (
+            self._build_bounded_attestation_recommendation_evidence_index(
+                bounded_analysis.get("recommendations") or []
+            )
+        )
+        issue_ledger = run_details.get("issue_ledger")
+        if not isinstance(issue_ledger, list):
+            issue_ledger = self._serialized_issue_ledger()
+        topic_ledger = run_details.get("topic_ledger")
+        if not isinstance(topic_ledger, list):
+            topic_ledger = self._serialized_topic_ledger()
+        flattened_refs: list[str] = []
+        for refs in recommendation_evidence_index.values():
+            flattened_refs.extend(refs)
+        payload = {
+            "schema_version": BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+            "source": {
+                "strategy_kind": str(
+                    contract_dict.get("strategy_kind") or self.strategy.kind
+                ),
+                "mode": "bounded",
+                "analysis_stage_role_name": analysis_stage_role_name,
+                "analysis_stage_index": analysis_stage_index,
+                "bounded_payload_sha256": bounded_payload_sha256,
+            },
+            "focus_decision": (
+                deepcopy(run_details.get("focus_decision"))
+                if isinstance(run_details.get("focus_decision"), dict)
+                else None
+            ),
+            "contract": {
+                "contract_version": str(contract_dict.get("contract_version") or ""),
+                "strategy_kind": str(
+                    contract_dict.get("strategy_kind") or self.strategy.kind
+                ),
+                "trust_execution_mode": trust_execution_mode,
+            },
+            "bounded_analysis": bounded_analysis,
+            "review_surface": {
+                "recommendation_count": bounded_review_summary.get(
+                    "recommendation_count"
+                ),
+                "recommendations_with_review_surface": bounded_review_summary.get(
+                    "recommendations_with_review_surface"
+                ),
+                "review_stages": deepcopy(
+                    bounded_review_summary.get("review_stages") or []
+                ),
+                "scope_escape_count": bounded_review_summary.get(
+                    "scope_escape_count"
+                ),
+            },
+            "ledgers": {
+                "issue_ledger": deepcopy(issue_ledger),
+                "topic_ledger": deepcopy(topic_ledger),
+            },
+            "provenance_context": {
+                "normalized_ref_count": len(
+                    self._dedupe_preserving_order(flattened_refs)
+                ),
+                "recommendation_evidence_index": recommendation_evidence_index,
+            },
+        }
+
+        schema_validation_errors = _soft_validate_schema(
+            payload,
+            bounded_attestation_input_schema(),
+        )
+        if schema_validation_errors:
+            raise HarnessError(
+                "bounded_attestation_input schema validation failed: "
+                + "; ".join(schema_validation_errors)
+            )
+        workspace_paths = capture_workspace_file_inventory(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        validation_result = validate_bounded_attestation_input_payload(
+            payload,
+            workspace_paths=workspace_paths,
+        )
+        if not validation_result.ok:
+            raise HarnessError(
+                "bounded_attestation_input semantic validation failed: "
+                + "; ".join(validation_result.errors)
+            )
+        return payload
+
+    def _resolve_bounded_review_analysis_payload(
+        self, run_details: dict[str, Any]
+    ) -> dict[str, Any]:
+        final_analysis = run_details.get("final_analysis")
+        if isinstance(final_analysis, dict) and final_analysis:
+            return final_analysis
+
+        for stage in reversed(self.agent_stages):
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if not role_name.startswith("reviser_round_"):
+                continue
+            payload = stage.get("structured_output")
+            if stage.get("ok") and isinstance(payload, dict) and payload:
+                return payload
+
+        for stage in self.agent_stages:
+            if not isinstance(stage, dict):
+                continue
+            if str(stage.get("role_name") or "").strip() != "proposer":
+                continue
+            payload = stage.get("structured_output")
+            if stage.get("ok") and isinstance(payload, dict) and payload:
+                return payload
+        return {}
+
+    def _build_bounded_attestation_recommendation_evidence_index(
+        self, recommendations: list[dict[str, Any]]
+    ) -> dict[str, list[str]]:
+        evidence_index: dict[str, list[str]] = {}
+        for index, recommendation in enumerate(recommendations, start=1):
+            evidence_index[str(index)] = self._dedupe_preserving_order(
+                self._normalize_workspace_ref_list(
+                    recommendation.get("evidence") if isinstance(recommendation, dict) else []
+                )
+            )
+        return evidence_index
+
     @staticmethod
-    def _count_review_issues(review_payload: dict[str, Any], severities: set[str]) -> int:
+    def _canonical_json_bytes(value: Any) -> bytes:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+    @classmethod
+    def _sha256_hex_for_json(cls, value: Any) -> str:
+        return hashlib.sha256(cls._canonical_json_bytes(value)).hexdigest()
+
+    @staticmethod
+    def _count_medium_or_higher_review_issues(issues: list[dict[str, Any]]) -> int:
+        return sum(
+            1
+            for issue in issues
+            if str(issue.get("severity") or "").strip().lower()
+            in {"medium", "high", "critical"}
+        )
+
+    def _count_new_medium_or_higher_review_issues(
+        self,
+        *,
+        role_name: str,
+        round_index: int,
+        issues: list[dict[str, Any]],
+        issue_ledger: list[dict[str, Any]],
+    ) -> int:
+        if role_name == "critic":
+            return self._count_medium_or_higher_review_issues(issues)
+
+        current_issue_ids = {
+            str(issue.get("issue_id") or "").strip()
+            for issue in issues
+            if str(issue.get("issue_id") or "").strip()
+        }
+        if current_issue_ids:
+            return sum(
+                1
+                for record in issue_ledger
+                if isinstance(record, dict)
+                and str(record.get("issue_id") or "").strip() in current_issue_ids
+                and str(record.get("severity") or "").strip().lower()
+                in {"medium", "high", "critical"}
+                and record.get("first_seen_round") == round_index
+            )
+
+        return sum(
+            1
+            for issue in issues
+            if str(issue.get("severity") or "").strip().lower()
+            in {"medium", "high", "critical"}
+            and str(issue.get("why_not_raised_earlier") or "").strip()
+        )
+
+    @staticmethod
+    def _count_review_issues(
+        review_payload: dict[str, Any], severities: set[str]
+    ) -> int:
         return sum(
             1
             for issue in review_payload.get("issues", [])
             if str(issue.get("severity", "")).lower() in severities
         )
 
+    def _analysis_warning_causes(
+        self,
+        review_payload: dict[str, Any],
+        *,
+        final_analysis_payload: dict[str, Any] | None,
+    ) -> list[str]:
+        causes: list[str] = []
+        if self._count_review_issues(review_payload, {"low"}):
+            causes.append("low-severity reviewer issues remain open")
+        open_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger, status_name="open"
+        )
+        if open_topic_ids:
+            causes.append("open review topics remain: " + ", ".join(open_topic_ids))
+        carried_forward_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger,
+            status_name="carried_forward",
+        )
+        if carried_forward_topic_ids:
+            causes.append(
+                "review topics are carried forward: "
+                + ", ".join(carried_forward_topic_ids)
+            )
+        accepted_caveat_indices = self._accepted_caveat_recommendation_indices(
+            review_payload
+        )
+        if accepted_caveat_indices:
+            causes.append(
+                "accepted recommendation reviews include accept_with_caveat: "
+                + ", ".join(str(item) for item in accepted_caveat_indices)
+            )
+        contract = self._analysis_contract()
+        if contract.mode == "trust":
+            semantic_warning_records = self._final_semantic_warning_records()
+            if (
+                contract.trust_review.downgrade_on_semantic_warnings
+                and semantic_warning_records
+            ):
+                causes.append(
+                    "semantic validation warnings remain: "
+                    + "; ".join(
+                        record["warning"] for record in semantic_warning_records
+                    )
+                )
+            inferred_indices = self._accepted_inferred_recommendation_indices(
+                final_analysis_payload,
+                review_payload,
+            )
+            if (
+                contract.trust_review.downgrade_on_inferred_acceptance
+                and inferred_indices
+            ):
+                causes.append(
+                    "accepted recommendations rely on inference-only grounding: "
+                    + ", ".join(str(item) for item in inferred_indices)
+                )
+            provenance_status = self._final_payload_provenance_status()
+            if (
+                contract.trust_review.payload_provenance_mode == "payload_hash_and_refs"
+                and provenance_status != "bound"
+            ):
+                causes.append("final payload provenance is not fully bound")
+        return causes
+
+    def _analysis_publishability(
+        self,
+        *,
+        content_verdict: str,
+    ) -> dict[str, Any]:
+        contract = self._analysis_contract()
+        if contract.mode != "trust":
+            return {
+                "final_answer_publishable": content_verdict
+                in _FULLY_ACCEPTED_CONTENT_VERDICTS,
+                "blocking_causes": [],
+            }
+
+        if content_verdict not in _FULLY_ACCEPTED_CONTENT_VERDICTS:
+            return {
+                "final_answer_publishable": False,
+                "blocking_causes": [
+                    f"content verdict is not fully accepted: {content_verdict}"
+                ],
+            }
+
+        blocking_causes: list[str] = []
+        if self._final_payload_provenance_status() != "bound":
+            blocking_causes.append("final payload provenance is not fully bound")
+
+        open_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger, status_name="open"
+        )
+        if open_topic_ids:
+            blocking_causes.append(
+                "open review topics remain: " + ", ".join(open_topic_ids)
+            )
+
+        carried_forward_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger,
+            status_name="carried_forward",
+        )
+        if carried_forward_topic_ids:
+            blocking_causes.append(
+                "review topics are carried forward: "
+                + ", ".join(carried_forward_topic_ids)
+            )
+
+        blocking_semantic_warning_records = (
+            self._final_publication_blocking_semantic_warning_records()
+        )
+        if blocking_semantic_warning_records:
+            blocking_causes.append(
+                "semantic validation warnings remain: "
+                + "; ".join(
+                    str(record.get("warning") or "")
+                    for record in blocking_semantic_warning_records
+                )
+            )
+
+        return {
+            "final_answer_publishable": not blocking_causes,
+            "blocking_causes": blocking_causes,
+        }
+
+    def _final_publication_blocking_semantic_warning_records(
+        self,
+    ) -> list[dict[str, Any]]:
+        return [
+            record
+            for record in self._final_semantic_warning_records()
+            if str(record.get("warning") or "")
+            not in _TRUST_PUBLICATION_ADVISORY_WARNING_ALLOWLIST
+        ]
+
     def _analysis_contract(self) -> AnalysisReviewContract:
         if self.analysis_review_contract is None:
-            self.analysis_review_contract = build_analysis_review_contract(self.task, self.strategy)
+            self.analysis_review_contract = build_analysis_review_contract(
+                self.task, self.strategy
+            )
         return self.analysis_review_contract
 
     def _next_issue_id(self, reserved_ids: set[str] | None = None) -> str:
@@ -1087,15 +2384,145 @@ class HarnessRunner:
                 return issue_id
             index += 1
 
+    def _next_topic_id(self, reserved_ids: set[str] | None = None) -> str:
+        reserved = set(self._topic_ledger_by_id)
+        if reserved_ids:
+            reserved.update(reserved_ids)
+        index = 1
+        while True:
+            topic_id = f"AT-{index:03d}"
+            if topic_id not in reserved:
+                return topic_id
+            index += 1
+
     def _open_issue_records(self) -> list[dict[str, Any]]:
         return [
-            json.loads(json.dumps(record))
+            self._validation_issue_record(record)
             for record in self.issue_ledger
             if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
         ]
 
+    def _open_topic_records(self) -> list[dict[str, Any]]:
+        return [
+            self._validation_topic_record(record)
+            for record in self.topic_ledger
+            if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
+        ]
+
+    def _auditor_prior_open_topic_records(
+        self,
+        reviser_output: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        records = [dict(item) for item in self._open_topic_records()]
+        if not isinstance(reviser_output, dict) or not records:
+            return records
+        records_by_id = {
+            str(item.get("topic_id") or "").strip(): item
+            for item in records
+            if str(item.get("topic_id") or "").strip()
+        }
+        for item in reviser_output.get("topic_resolution_map", []) or []:
+            if not isinstance(item, dict):
+                continue
+            topic_id = str(item.get("topic_id") or "").strip()
+            if not topic_id:
+                continue
+            record = records_by_id.get(topic_id)
+            if record is None:
+                continue
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is not None:
+                record["recommendation_index"] = recommendation_index
+        return records
+
     def _serialized_issue_ledger(self) -> list[dict[str, Any]]:
-        return [json.loads(json.dumps(record)) for record in self.issue_ledger]
+        return [self._serialized_issue_record(record) for record in self.issue_ledger]
+
+    def _serialized_topic_ledger(self) -> list[dict[str, Any]]:
+        return [self._serialized_topic_record(record) for record in self.topic_ledger]
+
+    @staticmethod
+    def _serialized_issue_record(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "issue_id": str(record.get("issue_id") or ""),
+            "source_stage_id": str(record.get("source_stage_id") or ""),
+            "first_seen_round": record.get("first_seen_round"),
+            "last_seen_round": record.get("last_seen_round"),
+            "severity": str(record.get("severity") or ""),
+            "kind": str(record.get("kind") or ""),
+            "blocking_class": str(record.get("blocking_class") or ""),
+            "recommendation_index": record.get("recommendation_index"),
+            "title": str(record.get("title") or ""),
+            "evidence": str(record.get("evidence") or ""),
+            "repair_hint": str(record.get("repair_hint") or ""),
+            "why_not_raised_earlier": record.get("why_not_raised_earlier"),
+            "resolution_status": str(record.get("resolution_status") or ""),
+            "resolution_note": str(record.get("resolution_note") or ""),
+        }
+
+    @staticmethod
+    def _serialized_topic_record(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "topic_id": str(record.get("topic_id") or ""),
+            "title": str(record.get("title") or ""),
+            "severity": str(record.get("severity") or ""),
+            "evidence": str(record.get("evidence") or ""),
+            "recommendation_index": record.get("recommendation_index"),
+            "introduced_by": str(record.get("introduced_by") or ""),
+            "introduced_in_stage_index": record.get("introduced_in_stage_index"),
+            "resolution_status": str(record.get("resolution_status") or ""),
+            "resolution_note": str(record.get("resolution_note") or ""),
+            "resolved_in_stage_index": record.get("resolved_in_stage_index"),
+        }
+
+    @classmethod
+    def _validation_issue_record(cls, record: dict[str, Any]) -> dict[str, Any]:
+        serialized = cls._serialized_issue_record(record)
+        serialized[_PRIOR_SURFACED_REFS_FIELD] = cls._normalized_internal_ref_list(
+            record.get(_PRIOR_SURFACED_REFS_FIELD)
+        )
+        return serialized
+
+    @classmethod
+    def _validation_topic_record(cls, record: dict[str, Any]) -> dict[str, Any]:
+        serialized = cls._serialized_topic_record(record)
+        serialized[_PRIOR_SURFACED_REFS_FIELD] = cls._normalized_internal_ref_list(
+            record.get(_PRIOR_SURFACED_REFS_FIELD)
+        )
+        return serialized
+
+    @staticmethod
+    def _normalized_internal_ref_list(values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        return HarnessRunner._dedupe_preserving_order(
+            [str(value).strip() for value in values if str(value).strip()]
+        )
+
+    @staticmethod
+    def _topic_resolution_status_from_reviewer_classification(
+        *,
+        topic_id: str,
+        resolved_topic_ids: set[str],
+        waived_topic_ids: set[str],
+        current_topic_ids: set[str],
+        carried_topic_ids: set[str],
+        resolution_entry: dict[str, Any] | None,
+    ) -> str:
+        if topic_id in resolved_topic_ids:
+            return "addressed"
+        if topic_id in waived_topic_ids:
+            resolution_status = (
+                str((resolution_entry or {}).get("status") or "").strip().lower()
+            )
+            if resolution_status == "disagree":
+                return "disagree"
+            return "waived"
+        if topic_id in current_topic_ids or topic_id in carried_topic_ids:
+            return "carried_forward"
+        return "carried_forward"
 
     def _normalize_review_issue(
         self,
@@ -1109,30 +2536,74 @@ class HarnessRunner:
         if not issue_id:
             issue_id = self._next_issue_id(reserved_ids)
         normalized["issue_id"] = issue_id
-        normalized["severity"] = str(normalized.get("severity") or "low").strip().lower()
+        normalized["severity"] = (
+            str(normalized.get("severity") or "low").strip().lower()
+        )
         normalized["kind"] = str(normalized.get("kind") or "other").strip().lower()
-        normalized["blocking_class"] = str(
-            normalized.get("blocking_class") or default_blocking_class_for_kind(normalized.get("kind"))
-        ).strip().lower()
+        normalized["blocking_class"] = (
+            str(
+                normalized.get("blocking_class")
+                or default_blocking_class_for_kind(normalized.get("kind"))
+            )
+            .strip()
+            .lower()
+        )
         recommendation_index = normalized.get("recommendation_index")
         try:
             normalized["recommendation_index"] = (
-                None if recommendation_index in (None, "") else int(recommendation_index)
+                None
+                if recommendation_index in (None, "")
+                else int(recommendation_index)
             )
         except (TypeError, ValueError):
             normalized["recommendation_index"] = None
-        normalized["title"] = str(normalized.get("title") or normalized.get("summary") or "Issue")
+        normalized["title"] = str(
+            normalized.get("title") or normalized.get("summary") or "Issue"
+        )
         normalized["evidence"] = str(normalized.get("evidence") or "")
         normalized["repair_hint"] = str(normalized.get("repair_hint") or "")
         why_not_raised_earlier = normalized.get("why_not_raised_earlier")
         normalized["why_not_raised_earlier"] = (
-            None if why_not_raised_earlier in (None, "") else str(why_not_raised_earlier)
+            None
+            if why_not_raised_earlier in (None, "")
+            else str(why_not_raised_earlier)
         )
         if round_index > 0 and issue_id not in self._issue_ledger_by_id:
-            if normalized["severity"] in {"medium", "high", "critical"} and not normalized["why_not_raised_earlier"]:
+            if (
+                normalized["severity"] in {"medium", "high", "critical"}
+                and not normalized["why_not_raised_earlier"]
+            ):
                 self.warnings.append(
                     f"{issue_id} was introduced as a new medium-or-higher issue in round {round_index} without why_not_raised_earlier."
                 )
+        return normalized
+
+    def _normalize_review_topic(
+        self,
+        topic: dict[str, Any],
+        *,
+        reserved_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        normalized = dict(topic)
+        topic_id = str(normalized.get("topic_id") or "").strip()
+        if not topic_id:
+            topic_id = self._next_topic_id(reserved_ids)
+        normalized["topic_id"] = topic_id
+        normalized["severity"] = (
+            str(normalized.get("severity") or "low").strip().lower()
+        )
+        recommendation_index = normalized.get("recommendation_index")
+        try:
+            normalized["recommendation_index"] = (
+                None
+                if recommendation_index in (None, "")
+                else int(recommendation_index)
+            )
+        except (TypeError, ValueError):
+            normalized["recommendation_index"] = None
+        normalized["title"] = str(normalized.get("title") or "Topic")
+        normalized["evidence"] = str(normalized.get("evidence") or "")
+        normalized["repair_hint"] = str(normalized.get("repair_hint") or "")
         return normalized
 
     def _resolution_note_from_reviser(
@@ -1154,6 +2625,35 @@ class HarnessRunner:
             return " | ".join(note_bits)
         return ""
 
+    def _topic_resolution_note_from_reviser(
+        self,
+        reviser_output: dict[str, Any] | None,
+        topic_id: str,
+    ) -> str:
+        entry = self._topic_resolution_entry_from_reviser(reviser_output, topic_id)
+        if not isinstance(entry, dict):
+            return ""
+        status = str(entry.get("status") or "")
+        change_summary = str(entry.get("change_summary") or "")
+        residual_risk = str(entry.get("residual_risk") or "")
+        note_bits = [bit for bit in (status, change_summary, residual_risk) if bit]
+        return " | ".join(note_bits)
+
+    @staticmethod
+    def _topic_resolution_entry_from_reviser(
+        reviser_output: dict[str, Any] | None,
+        topic_id: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(reviser_output, dict):
+            return None
+        for item in reviser_output.get("topic_resolution_map", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("topic_id") or "") != topic_id:
+                continue
+            return item
+        return None
+
     def _ingest_review_payload(
         self,
         review_payload: dict[str, Any],
@@ -1165,7 +2665,8 @@ class HarnessRunner:
         if not isinstance(review_payload, dict) or not review_payload:
             return
 
-        stage_id = f"stage-{self.stage_counter:02d}-{slugify(role_name)}"
+        stage_index = self.stage_counter
+        stage_id = f"stage-{stage_index:02d}-{slugify(role_name)}"
         prior_open_ids = {
             str(record.get("issue_id"))
             for record in self.issue_ledger
@@ -1184,10 +2685,64 @@ class HarnessRunner:
             reserved_ids.add(str(normalized_issue.get("issue_id")))
             normalized_issues.append(normalized_issue)
         current_issue_ids = {str(item.get("issue_id")) for item in normalized_issues}
-        resolved_ids = {str(item) for item in review_payload.get("resolved_issue_ids", []) if str(item).strip()}
-        carried_ids = {str(item) for item in review_payload.get("carried_forward_issue_ids", []) if str(item).strip()}
-        waived_ids = {str(item) for item in review_payload.get("waived_issue_ids", []) if str(item).strip()}
-        normalized_by_id = {str(item.get("issue_id")): item for item in normalized_issues}
+        resolved_ids = {
+            str(item)
+            for item in review_payload.get("resolved_issue_ids", [])
+            if str(item).strip()
+        }
+        carried_ids = {
+            str(item)
+            for item in review_payload.get("carried_forward_issue_ids", [])
+            if str(item).strip()
+        }
+        waived_ids = {
+            str(item)
+            for item in review_payload.get("waived_issue_ids", [])
+            if str(item).strip()
+        }
+        prior_open_topic_ids = {
+            str(record.get("topic_id"))
+            for record in self.topic_ledger
+            if str(record.get("resolution_status") or "") in {"open", "carried_forward"}
+        }
+        normalized_topics = []
+        reserved_topic_ids = set(self._topic_ledger_by_id)
+        for topic in review_payload.get("topics", []) or []:
+            if not isinstance(topic, dict):
+                continue
+            normalized_topic = self._normalize_review_topic(
+                topic,
+                reserved_ids=reserved_topic_ids,
+            )
+            reserved_topic_ids.add(str(normalized_topic.get("topic_id")))
+            normalized_topics.append(normalized_topic)
+        current_topic_ids = {str(item.get("topic_id")) for item in normalized_topics}
+        resolved_topic_ids = {
+            str(item)
+            for item in review_payload.get("resolved_topic_ids", [])
+            if str(item).strip()
+        }
+        carried_topic_ids = {
+            str(item)
+            for item in review_payload.get("carried_forward_topic_ids", [])
+            if str(item).strip()
+        }
+        waived_topic_ids = {
+            str(item)
+            for item in review_payload.get("waived_topic_ids", [])
+            if str(item).strip()
+        }
+        recommendation_review_proof_by_index = (
+            self._recommendation_review_proof_by_index(review_payload)
+        )
+        issue_closure_review_map = self._scoped_closure_review_map(
+            review_payload.get("issue_closure_reviews"),
+            id_field="issue_id",
+        )
+        topic_closure_review_map = self._scoped_closure_review_map(
+            review_payload.get("topic_closure_reviews"),
+            id_field="topic_id",
+        )
 
         for issue_id in prior_open_ids:
             record = self._issue_ledger_by_id.get(issue_id)
@@ -1195,7 +2750,9 @@ class HarnessRunner:
                 continue
             if issue_id in resolved_ids:
                 record["resolution_status"] = "resolved"
-                record["resolution_note"] = self._resolution_note_from_reviser(reviser_output, issue_id)
+                record["resolution_note"] = self._resolution_note_from_reviser(
+                    reviser_output, issue_id
+                )
                 record["last_seen_round"] = round_index
             elif issue_id in waived_ids:
                 record["resolution_status"] = "waived"
@@ -1250,6 +2807,129 @@ class HarnessRunner:
                 }
                 self.issue_ledger.append(record)
                 self._issue_ledger_by_id[issue_id] = record
+            self._refresh_issue_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+            )
+
+        for topic_id in prior_open_topic_ids:
+            record = self._topic_ledger_by_id.get(topic_id)
+            if record is None:
+                continue
+            resolution_entry = self._topic_resolution_entry_from_reviser(
+                reviser_output, topic_id
+            )
+            resolution_note = self._topic_resolution_note_from_reviser(
+                reviser_output, topic_id
+            )
+            resolution_recommendation_index = None
+            if isinstance(resolution_entry, dict):
+                raw_resolution_recommendation_index = resolution_entry.get(
+                    "recommendation_index"
+                )
+                if raw_resolution_recommendation_index not in (None, ""):
+                    try:
+                        resolution_recommendation_index = int(
+                            raw_resolution_recommendation_index
+                        )
+                    except (TypeError, ValueError):
+                        resolution_recommendation_index = None
+            if resolution_recommendation_index is not None:
+                record["recommendation_index"] = resolution_recommendation_index
+            if topic_id in resolved_topic_ids:
+                record["resolution_status"] = "addressed"
+                if resolution_note:
+                    record["resolution_note"] = resolution_note
+                record["resolved_in_stage_index"] = stage_index
+            elif topic_id in waived_topic_ids:
+                record["resolution_status"] = (
+                    self._topic_resolution_status_from_reviewer_classification(
+                        topic_id=topic_id,
+                        resolved_topic_ids=resolved_topic_ids,
+                        waived_topic_ids=waived_topic_ids,
+                        current_topic_ids=current_topic_ids,
+                        carried_topic_ids=carried_topic_ids,
+                        resolution_entry=resolution_entry,
+                    )
+                )
+                if resolution_note:
+                    record["resolution_note"] = resolution_note
+                record["resolved_in_stage_index"] = stage_index
+            elif topic_id in current_topic_ids or topic_id in carried_topic_ids:
+                record["resolution_status"] = "carried_forward"
+                if resolution_note:
+                    record["resolution_note"] = resolution_note
+                record["resolved_in_stage_index"] = None
+            else:
+                self.warnings.append(
+                    f"Review stage '{role_name}' did not explicitly classify prior open topic {topic_id}; treating it as carried_forward."
+                )
+                record["resolution_status"] = "carried_forward"
+                if resolution_note:
+                    record["resolution_note"] = resolution_note
+                record["resolved_in_stage_index"] = None
+
+        for topic in normalized_topics:
+            topic_id = str(topic.get("topic_id"))
+            if topic_id in self._topic_ledger_by_id:
+                if topic_id not in prior_open_topic_ids:
+                    raise ValueError(
+                        f"Review stage '{role_name}' reused historical topic ID {topic_id} even though it is not currently open."
+                    )
+                record = self._topic_ledger_by_id[topic_id]
+                record.update(
+                    {
+                        "severity": topic.get("severity"),
+                        "title": topic.get("title"),
+                        "evidence": topic.get("evidence"),
+                        "repair_hint": topic.get("repair_hint"),
+                        "resolution_status": "carried_forward",
+                        "resolved_in_stage_index": None,
+                    }
+                )
+                topic_recommendation_index = topic.get("recommendation_index")
+                if topic_recommendation_index not in (None, ""):
+                    record["recommendation_index"] = topic_recommendation_index
+            else:
+                record = {
+                    "topic_id": topic_id,
+                    "severity": topic.get("severity"),
+                    "recommendation_index": topic.get("recommendation_index"),
+                    "title": topic.get("title"),
+                    "evidence": topic.get("evidence"),
+                    "repair_hint": topic.get("repair_hint"),
+                    "introduced_by": role_name,
+                    "introduced_in_stage_index": stage_index,
+                    "resolution_status": "open",
+                    "resolution_note": "",
+                    "resolved_in_stage_index": None,
+                }
+                self.topic_ledger.append(record)
+                self._topic_ledger_by_id[topic_id] = record
+            self._refresh_topic_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+            )
+
+        for issue_id in resolved_ids | carried_ids | waived_ids:
+            record = self._issue_ledger_by_id.get(issue_id)
+            if record is None:
+                continue
+            self._refresh_issue_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+                issue_closure_review_map=issue_closure_review_map,
+            )
+
+        for topic_id in resolved_topic_ids | carried_topic_ids | waived_topic_ids:
+            record = self._topic_ledger_by_id.get(topic_id)
+            if record is None:
+                continue
+            self._refresh_topic_prior_surfaced_refs(
+                record,
+                recommendation_review_proof_by_index=recommendation_review_proof_by_index,
+                topic_closure_review_map=topic_closure_review_map,
+            )
 
     @staticmethod
     def _recommendation_reviews(review_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1260,12 +2940,27 @@ class HarnessRunner:
         reviews.sort(key=lambda item: int(item.get("recommendation_index") or 0))
         return reviews
 
-    def _accepted_recommendation_reviews(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def _accepted_recommendation_reviews(
+        self, review_payload: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         return [
             item
             for item in self._recommendation_reviews(review_payload)
-            if str(item.get("verdict") or "").strip().lower() in {"accept", "accept_with_caveat"}
+            if str(item.get("verdict") or "").strip().lower()
+            in {"accept", "accept_with_caveat"}
         ]
+
+    def _accepted_recommendation_indices(
+        self, review_payload: dict[str, Any]
+    ) -> list[int]:
+        accepted_indices: list[int] = []
+        for item in self._accepted_recommendation_reviews(review_payload):
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is not None:
+                accepted_indices.append(recommendation_index)
+        return sorted(set(accepted_indices))
 
     def _has_recommendation_caveats(self, review_payload: dict[str, Any]) -> bool:
         return any(
@@ -1273,13 +2968,461 @@ class HarnessRunner:
             for item in self._recommendation_reviews(review_payload)
         )
 
+    def _accepted_caveat_recommendation_indices(
+        self, review_payload: dict[str, Any]
+    ) -> list[int]:
+        indices: list[int] = []
+        for item in self._recommendation_reviews(review_payload):
+            if str(item.get("verdict") or "").strip().lower() != "accept_with_caveat":
+                continue
+            try:
+                indices.append(int(item.get("recommendation_index")))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(indices))
+
+    def _accepted_inferred_recommendation_indices(
+        self,
+        final_analysis_payload: dict[str, Any] | None,
+        review_payload: dict[str, Any],
+    ) -> list[int]:
+        if not isinstance(final_analysis_payload, dict):
+            return []
+        recommendations = final_analysis_payload.get("recommendations")
+        if not isinstance(recommendations, list):
+            return []
+        accepted_indices = set(self._accepted_recommendation_indices(review_payload))
+        inferred_indices: list[int] = []
+        for index, item in enumerate(recommendations, start=1):
+            if index not in accepted_indices or not isinstance(item, dict):
+                continue
+            if str(item.get("grounding_mode") or "").strip().lower() == "inferred":
+                inferred_indices.append(index)
+        return inferred_indices
+
+    def _build_recommendation_admissibility(
+        self,
+        *,
+        final_analysis_payload: dict[str, Any],
+        final_review_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        contract = self._analysis_contract()
+        empty_status = RecommendationAdmissibilityStatus()
+
+        recommendations = final_analysis_payload.get("recommendations")
+        if not isinstance(recommendations, list):
+            return empty_status.to_dict()
+
+        review_by_index: dict[int, dict[str, Any]] = {}
+        for item in self._recommendation_reviews(final_review_payload):
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is not None:
+                review_by_index[recommendation_index] = item
+
+        topic_blocked_indices = set(
+            partial_accept_topic_eligibility(
+                self.topic_ledger,
+                accepted_recommendation_indices=self._accepted_recommendation_indices(
+                    final_review_payload
+                ),
+            )["blocked_recommendation_indices"]
+        )
+
+        final_indices: list[int] = []
+        partial_only_indices: list[int] = []
+        excluded_indices: list[int] = []
+        reasons_by_index: dict[str, list[str]] = {}
+
+        for recommendation_index, recommendation in enumerate(recommendations, start=1):
+            if not isinstance(recommendation, dict):
+                excluded_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = ["not_accepted"]
+                continue
+
+            if recommendation_index in topic_blocked_indices:
+                excluded_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = ["topic_blocked"]
+                continue
+
+            review = review_by_index.get(recommendation_index) or {}
+            verdict = str(review.get("verdict") or "").strip().lower()
+            if verdict not in {"accept", "accept_with_caveat"}:
+                excluded_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = ["not_accepted"]
+                continue
+
+            reasons: list[str] = []
+            if contract.mode == "trust":
+                if verdict == "accept_with_caveat":
+                    reasons.append("accepted_with_caveat")
+                if (
+                    str(recommendation.get("grounding_mode") or "").strip().lower()
+                    == "inferred"
+                ):
+                    reasons.append("inferred_grounding")
+
+            if reasons:
+                partial_only_indices.append(recommendation_index)
+                reasons_by_index[str(recommendation_index)] = reasons
+                continue
+
+            final_indices.append(recommendation_index)
+
+        return RecommendationAdmissibilityStatus(
+            final_answer_recommendation_indices=final_indices,
+            partial_only_recommendation_indices=partial_only_indices,
+            excluded_recommendation_indices=excluded_indices,
+            reasons_by_recommendation_index=reasons_by_index,
+        ).to_dict()
+
+    def _latest_successful_stage(
+        self, *, role_names: set[str] | None = None
+    ) -> dict[str, Any] | None:
+        for stage in reversed(self.agent_stages):
+            if not isinstance(stage, dict) or not stage.get("ok"):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if role_names is not None and role_name not in role_names:
+                continue
+            payload = stage.get("structured_output")
+            if isinstance(payload, dict) and payload:
+                return stage
+        return None
+
+    def _final_semantic_warning_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        final_stages = [
+            self._resolve_bounded_review_analysis_stage(),
+            self._latest_successful_stage(role_names={"critic", "auditor"}),
+        ]
+        seen_keys: set[tuple[Any, Any, Any]] = set()
+        for stage in final_stages:
+            if not isinstance(stage, dict):
+                continue
+            for warning in stage.get("semantic_validation_warnings") or []:
+                key = (stage.get("stage_index"), stage.get("role_name"), warning)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                records.append(
+                    {
+                        "stage_index": stage.get("stage_index"),
+                        "role_name": stage.get("role_name"),
+                        "warning": warning,
+                    }
+                )
+        return records
+
+    def _final_payload_provenance_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        contract = self._analysis_contract()
+        if (
+            contract.mode == "trust"
+            and contract.trust_review.execution_mode == "attestation_over_bounded"
+        ):
+            stage_specs = (
+                (
+                    "review",
+                    self._latest_successful_stage(role_names={"critic", "auditor"}),
+                ),
+            )
+        else:
+            stage_specs = (
+                ("analysis", self._resolve_bounded_review_analysis_stage()),
+                (
+                    "review",
+                    self._latest_successful_stage(role_names={"critic", "auditor"}),
+                ),
+            )
+        for surface, stage in stage_specs:
+            if not isinstance(stage, dict):
+                continue
+            provenance = stage.get("semantic_validation_payload_provenance")
+            if not isinstance(provenance, dict):
+                provenance = {"status": "missing"}
+            status = provenance.get("status") or "missing"
+            if (
+                surface == "review"
+                and status == "bound"
+                and provenance.get("policy_mode") == "payload_hash_and_refs"
+                and not bool(provenance.get("closure_provenance_satisfied"))
+            ):
+                status = "insufficient"
+            record = {
+                "surface": surface,
+                "stage_index": stage.get("stage_index"),
+                "role_name": stage.get("role_name"),
+                "status": status,
+                "policy_mode": provenance.get("policy_mode") or "none",
+                "payload_sha256": provenance.get("payload_sha256"),
+                "normalized_ref_field_count": provenance.get(
+                    "normalized_ref_field_count", 0
+                ),
+                "normalized_ref_count": provenance.get("normalized_ref_count", 0),
+                "recommendation_review_ref_field_count": provenance.get(
+                    "recommendation_review_ref_field_count",
+                    0,
+                ),
+                "recommendation_review_ref_count": provenance.get(
+                    "recommendation_review_ref_count",
+                    0,
+                ),
+                "issue_closure_review_ref_count": provenance.get(
+                    "issue_closure_review_ref_count",
+                    0,
+                ),
+                "topic_closure_review_ref_count": provenance.get(
+                    "topic_closure_review_ref_count",
+                    0,
+                ),
+                "closure_provenance_satisfied": bool(
+                    provenance.get("closure_provenance_satisfied")
+                ),
+                "covered_recommendation_indices": list(
+                    provenance.get("covered_recommendation_indices") or []
+                ),
+                "uncovered_recommendation_indices": list(
+                    provenance.get("uncovered_recommendation_indices") or []
+                ),
+                "closure_complete_issue_ids": list(
+                    provenance.get("closure_complete_issue_ids") or []
+                ),
+                "closure_complete_topic_ids": list(
+                    provenance.get("closure_complete_topic_ids") or []
+                ),
+                "uncovered_global_issue_ids": list(
+                    provenance.get("uncovered_global_issue_ids") or []
+                ),
+                "uncovered_global_topic_ids": list(
+                    provenance.get("uncovered_global_topic_ids") or []
+                ),
+                "closure_proof_by_id": dict(
+                    provenance.get("closure_proof_by_id") or {}
+                ),
+            }
+            records.append(record)
+        return records
+
+    def _final_payload_provenance_status(self) -> str:
+        records = self._final_payload_provenance_records()
+        if not records:
+            return "missing"
+        statuses = {str(item.get("status") or "missing") for item in records}
+        if "insufficient" in statuses:
+            return "insufficient"
+        if statuses == {"bound"}:
+            return "bound"
+        if "bound" in statuses:
+            return "partial"
+        if "not_required" in statuses and statuses <= {"not_required", "missing"}:
+            return "not_required"
+        return "missing"
+
+    def _build_analysis_review_status(
+        self,
+        *,
+        final_analysis_payload: dict[str, Any],
+        final_review_payload: dict[str, Any],
+        content_verdict: str,
+    ) -> dict[str, Any]:
+        contract = self._analysis_contract()
+        semantic_warning_records = self._final_semantic_warning_records()
+        provenance_records = self._final_payload_provenance_records()
+        accepted_caveat_indices = self._accepted_caveat_recommendation_indices(
+            final_review_payload
+        )
+        inferred_indices = self._accepted_inferred_recommendation_indices(
+            final_analysis_payload,
+            final_review_payload,
+        )
+        downgrade_causes = self._analysis_warning_causes(
+            final_review_payload,
+            final_analysis_payload=final_analysis_payload,
+        )
+        provenance_status = self._final_payload_provenance_status()
+        open_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger, status_name="open"
+        )
+        carried_forward_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger,
+            status_name="carried_forward",
+        )
+        waived_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger, status_name="waived"
+        )
+        resolved_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger, status_name="resolved"
+        )
+        disagreed_topic_ids = topic_ids_for_status_name(
+            self.topic_ledger, status_name="disagreed"
+        )
+        review_provenance = next(
+            (
+                item
+                for item in provenance_records
+                if str(item.get("surface") or "") == "review"
+            ),
+            {},
+        )
+        if (
+            contract.trust_review.payload_provenance_mode == "none"
+            and provenance_status == "missing"
+        ):
+            provenance_status = "not_required"
+        publishability = self._analysis_publishability(content_verdict=content_verdict)
+        recommendation_admissibility = self._build_recommendation_admissibility(
+            final_analysis_payload=final_analysis_payload,
+            final_review_payload=final_review_payload,
+        )
+        primary_seam = self._canonical_primary_seam(final_analysis_payload)
+        secondary_seams_considered = self._canonical_secondary_seams_considered(
+            final_analysis_payload
+        )
+        recommendation_seam_bindings = self._canonical_recommendation_seam_bindings(
+            final_analysis_payload
+        )
+        scope_escapes = self._canonical_analysis_scope_escapes(final_analysis_payload)
+        return {
+            "mode": contract.mode,
+            "content_verdict": content_verdict,
+            "primary_seam": primary_seam,
+            "secondary_seams_considered": secondary_seams_considered,
+            "recommendation_seam_bindings": recommendation_seam_bindings,
+            "scope_escapes": scope_escapes,
+            "semantic_warning_count": len(semantic_warning_records),
+            "semantic_warnings": semantic_warning_records,
+            "provenance": {
+                "status": provenance_status,
+                "policy_mode": contract.trust_review.payload_provenance_mode,
+                "required": contract.trust_review.payload_provenance_mode
+                == "payload_hash_and_refs",
+                "issue_closure_review_ref_count": review_provenance.get(
+                    "issue_closure_review_ref_count",
+                    0,
+                ),
+                "topic_closure_review_ref_count": review_provenance.get(
+                    "topic_closure_review_ref_count",
+                    0,
+                ),
+                "closure_complete_issue_ids": list(
+                    review_provenance.get("closure_complete_issue_ids") or []
+                ),
+                "closure_complete_topic_ids": list(
+                    review_provenance.get("closure_complete_topic_ids") or []
+                ),
+                "uncovered_recommendation_indices": list(
+                    review_provenance.get("uncovered_recommendation_indices") or []
+                ),
+                "uncovered_global_issue_ids": list(
+                    review_provenance.get("uncovered_global_issue_ids") or []
+                ),
+                "uncovered_global_topic_ids": list(
+                    review_provenance.get("uncovered_global_topic_ids") or []
+                ),
+                "closure_proof_by_id": dict(
+                    review_provenance.get("closure_proof_by_id") or {}
+                ),
+                "stages": provenance_records,
+            },
+            "accepted_recommendations_with_caveats": accepted_caveat_indices,
+            "accepted_recommendations_with_inferred_grounding": inferred_indices,
+            "open_topic_ids": open_topic_ids,
+            "carried_forward_topic_ids": carried_forward_topic_ids,
+            "waived_topic_ids": waived_topic_ids,
+            "resolved_topic_ids": resolved_topic_ids,
+            "disagreed_topic_ids": disagreed_topic_ids,
+            "topic_ledger_count": len(self.topic_ledger),
+            "downgrade_causes": downgrade_causes,
+            "recommendation_admissibility": recommendation_admissibility,
+            "publishability": publishability,
+        }
+
+    @staticmethod
+    def _canonical_primary_seam(
+        final_analysis_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        primary_seam = final_analysis_payload.get("primary_seam")
+        if not isinstance(primary_seam, dict):
+            return None
+        return json.loads(json.dumps(primary_seam))
+
+    @staticmethod
+    def _canonical_secondary_seams_considered(
+        final_analysis_payload: dict[str, Any],
+    ) -> list[Any]:
+        secondary_seams_considered = final_analysis_payload.get(
+            "secondary_seams_considered"
+        )
+        if not isinstance(secondary_seams_considered, list):
+            return []
+        return json.loads(json.dumps(secondary_seams_considered))
+
+    @staticmethod
+    def _canonical_recommendation_seam_bindings(
+        final_analysis_payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        recommendations = final_analysis_payload.get("recommendations")
+        if not isinstance(recommendations, list):
+            return []
+        bindings: list[dict[str, Any]] = []
+        for recommendation_index, item in enumerate(recommendations, start=1):
+            if not isinstance(item, dict):
+                continue
+            bindings.append(
+                {
+                    "recommendation_index": recommendation_index,
+                    "seam_id": item.get("seam_id"),
+                    "seam_expansion_reason": item.get("seam_expansion_reason"),
+                }
+            )
+        return bindings
+
+    @staticmethod
+    def _canonical_analysis_scope_escapes(
+        final_analysis_payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        scope_escapes = final_analysis_payload.get("scope_escapes")
+        if not isinstance(scope_escapes, list):
+            return []
+        return json.loads(
+            json.dumps([item for item in scope_escapes if isinstance(item, dict)])
+        )
+
+    def _resolve_final_analysis_stage(self) -> dict[str, Any] | None:
+        for stage in reversed(self.agent_stages):
+            if not isinstance(stage, dict):
+                continue
+            role_name = str(stage.get("role_name") or "").strip()
+            if role_name == "proposer" or role_name.startswith("reviser_round_"):
+                payload = stage.get("structured_output")
+                if stage.get("ok") and isinstance(payload, dict) and payload:
+                    return stage
+        return None
+
+    @staticmethod
+    def _analysis_stage_round_index(role_name: str) -> int:
+        normalized = str(role_name or "").strip()
+        if normalized == "proposer":
+            return 0
+        if normalized.startswith("reviser_round_"):
+            suffix = normalized.removeprefix("reviser_round_")
+            try:
+                return int(suffix)
+            except ValueError:
+                return 0
+        return 0
+
     def _blocking_issues(self, review_payload: dict[str, Any]) -> list[dict[str, Any]]:
         blocking: list[dict[str, Any]] = []
         for issue in review_payload.get("issues", []) or []:
             if not isinstance(issue, dict):
                 continue
             severity = str(issue.get("severity") or "").strip().lower()
-            blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
+            blocking_class = (
+                str(issue.get("blocking_class") or "presentation").strip().lower()
+            )
             if severity in {"medium", "high", "critical"} and blocking_class in {
                 "correctness",
                 "actionability",
@@ -1317,13 +3460,17 @@ class HarnessRunner:
             return False
         if str(review_payload.get("verdict") or "").strip().lower() != "accept":
             return False
-        if self._count_review_issues(review_payload, {"medium", "high", "critical"}) > 0:
+        if (
+            self._count_review_issues(review_payload, {"medium", "high", "critical"})
+            > 0
+        ):
             return False
         if self._score_threshold_failures(review_payload):
             return False
         recommendation_reviews = self._recommendation_reviews(review_payload)
         if recommendation_reviews and any(
-            str(item.get("verdict") or "").strip().lower() not in {"accept", "accept_with_caveat"}
+            str(item.get("verdict") or "").strip().lower()
+            not in {"accept", "accept_with_caveat"}
             for item in recommendation_reviews
         ):
             return False
@@ -1340,40 +3487,89 @@ class HarnessRunner:
         accepted_reviews = self._accepted_recommendation_reviews(review_payload)
         if len(accepted_reviews) < policy.min_accepted_recommendations:
             return False
+        if (
+            contract.mode == "trust"
+            and contract.trust_review.payload_provenance_mode == "payload_hash_and_refs"
+        ):
+            provenance_status = self._final_payload_provenance_status()
+            if provenance_status != "bound":
+                return False
 
-        issues_by_id: dict[str, dict[str, Any]] = {}
+        accepted_recommendation_indices: list[int] = []
+        accepted_issue_ids: set[str] = set()
+        for review in accepted_reviews:
+            raw_index = review.get("recommendation_index")
+            if raw_index in (None, ""):
+                pass
+            else:
+                try:
+                    accepted_recommendation_indices.append(int(raw_index))
+                except (TypeError, ValueError):
+                    pass
+            for issue_id in review.get("open_issue_ids", []) or []:
+                normalized_issue_id = str(issue_id or "").strip()
+                if normalized_issue_id:
+                    accepted_issue_ids.add(normalized_issue_id)
+
+        accepted_recommendation_index_set = set(accepted_recommendation_indices)
         for issue in review_payload.get("issues", []) or []:
             if not isinstance(issue, dict):
                 continue
-            issues_by_id[str(issue.get("issue_id") or "")] = issue
-            severity = str(issue.get("severity") or "").strip().lower()
-            recommendation_index = issue.get("recommendation_index")
-            blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
-            if recommendation_index in (None, "") and severity in {"medium", "high", "critical"} and blocking_class in {
-                "correctness",
-                "actionability",
-                "completeness",
-            }:
-                return False
-            if recommendation_index in (None, "") and severity in {"high", "critical"}:
+            if self._issue_blocks_partial_accept(
+                issue,
+                accepted_recommendation_indices=accepted_recommendation_index_set,
+                accepted_issue_ids=accepted_issue_ids,
+                policy=policy,
+            ):
                 return False
 
-        for review in accepted_reviews:
-            for issue_id in review.get("open_issue_ids", []) or []:
-                issue = issues_by_id.get(str(issue_id))
-                if not isinstance(issue, dict):
-                    continue
-                severity = str(issue.get("severity") or "").strip().lower()
-                blocking_class = str(issue.get("blocking_class") or "presentation").strip().lower()
-                if severity in {"high", "critical"}:
-                    return False
-                if severity == "medium" and blocking_class in {
-                    "correctness",
-                    "actionability",
-                    "completeness",
-                }:
-                    return False
+        topic_eligibility = partial_accept_topic_eligibility(
+            self.topic_ledger,
+            accepted_recommendation_indices=accepted_recommendation_indices,
+        )
+        if topic_eligibility["global_blocking_topic_ids"]:
+            return False
+        if (
+            len(topic_eligibility["eligible_recommendation_indices"])
+            < policy.min_accepted_recommendations
+        ):
+            return False
 
+        return True
+
+    @staticmethod
+    def _issue_blocks_partial_accept(
+        issue: dict[str, Any],
+        *,
+        accepted_recommendation_indices: set[int],
+        accepted_issue_ids: set[str],
+        policy: PartialAcceptancePolicy,
+    ) -> bool:
+        severity = str(issue.get("severity") or "").strip().lower()
+        if severity not in {"medium", "high", "critical"}:
+            return False
+
+        issue_id = str(issue.get("issue_id") or "").strip()
+        recommendation_index = HarnessRunner._normalized_recommendation_index(
+            issue.get("recommendation_index")
+        )
+        if recommendation_index is None:
+            return True
+        if (
+            recommendation_index not in accepted_recommendation_indices
+            and issue_id not in accepted_issue_ids
+        ):
+            return False
+        if severity in {"high", "critical"}:
+            return True
+
+        blocking_class = (
+            str(issue.get("blocking_class") or "presentation").strip().lower()
+        )
+        if blocking_class == "correctness":
+            return policy.forbid_correctness_blockers_on_accepted_recommendations
+        if blocking_class in {"actionability", "completeness", "presentation"}:
+            return not policy.allow_localized_medium_non_correctness_issues
         return True
 
     def _require_role(self, role_name: str) -> RoleConfig:
@@ -1381,6 +3577,13 @@ class HarnessRunner:
         if role is None:
             raise HarnessError(f"Strategy requires role: {role_name}")
         return role
+
+    def _focus_gate_role_config(self) -> RoleConfig:
+        role = self.strategy.roles.get("focus_gate")
+        if role is not None:
+            return replace(role, access="read")
+        proposer = self._require_role("proposer")
+        return replace(proposer, access="read")
 
     def _role_or_fallback(self, preferred: str, fallbacks: list[str]) -> RoleConfig:
         if preferred in self.strategy.roles:
@@ -1408,24 +3611,2460 @@ class HarnessRunner:
         rel_str = rel.as_posix().strip("/")
         return [rel_str] if rel_str else []
 
-    def _effective_role_config(self, role_name: str, role_config: RoleConfig) -> RoleConfig:
+    def _strip_workspace_ref_location_suffix(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text or "://" in text:
+            return text
+        match = _WORKSPACE_REF_LOCATION_SUFFIX_RE.match(text)
+        if not match:
+            return text
+        return match.group("path")
+
+    def _normalize_workspace_ref(self, value: str) -> str:
+        return normalize_workspace_ref(value, workspace_root=self.workspace)
+
+    def _normalize_workspace_ref_list(self, values: Any) -> list[str]:
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            return []
+        normalized: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            value = self._normalize_workspace_ref(item)
+            if value:
+                normalized.append(value)
+        return normalized
+
+    @staticmethod
+    def _dedupe_preserving_order(values: list[str]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    def _bind_normalized_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        payload_provenance_mode: str,
+        normalized_refs: dict[str, Any],
+        prior_open_issue_records: list[dict[str, Any]] | None = None,
+        prior_open_topic_records: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        normalized_ref_count = 0
+        for value in normalized_refs.values():
+            if isinstance(value, list):
+                normalized_ref_count += len(value)
+            elif value:
+                normalized_ref_count += 1
+        (
+            recommendation_review_ref_count,
+            recommendation_review_ref_field_count,
+        ) = self._recommendation_review_ref_stats(normalized_refs)
+        issue_closure_review_ref_count = self._scoped_closure_review_ref_count(
+            normalized_refs,
+            prefix="issue_closure_reviews[",
+        )
+        topic_closure_review_ref_count = self._scoped_closure_review_ref_count(
+            normalized_refs,
+            prefix="topic_closure_reviews[",
+        )
+        coverage = self._review_payload_ref_coverage(
+            payload,
+            prior_open_issue_records=prior_open_issue_records,
+            prior_open_topic_records=prior_open_topic_records,
+        )
+        closure_provenance_satisfied = (
+            not coverage["uncovered_recommendation_indices"]
+            and not coverage["uncovered_global_issue_ids"]
+            and not coverage["uncovered_global_topic_ids"]
+        )
+        if payload_provenance_mode == "none":
+            return {
+                "status": "not_required",
+                "policy_mode": payload_provenance_mode,
+                "normalized_ref_field_count": len(normalized_refs),
+                "normalized_ref_count": normalized_ref_count,
+                "recommendation_review_ref_field_count": recommendation_review_ref_field_count,
+                "recommendation_review_ref_count": recommendation_review_ref_count,
+                "issue_closure_review_ref_count": issue_closure_review_ref_count,
+                "topic_closure_review_ref_count": topic_closure_review_ref_count,
+                "closure_provenance_satisfied": closure_provenance_satisfied,
+                **coverage,
+            }
+        serialized = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        return {
+            "status": "bound",
+            "binding_method": "payload_hash_and_refs",
+            "policy_mode": payload_provenance_mode,
+            "payload_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+            "normalized_ref_field_count": len(normalized_refs),
+            "normalized_ref_count": normalized_ref_count,
+            "recommendation_review_ref_field_count": recommendation_review_ref_field_count,
+            "recommendation_review_ref_count": recommendation_review_ref_count,
+            "issue_closure_review_ref_count": issue_closure_review_ref_count,
+            "topic_closure_review_ref_count": topic_closure_review_ref_count,
+            "closure_provenance_satisfied": closure_provenance_satisfied,
+            **coverage,
+            "normalized_refs": normalized_refs,
+        }
+
+    @staticmethod
+    def _normalized_recommendation_index(value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        if normalized < 1:
+            return None
+        return normalized
+
+    @staticmethod
+    def _record_recommendation_index_map(
+        records: list[dict[str, Any]] | None,
+        *,
+        id_field: str,
+    ) -> dict[str, int | None]:
+        mapping: dict[str, int | None] = {}
+        for item in records or []:
+            if not isinstance(item, dict):
+                continue
+            record_id = str(item.get(id_field) or "").strip()
+            if not record_id:
+                continue
+            mapping[record_id] = HarnessRunner._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+        return mapping
+
+    @staticmethod
+    def _recommendation_review_proof_by_index(
+        payload: dict[str, Any],
+    ) -> dict[int, dict[str, Any]]:
+        mapping: dict[int, dict[str, Any]] = {}
+        for item in payload.get("recommendation_reviews", []) or []:
+            if not isinstance(item, dict):
+                continue
+            recommendation_index = HarnessRunner._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is None:
+                continue
+            checked_files = [
+                str(value).strip()
+                for value in (item.get("checked_files") or [])
+                if str(value).strip()
+            ]
+            verified_refs = [
+                str(value).strip()
+                for value in (item.get("verified_evidence_refs") or [])
+                if str(value).strip()
+            ]
+            mapping[recommendation_index] = {
+                "checked_files": checked_files,
+                "verified_evidence_refs": verified_refs,
+                "has_structured_refs": bool(checked_files or verified_refs),
+            }
+        return mapping
+
+    @staticmethod
+    def _structured_ref_union(proof: dict[str, Any] | None) -> list[str]:
+        if not isinstance(proof, dict):
+            return []
+        refs: list[str] = []
+        for field_name in ("verified_evidence_refs", "checked_files"):
+            for value in proof.get(field_name) or []:
+                text = str(value).strip()
+                if text:
+                    refs.append(text)
+        return HarnessRunner._dedupe_preserving_order(refs)
+
+    def _refresh_issue_prior_surfaced_refs(
+        self,
+        record: dict[str, Any],
+        *,
+        recommendation_review_proof_by_index: dict[int, dict[str, Any]],
+        issue_closure_review_map: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        recommendation_index = self._normalized_recommendation_index(
+            record.get("recommendation_index")
+        )
+        surfaced_refs: list[str] = []
+        if recommendation_index is not None:
+            surfaced_refs = self._structured_ref_union(
+                recommendation_review_proof_by_index.get(recommendation_index)
+            )
+        elif issue_closure_review_map is not None:
+            surfaced_refs = self._structured_ref_union(
+                issue_closure_review_map.get(str(record.get("issue_id") or "").strip())
+            )
+        if surfaced_refs:
+            record[_PRIOR_SURFACED_REFS_FIELD] = surfaced_refs
+
+    def _refresh_topic_prior_surfaced_refs(
+        self,
+        record: dict[str, Any],
+        *,
+        recommendation_review_proof_by_index: dict[int, dict[str, Any]],
+        topic_closure_review_map: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        recommendation_index = self._normalized_recommendation_index(
+            record.get("recommendation_index")
+        )
+        surfaced_refs: list[str] = []
+        if recommendation_index is not None:
+            surfaced_refs = self._structured_ref_union(
+                recommendation_review_proof_by_index.get(recommendation_index)
+            )
+        elif topic_closure_review_map is not None:
+            surfaced_refs = self._structured_ref_union(
+                topic_closure_review_map.get(str(record.get("topic_id") or "").strip())
+            )
+        if surfaced_refs:
+            record[_PRIOR_SURFACED_REFS_FIELD] = surfaced_refs
+
+    def _review_payload_ref_coverage(
+        self,
+        payload: dict[str, Any],
+        *,
+        prior_open_issue_records: list[dict[str, Any]] | None,
+        prior_open_topic_records: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        covered_recommendation_indices: set[int] = set()
+        uncovered_recommendation_indices: set[int] = set()
+        recommendation_review_proof_by_index = (
+            self._recommendation_review_proof_by_index(payload)
+        )
+
+        for item in payload.get("recommendation_reviews", []) or []:
+            if not isinstance(item, dict):
+                continue
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if not verdict:
+                continue
+            recommendation_index = self._normalized_recommendation_index(
+                item.get("recommendation_index")
+            )
+            if recommendation_index is None:
+                continue
+            proof = recommendation_review_proof_by_index.get(recommendation_index) or {}
+            checked_files = list(proof.get("checked_files") or [])
+            verified_refs = list(proof.get("verified_evidence_refs") or [])
+            if checked_files or verified_refs:
+                covered_recommendation_indices.add(recommendation_index)
+                uncovered_recommendation_indices.discard(recommendation_index)
+            else:
+                uncovered_recommendation_indices.add(recommendation_index)
+
+        issue_closure_review_map = self._scoped_closure_review_map(
+            payload.get("issue_closure_reviews"),
+            id_field="issue_id",
+        )
+        topic_closure_review_map = self._scoped_closure_review_map(
+            payload.get("topic_closure_reviews"),
+            id_field="topic_id",
+        )
+        uncovered_global_issue_ids: set[str] = set()
+        uncovered_global_topic_ids: set[str] = set()
+        closure_complete_issue_ids: set[str] = set()
+        closure_complete_topic_ids: set[str] = set()
+        closure_proof_by_id: dict[str, dict[str, Any]] = {}
+        prior_open_issue_map = self._record_recommendation_index_map(
+            prior_open_issue_records,
+            id_field="issue_id",
+        )
+        prior_open_topic_map = self._record_recommendation_index_map(
+            prior_open_topic_records,
+            id_field="topic_id",
+        )
+
+        def _record_recommendation_proof(
+            *,
+            record_id: str,
+            classification_status: str,
+            recommendation_index: int,
+        ) -> None:
+            proof = recommendation_review_proof_by_index.get(recommendation_index) or {}
+            closure_proof_by_id[record_id] = {
+                "proof_path": "recommendation",
+                "classification_status": classification_status,
+                "checked_files": list(proof.get("checked_files") or []),
+                "verified_evidence_refs": list(
+                    proof.get("verified_evidence_refs") or []
+                ),
+                "proof_strength": "recommendation_evidence",
+            }
+
+        def _record_scoped_proof(
+            *,
+            record_id: str,
+            classification_status: str,
+            proof: dict[str, Any],
+        ) -> None:
+            closure_proof_by_id[record_id] = {
+                "proof_path": "scoped",
+                "classification_status": classification_status,
+                "checked_files": list(proof.get("checked_files") or []),
+                "verified_evidence_refs": list(
+                    proof.get("verified_evidence_refs") or []
+                ),
+                "proof_strength": "review_attested",
+            }
+
+        def require_issue_coverage(
+            issue_id: str, recommendation_index: int | None
+        ) -> None:
+            if not issue_id:
+                return
+            if recommendation_index is None:
+                return
+            if recommendation_index not in covered_recommendation_indices:
+                uncovered_recommendation_indices.add(recommendation_index)
+
+        def require_topic_coverage(
+            topic_id: str, recommendation_index: int | None
+        ) -> None:
+            if not topic_id:
+                return
+            if recommendation_index is None:
+                return
+            if recommendation_index not in covered_recommendation_indices:
+                uncovered_recommendation_indices.add(recommendation_index)
+
+        def require_classified_issue_closure(
+            issue_id: str,
+            recommendation_index: int | None,
+            *,
+            classification_status: str,
+        ) -> None:
+            if not issue_id:
+                return
+            if recommendation_index is None:
+                proof = issue_closure_review_map.get(issue_id)
+                if proof and proof.get("has_structured_refs"):
+                    closure_complete_issue_ids.add(issue_id)
+                    _record_scoped_proof(
+                        record_id=issue_id,
+                        classification_status=classification_status,
+                        proof=proof,
+                    )
+                else:
+                    uncovered_global_issue_ids.add(issue_id)
+                return
+            if recommendation_index in covered_recommendation_indices:
+                closure_complete_issue_ids.add(issue_id)
+                _record_recommendation_proof(
+                    record_id=issue_id,
+                    classification_status=classification_status,
+                    recommendation_index=recommendation_index,
+                )
+                return
+            uncovered_recommendation_indices.add(recommendation_index)
+
+        def require_classified_topic_closure(
+            topic_id: str,
+            recommendation_index: int | None,
+            *,
+            classification_status: str,
+        ) -> None:
+            if not topic_id:
+                return
+            if recommendation_index is None:
+                proof = topic_closure_review_map.get(topic_id)
+                if proof and proof.get("has_structured_refs"):
+                    closure_complete_topic_ids.add(topic_id)
+                    _record_scoped_proof(
+                        record_id=topic_id,
+                        classification_status=classification_status,
+                        proof=proof,
+                    )
+                else:
+                    uncovered_global_topic_ids.add(topic_id)
+                return
+            if recommendation_index in covered_recommendation_indices:
+                closure_complete_topic_ids.add(topic_id)
+                _record_recommendation_proof(
+                    record_id=topic_id,
+                    classification_status=classification_status,
+                    recommendation_index=recommendation_index,
+                )
+                return
+            uncovered_recommendation_indices.add(recommendation_index)
+
+        for item in payload.get("issues", []) or []:
+            if not isinstance(item, dict):
+                continue
+            require_issue_coverage(
+                str(item.get("issue_id") or "").strip(),
+                self._normalized_recommendation_index(item.get("recommendation_index")),
+            )
+        for field_name in (
+            "resolved_issue_ids",
+            "carried_forward_issue_ids",
+            "waived_issue_ids",
+        ):
+            for raw_issue_id in payload.get(field_name, []) or []:
+                issue_id = str(raw_issue_id or "").strip()
+                if not issue_id:
+                    continue
+                require_classified_issue_closure(
+                    issue_id,
+                    prior_open_issue_map.get(issue_id),
+                    classification_status=field_name.removesuffix("_issue_ids"),
+                )
+
+        for item in payload.get("topics", []) or []:
+            if not isinstance(item, dict):
+                continue
+            require_topic_coverage(
+                str(item.get("topic_id") or "").strip(),
+                self._normalized_recommendation_index(item.get("recommendation_index")),
+            )
+        for field_name in (
+            "resolved_topic_ids",
+            "carried_forward_topic_ids",
+            "waived_topic_ids",
+        ):
+            for raw_topic_id in payload.get(field_name, []) or []:
+                topic_id = str(raw_topic_id or "").strip()
+                if not topic_id:
+                    continue
+                require_classified_topic_closure(
+                    topic_id,
+                    prior_open_topic_map.get(topic_id),
+                    classification_status=field_name.removesuffix("_topic_ids"),
+                )
+
+        return {
+            "covered_recommendation_indices": sorted(covered_recommendation_indices),
+            "uncovered_recommendation_indices": sorted(
+                uncovered_recommendation_indices
+            ),
+            "issue_closure_review_ref_count": sum(
+                len(item.get("checked_files") or [])
+                + len(item.get("verified_evidence_refs") or [])
+                for item in issue_closure_review_map.values()
+                if item.get("has_structured_refs")
+            ),
+            "topic_closure_review_ref_count": sum(
+                len(item.get("checked_files") or [])
+                + len(item.get("verified_evidence_refs") or [])
+                for item in topic_closure_review_map.values()
+                if item.get("has_structured_refs")
+            ),
+            "closure_complete_issue_ids": sorted(closure_complete_issue_ids),
+            "closure_complete_topic_ids": sorted(closure_complete_topic_ids),
+            "uncovered_global_issue_ids": sorted(uncovered_global_issue_ids),
+            "uncovered_global_topic_ids": sorted(uncovered_global_topic_ids),
+            "closure_proof_by_id": closure_proof_by_id,
+        }
+
+    @staticmethod
+    def _recommendation_review_ref_stats(
+        normalized_refs: dict[str, Any],
+    ) -> tuple[int, int]:
+        ref_count = 0
+        field_count = 0
+        for field_name, value in normalized_refs.items():
+            if not field_name.startswith("recommendation_reviews["):
+                continue
+            if not (
+                field_name.endswith(".checked_files")
+                or field_name.endswith(".verified_evidence_refs")
+            ):
+                continue
+            if isinstance(value, list):
+                value_count = len(value)
+            elif value:
+                value_count = 1
+            else:
+                value_count = 0
+            if value_count <= 0:
+                continue
+            field_count += 1
+            ref_count += value_count
+        return (ref_count, field_count)
+
+    @staticmethod
+    def _scoped_closure_review_ref_count(
+        normalized_refs: dict[str, Any],
+        *,
+        prefix: str,
+    ) -> int:
+        ref_count = 0
+        for field_name, value in normalized_refs.items():
+            if not field_name.startswith(prefix):
+                continue
+            if not (
+                field_name.endswith(".checked_files")
+                or field_name.endswith(".verified_evidence_refs")
+            ):
+                continue
+            if isinstance(value, list):
+                ref_count += len(value)
+            elif value:
+                ref_count += 1
+        return ref_count
+
+    @staticmethod
+    def _scoped_closure_review_map(
+        values: Any,
+        *,
+        id_field: str,
+    ) -> dict[str, dict[str, Any]]:
+        mapping: dict[str, dict[str, Any]] = {}
+        if not isinstance(values, list):
+            return mapping
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            record_id = str(item.get(id_field) or "").strip()
+            if not record_id:
+                continue
+            checked_files = [
+                str(value).strip()
+                for value in (item.get("checked_files") or [])
+                if str(value).strip()
+            ]
+            verified_refs = [
+                str(value).strip()
+                for value in (item.get("verified_evidence_refs") or [])
+                if str(value).strip()
+            ]
+            mapping[record_id] = {
+                "checked_files": checked_files,
+                "verified_evidence_refs": verified_refs,
+                "summary": str(item.get("summary") or "").strip(),
+                "has_structured_refs": bool(checked_files or verified_refs),
+            }
+        return mapping
+
+    @staticmethod
+    def _review_payload_requires_structured_refs(payload: dict[str, Any]) -> bool:
+        closure_fields = (
+            "issues",
+            "topics",
+            "resolved_issue_ids",
+            "carried_forward_issue_ids",
+            "waived_issue_ids",
+            "resolved_topic_ids",
+            "carried_forward_topic_ids",
+            "waived_topic_ids",
+        )
+        for field_name in closure_fields:
+            values = payload.get(field_name)
+            if isinstance(values, list) and values:
+                return True
+        return False
+
+    def _normalize_analysis_review_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        role_name: str,
+        payload_provenance_mode: str,
+        contract: AnalysisReviewContract,
+        prior_open_issue_records: list[dict[str, Any]] | None = None,
+        prior_open_topic_records: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+        normalized = json.loads(json.dumps(payload))
+        normalized_refs: dict[str, Any] = {}
+        warnings: list[str] = []
+        canonical_role_name = self._canonical_stage_role_name(role_name)
+        if prior_open_issue_records is None:
+            prior_open_issue_records = self._open_issue_records()
+        else:
+            prior_open_issue_records = [dict(item) for item in prior_open_issue_records]
+        if prior_open_topic_records is None:
+            prior_open_topic_records = self._open_topic_records()
+        else:
+            prior_open_topic_records = [dict(item) for item in prior_open_topic_records]
+
+        if canonical_role_name in {"critic", "auditor"}:
+            def _normalize_prior_open_classification_ids(
+                *,
+                field_name: str,
+                raw_ids: Any,
+                prior_open_ids: set[str],
+                current_stage_ids: set[str],
+                prior_open_label: str,
+            ) -> tuple[list[str], list[str]]:
+                normalized_ids: list[str] = []
+                warnings_local: list[str] = []
+                dropped_current_stage_ids: list[str] = []
+                dropped_unknown_ids: list[str] = []
+                dropped_without_prior_open_ids: list[str] = []
+                for raw_id in raw_ids:
+                    record_id = str(raw_id or "").strip()
+                    if not record_id:
+                        continue
+                    if record_id in prior_open_ids:
+                        normalized_ids.append(record_id)
+                        continue
+                    if not prior_open_ids:
+                        dropped_without_prior_open_ids.append(record_id)
+                        continue
+                    if record_id in current_stage_ids:
+                        dropped_current_stage_ids.append(record_id)
+                        continue
+                    dropped_unknown_ids.append(record_id)
+                if dropped_without_prior_open_ids:
+                    warnings_local.append(
+                        f"{field_name} included IDs but there were no prior-open {prior_open_label} IDs for this stage, so they were dropped: "
+                        + ", ".join(
+                            self._dedupe_preserving_order(
+                                dropped_without_prior_open_ids
+                            )
+                        )
+                    )
+                if dropped_current_stage_ids:
+                    warnings_local.append(
+                        f"{field_name} included current-stage {prior_open_label} IDs and they were dropped: "
+                        + ", ".join(
+                            self._dedupe_preserving_order(dropped_current_stage_ids)
+                        )
+                    )
+                if dropped_unknown_ids and prior_open_ids:
+                    warnings_local.append(
+                        f"{field_name} included unknown prior-open {prior_open_label} IDs and they were dropped: "
+                        + ", ".join(
+                            self._dedupe_preserving_order(dropped_unknown_ids)
+                        )
+                    )
+                return (
+                    self._dedupe_preserving_order(normalized_ids),
+                    warnings_local,
+                )
+
+            prior_open_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in prior_open_issue_records
+                if str(item.get("issue_id") or "").strip()
+            }
+            current_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in normalized.get("issues", []) or []
+                if isinstance(item, dict) and str(item.get("issue_id") or "").strip()
+            }
+            for field_name in (
+                "resolved_issue_ids",
+                "carried_forward_issue_ids",
+                "waived_issue_ids",
+            ):
+                raw_ids = normalized.get(field_name)
+                if isinstance(raw_ids, list):
+                    normalized[field_name], field_warnings = (
+                        _normalize_prior_open_classification_ids(
+                            field_name=field_name,
+                            raw_ids=raw_ids,
+                            prior_open_ids=prior_open_issue_ids,
+                            current_stage_ids=current_issue_ids,
+                            prior_open_label="issue",
+                        )
+                    )
+                    warnings.extend(field_warnings)
+                elif field_name in normalized or not prior_open_issue_ids:
+                    normalized[field_name] = []
+            prior_open_topics_exist = bool(prior_open_topic_records)
+            for field_name in ("issue_closure_reviews", "topic_closure_reviews"):
+                if field_name not in normalized:
+                    normalized[field_name] = []
+            reserved_topic_ids = {
+                str(item.get("topic_id") or "").strip()
+                for item in normalized.get("topics", []) or []
+                if isinstance(item, dict) and str(item.get("topic_id") or "").strip()
+            }
+            normalized_topics: list[dict[str, Any]] = []
+            raw_topics = normalized.get("topics")
+            can_normalize_topics = raw_topics is None or isinstance(raw_topics, list)
+            if can_normalize_topics:
+                for item in raw_topics or []:
+                    if not isinstance(item, dict):
+                        continue
+                    normalized_topic = self._normalize_review_topic(
+                        item,
+                        reserved_ids=reserved_topic_ids,
+                    )
+                    reserved_topic_ids.add(str(normalized_topic.get("topic_id")))
+                    normalized_topics.append(normalized_topic)
+                legacy_missing_topics = normalized.get("missing_topics")
+                if isinstance(legacy_missing_topics, list):
+                    for item in legacy_missing_topics:
+                        title = str(item or "").strip()
+                        if not title:
+                            continue
+                        normalized_topic = self._normalize_review_topic(
+                            {
+                                "title": title,
+                                "severity": "low",
+                                "evidence": "",
+                                "repair_hint": "",
+                                "recommendation_index": None,
+                            },
+                            reserved_ids=reserved_topic_ids,
+                        )
+                        reserved_topic_ids.add(str(normalized_topic.get("topic_id")))
+                        normalized_topics.append(normalized_topic)
+                    if legacy_missing_topics:
+                        warnings.append(
+                            "Normalized legacy missing_topics into topics with stable topic IDs."
+                        )
+                normalized["topics"] = normalized_topics
+                normalized.pop("missing_topics", None)
+            current_topic_ids = {
+                str(item.get("topic_id") or "").strip()
+                for item in normalized.get("topics", []) or []
+                if isinstance(item, dict) and str(item.get("topic_id") or "").strip()
+            }
+            prior_open_topic_ids = {
+                str(item.get("topic_id") or "").strip()
+                for item in prior_open_topic_records
+                if str(item.get("topic_id") or "").strip()
+            }
+            for field_name in (
+                "resolved_topic_ids",
+                "carried_forward_topic_ids",
+                "waived_topic_ids",
+            ):
+                if field_name in normalized:
+                    if isinstance(normalized.get(field_name), list):
+                        normalized[field_name], field_warnings = (
+                            _normalize_prior_open_classification_ids(
+                                field_name=field_name,
+                                raw_ids=normalized.get(field_name),
+                                prior_open_ids=prior_open_topic_ids,
+                                current_stage_ids=current_topic_ids,
+                                prior_open_label="topic",
+                            )
+                        )
+                        warnings.extend(field_warnings)
+                elif not prior_open_topics_exist:
+                    normalized[field_name] = []
+
+        files_reviewed = self._normalize_workspace_ref_list(
+            normalized.get("files_reviewed")
+        )
+        if files_reviewed:
+            files_reviewed = self._dedupe_preserving_order(files_reviewed)
+            normalized["files_reviewed"] = files_reviewed
+            normalized_refs["files_reviewed"] = files_reviewed
+
+        recommendation_reviews = normalized.get("recommendation_reviews")
+        if isinstance(recommendation_reviews, list):
+            known_issue_ids = {
+                str(item.get("issue_id") or "").strip()
+                for item in (normalized.get("issues") or [])
+                if isinstance(item, dict) and str(item.get("issue_id") or "").strip()
+            }
+            known_topic_ids = {
+                str(item.get("topic_id") or "").strip()
+                for item in (normalized.get("topics") or [])
+                if isinstance(item, dict) and str(item.get("topic_id") or "").strip()
+            }
+            for index, item in enumerate(recommendation_reviews, start=1):
+                if not isinstance(item, dict):
+                    continue
+                open_issue_ids = item.get("open_issue_ids")
+                if isinstance(open_issue_ids, list):
+                    normalized_issue_ids: list[str] = []
+                    dropped_topic_ids: list[str] = []
+                    dropped_unknown_ids: list[str] = []
+                    for raw_issue_id in open_issue_ids:
+                        issue_id = str(raw_issue_id or "").strip()
+                        if not issue_id:
+                            continue
+                        if issue_id in known_issue_ids:
+                            normalized_issue_ids.append(issue_id)
+                            continue
+                        if issue_id in known_topic_ids:
+                            dropped_topic_ids.append(issue_id)
+                            continue
+                        dropped_unknown_ids.append(issue_id)
+                    item["open_issue_ids"] = self._dedupe_preserving_order(
+                        normalized_issue_ids
+                    )
+                    if dropped_topic_ids:
+                        warnings.append(
+                            f"recommendation_reviews[{index}].open_issue_ids included topic IDs and they were dropped: "
+                            + ", ".join(self._dedupe_preserving_order(dropped_topic_ids))
+                        )
+                    if dropped_unknown_ids:
+                        warnings.append(
+                            f"recommendation_reviews[{index}].open_issue_ids included unknown issue IDs and they were dropped: "
+                            + ", ".join(
+                                self._dedupe_preserving_order(dropped_unknown_ids)
+                            )
+                        )
+                for field_name in ("checked_files", "verified_evidence_refs"):
+                    values = self._normalize_workspace_ref_list(item.get(field_name))
+                    if values:
+                        values = self._dedupe_preserving_order(values)
+                    if field_name in item:
+                        item[field_name] = values
+                        normalized_refs[
+                            f"recommendation_reviews[{index}].{field_name}"
+                        ] = values
+
+        for field_name, id_field in (
+            ("issue_closure_reviews", "issue_id"),
+            ("topic_closure_reviews", "topic_id"),
+        ):
+            closure_reviews = normalized.get(field_name)
+            if not isinstance(closure_reviews, list):
+                continue
+            prior_open_ids = {
+                str(item.get(id_field) or "").strip()
+                for item in (
+                    prior_open_issue_records
+                    if field_name == "issue_closure_reviews"
+                    else prior_open_topic_records
+                )
+                if str(item.get(id_field) or "").strip()
+            }
+            current_global_ids = {
+                str(item).strip()
+                for item in (
+                    normalized.get(
+                        "carried_forward_issue_ids"
+                        if field_name == "issue_closure_reviews"
+                        else "carried_forward_topic_ids"
+                    )
+                    or []
+                )
+                if str(item).strip()
+            }
+            current_global_ids.update(
+                str(item).strip()
+                for item in (
+                    normalized.get(
+                        "resolved_issue_ids"
+                        if field_name == "issue_closure_reviews"
+                        else "resolved_topic_ids"
+                    )
+                    or []
+                )
+                if str(item).strip()
+            )
+            current_global_ids.update(
+                str(item).strip()
+                for item in (
+                    normalized.get(
+                        "waived_issue_ids"
+                        if field_name == "issue_closure_reviews"
+                        else "waived_topic_ids"
+                    )
+                    or []
+                )
+                if str(item).strip()
+            )
+            filtered_closure_reviews: list[dict[str, Any]] = []
+            for index, item in enumerate(closure_reviews, start=1):
+                if not isinstance(item, dict):
+                    continue
+                record_id = str(item.get(id_field) or "").strip()
+                if record_id:
+                    if not prior_open_ids:
+                        if record_id not in current_global_ids:
+                            warnings.append(
+                                f"Dropped {field_name}[{index}] because it did not match a current classified global ID and there were no prior open IDs for {field_name} in this stage: {record_id}."
+                            )
+                            continue
+                    if prior_open_ids and record_id not in prior_open_ids:
+                        warnings.append(
+                            f"Dropped {field_name}[{index}] because it referenced an unknown prior open ID: {record_id}."
+                        )
+                        continue
+                    item[id_field] = record_id
+                for ref_field_name in ("checked_files", "verified_evidence_refs"):
+                    values = self._normalize_workspace_ref_list(
+                        item.get(ref_field_name)
+                    )
+                    if values:
+                        values = self._dedupe_preserving_order(values)
+                    if ref_field_name in item:
+                        item[ref_field_name] = values
+                        normalized_refs[f"{field_name}[{index}].{ref_field_name}"] = (
+                            values
+                        )
+                filtered_closure_reviews.append(item)
+            normalized[field_name] = filtered_closure_reviews
+
+        recommendations = normalized.get("recommendations")
+        if isinstance(recommendations, list):
+            for index, item in enumerate(recommendations, start=1):
+                if not isinstance(item, dict):
+                    continue
+                evidence_values = self._dedupe_preserving_order(
+                    self._normalize_workspace_ref_list(item.get("evidence"))
+                )
+                if evidence_values:
+                    cap = contract.bounded_review.max_evidence_refs_per_recommendation
+                    if (
+                        contract.mode == "bounded"
+                        and contract.bounded_review.evidence_cap_policy == "trim_to_cap"
+                        and len(evidence_values) > cap
+                    ):
+                        dropped_refs = evidence_values[cap:]
+                        evidence_values = evidence_values[:cap]
+                        warnings.append(
+                            f"recommendations[{index}].evidence exceeded the bounded-review cap of {cap}; trimmed dropped refs: "
+                            + ", ".join(dropped_refs)
+                        )
+                    item["evidence"] = evidence_values
+                    normalized_refs[f"recommendations[{index}].evidence"] = (
+                        evidence_values
+                    )
+                for field_name in (
+                    "verified_evidence_refs",
+                    "checked_files",
+                    "affected_files",
+                ):
+                    values = self._normalize_workspace_ref_list(item.get(field_name))
+                    if values:
+                        values = self._dedupe_preserving_order(values)
+                    if field_name in item:
+                        item[field_name] = values
+                        normalized_refs[f"recommendations[{index}].{field_name}"] = (
+                            values
+                        )
+                review_surface = item.get("review_surface")
+                if isinstance(review_surface, dict):
+                    for field_name in ("must_check_files", "optional_check_files"):
+                        values = self._normalize_workspace_ref_list(
+                            review_surface.get(field_name)
+                        )
+                        if values:
+                            values = self._dedupe_preserving_order(values)
+                        if field_name in review_surface:
+                            review_surface[field_name] = values
+                            normalized_refs[
+                                f"recommendations[{index}].review_surface.{field_name}"
+                            ] = values
+
+        self._canonicalize_analysis_payload_seams(
+            normalized=normalized,
+        )
+
+        scope_escapes = normalized.get("scope_escapes")
+        if isinstance(scope_escapes, list):
+            for index, item in enumerate(scope_escapes, start=1):
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "").strip()
+                if not path:
+                    continue
+                normalized_path = self._normalize_workspace_ref(path)
+                item["path"] = normalized_path or path
+                normalized_refs[f"scope_escapes[{index}].path"] = item["path"]
+
+        payload_provenance = self._bind_normalized_payload(
+            normalized,
+            payload_provenance_mode=payload_provenance_mode,
+            normalized_refs=normalized_refs,
+            prior_open_issue_records=prior_open_issue_records,
+            prior_open_topic_records=prior_open_topic_records,
+        )
+        if (
+            canonical_role_name in {"critic", "auditor"}
+            and payload_provenance_mode == "payload_hash_and_refs"
+            and not bool(payload_provenance.get("closure_provenance_satisfied"))
+        ):
+            payload_provenance["status"] = "insufficient"
+            payload_provenance["failure_reason"] = (
+                "trust_review_requires_structured_refs_for_recommendation_and_closure_provenance"
+            )
+
+        return (normalized, payload_provenance, warnings)
+
+    def _canonicalize_analysis_payload_seams(
+        self,
+        *,
+        normalized: dict[str, Any],
+    ) -> None:
+        primary_seam = normalized.get("primary_seam")
+        secondary_seams = normalized.get("secondary_seams_considered")
+        recommendations = normalized.get("recommendations")
+        if not isinstance(primary_seam, dict) or not isinstance(secondary_seams, list):
+            return
+
+        seam_entries: list[dict[str, Any]] = [primary_seam]
+        seam_entries.extend(item for item in secondary_seams if isinstance(item, dict))
+        primary_canonical_seam_id: str | None = None
+
+        old_to_canonical: dict[str, str] = {}
+        ambiguous_old_ids: set[str] = set()
+        for seam in seam_entries:
+            normalized_paths = canonical_seam_path_list(
+                seam.get("paths"),
+                workspace_root=self.workspace,
+            )
+            if normalized_paths:
+                seam["paths"] = normalized_paths
+                canonical_seam_id = canonical_seam_id_for_paths(normalized_paths)
+                old_seam_id = str(seam.get("seam_id") or "").strip()
+                seam["seam_id"] = canonical_seam_id
+                if seam is primary_seam:
+                    primary_canonical_seam_id = canonical_seam_id
+                if old_seam_id:
+                    existing = old_to_canonical.get(old_seam_id)
+                    if existing is not None and existing != canonical_seam_id:
+                        ambiguous_old_ids.add(old_seam_id)
+                    else:
+                        old_to_canonical[old_seam_id] = canonical_seam_id
+
+        for seam_id in ambiguous_old_ids:
+            old_to_canonical.pop(seam_id, None)
+
+        if not isinstance(recommendations, list):
+            return
+
+        for item in recommendations:
+            if not isinstance(item, dict):
+                continue
+            old_seam_id = str(item.get("seam_id") or "").strip()
+            canonical_seam_id = old_to_canonical.get(old_seam_id)
+            if canonical_seam_id:
+                item["seam_id"] = canonical_seam_id
+            recommendation_seam_id = str(item.get("seam_id") or "").strip()
+            if (
+                primary_canonical_seam_id
+                and recommendation_seam_id == primary_canonical_seam_id
+            ):
+                item["seam_expansion_reason"] = ""
+
+    @staticmethod
+    def _canonical_stage_role_name(role_name: str) -> str:
+        text = str(role_name or "").strip().lower()
+        if text.startswith("reviser_round_"):
+            return "reviser"
+        if text.startswith("patcher_round_"):
+            return "patcher"
+        return text
+
+    @staticmethod
+    def _normalize_string_list(values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        return [str(item).strip() for item in values if str(item).strip()]
+
+    @staticmethod
+    def _semantic_validation_kwargs(
+        *,
+        role_name: str,
+        payload: dict[str, Any],
+        task: TaskSpec,
+        contract: AnalysisReviewContract,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "role_name": role_name,
+            "payload": payload,
+            "task": task,
+            "contract": contract,
+        }
+        allowed = set(inspect.signature(validate_stage_output).parameters)
+        for key, value in context.items():
+            if key in allowed:
+                kwargs[key] = value
+        return kwargs
+
+    def _topic_ids_for_status(self, statuses: set[str]) -> list[str]:
+        return sorted(
+            str(record.get("topic_id"))
+            for record in self.topic_ledger
+            if str(record.get("resolution_status") or "").strip() in statuses
+            and str(record.get("topic_id") or "").strip()
+        )
+
+    def _resolve_bounded_review_analysis_stage(self) -> dict[str, Any] | None:
+        reviser_role_names = {
+            str(stage.get("role_name") or "")
+            for stage in self.agent_stages
+            if str(stage.get("role_name") or "").startswith("reviser_round_")
+        }
+        if reviser_role_names:
+            stage = self._latest_successful_stage(role_names=reviser_role_names)
+            if stage is not None:
+                return stage
+        return self._latest_successful_stage(role_names={"proposer"})
+
+    def _effective_role_config(
+        self, role_name: str, role_config: RoleConfig
+    ) -> RoleConfig:
         effective_access = role_config.access
-        forced_read_roles = {"falsifier", "critic", "auditor"}
+        forced_read_roles = {
+            "falsifier",
+            "critic",
+            "auditor",
+            "focus_gate",
+            "focus_gate_probe",
+        }
         if role_name in forced_read_roles:
             effective_access = "read"
         elif not self.task.workspace_write_policy.allows_workspace_writes():
             effective_access = "read"
         return replace(role_config, access=effective_access)
 
+    def _focus_gate_answer_payload(self) -> dict[str, Any] | None:
+        if self.task.focus_gate_answer is None:
+            return None
+        return asdict(self.task.focus_gate_answer)
+
+    @staticmethod
+    def _downstream_primary_seam_id(
+        focus_decision: dict[str, Any] | None,
+    ) -> str | None:
+        if not isinstance(focus_decision, dict):
+            return None
+        adapter_plan = focus_decision.get("adapter_plan")
+        if not isinstance(adapter_plan, dict):
+            return None
+        value = str(adapter_plan.get("downstream_primary_seam_id") or "").strip()
+        return value or None
+
+    def _downstream_primary_seam_paths(
+        self, focus_decision: dict[str, Any] | None
+    ) -> list[str] | None:
+        if not isinstance(focus_decision, dict):
+            return None
+        adapter_plan = focus_decision.get("adapter_plan")
+        if not isinstance(adapter_plan, dict):
+            return None
+        values = canonical_seam_path_list(
+            adapter_plan.get("downstream_primary_seam_paths"),
+            workspace_root=self.workspace,
+        )
+        return values or None
+
+    def _normalize_focus_gate_candidate_payloads(
+        self,
+        candidates: Any,
+        *,
+        checked_files: list[str],
+        focus_type: Any,
+        workspace_paths: list[str],
+    ) -> list[dict[str, Any]]:
+        if not isinstance(candidates, list):
+            return []
+        adapter = focus_type_adapter(focus_type)
+        checked_file_set = set(checked_files)
+        normalized_candidates: list[dict[str, Any]] = []
+        candidate_group_indices: dict[str, int] = {}
+        merged_evidence_refs_by_index: list[list[str]] = []
+        representative_scores: list[float | None] = []
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            normalized_candidate = deepcopy(item)
+            candidate_paths = self._expand_focus_candidate_paths(
+                self._normalize_workspace_ref_list(item.get("candidate_paths")),
+                focus_type=focus_type,
+                workspace_paths=workspace_paths,
+            )
+            normalized_candidate["candidate_paths"] = candidate_paths
+            canonical_focus_id = adapter.canonical_focus_id_for_paths(candidate_paths)
+            if canonical_focus_id:
+                normalized_candidate["focus_id"] = canonical_focus_id
+            evidence_refs = self._dedupe_preserving_order(
+                self._normalize_workspace_ref_list(item.get("evidence_refs"))
+            )
+            if checked_file_set:
+                evidence_refs = [
+                    ref for ref in evidence_refs if ref in checked_file_set
+                ]
+            else:
+                evidence_refs = []
+            candidate_score: float | None
+            raw_score = normalized_candidate.get("score")
+            if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
+                candidate_score = float(raw_score)
+            else:
+                candidate_score = None
+
+            if canonical_focus_id:
+                existing_index = candidate_group_indices.get(canonical_focus_id)
+                if existing_index is not None:
+                    merged_refs = self._dedupe_preserving_order(
+                        merged_evidence_refs_by_index[existing_index] + evidence_refs
+                    )
+                    merged_evidence_refs_by_index[existing_index] = merged_refs
+                    existing_score = representative_scores[existing_index]
+                    should_replace = candidate_score is not None and (
+                        existing_score is None or candidate_score > existing_score
+                    )
+                    if should_replace:
+                        normalized_candidate["evidence_refs"] = merged_refs[
+                            :_FOCUS_MAX_EVIDENCE_REFS
+                        ]
+                        normalized_candidates[existing_index] = normalized_candidate
+                        representative_scores[existing_index] = candidate_score
+                    else:
+                        normalized_candidates[existing_index]["evidence_refs"] = (
+                            merged_refs[:_FOCUS_MAX_EVIDENCE_REFS]
+                        )
+                    continue
+                if len(normalized_candidates) >= _FOCUS_MAX_CANDIDATES:
+                    continue
+                candidate_group_indices[canonical_focus_id] = len(normalized_candidates)
+            else:
+                if len(normalized_candidates) >= _FOCUS_MAX_CANDIDATES:
+                    continue
+
+            normalized_candidate["evidence_refs"] = evidence_refs[
+                :_FOCUS_MAX_EVIDENCE_REFS
+            ]
+            normalized_candidates.append(normalized_candidate)
+            merged_evidence_refs_by_index.append(evidence_refs)
+            representative_scores.append(candidate_score)
+        return normalized_candidates
+
+    def _expand_focus_candidate_paths(
+        self,
+        candidate_paths: list[str],
+        *,
+        focus_type: Any,
+        workspace_paths: list[str],
+    ) -> list[str]:
+        workspace_values = self._dedupe_preserving_order(
+            [str(path).strip() for path in workspace_paths if str(path).strip()]
+        )
+        workspace_set = set(workspace_values)
+        normalized_focus_type = str(focus_type or "").strip()
+        expanded: list[str] = []
+
+        def _matching_workspace_files(prefix: str) -> list[str]:
+            prefix = prefix.rstrip("/")
+            if not prefix:
+                return []
+            return [path for path in workspace_values if path.startswith(prefix + "/")]
+
+        for raw_path in candidate_paths:
+            path = str(raw_path).strip()
+            if not path:
+                continue
+            if path in workspace_set:
+                expanded.append(path)
+                continue
+
+            matches: list[str] = []
+            if path.endswith("/*"):
+                matches = _matching_workspace_files(path[:-2])
+            else:
+                matches = _matching_workspace_files(path)
+
+            if not matches:
+                expanded.append(path)
+                continue
+            if normalized_focus_type == "artifact" and len(matches) != 1:
+                expanded.append(path)
+                continue
+            expanded.extend(matches)
+
+        deduped = self._dedupe_preserving_order(expanded)
+        if normalized_focus_type != "artifact":
+            return sorted(deduped)
+        return deduped
+
+    def _normalize_focus_gate_probe_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = deepcopy(payload)
+        focus_type = str(normalized.get("focus_type") or "").strip()
+        workspace_paths = capture_workspace_file_inventory(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        checked_files = self._expand_focus_candidate_paths(
+            self._normalize_workspace_ref_list(payload.get("checked_files")),
+            focus_type=focus_type,
+            workspace_paths=workspace_paths,
+        )[:_FOCUS_MAX_CHECKED_FILES]
+        normalized["checked_files"] = checked_files
+        normalized["candidates"] = self._normalize_focus_gate_candidate_payloads(
+            payload.get("candidates"),
+            checked_files=checked_files,
+            focus_type=focus_type,
+            workspace_paths=workspace_paths,
+        )
+        return normalized
+
+    def _normalize_focus_gate_decision_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        expected_gate_path: Any,
+    ) -> dict[str, Any]:
+        normalized = deepcopy(payload)
+        gate_path = str(normalized.get("gate_path") or "").strip()
+        decision_state = str(normalized.get("decision_state") or "").strip()
+        focus_type = str(normalized.get("focus_type") or "").strip()
+        adapter = focus_type_adapter(focus_type)
+        workspace_paths = capture_workspace_file_inventory(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        checked_files = self._expand_focus_candidate_paths(
+            self._normalize_workspace_ref_list(payload.get("checked_files")),
+            focus_type=focus_type,
+            workspace_paths=workspace_paths,
+        )[:_FOCUS_MAX_CHECKED_FILES]
+        if gate_path == "adjudicate":
+            normalized["decision_basis"] = "request_only"
+            normalized["files_hint_disposition"] = "absent"
+            checked_files = []
+        normalized["checked_files"] = checked_files
+        normalized["candidates"] = self._normalize_focus_gate_candidate_payloads(
+            payload.get("candidates"),
+            checked_files=checked_files,
+            focus_type=focus_type,
+            workspace_paths=workspace_paths,
+        )
+        candidate_ids = [
+            str(item.get("focus_id") or "").strip()
+            for item in normalized["candidates"]
+            if str(item.get("focus_id") or "").strip()
+        ]
+        selected_focus_paths = self._expand_focus_candidate_paths(
+            self._normalize_workspace_ref_list(payload.get("selected_focus_paths")),
+            focus_type=focus_type,
+            workspace_paths=workspace_paths,
+        )
+        normalized["selected_focus_paths"] = selected_focus_paths
+        canonical_focus_id = adapter.canonical_focus_id_for_paths(selected_focus_paths)
+        if decision_state == "selected" and canonical_focus_id:
+            normalized["selected_focus_id"] = canonical_focus_id
+        secondary_focus_ids = candidate_ids
+        if decision_state == "selected" and canonical_focus_id:
+            secondary_focus_ids = [
+                candidate_id
+                for candidate_id in candidate_ids
+                if candidate_id != canonical_focus_id
+            ]
+        normalized["adapter_plan"] = adapter.build_adapter_plan(
+            selected_focus_id=(
+                canonical_focus_id if decision_state == "selected" else None
+            ),
+            selected_focus_paths=(
+                selected_focus_paths if decision_state == "selected" else []
+            ),
+            secondary_focus_ids=secondary_focus_ids,
+        ).to_dict()
+        question = normalized.get("question")
+        if decision_state == "clarification_requested":
+            normalized["question"] = {
+                "prompt": self._canonical_focus_gate_question_prompt(),
+                "options": candidate_ids,
+            }
+        if gate_path == "adjudicate":
+            question = normalized.get("question")
+            if (
+                isinstance(question, dict)
+                and decision_state != "clarification_requested"
+            ):
+                normalized["question"] = {"prompt": "", "options": []}
+        del expected_gate_path
+        return normalized
+
+    @staticmethod
+    def _probe_candidate_score_map(
+        focus_probe: dict[str, Any] | None,
+    ) -> dict[str, float]:
+        if not isinstance(focus_probe, dict):
+            return {}
+        score_map: dict[str, float] = {}
+        for item in focus_probe.get("candidates") or []:
+            if not isinstance(item, dict):
+                continue
+            focus_id = str(item.get("focus_id") or "").strip()
+            score = item.get("score")
+            if (
+                focus_id
+                and isinstance(score, (int, float))
+                and not isinstance(score, bool)
+            ):
+                score_map[focus_id] = float(score)
+        return score_map
+
+    @staticmethod
+    def _focus_confidence_band(confidence: float) -> str:
+        if confidence >= 0.80:
+            return "high"
+        if confidence >= 0.55:
+            return "medium"
+        return "low"
+
+    @classmethod
+    def _canonical_focus_gate_question_prompt(cls) -> str:
+        return GENERIC_FOCUS_GATE_QUESTION_PROMPT
+
+    @classmethod
+    def _resolve_focus_probe_state(
+        cls,
+        *,
+        focus_probe: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(focus_probe, dict):
+            return {
+                "scored_candidates": [],
+                "top_candidate_id": None,
+                "top_candidate_score": None,
+                "second_candidate_id": None,
+                "second_candidate_score": None,
+                "top_confidence_band": "low",
+                "lead_score": None,
+                "valid_winner_focus_id": None,
+                "is_ambiguous": True,
+                "ambiguity_reason": "current probe is ambiguous under selection thresholds",
+            }
+
+        scored_candidates: list[dict[str, Any]] = []
+        for item in focus_probe.get("candidates") or []:
+            if not isinstance(item, dict):
+                continue
+            focus_id = str(item.get("focus_id") or "").strip()
+            score = item.get("score")
+            if (
+                not focus_id
+                or not isinstance(score, (int, float))
+                or isinstance(score, bool)
+            ):
+                continue
+            scored_candidates.append({"focus_id": focus_id, "score": float(score)})
+
+        scored_candidates.sort(key=lambda item: item["score"], reverse=True)
+        top_candidate = scored_candidates[0] if scored_candidates else None
+        second_candidate = scored_candidates[1] if len(scored_candidates) > 1 else None
+        top_score = (
+            float(top_candidate["score"]) if isinstance(top_candidate, dict) else None
+        )
+        second_score = (
+            float(second_candidate["score"])
+            if isinstance(second_candidate, dict)
+            else None
+        )
+        lead_score = (
+            top_score - second_score
+            if top_score is not None and second_score is not None
+            else None
+        )
+
+        valid_winner_focus_id: str | None = None
+        ambiguity_reason = "current probe is ambiguous under selection thresholds"
+        if top_score is not None:
+            if second_score is None and top_score >= 0.80:
+                valid_winner_focus_id = str(top_candidate["focus_id"])
+                ambiguity_reason = ""
+            elif top_score >= 0.55 and lead_score is not None and lead_score >= 0.15:
+                valid_winner_focus_id = str(top_candidate["focus_id"])
+                ambiguity_reason = ""
+
+        return {
+            "scored_candidates": scored_candidates,
+            "top_candidate_id": (
+                str(top_candidate["focus_id"])
+                if isinstance(top_candidate, dict)
+                else None
+            ),
+            "top_candidate_score": top_score,
+            "second_candidate_id": (
+                str(second_candidate["focus_id"])
+                if isinstance(second_candidate, dict)
+                else None
+            ),
+            "second_candidate_score": second_score,
+            "top_confidence_band": (
+                cls._focus_confidence_band(top_score)
+                if top_score is not None
+                else "low"
+            ),
+            "lead_score": lead_score,
+            "valid_winner_focus_id": valid_winner_focus_id,
+            "is_ambiguous": valid_winner_focus_id is None,
+            "ambiguity_reason": ambiguity_reason,
+        }
+
+    @classmethod
+    def _focus_gate_stale_answer_context(
+        cls,
+        *,
+        focus_probe: dict[str, Any] | None,
+        focus_gate_answer: dict[str, Any] | None,
+        clarification_policy: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(focus_probe, dict) or not isinstance(focus_gate_answer, dict):
+            return None
+
+        canonical_prompt = cls._canonical_focus_gate_question_prompt().strip()
+        answer_prompt = str(focus_gate_answer.get("question_prompt") or "").strip()
+        answered_focus_id = str(focus_gate_answer.get("selected_option") or "").strip()
+        if not answer_prompt or not answered_focus_id:
+            return None
+        if answer_prompt != canonical_prompt:
+            return {
+                "reason": "recorded question prompt no longer matches the canonical deliberate prompt",
+                "clarification_policy": clarification_policy,
+                "question_prompt": answer_prompt,
+                "canonical_question_prompt": canonical_prompt,
+                "selected_option": answered_focus_id,
+            }
+
+        candidate_ids = [
+            str(item.get("focus_id") or "").strip()
+            for item in (focus_probe.get("candidates") or [])
+            if isinstance(item, dict) and str(item.get("focus_id") or "").strip()
+        ]
+        if answered_focus_id not in candidate_ids:
+            return {
+                "reason": "selected option vanished from the current probe candidate set",
+                "clarification_policy": clarification_policy,
+                "question_prompt": answer_prompt,
+                "selected_option": answered_focus_id,
+                "probe_candidate_ids": candidate_ids,
+            }
+
+        probe_state = cls._resolve_focus_probe_state(focus_probe=focus_probe)
+        valid_winner_focus_id = str(
+            probe_state.get("valid_winner_focus_id") or ""
+        ).strip()
+        if not valid_winner_focus_id:
+            return {
+                "reason": "current probe is ambiguous under selection thresholds",
+                "clarification_policy": clarification_policy,
+                "question_prompt": answer_prompt,
+                "canonical_question_prompt": canonical_prompt,
+                "selected_option": answered_focus_id,
+                "probe_candidate_ids": candidate_ids,
+            }
+        if valid_winner_focus_id == answered_focus_id:
+            return None
+
+        return {
+            "reason": (
+                "current probe now resolves to a different threshold-valid winner: "
+                f"{valid_winner_focus_id}"
+            ),
+            "clarification_policy": clarification_policy,
+            "question_prompt": answer_prompt,
+            "canonical_question_prompt": canonical_prompt,
+            "selected_option": answered_focus_id,
+            "dominant_candidate_id": valid_winner_focus_id,
+            "dominant_candidate_score": probe_state.get("top_candidate_score"),
+            "probe_candidate_ids": candidate_ids,
+        }
+
+    @staticmethod
+    def _normalized_focus_gate_no_viable_decision(
+        focus_decision: dict[str, Any],
+        *,
+        warning: str | None = None,
+    ) -> dict[str, Any]:
+        normalized = deepcopy(focus_decision)
+        normalized["decision_state"] = "no_viable_focus"
+        normalized["selected_focus_id"] = None
+        normalized["selected_focus_summary"] = None
+        normalized["selected_focus_paths"] = []
+        normalized["question"] = {"prompt": "", "options": []}
+        adapter_plan = normalized.get("adapter_plan")
+        if isinstance(adapter_plan, dict):
+            adapter_plan["primary_focus_id"] = None
+            adapter_plan["downstream_primary_seam_id"] = None
+            adapter_plan["downstream_primary_seam_paths"] = []
+            adapter_plan["adaptation_basis"] = None
+        warnings = [
+            str(item).strip()
+            for item in (normalized.get("warnings") or [])
+            if str(item).strip()
+        ]
+        if warning and warning not in warnings:
+            warnings.append(warning)
+        normalized["warnings"] = warnings
+        return normalized
+
+    @classmethod
+    def _stale_focus_gate_decision_from_probe(
+        cls,
+        *,
+        focus_probe: dict[str, Any],
+        focus_gate_answer: dict[str, Any] | None,
+        stale_answer_context: dict[str, Any],
+        clarification_policy: str,
+    ) -> dict[str, Any]:
+        warning = (
+            "Prior focus_gate_answer went stale: "
+            + str(stale_answer_context.get("reason") or "").strip()
+            + "."
+        )
+        del focus_gate_answer
+        return cls._probe_blocked_focus_gate_decision_from_probe(
+            focus_probe=focus_probe,
+            clarification_policy=clarification_policy,
+            decision_basis="rerun_answer",
+            warning=warning,
+        )
+
+    @classmethod
+    def _probe_blocked_focus_gate_decision_from_probe(
+        cls,
+        *,
+        focus_probe: dict[str, Any],
+        clarification_policy: str,
+        decision_basis: str,
+        warning: str | None = None,
+    ) -> dict[str, Any]:
+        candidates = [
+            deepcopy(item)
+            for item in (focus_probe.get("candidates") or [])
+            if isinstance(item, dict)
+        ]
+        checked_files = [
+            str(item).strip()
+            for item in (focus_probe.get("checked_files") or [])
+            if str(item).strip()
+        ]
+        candidate_ids = [
+            str(item.get("focus_id") or "").strip()
+            for item in candidates
+            if str(item.get("focus_id") or "").strip()
+        ]
+        prompt = cls._canonical_focus_gate_question_prompt()
+        confidence = max(
+            (
+                float(item.get("score"))
+                for item in candidates
+                if isinstance(item.get("score"), (int, float))
+                and not isinstance(item.get("score"), bool)
+            ),
+            default=0.0,
+        )
+        warnings = [
+            str(item).strip()
+            for item in (focus_probe.get("warnings") or [])
+            if str(item).strip()
+        ]
+        if warning and warning not in warnings:
+            warnings.append(warning)
+        decision_state = "clarification_requested"
+        question = {"prompt": prompt, "options": candidate_ids}
+        if clarification_policy == "never_ask" or not candidate_ids:
+            decision_state = "no_viable_focus"
+            question = {"prompt": "", "options": []}
+        return {
+            "gate_path": "deliberate",
+            "focus_type": str(focus_probe.get("focus_type") or "seam").strip(),
+            "decision_state": decision_state,
+            "decision_basis": decision_basis,
+            "selected_focus_id": None,
+            "selected_focus_summary": None,
+            "selected_focus_paths": [],
+            "confidence": confidence,
+            "confidence_band": cls._focus_confidence_band(confidence),
+            "files_hint_disposition": str(
+                focus_probe.get("files_hint_disposition") or "absent"
+            ).strip(),
+            "checked_files": checked_files,
+            "candidates": candidates,
+            "question": question,
+            "warnings": warnings,
+            "adapter_plan": focus_type_adapter(focus_probe.get("focus_type"))
+            .build_adapter_plan(
+                selected_focus_id=None,
+                selected_focus_paths=[],
+                secondary_focus_ids=candidate_ids,
+            )
+            .to_dict(),
+        }
+
+    @classmethod
+    def _focus_gate_rerun_answer_hardening_context(
+        cls,
+        *,
+        focus_probe: dict[str, Any] | None,
+        focus_decision: dict[str, Any],
+        clarification_policy: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(focus_probe, dict) or not focus_probe:
+            return None
+        if str(focus_decision.get("decision_basis") or "").strip() != "rerun_answer":
+            return None
+
+        probe_state = cls._resolve_focus_probe_state(focus_probe=focus_probe)
+        valid_winner_focus_id = str(
+            probe_state.get("valid_winner_focus_id") or ""
+        ).strip()
+        if not valid_winner_focus_id:
+            return {
+                "reason": "current probe is ambiguous under selection thresholds",
+                "clarification_policy": clarification_policy,
+                "dominant_candidate_id": None,
+                "dominant_candidate_score": probe_state.get("top_candidate_score"),
+            }
+
+        selected_focus_id = str(focus_decision.get("selected_focus_id") or "").strip()
+        if selected_focus_id == valid_winner_focus_id:
+            return None
+
+        return {
+            "reason": (
+                "model-selected rerun focus did not match the runner-computed admissible rerun focus: "
+                f"{valid_winner_focus_id}"
+            ),
+            "clarification_policy": clarification_policy,
+            "selected_option": selected_focus_id,
+            "dominant_candidate_id": valid_winner_focus_id,
+            "dominant_candidate_score": probe_state.get("top_candidate_score"),
+        }
+
+    def _focus_refinement_trigger_reason(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any],
+    ) -> str | None:
+        selected_focus_paths = self._normalize_workspace_ref_list(
+            focus_decision.get("selected_focus_paths")
+        )
+        selected_focus_path_set = set(selected_focus_paths)
+        if len(selected_focus_path_set) <= 1:
+            return None
+
+        checked_file_set = set(
+            self._normalize_workspace_ref_list(focus_probe.get("checked_files"))
+        )
+        if checked_file_set and selected_focus_path_set == checked_file_set:
+            return "umbrella_selected_checked_files"
+
+        for candidate in focus_probe.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            score = candidate.get("score")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or float(score) < 0.55
+            ):
+                continue
+            candidate_paths = set(
+                self._normalize_workspace_ref_list(candidate.get("candidate_paths"))
+            )
+            if candidate_paths and candidate_paths < selected_focus_path_set:
+                return "collapsed_narrower_subset"
+        return None
+
+    def _rank_focus_refinement_candidates(
+        self,
+        *,
+        focus_probe: dict[str, Any],
+        selected_focus_paths: list[str],
+    ) -> list[dict[str, Any]]:
+        selected_focus_path_set = set(selected_focus_paths)
+        seam_adapter = focus_type_adapter("seam")
+        representatives_by_focus_id: dict[str, dict[str, Any]] = {}
+
+        for probe_index, candidate in enumerate(focus_probe.get("candidates") or []):
+            if not isinstance(candidate, dict):
+                continue
+            focus_id = str(candidate.get("focus_id") or "").strip()
+            score = candidate.get("score")
+            candidate_paths = self._normalize_workspace_ref_list(
+                candidate.get("candidate_paths")
+            )
+            candidate_path_set = set(candidate_paths)
+            if (
+                not focus_id
+                or not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not candidate_paths
+                or not candidate_path_set
+                or not candidate_path_set < selected_focus_path_set
+            ):
+                continue
+            canonical_focus_id = seam_adapter.canonical_focus_id_for_paths(
+                candidate_paths
+            )
+            if not canonical_focus_id:
+                continue
+            normalized_candidate = {
+                "focus_id": focus_id,
+                "canonical_focus_id": canonical_focus_id,
+                "score": float(score),
+                "candidate_paths": candidate_paths,
+                "focus_summary": str(candidate.get("focus_summary") or "").strip(),
+                "why_candidate": str(candidate.get("why_candidate") or "").strip(),
+                "original_probe_index": probe_index,
+                "raw_candidate": deepcopy(candidate),
+            }
+            existing = representatives_by_focus_id.get(canonical_focus_id)
+            if existing is None or normalized_candidate["score"] > existing["score"]:
+                representatives_by_focus_id[canonical_focus_id] = normalized_candidate
+
+        return sorted(
+            representatives_by_focus_id.values(),
+            key=lambda item: (
+                -float(item["score"]),
+                len(item["candidate_paths"]),
+                int(item["original_probe_index"]),
+            ),
+        )
+
+    def _refine_selected_focus_from_probe_candidate(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        selected_focus_paths = self._normalize_workspace_ref_list(
+            focus_decision.get("selected_focus_paths")
+        )
+        candidate_paths = self._normalize_workspace_ref_list(
+            candidate.get("candidate_paths")
+        )
+        if not set(candidate_paths) < set(selected_focus_paths):
+            return None, "not_proper_subset"
+
+        canonical_focus_id = focus_type_adapter("seam").canonical_focus_id_for_paths(
+            candidate_paths
+        )
+        candidate_focus_id = str(candidate.get("focus_id") or "").strip()
+        if not canonical_focus_id or candidate_focus_id != canonical_focus_id:
+            return None, "canonical_drift"
+
+        refined_candidates = [
+            deepcopy(item)
+            for item in (focus_probe.get("candidates") or [])
+            if isinstance(item, dict)
+        ]
+        secondary_focus_ids = self._dedupe_preserving_order(
+            [
+                str(item.get("focus_id") or "").strip()
+                for item in refined_candidates
+                if str(item.get("focus_id") or "").strip()
+                and str(item.get("focus_id") or "").strip() != canonical_focus_id
+            ]
+        )
+        adapter_plan = focus_type_adapter("seam").build_adapter_plan(
+            selected_focus_id=canonical_focus_id,
+            selected_focus_paths=candidate_paths,
+            secondary_focus_ids=secondary_focus_ids,
+        ).to_dict()
+        if (
+            str(adapter_plan.get("downstream_primary_seam_id") or "").strip()
+            != canonical_focus_id
+            or self._normalize_workspace_ref_list(
+                adapter_plan.get("downstream_primary_seam_paths")
+            )
+            != candidate_paths
+        ):
+            return None, "downstream_bridge_drift"
+
+        refined_decision = deepcopy(focus_decision)
+        refined_decision["selected_focus_id"] = canonical_focus_id
+        refined_decision["selected_focus_summary"] = (
+            str(candidate.get("focus_summary") or "").strip()
+            or str(refined_decision.get("selected_focus_summary") or "").strip()
+            or None
+        )
+        refined_decision["selected_focus_paths"] = candidate_paths
+        refined_decision["confidence"] = float(candidate.get("score"))
+        refined_decision["confidence_band"] = self._focus_confidence_band(
+            float(candidate.get("score"))
+        )
+        refined_decision["candidates"] = refined_candidates
+        refined_decision["adapter_plan"] = adapter_plan
+        return refined_decision, None
+
+    def _attempt_focus_refinement(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any],
+        trigger_reason: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        source_selected_focus_id = str(
+            focus_decision.get("selected_focus_id") or ""
+        ).strip()
+        source_selected_focus_paths = self._normalize_workspace_ref_list(
+            focus_decision.get("selected_focus_paths")
+        )
+        ranked_candidates = self._rank_focus_refinement_candidates(
+            focus_probe=focus_probe,
+            selected_focus_paths=source_selected_focus_paths,
+        )
+        rerun_guidance = [
+            {
+                "focus_id": str(candidate.get("canonical_focus_id") or "").strip(),
+                "score": float(candidate["score"]),
+                "candidate_paths": list(candidate["candidate_paths"]),
+                "why_candidate": str(candidate.get("why_candidate") or "").strip(),
+            }
+            for candidate in ranked_candidates
+        ]
+        attempted_candidate_ids: list[str] = []
+        rejected_candidates: list[dict[str, Any]] = []
+        candidate_shortlist_ids = [
+            str(candidate.get("canonical_focus_id") or "").strip()
+            for candidate in ranked_candidates
+            if str(candidate.get("canonical_focus_id") or "").strip()
+        ]
+
+        for candidate in ranked_candidates[:_FOCUS_MAX_REFINEMENT_ATTEMPTS]:
+            canonical_focus_id = str(candidate.get("canonical_focus_id") or "").strip()
+            if canonical_focus_id:
+                attempted_candidate_ids.append(canonical_focus_id)
+            refined_decision, rejection_reason = (
+                self._refine_selected_focus_from_probe_candidate(
+                    focus_decision=focus_decision,
+                    focus_probe=focus_probe,
+                    candidate=candidate,
+                )
+            )
+            if refined_decision is not None:
+                return refined_decision, {
+                    "status": "applied",
+                    "trigger_reason": trigger_reason,
+                    "source_selected_focus_id": source_selected_focus_id,
+                    "source_selected_focus_paths": source_selected_focus_paths,
+                    "candidate_shortlist_ids": candidate_shortlist_ids,
+                    "attempted_candidate_ids": attempted_candidate_ids,
+                    "rejected_candidates": rejected_candidates,
+                    "selected_candidate_id": str(
+                        refined_decision.get("selected_focus_id") or ""
+                    ).strip()
+                    or None,
+                    "selected_candidate_paths": self._normalize_workspace_ref_list(
+                        refined_decision.get("selected_focus_paths")
+                    ),
+                    "exhausted_reason": None,
+                    "rerun_guidance": rerun_guidance,
+                }
+            rejected_candidates.append(
+                {
+                    "focus_id": canonical_focus_id
+                    or str(candidate.get("focus_id") or "").strip(),
+                    "reason": rejection_reason or "downstream_bridge_drift",
+                }
+            )
+
+        exhausted_decision = deepcopy(focus_decision)
+        exhausted_decision["candidates"] = [
+            deepcopy(candidate.get("raw_candidate"))
+            for candidate in ranked_candidates
+            if isinstance(candidate.get("raw_candidate"), dict)
+        ]
+        exhausted_decision = self._normalized_focus_gate_no_viable_decision(
+            exhausted_decision,
+            warning=(
+                "Selected repo-probe focus remained too broad after bounded "
+                "refinement; rerun with one of the narrower files_hint slices."
+            ),
+        )
+        return exhausted_decision, {
+            "status": "exhausted",
+            "trigger_reason": trigger_reason,
+            "source_selected_focus_id": source_selected_focus_id,
+            "source_selected_focus_paths": source_selected_focus_paths,
+            "candidate_shortlist_ids": candidate_shortlist_ids,
+            "attempted_candidate_ids": attempted_candidate_ids,
+            "rejected_candidates": rejected_candidates,
+            "selected_candidate_id": None,
+            "selected_candidate_paths": [],
+            "exhausted_reason": (
+                "no_ranked_narrower_candidates"
+                if not ranked_candidates
+                else "no_candidate_survived_validation"
+            ),
+            "rerun_guidance": rerun_guidance,
+        }
+
+    def _normalize_focus_gate_decision_for_policy(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        focus_decision: dict[str, Any],
+        focus_probe: dict[str, Any] | None,
+        focus_gate_answer: dict[str, Any] | None,
+        stale_answer_context: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        effective_stale_answer_context = stale_answer_context
+        if effective_stale_answer_context is None:
+            effective_stale_answer_context = (
+                self._focus_gate_rerun_answer_hardening_context(
+                    focus_probe=focus_probe,
+                    focus_decision=focus_decision,
+                    clarification_policy=contract.focus_gate.clarification_policy,
+                )
+            )
+
+        if (
+            isinstance(effective_stale_answer_context, dict)
+            and isinstance(focus_probe, dict)
+            and focus_probe
+        ):
+            return (
+                self._stale_focus_gate_decision_from_probe(
+                    focus_probe=focus_probe,
+                    focus_gate_answer=focus_gate_answer,
+                    stale_answer_context=effective_stale_answer_context,
+                    clarification_policy=contract.focus_gate.clarification_policy,
+                ),
+                None,
+            )
+
+        decision_state = str(focus_decision.get("decision_state") or "").strip()
+        gate_path = str(focus_decision.get("gate_path") or "").strip()
+        if (
+            decision_state == "selected"
+            and gate_path == "deliberate"
+            and focus_gate_answer is None
+            and isinstance(focus_probe, dict)
+            and focus_probe
+        ):
+            probe_state = self._resolve_focus_probe_state(focus_probe=focus_probe)
+            valid_winner_focus_id = str(
+                probe_state.get("valid_winner_focus_id") or ""
+            ).strip()
+            if not valid_winner_focus_id:
+                return (
+                    self._probe_blocked_focus_gate_decision_from_probe(
+                        focus_probe=focus_probe,
+                        clarification_policy=contract.focus_gate.clarification_policy,
+                        decision_basis="repo_probe",
+                        warning=str(probe_state.get("ambiguity_reason") or "").strip()
+                        or None,
+                    ),
+                    None,
+                )
+            selected_focus_id = str(
+                focus_decision.get("selected_focus_id") or ""
+            ).strip()
+            if selected_focus_id != valid_winner_focus_id:
+                warning = (
+                    "Model-selected repo-probe focus did not match the "
+                    "runner-computed admissible probe focus: "
+                    f"{valid_winner_focus_id}."
+                )
+                return (
+                    self._probe_blocked_focus_gate_decision_from_probe(
+                        focus_probe=focus_probe,
+                        clarification_policy=contract.focus_gate.clarification_policy,
+                        decision_basis="repo_probe",
+                        warning=warning,
+                    ),
+                    None,
+                )
+            if str(focus_decision.get("focus_type") or "").strip() == "artifact":
+                warning = (
+                    "Initial deliberate artifact selection requires operator "
+                    "confirmation; adjudicate remains the only automatic "
+                    "selection path for obvious artifact requests."
+                )
+                return (
+                    self._probe_blocked_focus_gate_decision_from_probe(
+                        focus_probe=focus_probe,
+                        clarification_policy=contract.focus_gate.clarification_policy,
+                        decision_basis="repo_probe",
+                        warning=warning,
+                    ),
+                    None,
+                )
+            selected_focus_paths = set(
+                self._normalize_workspace_ref_list(
+                    focus_decision.get("selected_focus_paths")
+                )
+            )
+            trigger_reason = self._focus_refinement_trigger_reason(
+                focus_decision=focus_decision,
+                focus_probe=focus_probe,
+            )
+            if trigger_reason is not None:
+                refined_decision, focus_refinement = self._attempt_focus_refinement(
+                    focus_decision=focus_decision,
+                    focus_probe=focus_probe,
+                    trigger_reason=trigger_reason,
+                )
+                return refined_decision, focus_refinement
+            if selected_focus_paths:
+                for candidate in focus_decision.get("candidates") or []:
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_focus_id = str(candidate.get("focus_id") or "").strip()
+                    if (
+                        not candidate_focus_id
+                        or candidate_focus_id == selected_focus_id
+                    ):
+                        continue
+                    score = candidate.get("score")
+                    if (
+                        not isinstance(score, (int, float))
+                        or isinstance(score, bool)
+                        or float(score) < 0.55
+                    ):
+                        continue
+                    candidate_paths = set(
+                        self._normalize_workspace_ref_list(
+                            candidate.get("candidate_paths")
+                        )
+                    )
+                    if candidate_paths and candidate_paths < selected_focus_paths:
+                        warning = (
+                            "Selected repo-probe focus collapsed multiple narrower "
+                            "viable candidates into one umbrella seam."
+                        )
+                        return (
+                            self._probe_blocked_focus_gate_decision_from_probe(
+                                focus_probe=focus_probe,
+                                clarification_policy=contract.focus_gate.clarification_policy,
+                                decision_basis="repo_probe",
+                                warning=warning,
+                            ),
+                            None,
+                        )
+        if (
+            decision_state == "clarification_requested"
+            and contract.focus_gate.clarification_policy == "never_ask"
+        ):
+            warning = None
+            if isinstance(effective_stale_answer_context, dict):
+                reason = str(effective_stale_answer_context.get("reason") or "").strip()
+                if reason:
+                    warning = f"Prior focus_gate_answer went stale: {reason}."
+            return (
+                self._normalized_focus_gate_no_viable_decision(
+                    focus_decision,
+                    warning=warning,
+                ),
+                None,
+            )
+        return focus_decision, None
+
+    @staticmethod
+    def _focus_gate_stage_metadata(
+        focus_decision: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "focus_gate": {
+                "gate_path": focus_decision.get("gate_path"),
+                "focus_type": focus_decision.get("focus_type"),
+                "decision_state": focus_decision.get("decision_state"),
+            }
+        }
+
+    @staticmethod
+    def _focus_gate_probe_stage_metadata(
+        focus_probe: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "focus_gate_probe": {
+                "focus_type": focus_probe.get("focus_type"),
+                "files_hint_disposition": focus_probe.get("files_hint_disposition"),
+                "candidate_count": len(focus_probe.get("candidates") or []),
+            }
+        }
+
+    def _sync_persisted_focus_gate_stage(
+        self,
+        *,
+        focus_decision: dict[str, Any],
+    ) -> None:
+        for stage_record in reversed(self.agent_stages):
+            if stage_record.get("role_name") != "focus_gate":
+                continue
+            stage_record["structured_output"] = deepcopy(focus_decision)
+            stage_record["metadata"] = self._focus_gate_stage_metadata(focus_decision)
+
+            stdout_path = str(stage_record.get("stdout_path") or "").strip()
+            if stdout_path:
+                envelope_path = Path(stdout_path).with_name("run.envelope.json")
+                write_json(envelope_path, stage_record)
+            normalized_output_path = (
+                str(stage_record.get("normalized_output_path") or "").strip()
+                or str(stage_record.get("output_path") or "").strip()
+            )
+            if normalized_output_path:
+                write_json(Path(normalized_output_path), focus_decision)
+            return
+
+    def _build_focus_gate_blocked_outcome(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        focus_decision: dict[str, Any],
+        focus_refinement: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        decision_state = str(focus_decision.get("decision_state") or "").strip()
+        if decision_state == "clarification_requested":
+            return {
+                "run_verdict": "blocked_for_clarification",
+                "content_verdict": "blocked_for_clarification",
+                "validator_verdict": "not_run",
+                "final_summary": "Focus gate blocked the run pending clarification.",
+                "failure_details": {
+                    "stage": "focus_gate",
+                    "decision_state": "clarification_requested",
+                    "question": focus_decision.get("question"),
+                    "candidates": focus_decision.get("candidates"),
+                    "warnings": focus_decision.get("warnings"),
+                },
+                "details": {
+                    "focus_decision": focus_decision,
+                    "focus_refinement": focus_refinement,
+                    "review_loop_exercised": False,
+                    "analysis_review_contract": contract.to_dict(),
+                },
+            }
+        failure_details = {
+            "stage": "focus_gate",
+            "decision_state": "no_viable_focus",
+            "candidates": focus_decision.get("candidates"),
+            "warnings": focus_decision.get("warnings"),
+        }
+        details = {
+            "focus_decision": focus_decision,
+            "focus_refinement": focus_refinement,
+            "review_loop_exercised": False,
+            "analysis_review_contract": contract.to_dict(),
+        }
+        if isinstance(focus_refinement, dict) and focus_refinement:
+            failure_details["focus_refinement"] = focus_refinement
+        return {
+            "run_verdict": "no_viable_focus",
+            "content_verdict": "no_viable_focus",
+            "validator_verdict": "not_run",
+            "final_summary": "Focus gate could not identify a viable focus target.",
+            "failure_details": failure_details,
+            "details": details,
+        }
+
+    def _execute_focus_gate_probe_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        role_cfg: RoleConfig,
+        record_stage: bool,
+        record_workspace_policy_check: bool,
+    ) -> ProviderRun:
+        prompt = build_focus_probe_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            capture_git_snapshot(
+                self.workspace,
+                ignored_rel_paths=self.policy_ignored_rel_paths,
+            ),
+            contract,
+        )
+        return self._run_agent_stage(
+            "focus_gate_probe",
+            role_cfg.provider,
+            prompt,
+            focus_gate_probe_output_schema(),
+            role_cfg,
+            semantic_context={"contract": contract},
+            record_stage=record_stage,
+            record_workspace_policy_check=record_workspace_policy_check,
+        )
+
+    def _execute_focus_gate_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        role_cfg: RoleConfig,
+        gate_path: str,
+        focus_probe: dict[str, Any] | None,
+        focus_gate_answer: dict[str, Any] | None,
+        stale_answer_context: dict[str, Any] | None,
+        record_stage: bool,
+        record_workspace_policy_check: bool,
+    ) -> ProviderRun:
+        git_snapshot = capture_git_snapshot(
+            self.workspace,
+            ignored_rel_paths=self.policy_ignored_rel_paths,
+        )
+        if gate_path == "adjudicate":
+            prompt = build_focus_gate_adjudicate_prompt(
+                self.task,
+                self.strategy.prompt_preamble,
+                git_snapshot,
+                contract,
+                focus_probe=focus_probe,
+                focus_gate_answer=focus_gate_answer,
+                prior_focus_decision=None,
+                stale_answer_context=stale_answer_context,
+            )
+        else:
+            prompt = build_focus_gate_deliberate_prompt(
+                self.task,
+                self.strategy.prompt_preamble,
+                git_snapshot,
+                contract,
+                focus_probe=focus_probe,
+                focus_gate_answer=focus_gate_answer,
+                prior_focus_decision=None,
+                stale_answer_context=stale_answer_context,
+            )
+        return self._run_agent_stage(
+            "focus_gate",
+            role_cfg.provider,
+            prompt,
+            focus_gate_output_schema(),
+            role_cfg,
+            semantic_context={
+                "contract": contract,
+                "expected_gate_path": gate_path,
+            },
+            record_stage=record_stage,
+            record_workspace_policy_check=record_workspace_policy_check,
+        )
+
+    def _run_focus_gate(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        role_cfg: RoleConfig,
+    ) -> dict[str, Any]:
+        focus_gate_answer = self._focus_gate_answer_payload()
+        default_gate_path = contract.focus_gate.default_path
+        assert not (
+            default_gate_path == "adjudicate" and focus_gate_answer is not None
+        ), "adjudicate focus-gate runs cannot consume focus_gate_answer."
+
+        if default_gate_path == "deliberate":
+            probe_run = self._execute_focus_gate_probe_stage(
+                contract=contract,
+                role_cfg=role_cfg,
+                record_stage=True,
+                record_workspace_policy_check=True,
+            )
+            if not probe_run.ok:
+                return {
+                    "kind": "failed",
+                    "run": probe_run,
+                    "stage_label": "focus_gate_probe",
+                }
+
+            focus_probe = probe_run.structured_output or {}
+            stale_answer_context = self._focus_gate_stale_answer_context(
+                focus_probe=focus_probe,
+                focus_gate_answer=focus_gate_answer,
+                clarification_policy=contract.focus_gate.clarification_policy,
+            )
+            focus_gate_run = self._execute_focus_gate_stage(
+                contract=contract,
+                role_cfg=role_cfg,
+                gate_path="deliberate",
+                focus_probe=focus_probe,
+                focus_gate_answer=focus_gate_answer,
+                stale_answer_context=stale_answer_context,
+                record_stage=True,
+                record_workspace_policy_check=True,
+            )
+            if not focus_gate_run.ok:
+                return {
+                    "kind": "failed",
+                    "run": focus_gate_run,
+                    "stage_label": "focus_gate",
+                }
+
+            focus_decision, focus_refinement = (
+                self._normalize_focus_gate_decision_for_policy(
+                    contract=contract,
+                    focus_decision=focus_gate_run.structured_output or {},
+                    focus_probe=focus_probe,
+                    focus_gate_answer=focus_gate_answer,
+                    stale_answer_context=stale_answer_context,
+                )
+            )
+            self._sync_persisted_focus_gate_stage(focus_decision=focus_decision)
+            if str(focus_decision.get("decision_state") or "").strip() in {
+                "clarification_requested",
+                "no_viable_focus",
+            }:
+                return {
+                    "kind": "blocked",
+                    "outcome": self._build_focus_gate_blocked_outcome(
+                        contract=contract,
+                        focus_decision=focus_decision,
+                        focus_refinement=focus_refinement,
+                    ),
+                }
+            return {
+                "kind": "selected",
+                "focus_decision": focus_decision,
+                "focus_refinement": focus_refinement,
+            }
+
+        focus_gate_run = self._execute_focus_gate_stage(
+            contract=contract,
+            role_cfg=role_cfg,
+            gate_path=default_gate_path,
+            focus_probe=None,
+            focus_gate_answer=None,
+            stale_answer_context=None,
+            record_stage=True,
+            record_workspace_policy_check=True,
+        )
+        if not focus_gate_run.ok:
+            return {
+                "kind": "failed",
+                "run": focus_gate_run,
+                "stage_label": "focus_gate",
+            }
+        focus_decision, focus_refinement = (
+            self._normalize_focus_gate_decision_for_policy(
+                contract=contract,
+                focus_decision=focus_gate_run.structured_output or {},
+                focus_probe=None,
+                focus_gate_answer=None,
+                stale_answer_context=None,
+            )
+        )
+        self._sync_persisted_focus_gate_stage(focus_decision=focus_decision)
+        if str(focus_decision.get("decision_state") or "").strip() in {
+            "clarification_requested",
+            "no_viable_focus",
+        }:
+            return {
+                "kind": "blocked",
+                "outcome": self._build_focus_gate_blocked_outcome(
+                    contract=contract,
+                    focus_decision=focus_decision,
+                    focus_refinement=focus_refinement,
+                ),
+            }
+        return {
+            "kind": "selected",
+            "focus_decision": focus_decision,
+            "focus_refinement": focus_refinement,
+        }
+
     def _emit_task_strategy_warnings(self) -> None:
-        if self.task.task_kind == "analysis_review" and self.strategy.kind in {"pfr_v1", "single_pass"}:
+        if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
+            self.warnings.append(
+                "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
+            )
+        if self.task.task_kind == "analysis_review" and self.strategy.kind in {
+            "pfr_v1",
+            "single_pass",
+        }:
             self.warnings.append(
                 "This task looks like an analysis_review task, but the selected strategy is patch-oriented. "
-                "analysis_review_v1 will usually be a better fit."
+                "analysis_review_bounded_v1 or analysis_review_trust_v1 will usually be a better fit."
             )
-        if self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+        if self.task.task_kind == "patch" and is_analysis_review_strategy_kind(
+            self.strategy.kind
+        ):
             self.warnings.append(
-                "This task requires a patch-oriented workflow, but the selected strategy is analysis_review_v1."
+                f"This task requires a patch-oriented workflow, but the selected strategy is {self.strategy.kind}."
             )
 
     def _copy_role_if_missing(self, missing_role: str, source_roles: list[str]) -> None:
@@ -1437,30 +6076,35 @@ class HarnessRunner:
                 return
 
     def _apply_strategy_autofit(self) -> None:
+        if self.strategy.kind == ANALYSIS_REVIEW_LEGACY_KIND:
+            self.strategy.kind = ANALYSIS_REVIEW_BOUNDED_KIND
         if self.task.task_kind == "analysis_review" and self.strategy.kind == "pfr_v1":
             if not self.auto_fit_strategy:
                 self.errors.append(
                     "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
                 )
                 return
-            self.strategy.kind = "analysis_review_v1"
+            self.strategy.kind = ANALYSIS_REVIEW_BOUNDED_KIND
             self._copy_role_if_missing("critic", ["falsifier"])
             self._copy_role_if_missing("reviser", ["patcher", "proposer"])
             self._copy_role_if_missing("auditor", ["critic", "falsifier"])
             self.warnings.append(
-                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_v1 for an analysis_review task."
+                "Auto-fit changed strategy kind from pfr_v1 to analysis_review_bounded_v1 for an analysis_review task."
             )
-        elif self.task.task_kind == "patch" and self.strategy.kind == "analysis_review_v1":
+        elif self.task.task_kind == "patch" and is_analysis_review_strategy_kind(
+            self.strategy.kind
+        ):
+            original_kind = self.strategy.kind
             if not self.auto_fit_strategy:
                 self.errors.append(
-                    "patch tasks are incompatible with analysis_review_v1 unless auto-fit is enabled."
+                    f"patch tasks are incompatible with {original_kind} unless auto-fit is enabled."
                 )
                 return
             self.strategy.kind = "pfr_v1"
             self._copy_role_if_missing("falsifier", ["critic", "auditor"])
             self._copy_role_if_missing("patcher", ["reviser", "proposer"])
             self.warnings.append(
-                "Auto-fit changed strategy kind from analysis_review_v1 to pfr_v1 for a patch task."
+                f"Auto-fit changed strategy kind from {original_kind} to pfr_v1 for a patch task."
             )
 
     def _validator_preflight_outcome(self) -> dict[str, Any] | None:
@@ -1488,10 +6132,18 @@ class HarnessRunner:
         for item in preflight:
             status = str(item.get("status") or "")
             if item.get("required") and status in {"failed", "not_applicable"}:
-                reason = str(item.get("reason") or f"Validator {item.get('name')} is misconfigured.")
+                reason = str(
+                    item.get("reason")
+                    or f"Validator {item.get('name')} is misconfigured."
+                )
                 preflight_errors.append(reason)
             elif not item.get("required") and status in {"failed", "not_applicable"}:
-                self.warnings.append(str(item.get("reason") or f"Optional validator {item.get('name')} is not applicable."))
+                self.warnings.append(
+                    str(
+                        item.get("reason")
+                        or f"Optional validator {item.get('name')} is not applicable."
+                    )
+                )
 
         if not preflight_errors:
             return None
@@ -1503,7 +6155,10 @@ class HarnessRunner:
             "validator_verdict": "misconfigured",
             "config_verdict": "invalid_config",
             "final_summary": preflight_errors[0],
-            "failure_details": {"preflight_errors": preflight_errors, "validator_preflight": preflight},
+            "failure_details": {
+                "preflight_errors": preflight_errors,
+                "validator_preflight": preflight,
+            },
             "details": {},
         }
 
@@ -1527,7 +6182,11 @@ class HarnessRunner:
                     "violations": [
                         "workspace_write_policy.require_clean_start=true, but the workspace started dirty: "
                         + ", ".join(dirty_paths[:8])
-                        + (f", ... (+{len(dirty_paths) - 8} more)" if len(dirty_paths) > 8 else "")
+                        + (
+                            f", ... (+{len(dirty_paths) - 8} more)"
+                            if len(dirty_paths) > 8
+                            else ""
+                        )
                     ],
                     "ok": False,
                 }
@@ -1604,7 +6263,9 @@ class HarnessRunner:
             return "invalid_config"
         return content_verdict
 
-    def _derive_final_answer_payload(self, run_details: dict[str, Any]) -> dict[str, Any] | None:
+    def _derive_final_answer_payload(
+        self, run_details: dict[str, Any]
+    ) -> dict[str, Any] | None:
         candidate_keys = ("final_analysis", "final_solution")
         for key in candidate_keys:
             candidate = run_details.get(key)
@@ -1612,7 +6273,9 @@ class HarnessRunner:
                 return candidate
         return None
 
-    def _write_final_answer_artifacts(self, payload: dict[str, Any] | None) -> dict[str, str]:
+    def _write_final_answer_artifacts(
+        self, payload: dict[str, Any] | None
+    ) -> dict[str, str]:
         if not payload:
             return {}
         final_json_path = self.run_dir / "FINAL_ANSWER.json"
@@ -1662,7 +6325,16 @@ class HarnessRunner:
                 if confidence is not None:
                     lines.extend([f"**Confidence:** {confidence}", ""])
         else:
-            lines.extend(["## Structured Output", "", "```json", json.dumps(payload, indent=2, sort_keys=False), "```", ""])
+            lines.extend(
+                [
+                    "## Structured Output",
+                    "",
+                    "```json",
+                    json.dumps(payload, indent=2, sort_keys=False),
+                    "```",
+                    "",
+                ]
+            )
         return "\n".join(lines).rstrip() + "\n"
 
     def _latest_validator_results(self) -> list[ValidationRun]:
@@ -1685,11 +6357,15 @@ class HarnessRunner:
             status = str(item.get("status", "unknown"))
             status_counts[status] = status_counts.get(status, 0) + 1
             if item.get("required"):
-                required_status_counts[status] = required_status_counts.get(status, 0) + 1
+                required_status_counts[status] = (
+                    required_status_counts.get(status, 0) + 1
+                )
         latest_round_results = self._latest_validator_results()
         return {
             "total_runs": len(all_results),
             "status_counts": status_counts,
             "required_status_counts": required_status_counts,
-            "latest_round_verdict": self._classify_validator_verdict(latest_round_results),
+            "latest_round_verdict": self._classify_validator_verdict(
+                latest_round_results
+            ),
         }

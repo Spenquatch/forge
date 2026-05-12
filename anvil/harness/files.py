@@ -25,10 +25,16 @@ def load_structured_file(path: str | Path) -> dict[str, Any]:
     p = Path(path)
     text = p.read_text(encoding="utf-8")
     if p.suffix.lower() == ".json":
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Failed to parse {p}: {exc.msg}") from exc
     else:
         yaml = _load_yaml_module()
-        data = yaml.safe_load(text)
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Failed to parse {p}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Expected a mapping in {p}")
     return data

@@ -106,10 +106,15 @@ Responsibilities:
 
 ### 6) `write_artifacts`
 Responsibilities:
-- materialize the final or best-effort deliverables
+- materialize the selected primary deliverable
 - write `REPORT.md` and `summary.json`
-- write `FINAL_ANSWER.*` only for accepted runs
-- otherwise write `BEST_DRAFT.*`
+- write `FINAL_ANSWER.*` only when the selected primary deliverable is a publishable final answer
+- when trust final publication is blocked, fall through partial-answer eligibility before writing `BEST_DRAFT.*`
+- finalize `analysis_review_status.publishability` after artifact projection so it agrees with `final_artifact_kind`
+- keep `REPORT.md` wording runner-owned: `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`
+- keep `PARTIAL_ANSWER.*` scope wording exact when that state is rendered: `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`
+- keep topic lifecycle wording split as `Open topics:` and `Carried-forward topics:` rather than collapsing them into one unresolved label
+- treat only `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.` as advisory carveouts rather than model-authored publication authority
 
 ### 7) `finalize`
 Responsibilities:
@@ -377,7 +382,7 @@ Required output fields:
 - `single_pass` baseline with fake provider
 - `pfr_v1` patch loop with fake provider and fake validators
 - `analysis_review_v1` with critique/revision/auditor loop
-- non-accepted run writes `BEST_DRAFT.*`, not `FINAL_ANSWER.*`
+- blocked trust final publication falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`
 
 ### CLI
 - `anvil.cli harness-run --help`
@@ -391,7 +396,7 @@ Required output fields:
 ## Acceptance criteria
 - Each strategy kind runs through its own LangGraph subgraph.
 - The harness can select the best draft instead of blindly taking the last one.
-- Non-accepted runs produce `BEST_DRAFT.*` artifacts.
+- The harness writes `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, or `BEST_DRAFT.*` according to publishable final-answer and partial-answer eligibility.
 - Strategy/task mismatch is handled early and predictably.
 - The new surface works with CLI providers first-class and still supports API/local providers.
 

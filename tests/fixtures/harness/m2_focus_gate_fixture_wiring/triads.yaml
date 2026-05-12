@@ -1,0 +1,13 @@
+fixture_namespace: m2_focus_gate_fixture_wiring
+fixture_purpose: seam_regression_only_wiring_coverage
+cases:
+  - name: bounded-adjudicate
+    task: examples/harness/tasks/recommend_automation_improvements.yaml
+    strategy: examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml
+    workspace: tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace
+    expected_strategy_kind: analysis_review_bounded_v1
+  - name: trust-adjudicate
+    task: examples/harness/tasks/recommend_automation_improvements.yaml
+    strategy: examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml
+    workspace: tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace
+    expected_strategy_kind: analysis_review_trust_v1

@@ -27,7 +27,53 @@ Harness task/strategy examples:
 ```bash
 poetry run python -m anvil.cli harness-run \
   --task examples/harness/tasks/recommend_automation_improvements.yaml \
-  --strategy examples/harness/strategies/analysis_review_codex_claude.yaml \
+  --strategy examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml \
   --workspace /path/to/repo \
   --out-root .forge-harness-runs
 ```
+
+Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
+That canonical `analysis_review_trust_*` entrypoint is attestation-first in M3A. Use `analysis_review_trust_legacy_*` only for explicit `legacy_full_review` compatibility checks.
+
+These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
+
+Repo-local fixture wiring coverage lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and remains seam-regression-only wiring coverage.
+
+Authoritative focus-gate acceptance uses the shard manifest at `.gstack/m4-request-gate/orch/focus_gate_acceptance.yaml`.
+Seed it from `examples/harness/live_acceptance/focus_gate_acceptance.template.yaml`.
+The canonical shard path provisions its own isolated git-backed workspace from `tests/fixtures/harness/m2_focus_gate_fixture_wiring/workspace`; do not manually prepare `/tmp` workspaces and do not pass `--workspace`.
+
+Run preflight first:
+
+```bash
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard seam-adjudicate \
+  --preflight-only
+```
+
+Then run the four authoritative shards under one `pass-id`:
+
+```bash
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard seam-adjudicate \
+  --pass-id m4-final-001
+
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard seam-deliberate \
+  --pass-id m4-final-001
+
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard artifact-adjudicate \
+  --pass-id m4-final-001
+
+poetry run python scripts/run_focus_gate_acceptance.py \
+  --config .gstack/m4-request-gate/orch/focus_gate_acceptance.yaml \
+  --shard artifact-deliberate \
+  --pass-id m4-final-001
+```
+
+The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. Its legacy local config name stays `examples/harness/live_acceptance/m2_focus_gate_local.yaml`, and it still accepts the old `strategies:` shorthand surface, but its trust slot should still point at the canonical attestation-first `analysis_review_trust_*` strategy unless you are intentionally running a `legacy_full_review` compatibility check with an explicit `analysis_review_trust_legacy_*` file.

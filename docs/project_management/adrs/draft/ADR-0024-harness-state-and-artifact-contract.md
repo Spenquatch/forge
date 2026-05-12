@@ -333,23 +333,25 @@ run_verdict:
 
 ## Final artifact contract
 
-### Accepted / accepted_with_warnings runs
 Write:
-- `FINAL_ANSWER.md`
-- `FINAL_ANSWER.json`
 - `REPORT.md`
 - `summary.json`
-
-### Non-accepted runs
-Write:
-- `BEST_DRAFT.md`
-- `BEST_DRAFT.json`
-- `REPORT.md`
-- `summary.json`
+- `FINAL_ANSWER.md` / `FINAL_ANSWER.json` only when the selected primary deliverable is a publishable final answer
+- `PARTIAL_ANSWER.md` / `PARTIAL_ANSWER.json` when an eligible accepted-partial output or trust-mode fallback subset is the selected primary deliverable
+- `BEST_DRAFT.md` / `BEST_DRAFT.json` when neither a final nor partial deliverable may ship
 
 Rules:
-- Non-accepted runs must **not** present `FINAL_ANSWER.*` as the primary deliverable.
-- The artifact writer must put a prominent banner in markdown deliverables when the run is not accepted.
+- `summary.json["artifacts"]["final_artifact"]`, `final_artifact_json`, and `final_artifact_kind` are the source of truth for what actually shipped.
+- In trust mode, `accepted_with_warnings` does not guarantee `FINAL_ANSWER.*`.
+- `analysis_review_status.publishability.final_answer_publishable` and `blocking_causes` decide the canonical final publication outcome for trust-mode runs.
+- Artifact projection finalizes `analysis_review_status.publishability`, and `final_answer_publishable` must agree with `final_artifact_kind`.
+- Only the exact warning strings `strengths contains both concrete items and none_reason; prefer one or the other.` and `uncertainties contains both concrete items and none_reason; prefer one or the other.` are advisory carveouts for trust publication; reviewer prose does not decide artifact eligibility.
+- When trust final publication is blocked, artifact selection falls through to `PARTIAL_ANSWER.*` when eligible, otherwise `BEST_DRAFT.*`.
+- User-visible surfaces freeze their wording to `Final publication: publishable|blocked`, `Publication blockers:`, and `Recommendation indices withheld from FINAL_ANSWER.*:`.
+- Partial-answer scope lines freeze only for `PARTIAL_ANSWER.*`: `Recommendation indices included in PARTIAL_ANSWER.*: 1, 2`, `Recommendation indices withheld from FINAL_ANSWER.*: 2`, and `Recommendation indices excluded from PARTIAL_ANSWER.*: none`.
+- `REPORT.md` freezes only final-publication / final-withholding wording and does not render `Recommendation indices included in PARTIAL_ANSWER.*` or `Recommendation indices excluded from PARTIAL_ANSWER.*`.
+- Topic lifecycle summaries keep `Open topics:` and `Carried-forward topics:` separate; carried-forward items are not merged into open wording.
+- Markdown deliverables that are not the publishable final answer must carry a prominent banner explaining the artifact status.
 
 ## Best-draft selection contract
 Before writing the final deliverable, the harness must run a dedicated best-draft selector.
@@ -400,7 +402,7 @@ For analysis tasks, validators that do not apply must produce `not_applicable`, 
 - unit tests for reducers / serialization / draft selection
 - policy violation tests
 - validator applicability tests
-- artifact naming tests for accepted vs non-accepted runs
+- artifact naming tests for publishable final vs partial vs best-draft outcomes
 - issue-closure table tests in analysis-review loops
 
 ## Acceptance criteria

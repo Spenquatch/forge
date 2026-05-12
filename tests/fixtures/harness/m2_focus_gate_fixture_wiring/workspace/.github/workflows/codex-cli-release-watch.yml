@@ -1,0 +1,7 @@
+name: codex-cli-release-watch
+on:
+  schedule:
+    - cron: "0 * * * *"
+jobs:
+  watch:
+    runs-on: ubuntu-latest

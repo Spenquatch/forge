@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import posixpath
+import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
-
+from pathlib import Path
+from typing import Any, Literal, Optional
 
 VALID_TASK_KINDS = {"patch", "analysis_review"}
+ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
+ANALYSIS_REVIEW_TRUST_KIND = "analysis_review_trust_v1"
+ANALYSIS_REVIEW_LEGACY_KIND = "analysis_review_v1"
+ANALYSIS_REVIEW_STRATEGY_KINDS = {
+    ANALYSIS_REVIEW_BOUNDED_KIND,
+    ANALYSIS_REVIEW_TRUST_KIND,
+    ANALYSIS_REVIEW_LEGACY_KIND,
+}
 VALID_VALIDATOR_RUN_WHEN = {
     "patch_only",
     "analysis_only",
@@ -14,6 +25,290 @@ VALID_VALIDATOR_RUN_WHEN = {
     "mode_require",
 }
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
+VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
+VALID_TRUST_REVIEW_EXECUTION_MODES = {
+    "legacy_full_review",
+    "attestation_over_bounded",
+}
+VALID_FOCUS_GATE_DEFAULT_PATHS = {"adjudicate", "deliberate"}
+VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {
+    "block_for_clarification",
+    "never_ask",
+}
+VALID_SINGLETON_FOCUS_TYPES = ("seam", "artifact")
+DEFAULT_ALLOWED_FOCUS_TYPES = ["seam"]
+GENERIC_FOCUS_GATE_QUESTION_PROMPT = "Which focus should this run prioritize?"
+_WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(
+    r"^(?P<path>.+?):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
+)
+
+
+def is_analysis_review_strategy_kind(strategy_kind: str) -> bool:
+    return strategy_kind in ANALYSIS_REVIEW_STRATEGY_KINDS
+
+
+def _reject_unknown_keys(
+    data: dict[str, Any], *, allowed_keys: set[str], field_name: str
+) -> None:
+    unknown_keys = sorted(set(data.keys()) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(
+            f"{field_name} contains unsupported keys: {', '.join(unknown_keys)}."
+        )
+
+
+def _validate_singleton_focus_types(value: Any, *, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list.")
+    normalized = [str(item).strip().lower() for item in value]
+    if len(normalized) != 1:
+        if len(set(normalized)) > 1:
+            raise ValueError(
+                f"{field_name} must contain exactly one value; mixed-type lists are not allowed."
+            )
+        raise ValueError(
+            f"{field_name} must contain exactly one value: {DEFAULT_ALLOWED_FOCUS_TYPES!r} or ['artifact']."
+        )
+    if normalized[0] not in VALID_SINGLETON_FOCUS_TYPES:
+        raise ValueError(
+            f"{field_name} must contain exactly one value: {DEFAULT_ALLOWED_FOCUS_TYPES!r} or ['artifact']."
+        )
+    return normalized
+
+
+def strip_workspace_ref_location_suffix(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or "://" in text:
+        return text
+    match = _WORKSPACE_REF_LOCATION_SUFFIX_RE.match(text)
+    if not match:
+        return text
+    return match.group("path")
+
+
+def _strip_workspace_ref_control_chars(value: str) -> str:
+    return "".join(
+        char for char in value if unicodedata.category(char) not in {"Cc", "Cf"}
+    )
+
+
+def normalize_workspace_ref(
+    value: Any, *, workspace_root: str | Path | None = None
+) -> str:
+    text = _strip_workspace_ref_control_chars(str(value or "").strip())
+    if not text:
+        return ""
+    if "://" in text:
+        return text
+    normalized = strip_workspace_ref_location_suffix(text).replace("\\", "/")
+    candidate = Path(normalized)
+    if candidate.is_absolute():
+        root = Path(workspace_root or Path.cwd()).resolve(strict=False)
+        try:
+            normalized = candidate.resolve(strict=False).relative_to(root).as_posix()
+        except ValueError:
+            if normalized.startswith("/.") and not normalized.startswith("//"):
+                normalized = posixpath.normpath(normalized.lstrip("/"))
+                if normalized == ".":
+                    return ""
+                while normalized.startswith("./"):
+                    normalized = normalized[2:]
+                return normalized
+            return candidate.as_posix()
+    else:
+        normalized = posixpath.normpath(normalized)
+        if normalized == ".":
+            return ""
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def normalize_workspace_ref_list(
+    values: Any, *, workspace_root: str | Path | None = None
+) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        value = normalize_workspace_ref(item, workspace_root=workspace_root)
+        if value:
+            normalized.append(value)
+    return normalized
+
+
+def dedupe_preserving_order(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def canonical_workspace_ref_list(
+    values: Any, *, workspace_root: str | Path | None = None
+) -> list[str]:
+    return dedupe_preserving_order(
+        normalize_workspace_ref_list(values, workspace_root=workspace_root)
+    )
+
+
+def canonical_seam_path_list(
+    values: Any, *, workspace_root: str | Path | None = None
+) -> list[str]:
+    return sorted(
+        canonical_workspace_ref_list(values, workspace_root=workspace_root)
+    )
+
+
+@dataclass
+class TaskFocusGateConfig:
+    enabled: Optional[bool] = None
+    allowed_focus_types: Optional[list[str]] = None
+    clarification_policy: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "TaskFocusGateConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("focus_gate must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"enabled", "allowed_focus_types", "clarification_policy"},
+            field_name="focus_gate",
+        )
+        allowed_focus_types = data.get("allowed_focus_types")
+        clarification_policy = data.get("clarification_policy")
+        normalized_clarification_policy = None
+        if clarification_policy is not None:
+            normalized_clarification_policy = str(clarification_policy).strip().lower()
+            if (
+                normalized_clarification_policy
+                not in VALID_FOCUS_GATE_CLARIFICATION_POLICIES
+            ):
+                raise ValueError(
+                    "focus_gate.clarification_policy must be one of: "
+                    + ", ".join(sorted(VALID_FOCUS_GATE_CLARIFICATION_POLICIES))
+                    + "."
+                )
+        return cls(
+            enabled=(
+                None
+                if "enabled" not in data or data.get("enabled") is None
+                else bool(data.get("enabled"))
+            ),
+            allowed_focus_types=(
+                None
+                if allowed_focus_types is None
+                else _validate_singleton_focus_types(
+                    allowed_focus_types, field_name="focus_gate.allowed_focus_types"
+                )
+            ),
+            clarification_policy=normalized_clarification_policy,
+        )
+
+
+@dataclass
+class StrategyFocusGateConfig:
+    enabled: Optional[bool] = None
+    default_path: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "StrategyFocusGateConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("focus_gate must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"enabled", "default_path"},
+            field_name="focus_gate",
+        )
+        default_path = data.get("default_path")
+        normalized_default_path = None
+        if default_path is not None:
+            normalized_default_path = str(default_path).strip().lower()
+            if normalized_default_path not in VALID_FOCUS_GATE_DEFAULT_PATHS:
+                raise ValueError(
+                    "focus_gate.default_path must be one of: "
+                    + ", ".join(sorted(VALID_FOCUS_GATE_DEFAULT_PATHS))
+                    + "."
+                )
+        return cls(
+            enabled=(
+                None
+                if "enabled" not in data or data.get("enabled") is None
+                else bool(data.get("enabled"))
+            ),
+            default_path=normalized_default_path,
+        )
+
+
+@dataclass
+class StrategyTrustReviewConfig:
+    execution_mode: Literal[
+        "legacy_full_review", "attestation_over_bounded"
+    ] = "legacy_full_review"
+
+    @classmethod
+    def from_dict(
+        cls, data: dict[str, Any] | None
+    ) -> "StrategyTrustReviewConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("trust_review must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"execution_mode"},
+            field_name="trust_review",
+        )
+        execution_mode = str(
+            data.get("execution_mode", "legacy_full_review")
+        ).strip().lower()
+        if execution_mode not in VALID_TRUST_REVIEW_EXECUTION_MODES:
+            raise ValueError(
+                "trust_review.execution_mode must be one of: "
+                + ", ".join(sorted(VALID_TRUST_REVIEW_EXECUTION_MODES))
+                + "."
+            )
+        return cls(execution_mode=execution_mode)
+
+
+@dataclass
+class FocusGateAnswer:
+    question_prompt: str
+    selected_option: str
+    freeform_answer: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "FocusGateAnswer | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("focus_gate_answer must be a mapping when provided.")
+        question_prompt = str(data.get("question_prompt", "")).strip()
+        if not question_prompt:
+            raise ValueError(
+                "focus_gate_answer.question_prompt must be a non-empty string."
+            )
+        selected_option = str(data.get("selected_option", "")).strip()
+        if not selected_option:
+            raise ValueError(
+                "focus_gate_answer.selected_option must be a non-empty string."
+            )
+        freeform_answer = data.get("freeform_answer", "")
+        return cls(
+            question_prompt=question_prompt,
+            selected_option=selected_option,
+            freeform_answer="" if freeform_answer is None else str(freeform_answer),
+        )
 
 
 @dataclass
@@ -39,7 +334,9 @@ class WorkspaceWritePolicy:
         max_touched_raw = data.get("max_touched_files")
         max_touched_files = None if max_touched_raw is None else int(max_touched_raw)
         if max_touched_files is not None and max_touched_files < 0:
-            raise ValueError("workspace_write_policy.max_touched_files must be >= 0 or null.")
+            raise ValueError(
+                "workspace_write_policy.max_touched_files must be >= 0 or null."
+            )
         if mode == "forbid" and max_touched_files is None:
             max_touched_files = 0
         return cls(
@@ -69,6 +366,7 @@ class ReviewRequirements:
     require_classification: bool = False
     require_priority: bool = False
     min_recommendations: int = 0
+    evidence_cap_policy: str = "trim_to_cap"
 
     @classmethod
     def defaults_for_task_kind(cls, task_kind: str) -> "ReviewRequirements":
@@ -78,19 +376,35 @@ class ReviewRequirements:
                 require_classification=True,
                 require_priority=True,
                 min_recommendations=1,
+                evidence_cap_policy="trim_to_cap",
             )
         return cls()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None, *, task_kind: str) -> "ReviewRequirements":
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, task_kind: str
+    ) -> "ReviewRequirements":
         defaults = cls.defaults_for_task_kind(task_kind)
         if data is None:
             return defaults
         if not isinstance(data, dict):
             raise ValueError("review_requirements must be a mapping when provided.")
-        min_recommendations = int(data.get("min_recommendations", defaults.min_recommendations))
+        min_recommendations = int(
+            data.get("min_recommendations", defaults.min_recommendations)
+        )
         if min_recommendations < 0:
             raise ValueError("review_requirements.min_recommendations must be >= 0.")
+        evidence_cap_policy = (
+            str(data.get("evidence_cap_policy", defaults.evidence_cap_policy))
+            .strip()
+            .lower()
+        )
+        if evidence_cap_policy not in VALID_EVIDENCE_CAP_POLICIES:
+            raise ValueError(
+                "review_requirements.evidence_cap_policy must be one of: "
+                + ", ".join(sorted(VALID_EVIDENCE_CAP_POLICIES))
+                + "."
+            )
         return cls(
             require_evidence_per_recommendation=bool(
                 data.get(
@@ -101,8 +415,11 @@ class ReviewRequirements:
             require_classification=bool(
                 data.get("require_classification", defaults.require_classification)
             ),
-            require_priority=bool(data.get("require_priority", defaults.require_priority)),
+            require_priority=bool(
+                data.get("require_priority", defaults.require_priority)
+            ),
             min_recommendations=min_recommendations,
+            evidence_cap_policy=evidence_cap_policy,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,6 +439,8 @@ class TaskSpec:
     files_hint: list[str] = field(default_factory=list)
     prompt_addendum: str = ""
     review_requirements: ReviewRequirements = field(default_factory=ReviewRequirements)
+    focus_gate: TaskFocusGateConfig | None = None
+    focus_gate_answer: FocusGateAnswer | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TaskSpec":
@@ -153,6 +472,8 @@ class TaskSpec:
                 data.get("review_requirements"),
                 task_kind=task_kind_raw,
             ),
+            focus_gate=TaskFocusGateConfig.from_dict(data.get("focus_gate")),
+            focus_gate_answer=FocusGateAnswer.from_dict(data.get("focus_gate_answer")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -178,12 +499,18 @@ class RoleConfig:
         return cls(
             provider=str(data["provider"]),
             model=(None if data.get("model") in (None, "") else str(data.get("model"))),
-            effort=(None if data.get("effort") in (None, "") else str(data.get("effort"))),
+            effort=(
+                None if data.get("effort") in (None, "") else str(data.get("effort"))
+            ),
             access=str(data.get("access", "read")),
             timeout_sec=int(data.get("timeout_sec", 1800)),
-            max_turns=(None if data.get("max_turns") is None else int(data.get("max_turns"))),
+            max_turns=(
+                None if data.get("max_turns") is None else int(data.get("max_turns"))
+            ),
             max_budget_usd=(
-                None if data.get("max_budget_usd") is None else float(data.get("max_budget_usd"))
+                None
+                if data.get("max_budget_usd") is None
+                else float(data.get("max_budget_usd"))
             ),
             extra_args=[str(x) for x in data.get("extra_args", [])],
             env={str(k): str(v) for k, v in dict(data.get("env", {})).items()},
@@ -209,7 +536,9 @@ class ValidatorConfig:
     on_missing_binary: str = "fail"
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], *, default_run_when: str = "patch_only") -> "ValidatorConfig":
+    def from_dict(
+        cls, data: dict[str, Any], *, default_run_when: str = "patch_only"
+    ) -> "ValidatorConfig":
         run_when = str(data.get("run_when", default_run_when)).strip().lower()
         if run_when not in VALID_VALIDATOR_RUN_WHEN:
             raise ValueError(
@@ -257,7 +586,7 @@ class ReviewLoopPolicy:
 
     @classmethod
     def defaults_for_strategy_kind(cls, strategy_kind: str) -> "ReviewLoopPolicy":
-        if strategy_kind == "analysis_review_v1":
+        if is_analysis_review_strategy_kind(strategy_kind):
             return cls(
                 min_loops=1,
                 max_loops=3,
@@ -270,7 +599,9 @@ class ReviewLoopPolicy:
         return cls()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None, *, strategy_kind: str) -> "ReviewLoopPolicy":
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, strategy_kind: str
+    ) -> "ReviewLoopPolicy":
         defaults = cls.defaults_for_strategy_kind(strategy_kind)
         if data is None:
             return defaults
@@ -281,7 +612,9 @@ class ReviewLoopPolicy:
             min_loops=int(data.get("min_loops", defaults.min_loops)),
             max_loops=int(data.get("max_loops", defaults.max_loops)),
             always_run_first_revision=bool(
-                data.get("always_run_first_revision", defaults.always_run_first_revision)
+                data.get(
+                    "always_run_first_revision", defaults.always_run_first_revision
+                )
             ),
             max_open_medium_issues=(
                 defaults.max_open_medium_issues
@@ -307,7 +640,9 @@ class ReviewLoopPolicy:
         if policy.min_loops < 0 or policy.max_loops < 0:
             raise ValueError("review_loops min/max must be >= 0.")
         if policy.max_loops < policy.min_loops:
-            raise ValueError("review_loops.max_loops must be >= review_loops.min_loops.")
+            raise ValueError(
+                "review_loops.max_loops must be >= review_loops.min_loops."
+            )
         for field_name in (
             "min_grounding_score",
             "min_actionability_score",
@@ -315,9 +650,16 @@ class ReviewLoopPolicy:
         ):
             value = getattr(policy, field_name)
             if value is not None and not (0 <= value <= 1):
-                raise ValueError(f"review_loops.stop_when.{field_name} must be between 0 and 1.")
-        if policy.max_open_medium_issues is not None and policy.max_open_medium_issues < 0:
-            raise ValueError("review_loops.stop_when.max_open_medium_issues must be >= 0.")
+                raise ValueError(
+                    f"review_loops.stop_when.{field_name} must be between 0 and 1."
+                )
+        if (
+            policy.max_open_medium_issues is not None
+            and policy.max_open_medium_issues < 0
+        ):
+            raise ValueError(
+                "review_loops.stop_when.max_open_medium_issues must be >= 0."
+            )
         return policy
 
     def to_dict(self) -> dict[str, Any]:
@@ -345,11 +687,16 @@ class StrategyConfig:
     patch_on_inconclusive: bool = False
     prompt_preamble: str = ""
     review_loops: ReviewLoopPolicy = field(default_factory=ReviewLoopPolicy)
+    focus_gate: StrategyFocusGateConfig | None = None
+    trust_review: StrategyTrustReviewConfig | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyConfig":
         kind = str(data.get("kind") or "pfr_v1")
-        roles = {str(name): RoleConfig.from_dict(cfg) for name, cfg in dict(data.get("roles", {})).items()}
+        roles = {
+            str(name): RoleConfig.from_dict(cfg)
+            for name, cfg in dict(data.get("roles", {})).items()
+        }
         validators = [
             ValidatorConfig.from_dict(v, default_run_when="patch_only")
             for v in data.get("validators", [])
@@ -360,14 +707,20 @@ class StrategyConfig:
             roles=roles,
             validators=validators,
             max_repair_loops=int(data.get("max_repair_loops", 1)),
-            rerun_falsifier_after_patch=bool(data.get("rerun_falsifier_after_patch", True)),
+            rerun_falsifier_after_patch=bool(
+                data.get("rerun_falsifier_after_patch", True)
+            ),
             patch_on_inconclusive=bool(data.get("patch_on_inconclusive", False)),
             prompt_preamble=str(data.get("prompt_preamble", "") or ""),
-            review_loops=ReviewLoopPolicy.from_dict(data.get("review_loops"), strategy_kind=kind),
+            review_loops=ReviewLoopPolicy.from_dict(
+                data.get("review_loops"), strategy_kind=kind
+            ),
+            focus_gate=StrategyFocusGateConfig.from_dict(data.get("focus_gate")),
+            trust_review=StrategyTrustReviewConfig.from_dict(data.get("trust_review")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "kind": self.kind,
             "roles": {name: cfg.to_dict() for name, cfg in self.roles.items()},
@@ -377,7 +730,11 @@ class StrategyConfig:
             "patch_on_inconclusive": self.patch_on_inconclusive,
             "prompt_preamble": self.prompt_preamble,
             "review_loops": self.review_loops.to_dict(),
+            "focus_gate": None if self.focus_gate is None else asdict(self.focus_gate),
         }
+        if self.trust_review is not None:
+            payload["trust_review"] = asdict(self.trust_review)
+        return payload
 
 
 @dataclass
@@ -406,6 +763,8 @@ class ProviderRun:
     prompt_path: str
     schema_path: str
     output_path: Optional[str]
+    raw_output_path: Optional[str] = None
+    normalized_output_path: Optional[str] = None
     structured_output: Optional[dict[str, Any]] = None
     raw_meta: dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
