@@ -5,4 +5,5 @@ from ._bridge import run_harness_runner
 
 
 def analysis_review_v1_subgraph(state: HarnessState) -> HarnessState:
+    """Thin B1 wrapper over the legacy bridge boundary."""
     return run_harness_runner(state)
