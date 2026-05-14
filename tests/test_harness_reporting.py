@@ -15,6 +15,7 @@ from anvil.harness.reporting import (
     apply_final_artifacts,
     build_partial_answer_payload,
     render_deliverable_markdown,
+    summary_projection_v1,
     write_state_artifacts,
 )
 
@@ -3181,6 +3182,120 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
         in section
     )
     assert "The task mixes release and rollback concerns." in section
+
+
+def test_summary_projection_v1_projects_b1_boundary_fields(tmp_path):
+    summary = summary_projection_v1(
+        {
+            "run_id": "run-boundary",
+            "thread_id": "thread-boundary",
+            "workspace_root": str(tmp_path),
+            "run_dir": str(tmp_path),
+            "task_spec": {
+                "id": "task-boundary",
+                "task_kind": "analysis_review",
+                "workspace_write_policy": {},
+            },
+            "strategy_spec": {"name": "analysis_review_v1"},
+            "strategy_kind": "analysis_review_v1",
+            "serialization_version": "custom-serialization-v1",
+            "summary_boundary_version": "summary_projection_v1",
+            "bridge_boundary_version": "legacy_bridge_boundary_v1",
+            "analysis_review_contract": {"mode": "bounded"},
+            "strategy_graph_spec": {"runtime_target": "analysis_review_v1"},
+            "strategy_graph_spec_id": "analysis-review-spec",
+            "strategy_graph_subset": "bounded_strategy_graph_v1",
+            "focus_decision": _selected_focus_decision(),
+            "topic_ledger": [
+                {"topic_id": "TOPIC-1", "resolution_status": "open"}
+            ],
+            "warnings": [],
+            "policy_checks": [],
+            "stage_history": [],
+            "validator_rounds": [],
+            "drafts": [],
+            "issue_history": [],
+        }
+    )
+
+    assert summary["serialization_version"] == "custom-serialization-v1"
+    assert summary["summary_boundary_version"] == "summary_projection_v1"
+    assert summary["bridge_boundary_version"] == "legacy_bridge_boundary_v1"
+    assert summary["analysis_review_contract"] == {"mode": "bounded"}
+    assert summary["strategy_graph_spec"] == {"runtime_target": "analysis_review_v1"}
+    assert summary["strategy_graph_spec_id"] == "analysis-review-spec"
+    assert summary["strategy_graph_subset"] == "bounded_strategy_graph_v1"
+    assert summary["focus_decision"]["selected_focus_id"] == "release-trigger-automation"
+    assert summary["run_details"]["focus_decision"]["selected_focus_id"] == (
+        "release-trigger-automation"
+    )
+    assert summary["topic_ledger"] == [
+        {"topic_id": "TOPIC-1", "resolution_status": "open"}
+    ]
+
+
+def test_write_artifacts_node_round_trips_b1_boundary_fields(tmp_path):
+    state = {
+        "run_id": "run-boundary-roundtrip",
+        "thread_id": "thread-boundary-roundtrip",
+        "workspace_root": str(tmp_path),
+        "out_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_path": "task.md",
+        "strategy_path": "strategy.md",
+        "config_path": "config/models.yaml",
+        "auto_fit_strategy": True,
+        "task_spec": {
+            "id": "task-boundary-roundtrip",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "serialization_version": "custom-serialization-v1",
+        "summary_boundary_version": "summary_projection_v1",
+        "bridge_boundary_version": "legacy_bridge_boundary_v1",
+        "analysis_review_contract": {"mode": "bounded"},
+        "strategy_graph_spec": {"runtime_target": "analysis_review_v1"},
+        "strategy_graph_spec_id": "analysis-review-spec",
+        "strategy_graph_subset": "bounded_strategy_graph_v1",
+        "focus_decision": _selected_focus_decision(),
+        "topic_ledger": [{"topic_id": "TOPIC-1", "resolution_status": "open"}],
+        "warnings": [],
+        "run_verdict": "blocked_for_clarification",
+        "content_verdict": "blocked_for_clarification",
+        "validator_verdict": "not_run",
+        "policy_verdict": "pass",
+        "config_verdict": "pass",
+        "summary_text": "Boundary-only round trip.",
+        "policy_checks": [],
+        "stage_history": [],
+        "validator_rounds": [],
+        "drafts": [],
+        "issue_history": [],
+    }
+
+    updated_state = write_artifacts_node(state)
+
+    assert updated_state["serialization_version"] == "custom-serialization-v1"
+    assert updated_state["summary_boundary_version"] == "summary_projection_v1"
+    assert updated_state["bridge_boundary_version"] == "legacy_bridge_boundary_v1"
+    assert updated_state["analysis_review_contract"] == {"mode": "bounded"}
+    assert updated_state["strategy_graph_spec"] == {
+        "runtime_target": "analysis_review_v1"
+    }
+    assert updated_state["strategy_graph_spec_id"] == "analysis-review-spec"
+    assert updated_state["strategy_graph_subset"] == "bounded_strategy_graph_v1"
+    assert updated_state["focus_decision"]["selected_focus_id"] == (
+        "release-trigger-automation"
+    )
+    assert updated_state["topic_ledger"] == [
+        {"topic_id": "TOPIC-1", "resolution_status": "open"}
+    ]
+    assert updated_state["task_path"] == "task.md"
+    assert updated_state["summary_payload"]["bridge_boundary_version"] == (
+        "legacy_bridge_boundary_v1"
+    )
 
 
 def _recommendation_payload(*titles: str) -> dict[str, object]:

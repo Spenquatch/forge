@@ -33,6 +33,8 @@ _FINAL_ANSWER_INCLUDES_WITHHELD_PREFIX = "final answer payload includes recommen
 _FINAL_ANSWER_OMITS_REQUIRED_PREFIX = (
     "final answer payload omits recommendation indices required for FINAL_ANSWER.*: "
 )
+HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
+SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
 
 
 def artifact_ref(path: str | Path, *, kind: str, description: str) -> dict[str, str]:
@@ -1693,41 +1695,7 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
 
     run_dir_raw = state.get("run_dir") or state.get("out_root") or ".forge-harness-runs"
     run_dir = ensure_run_dir(run_dir_raw)
-    summary = {
-        "run_id": state.get("run_id"),
-        "thread_id": state.get("thread_id"),
-        "workspace": state.get("workspace_root"),
-        "task": state.get("task_spec") or {},
-        "strategy_name": (state.get("strategy_spec") or {}).get("name"),
-        "strategy_kind": state.get("strategy_kind"),
-        "warnings": list(state.get("warnings") or []),
-        "verdict": state.get("run_verdict")
-        or state.get("content_verdict")
-        or "invalid_config",
-        "verdicts": {
-            "run_verdict": state.get("run_verdict"),
-            "content_verdict": state.get("content_verdict"),
-            "validator_verdict": state.get("validator_verdict"),
-            "policy_verdict": state.get("policy_verdict"),
-            "config_verdict": state.get("config_verdict"),
-        },
-        "final_summary": state.get("summary_text"),
-        "workspace_write_policy": (
-            (state.get("task_spec") or {}).get("workspace_write_policy") or {}
-        ),
-        "workspace_policy_checks": list(state.get("policy_checks") or []),
-        "agent_stages": list(state.get("stage_history") or []),
-        "validator_rounds": list(state.get("validator_rounds") or []),
-        "drafts": list(state.get("drafts") or []),
-        "issue_ledger": list(state.get("issue_history") or []),
-        "artifacts": {
-            "run_dir": str(run_dir),
-        },
-    }
-    focus_decision = state.get("focus_decision")
-    if isinstance(focus_decision, dict) and focus_decision:
-        summary["focus_decision"] = copy.deepcopy(focus_decision)
-    _sync_focus_decision_into_summary(summary)
+    summary = summary_projection_v1(state, run_dir=run_dir)
     summary = apply_final_artifacts(summary)
     state.setdefault("artifact_index", {})["summary_json"] = artifact_ref(
         summary["artifacts"]["summary_json"],
@@ -1741,3 +1709,117 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
     )
     state["summary_payload"] = summary
     return state
+
+
+def summary_projection_v1(
+    state: dict[str, Any], *, run_dir: str | Path | None = None
+) -> dict[str, Any]:
+    projection_run_dir = (
+        str(run_dir)
+        if run_dir is not None
+        else str(state.get("run_dir") or state.get("out_root") or ".forge-harness-runs")
+    )
+    seeded_summary = (
+        copy.deepcopy(state.get("summary_payload"))
+        if isinstance(state.get("summary_payload"), dict)
+        else {}
+    )
+    seeded_verdicts = (
+        seeded_summary.get("verdicts")
+        if isinstance(seeded_summary.get("verdicts"), dict)
+        else {}
+    )
+    summary = dict(seeded_summary)
+    summary.update(
+        {
+            "run_id": state.get("run_id") or seeded_summary.get("run_id"),
+            "thread_id": state.get("thread_id") or seeded_summary.get("thread_id"),
+            "workspace": state.get("workspace_root") or seeded_summary.get("workspace"),
+            "task": state.get("task_spec") or seeded_summary.get("task") or {},
+            "strategy_name": (state.get("strategy_spec") or {}).get("name")
+            or seeded_summary.get("strategy_name"),
+            "strategy_kind": state.get("strategy_kind")
+            or seeded_summary.get("strategy_kind"),
+            "serialization_version": str(
+                state.get("serialization_version")
+                or seeded_summary.get("serialization_version")
+                or HARNESS_STATE_SERIALIZATION_VERSION
+            ),
+            "summary_boundary_version": str(
+                state.get("summary_boundary_version")
+                or seeded_summary.get("summary_boundary_version")
+                or SUMMARY_BOUNDARY_VERSION
+            ),
+            "warnings": list(
+                state.get("warnings") or seeded_summary.get("warnings") or []
+            ),
+            "verdict": state.get("run_verdict")
+            or state.get("content_verdict")
+            or seeded_summary.get("verdict")
+            or "invalid_config",
+            "verdicts": {
+                "run_verdict": state.get("run_verdict")
+                or seeded_verdicts.get("run_verdict"),
+                "content_verdict": state.get("content_verdict")
+                or seeded_verdicts.get("content_verdict"),
+                "validator_verdict": state.get("validator_verdict")
+                or seeded_verdicts.get("validator_verdict"),
+                "policy_verdict": state.get("policy_verdict")
+                or seeded_verdicts.get("policy_verdict"),
+                "config_verdict": state.get("config_verdict")
+                or seeded_verdicts.get("config_verdict"),
+            },
+            "final_summary": state.get("summary_text")
+            or seeded_summary.get("final_summary"),
+            "workspace_write_policy": (
+                (state.get("task_spec") or {}).get("workspace_write_policy")
+                or seeded_summary.get("workspace_write_policy")
+                or {}
+            ),
+            "workspace_policy_checks": list(
+                state.get("policy_checks")
+                or seeded_summary.get("workspace_policy_checks")
+                or []
+            ),
+            "agent_stages": list(
+                state.get("stage_history") or seeded_summary.get("agent_stages") or []
+            ),
+            "validator_rounds": list(
+                state.get("validator_rounds")
+                or seeded_summary.get("validator_rounds")
+                or []
+            ),
+            "drafts": list(state.get("drafts") or seeded_summary.get("drafts") or []),
+            "issue_ledger": list(
+                state.get("issue_history") or seeded_summary.get("issue_ledger") or []
+            ),
+        }
+    )
+    artifacts = dict(seeded_summary.get("artifacts") or {})
+    artifacts["run_dir"] = projection_run_dir
+    summary["artifacts"] = artifacts
+    analysis_review_contract = state.get("analysis_review_contract")
+    if isinstance(analysis_review_contract, dict) and analysis_review_contract:
+        summary["analysis_review_contract"] = copy.deepcopy(analysis_review_contract)
+    strategy_graph_spec = state.get("strategy_graph_spec")
+    if isinstance(strategy_graph_spec, dict) and strategy_graph_spec:
+        summary["strategy_graph_spec"] = copy.deepcopy(strategy_graph_spec)
+    strategy_graph_spec_id = state.get("strategy_graph_spec_id")
+    if strategy_graph_spec_id not in (None, ""):
+        summary["strategy_graph_spec_id"] = str(strategy_graph_spec_id)
+    strategy_graph_subset = state.get("strategy_graph_subset")
+    if strategy_graph_subset not in (None, ""):
+        summary["strategy_graph_subset"] = str(strategy_graph_subset)
+    focus_decision = state.get("focus_decision")
+    if isinstance(focus_decision, dict) and focus_decision:
+        summary["focus_decision"] = copy.deepcopy(focus_decision)
+    topic_ledger = state.get("topic_ledger")
+    if isinstance(topic_ledger, list):
+        summary["topic_ledger"] = [
+            copy.deepcopy(item) for item in topic_ledger if isinstance(item, dict)
+        ]
+    bridge_boundary_version = state.get("bridge_boundary_version")
+    if bridge_boundary_version not in (None, ""):
+        summary["bridge_boundary_version"] = str(bridge_boundary_version)
+    _sync_focus_decision_into_summary(summary)
+    return summary

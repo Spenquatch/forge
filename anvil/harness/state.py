@@ -13,6 +13,10 @@ from typing_extensions import TypedDict
 from .reporting import artifact_ref
 from .selection import extract_drafts_from_summary, select_best_draft
 
+HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
+SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
+LEGACY_BRIDGE_BOUNDARY_VERSION = "legacy_bridge_boundary_v1"
+
 
 class ArtifactRef(TypedDict, total=False):
     kind: str
@@ -159,6 +163,16 @@ class HarnessState(TypedDict, total=False):
     summary_text: str | None
 
     artifact_index: dict[str, ArtifactRef]
+    summary_payload: dict[str, Any]
+    serialization_version: str
+    analysis_review_contract: dict[str, Any]
+    strategy_graph_spec: dict[str, Any]
+    strategy_graph_spec_id: str | None
+    strategy_graph_subset: str | None
+    focus_decision: dict[str, Any]
+    topic_ledger: list[dict[str, Any]]
+    summary_boundary_version: str
+    bridge_boundary_version: str | None
 
     # Execution request metadata used by the wrapper graph. These keys are not
     # part of the ADR's durable contract, but they make it possible to re-enter
@@ -215,6 +229,16 @@ def initialize_harness_state(
         run_verdict=None,
         summary_text=None,
         artifact_index={},
+        summary_payload={},
+        serialization_version=HARNESS_STATE_SERIALIZATION_VERSION,
+        analysis_review_contract={},
+        strategy_graph_spec={},
+        strategy_graph_spec_id=None,
+        strategy_graph_subset=None,
+        focus_decision={},
+        topic_ledger=[],
+        summary_boundary_version=SUMMARY_BOUNDARY_VERSION,
+        bridge_boundary_version=None,
         task_path=task_path,
         strategy_path=strategy_path,
         config_path=config_path,
@@ -342,7 +366,33 @@ def _issue_history_from_summary(summary: dict[str, Any], drafts: list[dict[str, 
     return issues
 
 
-def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | None = None) -> HarnessState:
+def _summary_dict(summary: dict[str, Any], key: str) -> dict[str, Any]:
+    value = summary.get(key)
+    if isinstance(value, dict):
+        return dict(value)
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        nested_value = run_details.get(key)
+        if isinstance(nested_value, dict):
+            return dict(nested_value)
+    return {}
+
+
+def _summary_list_of_dicts(summary: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = summary.get(key)
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        nested_value = run_details.get(key)
+        if isinstance(nested_value, list):
+            return [dict(item) for item in nested_value if isinstance(item, dict)]
+    return []
+
+
+def summary_read_adapter_v1(
+    summary: dict[str, Any], *, fallback_thread_id: str | None = None
+) -> HarnessState:
     drafts = extract_drafts_from_summary(summary)
     best_draft = select_best_draft(drafts)
     issue_history = _issue_history_from_summary(summary, drafts)
@@ -416,5 +466,39 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
         run_verdict=(None if verdicts.get("run_verdict") in (None, "") else str(verdicts.get("run_verdict"))),
         summary_text=(None if summary.get("final_summary") in (None, "") else str(summary.get("final_summary"))),
         artifact_index=artifact_index,
+        summary_payload=dict(summary),
+        serialization_version=str(
+            summary.get("serialization_version") or HARNESS_STATE_SERIALIZATION_VERSION
+        ),
+        analysis_review_contract=_summary_dict(summary, "analysis_review_contract"),
+        strategy_graph_spec=_summary_dict(summary, "strategy_graph_spec"),
+        strategy_graph_spec_id=(
+            None
+            if summary.get("strategy_graph_spec_id") in (None, "")
+            else str(summary.get("strategy_graph_spec_id"))
+        ),
+        strategy_graph_subset=(
+            None
+            if summary.get("strategy_graph_subset") in (None, "")
+            else str(summary.get("strategy_graph_subset"))
+        ),
+        focus_decision=_summary_dict(summary, "focus_decision"),
+        topic_ledger=_summary_list_of_dicts(summary, "topic_ledger"),
+        summary_boundary_version=str(
+            summary.get("summary_boundary_version") or SUMMARY_BOUNDARY_VERSION
+        ),
+        bridge_boundary_version=(
+            None
+            if summary.get("bridge_boundary_version") in (None, "")
+            else str(summary.get("bridge_boundary_version"))
+        ),
     )
     return state
+
+
+def state_from_summary(
+    summary: dict[str, Any], *, fallback_thread_id: str | None = None
+) -> HarnessState:
+    return summary_read_adapter_v1(
+        summary, fallback_thread_id=fallback_thread_id
+    )
