@@ -19,9 +19,9 @@ from .contracts import (
     BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
     PartialAcceptancePolicy,
     RecommendationAdmissibilityStatus,
-    build_analysis_review_contract,
     canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
+    resolve_analysis_review_contract,
 )
 from .files import load_structured_file, slugify, write_json, write_text
 from .focus_types import focus_type_adapter
@@ -223,7 +223,7 @@ class HarnessRunner:
             self._emit_task_strategy_warnings()
             self._apply_strategy_autofit()
             if is_analysis_review_strategy_kind(self.strategy.kind):
-                self.analysis_review_contract = build_analysis_review_contract(
+                self.analysis_review_contract = resolve_analysis_review_contract(
                     self.task, self.strategy
                 )
             write_json(self.run_dir / "task.effective.json", self.task.to_dict())
@@ -665,7 +665,9 @@ class HarnessRunner:
             bounded_strategy_payload = self.strategy.to_dict()
             bounded_strategy_payload["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
             bounded_strategy = StrategyConfig.from_dict(bounded_strategy_payload)
-            bounded_contract = build_analysis_review_contract(self.task, bounded_strategy)
+            bounded_contract = resolve_analysis_review_contract(
+                self.task, bounded_strategy
+            )
             self.analysis_review_contract = bounded_contract
             try:
                 bounded_flow = self._execute_analysis_review_flow(
@@ -1445,9 +1447,18 @@ class HarnessRunner:
         if record_stage:
             self.stage_counter = stage_index
         stage_record = asdict(run)
+        stage_record["stage_id"] = self._stage_record_id(stage_index, role_name)
         stage_record["stage_index"] = stage_index
         stage_record["requested_access"] = role_config.access
         stage_record["effective_access"] = effective_role_config.access
+        if run.stdout_path:
+            stage_record["text_path"] = run.stdout_path
+        if run.output_path:
+            stage_record["json_path"] = run.output_path
+        if run.raw_output_path:
+            stage_record["raw_json_path"] = run.raw_output_path
+        if run.normalized_output_path:
+            stage_record["normalized_json_path"] = run.normalized_output_path
         if role_name == "focus_gate":
             stage_record["round_index"] = 0
         if run.failure_kind:
@@ -1470,14 +1481,18 @@ class HarnessRunner:
             stage_record["access_override_reason"] = (
                 "Task-level workspace_write_policy forced this stage to run read-only."
             )
+        stage_metadata = self._stage_observability_metadata(
+            role_name=role_name,
+            semantic_context=context,
+            semantic_validation_path=semantic_validation_path,
+        )
         if role_name == "focus_gate" and isinstance(run.structured_output, dict):
-            stage_record["metadata"] = {
-                "focus_gate": {
-                    "gate_path": run.structured_output.get("gate_path"),
-                    "focus_type": run.structured_output.get("focus_type"),
-                    "decision_state": run.structured_output.get("decision_state"),
-                }
-            }
+            stage_metadata.update(self._focus_gate_stage_metadata(run.structured_output))
+        elif role_name == "focus_gate_probe" and isinstance(run.structured_output, dict):
+            stage_metadata.update(
+                self._focus_gate_probe_stage_metadata(run.structured_output)
+            )
+        stage_record["metadata"] = stage_metadata
         if record_stage:
             self.agent_stages.append(stage_record)
             write_json(stage_dir / "run.envelope.json", stage_record)
@@ -2368,10 +2383,75 @@ class HarnessRunner:
 
     def _analysis_contract(self) -> AnalysisReviewContract:
         if self.analysis_review_contract is None:
-            self.analysis_review_contract = build_analysis_review_contract(
+            self.analysis_review_contract = resolve_analysis_review_contract(
                 self.task, self.strategy
             )
         return self.analysis_review_contract
+
+    @staticmethod
+    def _stage_record_id(stage_index: int, role_name: str) -> str:
+        return f"stage-{stage_index:02d}-{slugify(role_name)}"
+
+    @staticmethod
+    def _stage_transition_reason(graph_stage_id: str) -> str:
+        normalized = str(graph_stage_id or "").strip()
+        if normalized == "solver":
+            return "single_pass_entry"
+        if normalized == "proposer":
+            return "analysis_entry"
+        if normalized == "falsifier":
+            return "falsifier_review"
+        if normalized == "critic":
+            return "review_loop_entry"
+        if normalized == "reviser":
+            return "review_feedback_revision"
+        if normalized == "patcher":
+            return "repair_requested"
+        if normalized == "auditor":
+            return "publication_review"
+        if normalized == "attestation_auditor":
+            return "trust_attestation_review"
+        if normalized == "focus_gate_probe":
+            return "focus_probe_required"
+        if normalized == "focus_gate":
+            return "focus_gate_required"
+        return "stage_requested"
+
+    @classmethod
+    def _stage_observability_metadata(
+        cls,
+        *,
+        role_name: str,
+        semantic_context: dict[str, Any] | None,
+        semantic_validation_path: str | None,
+    ) -> dict[str, Any]:
+        graph_stage_id = cls._graph_stage_id(
+            role_name=role_name,
+            semantic_context=semantic_context,
+        )
+        metadata: dict[str, Any] = {
+            "graph_stage_id": graph_stage_id,
+            "transition_reason": cls._stage_transition_reason(graph_stage_id),
+            "boundary_source": "runner",
+        }
+        if semantic_validation_path:
+            metadata["semantic_validation_path"] = semantic_validation_path
+        return metadata
+
+    @classmethod
+    def _graph_stage_id(
+        cls,
+        *,
+        role_name: str,
+        semantic_context: dict[str, Any] | None,
+    ) -> str:
+        canonical_role_name = cls._canonical_stage_role_name(role_name)
+        if (
+            canonical_role_name == "auditor"
+            and isinstance((semantic_context or {}).get(BOUNDED_ATTESTATION_INPUT_KEY), dict)
+        ):
+            return "attestation_auditor"
+        return canonical_role_name
 
     def _next_issue_id(self, reserved_ids: set[str] | None = None) -> str:
         reserved = set(self._issue_ledger_by_id)
@@ -5781,7 +5861,17 @@ class HarnessRunner:
             if stage_record.get("role_name") != "focus_gate":
                 continue
             stage_record["structured_output"] = deepcopy(focus_decision)
-            stage_record["metadata"] = self._focus_gate_stage_metadata(focus_decision)
+            stage_record["metadata"] = self._stage_observability_metadata(
+                role_name="focus_gate",
+                semantic_context=None,
+                semantic_validation_path=str(
+                    stage_record.get("semantic_validation_path") or ""
+                ).strip()
+                or None,
+            )
+            stage_record["metadata"].update(
+                self._focus_gate_stage_metadata(focus_decision)
+            )
 
             stdout_path = str(stage_record.get("stdout_path") or "").strip()
             if stdout_path:
