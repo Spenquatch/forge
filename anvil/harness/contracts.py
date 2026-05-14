@@ -262,7 +262,7 @@ class AnalysisReviewContract:
         }
 
 
-def build_analysis_review_contract(
+def resolve_analysis_review_contract(
     task: TaskSpec,
     strategy: StrategyConfig,
 ) -> AnalysisReviewContract:
@@ -337,6 +337,13 @@ def build_analysis_review_contract(
         require_issue_ledger=True,
         require_recommendation_reviews=True,
     )
+
+
+def build_analysis_review_contract(
+    task: TaskSpec,
+    strategy: StrategyConfig,
+) -> AnalysisReviewContract:
+    return resolve_analysis_review_contract(task, strategy)
 
 
 def derive_analysis_review_mode(strategy_kind: str | None) -> AnalysisReviewMode:
