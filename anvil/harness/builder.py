@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Parent LangGraph builder for the harness surface."""
 
-from typing import Any, Mapping, MutableMapping, Optional
+from typing import Any, MutableMapping, Optional
 
 from anvil.langgraph_compat import END, MemorySaver, StateGraph
 
@@ -12,10 +12,10 @@ from .nodes.select_best_draft import select_best_draft_node
 from .nodes.select_strategy import select_strategy_node
 from .nodes.validator_preflight import validator_preflight_node
 from .nodes.write_artifacts import write_artifacts_node
+from .strategy_graph import route_after_strategy_selection
 from .subgraphs.analysis_review_v1 import analysis_review_v1_subgraph
 from .subgraphs.pfr_v1 import pfr_v1_subgraph
 from .subgraphs.single_pass import single_pass_subgraph
-from .types import is_analysis_review_strategy_kind
 
 
 async def _wrap_state_node(fn, state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
@@ -69,19 +69,9 @@ def build_harness_langgraph(*, checkpointer: Optional[Any] = None):
     graph.add_edge("prepare_run", "validator_preflight")
     graph.add_edge("validator_preflight", "select_strategy")
 
-    def _route_after_strategy_select(state: Mapping[str, Any]) -> str:
-        if str(state.get("config_verdict") or "pass") == "invalid_config":
-            return "write_artifacts"
-        strategy_kind = str(state.get("strategy_kind") or "single_pass")
-        if strategy_kind in {"single_pass", "pfr_v1"}:
-            return strategy_kind
-        if is_analysis_review_strategy_kind(strategy_kind):
-            return "analysis_review_v1"
-        return "write_artifacts"
-
     graph.add_conditional_edges(
         "select_strategy",
-        _route_after_strategy_select,
+        route_after_strategy_selection,
         {
             "single_pass": "single_pass",
             "pfr_v1": "pfr_v1",
