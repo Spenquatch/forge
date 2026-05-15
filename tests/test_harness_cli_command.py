@@ -72,6 +72,48 @@ def test_harness_run_cli_dispatch(monkeypatch, capsys):
     assert "final_answer=/tmp/run/FINAL_ANSWER.md" in captured.out
 
 
+def test_harness_run_cli_dispatches_native_artifact_index_fallback(monkeypatch, capsys):
+    class _NativeStateExecutor:
+        def __init__(self, *, checkpoint: str = "memory", **kwargs):
+            self.checkpoint = checkpoint
+            self.kwargs = kwargs
+
+        async def execute(self, **kwargs):
+            return {
+                "run_verdict": "accepted",
+                "content_verdict": "accepted",
+                "validator_verdict": "pass",
+                "policy_verdict": "pass",
+                "config_verdict": "pass",
+                "artifact_index": {
+                    "run_dir": {"path": "/tmp/run"},
+                    "report_md": {"path": "/tmp/run/REPORT.md"},
+                    "summary_json": {"path": "/tmp/run/summary.json"},
+                    "final_answer_md": {"path": "/tmp/run/FINAL_ANSWER.md"},
+                },
+            }
+
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _NativeStateExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
+    asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                "task.yaml",
+                "--strategy",
+                "strategy.yaml",
+                "--workspace",
+                "/tmp/workspace",
+            ]
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert "verdict=accepted" in captured.out
+    assert "final_answer=/tmp/run/FINAL_ANSWER.md" in captured.out
+
+
 def test_harness_run_cli_reports_runtime_dependency_errors(monkeypatch, capsys):
     _FakeExecutor.instances.clear()
     _FakeExecutor.execute_error = RuntimeError(

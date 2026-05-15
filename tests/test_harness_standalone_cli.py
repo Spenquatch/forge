@@ -73,6 +73,52 @@ def test_harness_standalone_cli_returns_zero_for_accepted(monkeypatch) -> None:
     assert exit_code == 0
 
 
+def test_harness_standalone_cli_uses_native_artifact_index_fallback(
+    monkeypatch, capsys
+) -> None:
+    class _NativeStateExecutor:
+        def __init__(self, *, checkpoint: str = "memory", **kwargs):
+            self.checkpoint = checkpoint
+            self.kwargs = kwargs
+
+        async def execute(self, **kwargs):
+            return {
+                "run_verdict": "accepted",
+                "content_verdict": "accepted",
+                "validator_verdict": "pass",
+                "policy_verdict": "pass",
+                "config_verdict": "pass",
+                "artifact_index": {
+                    "run_dir": {"path": "/tmp/run"},
+                    "report_md": {"path": "/tmp/run/REPORT.md"},
+                    "summary_json": {"path": "/tmp/run/summary.json"},
+                    "final_answer_md": {"path": "/tmp/run/FINAL_ANSWER.md"},
+                },
+            }
+
+    monkeypatch.setattr(
+        harness_cli_module, "HarnessLangGraphExecutor", _NativeStateExecutor
+    )
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "run_verdict=accepted" in captured.out
+    assert "final_answer=/tmp/run/FINAL_ANSWER.md" in captured.out
+
+
 def test_harness_standalone_cli_returns_nonzero_for_harness_error(monkeypatch) -> None:
     _FakeExecutor.instances.clear()
     _FakeExecutor.summary_payload = {

@@ -1908,7 +1908,51 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
+def _sync_native_publish_selection(state: dict[str, Any]) -> None:
+    drafts = state.get("drafts")
+    if not isinstance(drafts, list) or not drafts:
+        return
+
+    selected_draft_id = _normalized_draft_id(state.get("selected_draft_id"))
+    best_draft = _draft_by_id(drafts, state.get("best_draft_id")) or _draft_by_id(
+        drafts, selected_draft_id
+    )
+    if best_draft is None:
+        best_draft = select_best_draft(drafts)
+        if best_draft is None:
+            return
+
+    best_draft_id = _normalized_draft_id(best_draft.get("draft_id"))
+    if not best_draft_id:
+        return
+
+    best_draft = copy.deepcopy(best_draft)
+    best_draft["review_status"] = "best"
+    for index, draft in enumerate(drafts):
+        if _normalized_draft_id(draft.get("draft_id")) == best_draft_id:
+            drafts[index] = best_draft
+            break
+
+    state["best_draft_id"] = best_draft_id
+    if not selected_draft_id or _draft_by_id(drafts, selected_draft_id) is None:
+        state["selected_draft_id"] = best_draft_id
+
+
+def _artifact_index_from_summary(summary: dict[str, Any]) -> dict[str, dict[str, str]]:
+    artifact_index: dict[str, dict[str, str]] = {}
+    for key, value in dict(summary.get("artifacts") or {}).items():
+        path = str(value or "").strip()
+        if not path:
+            continue
+        artifact_index[str(key)] = artifact_ref(
+            path,
+            kind=str(key),
+            description=str(key).replace("_", " "),
+        )
+    return artifact_index
+
+
+def publish_state_artifacts_v1(state: dict[str, Any]) -> dict[str, Any]:
     """Write report/summary artifacts for a state-style payload.
 
     This is used by the new harness graph in the rare path where the graph exits
@@ -1917,20 +1961,34 @@ def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
 
     run_dir_raw = state.get("run_dir") or state.get("out_root") or ".forge-harness-runs"
     run_dir = ensure_run_dir(run_dir_raw)
+    _sync_native_publish_selection(state)
     summary = summary_projection_v1(state, run_dir=run_dir)
     summary = apply_final_artifacts(summary)
-    state.setdefault("artifact_index", {})["summary_json"] = artifact_ref(
-        summary["artifacts"]["summary_json"],
-        kind="summary_json",
-        description="Machine-readable harness run summary",
-    )
-    state.setdefault("artifact_index", {})["report_md"] = artifact_ref(
-        summary["artifacts"]["report_md"],
-        kind="report_md",
-        description="Human-readable harness run report",
-    )
+    state["artifact_index"] = _artifact_index_from_summary(summary)
     state["summary_payload"] = summary
+    artifacts = dict(summary.get("artifacts") or {})
+    if artifacts.get("run_dir"):
+        state["run_dir"] = str(artifacts["run_dir"])
+        state.setdefault("out_root", str(Path(str(artifacts["run_dir"])).parent))
+    if summary.get("best_draft_id") not in (None, ""):
+        state["best_draft_id"] = str(summary["best_draft_id"])
+    if summary.get("selected_draft_id") not in (None, ""):
+        state["selected_draft_id"] = str(summary["selected_draft_id"])
+    if isinstance(summary.get("final_answer"), dict):
+        state["final_answer"] = copy.deepcopy(summary["final_answer"])
+    if isinstance(summary.get("bounded_review_summary"), dict):
+        state["bounded_review_summary"] = copy.deepcopy(
+            summary["bounded_review_summary"]
+        )
+    if isinstance(summary.get("analysis_review_status"), dict):
+        state["analysis_review_status"] = copy.deepcopy(
+            summary["analysis_review_status"]
+        )
     return state
+
+
+def write_state_artifacts(state: dict[str, Any]) -> dict[str, Any]:
+    return publish_state_artifacts_v1(state)
 
 
 def summary_projection_v1(
