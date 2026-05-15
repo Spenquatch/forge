@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 from typing_extensions import TypedDict
 
 from .reporting import artifact_ref
-from .selection import extract_drafts_from_summary, select_best_draft
+from .selection import drafts_from_stage_history_v1, select_best_draft
 
 HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
 SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
@@ -45,6 +45,10 @@ class StageRecord(TypedDict, total=False):
     usage: dict[str, Any] | None
     warnings: list[str]
     error: str | None
+    structured_output: dict[str, Any] | None
+    failure_kind: str | None
+    failure_summary: str | None
+    semantic_validation_payload_provenance: dict[str, Any] | None
     metadata: dict[str, Any]
 
 
@@ -175,6 +179,19 @@ class HarnessState(TypedDict, total=False):
 
     artifact_index: dict[str, ArtifactRef]
     summary_payload: dict[str, Any]
+    analysis_review_status: dict[str, Any]
+    recommendation_reviews: list[dict[str, Any]]
+    final_answer: dict[str, Any] | None
+    bounded_review_summary: dict[str, Any] | None
+    bounded_attestation_input: dict[str, Any] | None
+    changed_files: list[str]
+    validator_summary: dict[str, Any]
+    analysis_review_coverage: dict[str, Any]
+    run_details: dict[str, Any]
+    failure_details: dict[str, Any]
+    closure_proof_by_id: dict[str, Any]
+    workspace_policy_ignored_rel_paths: list[str]
+    final_workspace_policy_evaluation: dict[str, Any]
     serialization_version: str
     analysis_review_contract: dict[str, Any]
     analysis_review_runtime: AnalysisReviewRuntimeState
@@ -194,7 +211,6 @@ class HarnessState(TypedDict, total=False):
     config_path: str
     auto_fit_strategy: bool
     analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"]
-    analysis_review_runtime: AnalysisReviewRuntimeState
 
 
 def initialize_harness_state(
@@ -245,6 +261,19 @@ def initialize_harness_state(
         summary_text=None,
         artifact_index={},
         summary_payload={},
+        analysis_review_status={},
+        recommendation_reviews=[],
+        final_answer=None,
+        bounded_review_summary=None,
+        bounded_attestation_input=None,
+        changed_files=[],
+        validator_summary={},
+        analysis_review_coverage={},
+        run_details={},
+        failure_details={},
+        closure_proof_by_id={},
+        workspace_policy_ignored_rel_paths=[],
+        final_workspace_policy_evaluation={},
         serialization_version=HARNESS_STATE_SERIALIZATION_VERSION,
         analysis_review_contract={},
         strategy_graph_spec={},
@@ -304,6 +333,26 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
                 usage=(stage.get("usage") if isinstance(stage.get("usage"), dict) else None),
                 warnings=[str(item) for item in stage.get("warnings", [])],
                 error=(None if stage.get("error") in (None, "") else str(stage.get("error"))),
+                structured_output=(
+                    stage.get("structured_output")
+                    if isinstance(stage.get("structured_output"), dict)
+                    else None
+                ),
+                failure_kind=(
+                    None
+                    if stage.get("failure_kind") in (None, "")
+                    else str(stage.get("failure_kind"))
+                ),
+                failure_summary=(
+                    None
+                    if stage.get("failure_summary") in (None, "")
+                    else str(stage.get("failure_summary"))
+                ),
+                semantic_validation_payload_provenance=(
+                    stage.get("semantic_validation_payload_provenance")
+                    if isinstance(stage.get("semantic_validation_payload_provenance"), dict)
+                    else None
+                ),
                 metadata={
                     key: value
                     for key, value in stage.items()
@@ -328,6 +377,10 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
                         "usage",
                         "warnings",
                         "error",
+                        "structured_output",
+                        "failure_kind",
+                        "failure_summary",
+                        "semantic_validation_payload_provenance",
                     }
                 },
             )
@@ -395,6 +448,11 @@ def _summary_dict(summary: dict[str, Any], key: str) -> dict[str, Any]:
     return {}
 
 
+def _summary_optional_dict(summary: dict[str, Any], key: str) -> dict[str, Any] | None:
+    value = _summary_dict(summary, key)
+    return value or None
+
+
 def _summary_list_of_dicts(summary: dict[str, Any], key: str) -> list[dict[str, Any]]:
     value = summary.get(key)
     if isinstance(value, list):
@@ -410,7 +468,19 @@ def _summary_list_of_dicts(summary: dict[str, Any], key: str) -> list[dict[str, 
 def summary_read_adapter_v1(
     summary: dict[str, Any], *, fallback_thread_id: str | None = None
 ) -> HarnessState:
-    drafts = extract_drafts_from_summary(summary)
+    task = summary.get("task") or {}
+    verdicts = summary.get("verdicts") or {}
+    stage_history = stage_records_from_summary(summary)
+    drafts = drafts_from_stage_history_v1(
+        stage_history,
+        task_kind=str(task.get("task_kind") or "patch"),
+        validator_rounds=list(summary.get("validator_rounds") or []),
+        content_verdict=(
+            None
+            if verdicts.get("content_verdict") in (None, "")
+            else str(verdicts.get("content_verdict"))
+        ),
+    )
     best_draft = select_best_draft(drafts)
     issue_history = _issue_history_from_summary(summary, drafts)
 
@@ -436,8 +506,8 @@ def summary_read_adapter_v1(
             if field_name in best_scores:
                 latest_review_scores[field_name] = float(best_scores[field_name])
 
-    verdicts = summary.get("verdicts") or {}
-    task = summary.get("task") or {}
+    analysis_review_status = _summary_dict(summary, "analysis_review_status")
+    analysis_review_provenance = analysis_review_status.get("provenance")
 
     state = HarnessState(
         run_id=str(summary.get("run_id") or ""),
@@ -457,7 +527,7 @@ def summary_read_adapter_v1(
         initial_workspace_state=None,
         current_git_snapshot=dict(summary.get("final_git_snapshot") or {}),
         current_workspace_state=None,
-        stage_history=stage_records_from_summary(summary),
+        stage_history=stage_history,
         drafts=drafts,
         validator_rounds=list(summary.get("validator_rounds") or []),
         policy_checks=list(summary.get("workspace_policy_checks") or []),
@@ -484,6 +554,36 @@ def summary_read_adapter_v1(
         summary_text=(None if summary.get("final_summary") in (None, "") else str(summary.get("final_summary"))),
         artifact_index=artifact_index,
         summary_payload=dict(summary),
+        analysis_review_status=analysis_review_status,
+        recommendation_reviews=_summary_list_of_dicts(summary, "recommendation_reviews"),
+        final_answer=_summary_optional_dict(summary, "final_answer"),
+        bounded_review_summary=_summary_optional_dict(summary, "bounded_review_summary"),
+        bounded_attestation_input=_summary_optional_dict(summary, "bounded_attestation_input"),
+        changed_files=[str(item) for item in summary.get("changed_files", []) or []],
+        validator_summary=_summary_dict(summary, "validator_summary"),
+        analysis_review_coverage=_summary_dict(summary, "analysis_review_coverage"),
+        run_details=(
+            dict(summary.get("run_details"))
+            if isinstance(summary.get("run_details"), dict)
+            else {}
+        ),
+        failure_details=(
+            dict(summary.get("failure_details"))
+            if isinstance(summary.get("failure_details"), dict)
+            else {}
+        ),
+        closure_proof_by_id=(
+            dict(analysis_review_provenance.get("closure_proof_by_id", {}))
+            if isinstance(analysis_review_provenance, dict)
+            else {}
+        ),
+        workspace_policy_ignored_rel_paths=[
+            str(item)
+            for item in summary.get("workspace_policy_ignored_rel_paths", []) or []
+        ],
+        final_workspace_policy_evaluation=_summary_dict(
+            summary, "final_workspace_policy_evaluation"
+        ),
         serialization_version=str(
             summary.get("serialization_version") or HARNESS_STATE_SERIALIZATION_VERSION
         ),

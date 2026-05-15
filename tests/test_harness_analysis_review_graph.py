@@ -166,6 +166,8 @@ def _normalize_value(value: Any, *, run_dir: Path, workspace: Path) -> Any:
     if isinstance(value, dict):
         normalized: dict[str, Any] = {}
         for key, item in value.items():
+            if key == "bridge_boundary_version":
+                continue
             if key in {"run_id", "thread_id", "created_at"}:
                 normalized[key] = f"<{key}>"
                 continue
@@ -273,6 +275,36 @@ def _artifact_payloads(summary: dict[str, Any]) -> dict[str, Any]:
     return payloads
 
 
+def _assert_graph_owned_native_surface(
+    run: _RunArtifacts,
+    *,
+    expect_bounded_review_summary: bool = False,
+    expect_bounded_attestation_input: bool = False,
+    expect_final_answer: bool = False,
+) -> None:
+    assert run.state.get("bridge_boundary_version") is None
+    assert run.summary.get("bridge_boundary_version") is None
+    assert run.state["stage_history"]
+    assert run.state["drafts"]
+    assert run.state["current_draft_id"]
+    assert run.state["best_draft_id"]
+    assert run.state["selected_draft_id"]
+    assert isinstance(run.state["analysis_review_status"], dict)
+    assert isinstance(run.state["recommendation_reviews"], list)
+    assert isinstance(run.state["changed_files"], list)
+    assert isinstance(run.state["validator_summary"], dict)
+    assert isinstance(run.state["analysis_review_coverage"], dict)
+    if expect_bounded_review_summary:
+        assert isinstance(run.state["bounded_review_summary"], dict)
+        assert run.state["bounded_review_summary"]
+    if expect_bounded_attestation_input:
+        assert isinstance(run.state["bounded_attestation_input"], dict)
+        assert run.state["bounded_attestation_input"]
+    if expect_final_answer:
+        assert isinstance(run.state["final_answer"], dict)
+        assert run.state["final_answer"]
+
+
 def _assert_common_parity(
     legacy_run: _RunArtifacts,
     graph_run: _RunArtifacts,
@@ -333,6 +365,10 @@ def test_b2_parity_matrix_bounded_no_focus_gate_matches_legacy_bridge(
     assert legacy_run.summary["recommendation_reviews"] == graph_run.summary[
         "recommendation_reviews"
     ]
+    _assert_graph_owned_native_surface(
+        graph_run,
+        expect_final_answer=True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -466,6 +502,18 @@ def test_b2_parity_matrix_focus_gate_rows_match_legacy_bridge(
             "recommendation_reviews"
         ]
         assert _stage_graph_ids(graph_run.summary) == expected_graph_stage_ids
+        _assert_graph_owned_native_surface(
+            graph_run,
+            expect_bounded_review_summary=(
+                trust_execution_mode == "attestation_over_bounded"
+            ),
+            expect_bounded_attestation_input=(
+                trust_execution_mode == "attestation_over_bounded"
+            ),
+            expect_final_answer=True,
+        )
+    assert graph_run.state.get("bridge_boundary_version") is None
+    assert graph_run.summary.get("bridge_boundary_version") is None
 
 
 def test_b2_parity_matrix_trust_attestation_focus_off_matches_legacy_bridge(
@@ -520,6 +568,12 @@ def test_b2_parity_matrix_trust_attestation_focus_off_matches_legacy_bridge(
     assert legacy_run.summary[_HELPERS.BOUNDED_ATTESTATION_INPUT_KEY] == graph_run.summary[
         _HELPERS.BOUNDED_ATTESTATION_INPUT_KEY
     ]
+    _assert_graph_owned_native_surface(
+        graph_run,
+        expect_bounded_review_summary=True,
+        expect_bounded_attestation_input=True,
+        expect_final_answer=True,
+    )
 
 
 @pytest.mark.parametrize("execution_mode", ["legacy_bridge", "graph_owned"])
@@ -548,6 +602,9 @@ def test_b2_parity_matrix_invalid_config_preflight_still_routes_to_artifacts(
     assert run.summary["artifacts"]["summary_json"]
     assert run.summary["artifacts"]["report_md"]
     assert _stage_roles(run.summary) == []
+    if execution_mode == "graph_owned":
+        assert run.state.get("bridge_boundary_version") is None
+        assert run.summary.get("bridge_boundary_version") is None
 
 
 @pytest.mark.parametrize("execution_mode", ["legacy_bridge", "graph_owned"])

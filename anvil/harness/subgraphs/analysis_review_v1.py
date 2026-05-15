@@ -15,9 +15,8 @@ from ..git_utils import (
     git_snapshot_is_dirty,
 )
 from ..runner import HarnessError, HarnessRunner
-from ..selection import extract_drafts_from_summary, select_best_draft
+from ..selection import drafts_from_stage_history_v1, select_best_draft
 from ..state import (
-    LEGACY_BRIDGE_BOUNDARY_VERSION,
     HarnessState,
     stage_records_from_summary,
 )
@@ -503,6 +502,25 @@ def _draft_summary_from_runner(runner: HarnessRunner) -> dict[str, Any]:
     }
 
 
+def _refresh_native_draft_projection(state: HarnessState, runner: HarnessRunner) -> HarnessState:
+    drafts = drafts_from_stage_history_v1(
+        list(state.get("stage_history") or []),
+        task_kind=str(getattr(runner.task, "task_kind", state.get("task_kind") or "patch")),
+        validator_rounds=list(state.get("validator_rounds") or []),
+        content_verdict=(
+            None
+            if state.get("content_verdict") in (None, "")
+            else str(state.get("content_verdict"))
+        ),
+    )
+    best_draft = select_best_draft(drafts)
+    state["drafts"] = drafts
+    state["current_draft_id"] = drafts[-1].get("draft_id") if drafts else None
+    state["best_draft_id"] = best_draft.get("draft_id") if best_draft else None
+    state["selected_draft_id"] = state["current_draft_id"]
+    return state
+
+
 def _merge_runner_state(state: HarnessState) -> HarnessState:
     runner: HarnessRunner = state[_RUNNER_KEY]
     runtime = state[_RUNTIME_KEY]
@@ -512,8 +530,6 @@ def _merge_runner_state(state: HarnessState) -> HarnessState:
     normalized_stage_history = stage_records_from_summary(
         {"agent_stages": deepcopy(runner.agent_stages)}
     )
-    drafts = extract_drafts_from_summary(_draft_summary_from_runner(runner))
-    best_draft = select_best_draft(drafts)
     final_policy_evaluation = next(
         (
             deepcopy(check)
@@ -547,16 +563,13 @@ def _merge_runner_state(state: HarnessState) -> HarnessState:
     state["stage_history"] = normalized_stage_history
     state["validator_rounds"] = deepcopy(runner.validator_rounds)
     state["policy_checks"] = deepcopy(runner.workspace_policy_checks)
-    state["drafts"] = drafts
     state["warnings"] = list(state.get("warnings") or []) + list(runner.warnings)
     state["errors"] = list(state.get("errors") or []) + list(runner.errors)
     state["stage_counter"] = int(runner.stage_counter)
     state["revision_round"] = int(runtime.get("revisions_completed") or 0)
     state["issue_history"] = deepcopy(runner._serialized_issue_ledger())
     state["topic_ledger"] = deepcopy(runner._serialized_topic_ledger())
-    state["current_draft_id"] = drafts[-1].get("draft_id") if drafts else None
-    state["best_draft_id"] = best_draft.get("draft_id") if best_draft else None
-    state["selected_draft_id"] = state["current_draft_id"]
+    _refresh_native_draft_projection(state, runner)
     state["open_issue_ids"] = [
         str(item.get("issue_id") or "")
         for item in state["issue_history"]
@@ -579,7 +592,6 @@ def _merge_runner_state(state: HarnessState) -> HarnessState:
     state["final_workspace_policy_evaluation"] = final_policy_evaluation
     state["changed_files"] = changed_paths
     state["config_path"] = str(getattr(runner, "config_path", ""))
-    state["bridge_boundary_version"] = LEGACY_BRIDGE_BOUNDARY_VERSION
     focus_decision = state.get(_FOCUS_DECISION_KEY)
     if isinstance(focus_decision, dict) and focus_decision:
         state["focus_decision"] = deepcopy(focus_decision)
@@ -652,6 +664,7 @@ def _apply_outcome_to_state(state: HarnessState, outcome: dict[str, Any]) -> Har
         state["config_verdict"] = "pass"
     if state.get("policy_verdict") in (None, ""):
         state["policy_verdict"] = "pass"
+    _refresh_native_draft_projection(state, runner)
     return state
 
 
