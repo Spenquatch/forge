@@ -51,6 +51,78 @@ def ensure_run_dir(run_dir: str | Path) -> Path:
     return path
 
 
+def _normalized_draft_id(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def _draft_by_id(
+    drafts: list[dict[str, Any]],
+    draft_id: str | None,
+) -> dict[str, Any] | None:
+    normalized_id = _normalized_draft_id(draft_id)
+    if not normalized_id:
+        return None
+    for draft in drafts:
+        if not isinstance(draft, dict):
+            continue
+        if _normalized_draft_id(draft.get("draft_id")) == normalized_id:
+            return copy.deepcopy(draft)
+    return None
+
+
+def _summary_graph_execution_mode(summary: dict[str, Any]) -> str:
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        graph_execution = run_details.get("graph_execution")
+        if isinstance(graph_execution, dict):
+            return str(graph_execution.get("execution_mode") or "").strip()
+    return ""
+
+
+def _resolve_summary_draft_selection(
+    summary: dict[str, Any],
+    drafts: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    best_draft_id = _normalized_draft_id(summary.get("best_draft_id"))
+    selected_draft_id = _normalized_draft_id(summary.get("selected_draft_id"))
+    best_draft = _draft_by_id(drafts, best_draft_id) or _draft_by_id(
+        drafts, selected_draft_id
+    )
+    selected_draft = _draft_by_id(drafts, selected_draft_id) or _draft_by_id(
+        drafts, best_draft_id
+    )
+
+    if _summary_graph_execution_mode(summary) == "graph_owned":
+        if best_draft is not None:
+            summary["best_draft_id"] = best_draft.get("draft_id")
+        if selected_draft is not None:
+            summary["selected_draft_id"] = selected_draft.get("draft_id")
+        return best_draft, selected_draft
+
+    if best_draft is None:
+        ranked_best_draft = select_best_draft(drafts)
+        if ranked_best_draft is not None:
+            best_draft = ranked_best_draft
+            summary["best_draft_id"] = ranked_best_draft.get("draft_id")
+            summary.setdefault("selected_draft_id", ranked_best_draft.get("draft_id"))
+            for index, draft in enumerate(drafts):
+                if draft.get("draft_id") == ranked_best_draft.get("draft_id"):
+                    drafts[index] = ranked_best_draft
+                    break
+            selected_draft = _draft_by_id(
+                drafts,
+                _normalized_draft_id(summary.get("selected_draft_id"))
+                or ranked_best_draft.get("draft_id"),
+            )
+        return best_draft, selected_draft
+
+    summary["best_draft_id"] = best_draft.get("draft_id")
+    if selected_draft is None:
+        summary.setdefault("selected_draft_id", best_draft.get("draft_id"))
+        selected_draft = _draft_by_id(drafts, summary.get("selected_draft_id"))
+    return best_draft, selected_draft
+
+
 def _sync_focus_decision_into_summary(summary: dict[str, Any]) -> None:
     top_level_focus = summary.get("focus_decision")
     run_details = summary.get("run_details")
@@ -1647,14 +1719,7 @@ def apply_final_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
             summary["bounded_review_summary"] = copy.deepcopy(bounded_review_summary)
 
     drafts = list(summary.get("drafts") or [])
-    best_draft = select_best_draft(drafts)
-    if best_draft is not None:
-        summary["best_draft_id"] = best_draft.get("draft_id")
-        summary.setdefault("selected_draft_id", best_draft.get("draft_id"))
-        for index, draft in enumerate(drafts):
-            if draft.get("draft_id") == best_draft.get("draft_id"):
-                drafts[index] = best_draft
-                break
+    best_draft, _selected_draft = _resolve_summary_draft_selection(summary, drafts)
     summary["drafts"] = drafts
 
     verdict = str(summary.get("verdict") or "")

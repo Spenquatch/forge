@@ -130,6 +130,25 @@ class AnalysisReviewRuntimeState(TypedDict, total=False):
     review_loop_exercised: bool
 
 
+def _normalized_draft_id(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def _draft_by_id(
+    drafts: list[dict[str, Any]],
+    draft_id: str | None,
+) -> dict[str, Any] | None:
+    normalized_id = _normalized_draft_id(draft_id)
+    if not normalized_id:
+        return None
+    for draft in drafts:
+        if not isinstance(draft, dict):
+            continue
+        if _normalized_draft_id(draft.get("draft_id")) == normalized_id:
+            return draft
+    return None
+
+
 class HarnessState(TypedDict, total=False):
     run_id: str
     thread_id: str
@@ -481,7 +500,16 @@ def summary_read_adapter_v1(
             else str(verdicts.get("content_verdict"))
         ),
     )
-    best_draft = select_best_draft(drafts)
+    best_draft_id = _normalized_draft_id(summary.get("best_draft_id"))
+    selected_draft_id = _normalized_draft_id(summary.get("selected_draft_id"))
+    best_draft = _draft_by_id(drafts, best_draft_id)
+    if best_draft is None and not best_draft_id:
+        ranked_best_draft = select_best_draft(drafts)
+        if ranked_best_draft is not None:
+            best_draft = ranked_best_draft
+            best_draft_id = _normalized_draft_id(ranked_best_draft.get("draft_id"))
+    if not selected_draft_id:
+        selected_draft_id = best_draft_id
     issue_history = _issue_history_from_summary(summary, drafts)
 
     artifacts = summary.get("artifacts") or {}
@@ -537,8 +565,8 @@ def summary_read_adapter_v1(
         stage_counter=len(summary.get("agent_stages", [])),
         revision_round=int((summary.get("run_details") or {}).get("revisions_completed") or 0),
         current_draft_id=(drafts[-1].get("draft_id") if drafts else None),
-        best_draft_id=(best_draft.get("draft_id") if best_draft else None),
-        selected_draft_id=(summary.get("selected_draft_id") or (best_draft.get("draft_id") if best_draft else None)),
+        best_draft_id=(best_draft_id or None),
+        selected_draft_id=(selected_draft_id or None),
         open_issue_ids=[
             issue.get("issue_id", "")
             for issue in issue_history

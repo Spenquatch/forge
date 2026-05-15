@@ -18,6 +18,7 @@ from anvil.harness.reporting import (
     summary_projection_v1,
     write_state_artifacts,
 )
+from anvil.harness.state import state_from_summary
 
 
 def _rendered_section(markdown: str, heading_prefix: str) -> str:
@@ -1833,6 +1834,184 @@ def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accept
     assert "none_reason:" not in (tmp_path / "FINAL_ANSWER.md").read_text(
         encoding="utf-8"
     )
+
+
+def test_apply_final_artifacts_graph_owned_uses_frozen_selection_ids(tmp_path):
+    summary = {
+        "task": {"id": "task-selection-frozen"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "best_draft_id": "draft-caveated",
+        "selected_draft_id": "draft-caveated",
+        "run_details": {
+            "graph_execution": {
+                "execution_mode": "graph_owned",
+                "graph_owned": True,
+                "fallback_used": False,
+            }
+        },
+        "drafts": [
+            {
+                "draft_id": "draft-clean",
+                "review_status": "accepted",
+                "review_state": "evaluated",
+                "round_index": 0,
+                "summary": "Cleaner but not graph-selected draft.",
+                "issue_counts": {
+                    "blocking_medium_or_higher": 0,
+                    "medium_or_higher": 0,
+                    "accepted_recommendations": 1,
+                    "required_validator_failures": 0,
+                    "topics": 0,
+                    "open_topics": 0,
+                },
+                "scores": {
+                    "grounding_score": 0.62,
+                    "actionability_score": 0.80,
+                    "scope_compliance_score": 0.90,
+                },
+                "metadata": {
+                    "stage_index": 1,
+                    "payload": _recommendation_payload("Clean recommendation"),
+                },
+            },
+            {
+                "draft_id": "draft-caveated",
+                "review_status": "accepted",
+                "review_state": "evaluated",
+                "round_index": 1,
+                "summary": "Graph-selected draft.",
+                "issue_counts": {
+                    "blocking_medium_or_higher": 0,
+                    "medium_or_higher": 0,
+                    "accepted_recommendations": 1,
+                    "required_validator_failures": 0,
+                    "topics": 1,
+                    "open_topics": 1,
+                },
+                "scores": {
+                    "grounding_score": 0.55,
+                    "actionability_score": 0.79,
+                    "scope_compliance_score": 0.88,
+                },
+                "metadata": {
+                    "stage_index": 2,
+                    "payload": _recommendation_payload("Frozen graph-owned recommendation"),
+                },
+            },
+        ],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["best_draft_id"] == "draft-caveated"
+    assert updated["selected_draft_id"] == "draft-caveated"
+    assert updated["final_answer"]["recommendations"][0]["title"] == (
+        "Frozen graph-owned recommendation"
+    )
+
+
+def test_state_from_summary_preserves_explicit_selection_ids_without_reranking():
+    summary = {
+        "run_id": "run-selection-frozen",
+        "thread_id": "thread-selection-frozen",
+        "task": {"id": "task-selection-frozen", "task_kind": "analysis_review"},
+        "strategy_kind": "analysis_review_v1",
+        "agent_stages": [
+            {
+                "stage_index": 1,
+                "role_name": "proposer_round_0",
+                "ok": True,
+                "structured_output": {"summary": "First draft."},
+                "stdout_path": "draft-1.txt",
+            },
+            {
+                "stage_index": 2,
+                "role_name": "critic_round_0",
+                "ok": True,
+                "structured_output": {
+                    "verdict": "accept",
+                    "issues": [],
+                    "recommendation_reviews": [
+                        {"recommendation_index": 0, "verdict": "accept"}
+                    ],
+                    "grounding_score": 0.95,
+                    "actionability_score": 0.90,
+                    "scope_compliance_score": 0.93,
+                },
+            },
+            {
+                "stage_index": 3,
+                "role_name": "proposer_round_1",
+                "ok": True,
+                "structured_output": {"summary": "Second draft."},
+                "stdout_path": "draft-2.txt",
+            },
+            {
+                "stage_index": 4,
+                "role_name": "critic_round_1",
+                "ok": True,
+                "structured_output": {
+                    "verdict": "accept",
+                    "issues": [],
+                    "recommendation_reviews": [
+                        {"recommendation_index": 0, "verdict": "accept"}
+                    ],
+                    "grounding_score": 0.40,
+                    "actionability_score": 0.50,
+                    "scope_compliance_score": 0.60,
+                    "topics": [{"topic_id": "TOPIC-1"}],
+                },
+            },
+        ],
+        "best_draft_id": "draft-proposer-round-1",
+        "selected_draft_id": "draft-proposer-round-1",
+        "verdicts": {"content_verdict": "accepted"},
+    }
+
+    state = state_from_summary(summary)
+
+    assert state["best_draft_id"] == "draft-proposer-round-1"
+    assert state["selected_draft_id"] == "draft-proposer-round-1"
+
+
+def test_state_from_summary_backfills_missing_selection_ids_for_legacy_summaries():
+    summary = {
+        "run_id": "run-selection-legacy",
+        "thread_id": "thread-selection-legacy",
+        "task": {"id": "task-selection-legacy", "task_kind": "analysis_review"},
+        "strategy_kind": "analysis_review_v1",
+        "agent_stages": [
+            {
+                "stage_index": 1,
+                "role_name": "proposer_round_0",
+                "ok": True,
+                "structured_output": {"summary": "First draft."},
+                "stdout_path": "draft-1.txt",
+            },
+            {
+                "stage_index": 2,
+                "role_name": "critic_round_0",
+                "ok": True,
+                "structured_output": {
+                    "verdict": "accept",
+                    "issues": [],
+                    "recommendation_reviews": [
+                        {"recommendation_index": 0, "verdict": "accept"}
+                    ],
+                    "grounding_score": 0.80,
+                    "actionability_score": 0.75,
+                    "scope_compliance_score": 0.77,
+                },
+            },
+        ],
+        "verdicts": {"content_verdict": "accepted"},
+    }
+
+    state = state_from_summary(summary)
+
+    assert state["best_draft_id"] == "draft-proposer_round_0"
+    assert state["selected_draft_id"] == "draft-proposer_round_0"
 
 
 def test_artifact_label_for_kind_rejects_unknown_values():

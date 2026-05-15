@@ -86,6 +86,35 @@ def test_state_from_summary_is_a_compatibility_wrapper():
     assert wrapped["bridge_boundary_version"] is None
 
 
+def test_state_from_summary_reads_historical_contract_fields_after_freeze(tmp_path):
+    summary = {
+        "run_id": "run-historical",
+        "workspace": "/tmp/workspace",
+        "task": {"id": "task-historical", "task_kind": "analysis_review"},
+        "strategy_kind": "analysis_review_v1",
+        "artifacts": {"run_dir": str(tmp_path / "run")},
+        "run_details": {
+            "analysis_review_contract": {"mode": "bounded"},
+            "focus_decision": _focus_decision(),
+            "topic_ledger": [
+                {"topic_id": "TOPIC-1", "resolution_status": "open"}
+            ],
+        },
+    }
+
+    wrapped = state_from_summary(summary, fallback_thread_id="fallback-thread")
+
+    assert wrapped["thread_id"] == "fallback-thread"
+    assert wrapped["analysis_review_contract"] == {"mode": "bounded"}
+    assert wrapped["focus_decision"]["selected_focus_id"] == "focus-1"
+    assert wrapped["topic_ledger"] == [
+        {"topic_id": "TOPIC-1", "resolution_status": "open"}
+    ]
+    assert wrapped["summary_boundary_version"] == SUMMARY_BOUNDARY_VERSION
+    assert wrapped["bridge_boundary_version"] is None
+    assert wrapped["summary_payload"] == summary
+
+
 class _FakeFocusGate:
     enabled = False
 
@@ -278,7 +307,9 @@ def test_analysis_review_v1_graph_owned_success_carries_native_state(monkeypatch
     result = asyncio.run(analysis_review_v1_subgraph(state))
 
     assert result["run_verdict"] == "accepted"
+    assert result.get("bridge_boundary_version") is None
     assert result["summary_payload"] == {}
+    assert "bridge_boundary_version" not in result["summary_payload"]
     assert result["analysis_review_contract"] == {"mode": "bounded"}
     assert result["analysis_review_runtime"]["transition_reason"] == "stop_policy_satisfied"
     assert result["drafts"][0]["draft_id"] == "draft-proposer"
