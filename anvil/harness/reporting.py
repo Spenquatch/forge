@@ -1952,11 +1952,21 @@ def _artifact_index_from_summary(summary: dict[str, Any]) -> dict[str, dict[str,
     return artifact_index
 
 
+def _should_sync_optional_container(
+    value: Any,
+    *,
+    seeded_summary: dict[str, Any],
+    key: str,
+) -> bool:
+    return bool(value) or key in seeded_summary
+
+
 def _sync_graph_owned_native_summary_fields(
     summary: dict[str, Any],
     state: dict[str, Any],
     *,
     execution_mode: str,
+    seeded_summary: dict[str, Any],
 ) -> None:
     if execution_mode != "graph_owned":
         return
@@ -2086,19 +2096,31 @@ def _sync_graph_owned_native_summary_fields(
             if state.get("strategy_graph_subset") in (None, "")
             else str(state.get("strategy_graph_subset"))
         )
-    if "focus_decision" in state:
+    if "focus_decision" in state and _should_sync_optional_container(
+        state.get("focus_decision"),
+        seeded_summary=seeded_summary,
+        key="focus_decision",
+    ):
         summary["focus_decision"] = (
             copy.deepcopy(state.get("focus_decision"))
             if isinstance(state.get("focus_decision"), dict)
             else None
         )
-    if "analysis_review_status" in state:
+    if "analysis_review_status" in state and _should_sync_optional_container(
+        state.get("analysis_review_status"),
+        seeded_summary=seeded_summary,
+        key="analysis_review_status",
+    ):
         summary["analysis_review_status"] = (
             copy.deepcopy(state.get("analysis_review_status"))
             if isinstance(state.get("analysis_review_status"), dict)
             else None
         )
-    if "analysis_review_coverage" in state:
+    if "analysis_review_coverage" in state and _should_sync_optional_container(
+        state.get("analysis_review_coverage"),
+        seeded_summary=seeded_summary,
+        key="analysis_review_coverage",
+    ):
         summary["analysis_review_coverage"] = (
             copy.deepcopy(state.get("analysis_review_coverage"))
             if isinstance(state.get("analysis_review_coverage"), dict)
@@ -2110,31 +2132,51 @@ def _sync_graph_owned_native_summary_fields(
             for item in state.get("recommendation_reviews") or []
             if isinstance(item, dict)
         ]
-    if "closure_proof_by_id" in state:
+    if "closure_proof_by_id" in state and _should_sync_optional_container(
+        state.get("closure_proof_by_id"),
+        seeded_summary=seeded_summary,
+        key="closure_proof_by_id",
+    ):
         summary["closure_proof_by_id"] = (
             copy.deepcopy(state.get("closure_proof_by_id"))
             if isinstance(state.get("closure_proof_by_id"), dict)
             else {}
         )
-    if "bounded_review_summary" in state:
+    if "bounded_review_summary" in state and _should_sync_optional_container(
+        state.get("bounded_review_summary"),
+        seeded_summary=seeded_summary,
+        key="bounded_review_summary",
+    ):
         summary["bounded_review_summary"] = (
             copy.deepcopy(state.get("bounded_review_summary"))
             if isinstance(state.get("bounded_review_summary"), dict)
             else {}
         )
-    if "bounded_attestation_input" in state:
+    if "bounded_attestation_input" in state and _should_sync_optional_container(
+        state.get("bounded_attestation_input"),
+        seeded_summary=seeded_summary,
+        key="bounded_attestation_input",
+    ):
         summary["bounded_attestation_input"] = (
             copy.deepcopy(state.get("bounded_attestation_input"))
             if isinstance(state.get("bounded_attestation_input"), dict)
             else {}
         )
-    if "final_answer" in state:
+    if "final_answer" in state and _should_sync_optional_container(
+        state.get("final_answer"),
+        seeded_summary=seeded_summary,
+        key="final_answer",
+    ):
         summary["final_answer"] = (
             copy.deepcopy(state.get("final_answer"))
             if isinstance(state.get("final_answer"), dict)
             else None
         )
-    if "topic_ledger" in state:
+    if "topic_ledger" in state and _should_sync_optional_container(
+        state.get("topic_ledger"),
+        seeded_summary=seeded_summary,
+        key="topic_ledger",
+    ):
         summary["topic_ledger"] = [
             copy.deepcopy(item)
             for item in state.get("topic_ledger") or []
@@ -2154,7 +2196,23 @@ def publish_state_artifacts_v1(state: dict[str, Any]) -> dict[str, Any]:
     early before the imperative runner creates on-disk artifacts.
     """
 
-    run_dir_raw = state.get("run_dir") or state.get("out_root") or ".forge-harness-runs"
+    seeded_summary = (
+        copy.deepcopy(state.get("summary_payload"))
+        if isinstance(state.get("summary_payload"), dict)
+        else {}
+    )
+    seeded_artifacts = (
+        seeded_summary.get("artifacts")
+        if isinstance(seeded_summary.get("artifacts"), dict)
+        else {}
+    )
+    run_dir_raw = (
+        state.get("run_dir")
+        or state.get("out_root")
+        or seeded_artifacts.get("run_dir")
+        or seeded_summary.get("run_dir")
+        or ".forge-harness-runs"
+    )
     run_dir = ensure_run_dir(run_dir_raw)
     _sync_native_publish_selection(state)
     summary = summary_projection_v1(state, run_dir=run_dir)
@@ -2439,6 +2497,7 @@ def summary_projection_v1(
         summary,
         state,
         execution_mode=execution_mode,
+        seeded_summary=seeded_summary,
     )
     _sync_focus_decision_into_summary(summary)
     return summary
