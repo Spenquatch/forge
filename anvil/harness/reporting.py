@@ -1952,6 +1952,201 @@ def _artifact_index_from_summary(summary: dict[str, Any]) -> dict[str, dict[str,
     return artifact_index
 
 
+def _sync_graph_owned_native_summary_fields(
+    summary: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    execution_mode: str,
+) -> None:
+    if execution_mode != "graph_owned":
+        return
+
+    if "warnings" in state:
+        summary["warnings"] = [str(item) for item in state.get("warnings") or []]
+    if "errors" in state:
+        summary["errors"] = [str(item) for item in state.get("errors") or []]
+
+    if any(key in state for key in ("run_verdict", "content_verdict")):
+        summary["verdict"] = (
+            state.get("run_verdict")
+            or state.get("content_verdict")
+            or "invalid_config"
+        )
+    if any(
+        key in state
+        for key in (
+            "run_verdict",
+            "content_verdict",
+            "validator_verdict",
+            "policy_verdict",
+            "config_verdict",
+        )
+    ):
+        summary["verdicts"] = {
+            "run_verdict": state.get("run_verdict"),
+            "content_verdict": state.get("content_verdict"),
+            "validator_verdict": state.get("validator_verdict"),
+            "policy_verdict": state.get("policy_verdict"),
+            "config_verdict": state.get("config_verdict"),
+        }
+
+    if "summary_text" in state:
+        summary["final_summary"] = state.get("summary_text")
+    if "failure_details" in state:
+        summary["failure_details"] = (
+            copy.deepcopy(state.get("failure_details"))
+            if isinstance(state.get("failure_details"), dict)
+            else None
+        )
+    if "workspace_policy_ignored_rel_paths" in state:
+        summary["workspace_policy_ignored_rel_paths"] = [
+            str(item)
+            for item in state.get("workspace_policy_ignored_rel_paths") or []
+        ]
+    if "policy_checks" in state:
+        summary["workspace_policy_checks"] = list(state.get("policy_checks") or [])
+    if "final_workspace_policy_evaluation" in state:
+        summary["final_workspace_policy_evaluation"] = (
+            copy.deepcopy(state.get("final_workspace_policy_evaluation"))
+            if isinstance(state.get("final_workspace_policy_evaluation"), dict)
+            else None
+        )
+
+    if "stage_history" in state:
+        summary["agent_stages"] = _project_agent_stages(
+            state.get("stage_history") or [],
+            execution_mode=execution_mode,
+        )
+    if "validator_rounds" in state:
+        summary["validator_rounds"] = list(state.get("validator_rounds") or [])
+    if "validator_summary" in state:
+        summary["validator_summary"] = (
+            copy.deepcopy(state.get("validator_summary"))
+            if isinstance(state.get("validator_summary"), dict)
+            else {}
+        )
+    if "drafts" in state:
+        summary["drafts"] = list(state.get("drafts") or [])
+    if "best_draft_id" in state:
+        summary["best_draft_id"] = state.get("best_draft_id")
+    if "selected_draft_id" in state:
+        summary["selected_draft_id"] = state.get("selected_draft_id")
+    if "issue_history" in state:
+        summary["issue_ledger"] = list(state.get("issue_history") or [])
+    if "changed_files" in state:
+        summary["changed_files"] = list(state.get("changed_files") or [])
+    if "initial_git_snapshot" in state:
+        summary["initial_git_snapshot"] = (
+            copy.deepcopy(state.get("initial_git_snapshot"))
+            if isinstance(state.get("initial_git_snapshot"), dict)
+            else {}
+        )
+    if "current_git_snapshot" in state:
+        summary["final_git_snapshot"] = (
+            copy.deepcopy(state.get("current_git_snapshot"))
+            if isinstance(state.get("current_git_snapshot"), dict)
+            else {}
+        )
+
+    if "run_details" in state:
+        run_details = (
+            copy.deepcopy(state.get("run_details"))
+            if isinstance(state.get("run_details"), dict)
+            else {}
+        )
+        graph_execution = (
+            summary.get("run_details", {}).get("graph_execution")
+            if isinstance(summary.get("run_details"), dict)
+            else None
+        )
+        if isinstance(graph_execution, dict):
+            run_details["graph_execution"] = copy.deepcopy(graph_execution)
+        summary["run_details"] = run_details
+    if "analysis_review_contract" in state:
+        summary["analysis_review_contract"] = (
+            copy.deepcopy(state.get("analysis_review_contract"))
+            if isinstance(state.get("analysis_review_contract"), dict)
+            else {}
+        )
+    if "strategy_graph_spec" in state:
+        summary["strategy_graph_spec"] = (
+            copy.deepcopy(state.get("strategy_graph_spec"))
+            if isinstance(state.get("strategy_graph_spec"), dict)
+            else {}
+        )
+    if "strategy_graph_spec_id" in state:
+        summary["strategy_graph_spec_id"] = (
+            None
+            if state.get("strategy_graph_spec_id") in (None, "")
+            else str(state.get("strategy_graph_spec_id"))
+        )
+    if "strategy_graph_subset" in state:
+        summary["strategy_graph_subset"] = (
+            None
+            if state.get("strategy_graph_subset") in (None, "")
+            else str(state.get("strategy_graph_subset"))
+        )
+    if "focus_decision" in state:
+        summary["focus_decision"] = (
+            copy.deepcopy(state.get("focus_decision"))
+            if isinstance(state.get("focus_decision"), dict)
+            else None
+        )
+    if "analysis_review_status" in state:
+        summary["analysis_review_status"] = (
+            copy.deepcopy(state.get("analysis_review_status"))
+            if isinstance(state.get("analysis_review_status"), dict)
+            else None
+        )
+    if "analysis_review_coverage" in state:
+        summary["analysis_review_coverage"] = (
+            copy.deepcopy(state.get("analysis_review_coverage"))
+            if isinstance(state.get("analysis_review_coverage"), dict)
+            else {}
+        )
+    if "recommendation_reviews" in state:
+        summary["recommendation_reviews"] = [
+            copy.deepcopy(item)
+            for item in state.get("recommendation_reviews") or []
+            if isinstance(item, dict)
+        ]
+    if "closure_proof_by_id" in state:
+        summary["closure_proof_by_id"] = (
+            copy.deepcopy(state.get("closure_proof_by_id"))
+            if isinstance(state.get("closure_proof_by_id"), dict)
+            else {}
+        )
+    if "bounded_review_summary" in state:
+        summary["bounded_review_summary"] = (
+            copy.deepcopy(state.get("bounded_review_summary"))
+            if isinstance(state.get("bounded_review_summary"), dict)
+            else {}
+        )
+    if "bounded_attestation_input" in state:
+        summary["bounded_attestation_input"] = (
+            copy.deepcopy(state.get("bounded_attestation_input"))
+            if isinstance(state.get("bounded_attestation_input"), dict)
+            else {}
+        )
+    if "final_answer" in state:
+        summary["final_answer"] = (
+            copy.deepcopy(state.get("final_answer"))
+            if isinstance(state.get("final_answer"), dict)
+            else None
+        )
+    if "topic_ledger" in state:
+        summary["topic_ledger"] = [
+            copy.deepcopy(item)
+            for item in state.get("topic_ledger") or []
+            if isinstance(item, dict)
+        ]
+    if "bridge_boundary_version" in state:
+        if state.get("bridge_boundary_version") in (None, ""):
+            summary.pop("bridge_boundary_version", None)
+        else:
+            summary["bridge_boundary_version"] = str(state.get("bridge_boundary_version"))
+
+
 def publish_state_artifacts_v1(state: dict[str, Any]) -> dict[str, Any]:
     """Write report/summary artifacts for a state-style payload.
 
@@ -2240,5 +2435,10 @@ def summary_projection_v1(
     bridge_boundary_version = state.get("bridge_boundary_version")
     if bridge_boundary_version not in (None, ""):
         summary["bridge_boundary_version"] = str(bridge_boundary_version)
+    _sync_graph_owned_native_summary_fields(
+        summary,
+        state,
+        execution_mode=execution_mode,
+    )
     _sync_focus_decision_into_summary(summary)
     return summary

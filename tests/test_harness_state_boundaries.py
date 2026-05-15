@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
+from anvil.harness.reporting import summary_projection_v1
 from anvil.harness.subgraphs.analysis_review_v1 import analysis_review_v1_subgraph
 from anvil.harness.state import (
     HARNESS_STATE_SERIALIZATION_VERSION,
     SUMMARY_BOUNDARY_VERSION,
+    initialize_harness_state,
     state_from_summary,
     summary_read_adapter_v1,
 )
@@ -113,6 +115,101 @@ def test_state_from_summary_reads_historical_contract_fields_after_freeze(tmp_pa
     assert wrapped["summary_boundary_version"] == SUMMARY_BOUNDARY_VERSION
     assert wrapped["bridge_boundary_version"] is None
     assert wrapped["summary_payload"] == summary
+
+
+def test_summary_projection_v1_graph_owned_native_state_wins_over_seeded_summary(
+    tmp_path,
+):
+    state = initialize_harness_state(
+        task_path="task.yaml",
+        strategy_path="strategy.yaml",
+        workspace_root="/tmp/workspace",
+        out_root=str(tmp_path / "runs"),
+        analysis_review_execution_mode="graph_owned",
+    )
+    state.update(
+        {
+            "run_id": "run-graph-owned",
+            "thread_id": "thread-graph-owned",
+            "task_spec": {"id": "task-graph-owned", "task_kind": "analysis_review"},
+            "strategy_spec": {
+                "name": "analysis_review_v1",
+                "kind": "analysis_review_v1",
+            },
+            "strategy_kind": "analysis_review_v1",
+            "summary_payload": {
+                "warnings": ["stale warning"],
+                "errors": ["stale error"],
+                "drafts": [{"draft_id": "stale-draft"}],
+                "best_draft_id": "stale-draft",
+                "selected_draft_id": "stale-draft",
+                "issue_ledger": [{"issue_id": "ISSUE-stale"}],
+                "changed_files": ["stale.py"],
+                "analysis_review_status": {"mode": "stale"},
+                "recommendation_reviews": [
+                    {"recommendation_index": 99, "verdict": "reject"}
+                ],
+                "closure_proof_by_id": {"TOPIC-1": {"status": "stale"}},
+                "bounded_review_summary": {"status": "stale"},
+                "bounded_attestation_input": {"status": "stale"},
+                "final_answer": {"status": "stale"},
+                "topic_ledger": [
+                    {"topic_id": "TOPIC-1", "resolution_status": "stale"}
+                ],
+                "focus_decision": {"selected_focus_id": "stale-focus"},
+                "run_details": {
+                    "stale": True,
+                    "graph_execution": {"execution_mode": "legacy_bridge"},
+                },
+                "bridge_boundary_version": "legacy_bridge_boundary_v1",
+            },
+            "warnings": [],
+            "errors": [],
+            "stage_history": [],
+            "validator_rounds": [],
+            "drafts": [],
+            "best_draft_id": None,
+            "selected_draft_id": None,
+            "issue_history": [],
+            "changed_files": [],
+            "run_details": {},
+            "analysis_review_status": {},
+            "recommendation_reviews": [],
+            "closure_proof_by_id": {},
+            "bounded_review_summary": {},
+            "bounded_attestation_input": {},
+            "final_answer": None,
+            "topic_ledger": [],
+            "focus_decision": {},
+            "bridge_boundary_version": None,
+        }
+    )
+
+    summary = summary_projection_v1(state, run_dir=tmp_path / "run")
+
+    assert summary["warnings"] == []
+    assert summary["errors"] == []
+    assert summary["drafts"] == []
+    assert summary["best_draft_id"] is None
+    assert summary["selected_draft_id"] is None
+    assert summary["issue_ledger"] == []
+    assert summary["changed_files"] == []
+    assert summary["analysis_review_status"] == {}
+    assert summary["recommendation_reviews"] == []
+    assert summary["closure_proof_by_id"] == {}
+    assert summary["bounded_review_summary"] == {}
+    assert summary["bounded_attestation_input"] == {}
+    assert summary["final_answer"] is None
+    assert summary["topic_ledger"] == []
+    assert summary["focus_decision"] == {}
+    assert summary["run_details"] == {
+        "graph_execution": {
+            "execution_mode": "graph_owned",
+            "graph_owned": True,
+            "fallback_used": False,
+        }
+    }
+    assert "bridge_boundary_version" not in summary
 
 
 class _FakeFocusGate:

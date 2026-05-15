@@ -487,6 +487,13 @@ def _summary_list_of_dicts(summary: dict[str, Any], key: str) -> list[dict[str, 
 def summary_read_adapter_v1(
     summary: dict[str, Any], *, fallback_thread_id: str | None = None
 ) -> HarnessState:
+    """Compatibility-only summary reader.
+
+    Sanctioned B3 call sites are limited to the actual legacy bridge,
+    historical summary/readability tooling, and compatibility/parity tests.
+    Graph-owned success paths must carry native state instead of rehydrating it
+    from summary artifacts.
+    """
     task = summary.get("task") or {}
     verdicts = summary.get("verdicts") or {}
     stage_history = stage_records_from_summary(summary)
@@ -645,6 +652,7 @@ def summary_read_adapter_v1(
 def state_from_summary(
     summary: dict[str, Any], *, fallback_thread_id: str | None = None
 ) -> HarnessState:
+    """Thin compatibility alias for historical tooling and tests only."""
     return summary_read_adapter_v1(
         summary, fallback_thread_id=fallback_thread_id
     )
