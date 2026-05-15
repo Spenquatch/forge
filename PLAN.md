@@ -55,6 +55,23 @@ This plan says yes, but only if native state completion, single-owner
 selection, state-native artifact publishing, compatibility-boundary reduction,
 and full parity coverage land together.
 
+## Preconditions and Non-Negotiables
+
+These are implementation gates, not suggestions.
+
+- B2 parity must already be green on `main` before B3 starts. B3 is not allowed
+  to debug unfinished B2 topology drift at the same time it changes state truth.
+- B3 only covers the `analysis_review` migrated surface. Do not widen into
+  `single_pass`, `pfr_v1`, or future C-series graph/compiler work.
+- External artifact semantics stay stable in this milestone. `summary.json`,
+  `REPORT.md`, `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, and `BEST_DRAFT.*` may gain
+  approved graph-trace metadata, but they may not change contract shape or
+  meaning.
+- `legacy_bridge` remains the boring rollback path for the whole milestone. B3
+  does not change rollout defaults, flags, or operator playbooks.
+- No merge is complete until the parity matrix, readability checks, and the
+  named deleted bridge path are all proven green.
+
 ## Success Criteria
 
 - no graph-owned success path calls `summary_read_adapter_v1(...)`
@@ -369,6 +386,35 @@ publication.**
 | `anvil/harness/runner.py` | adjust only as needed so legacy summary behavior still works after the projector split | No new canonical state truth here |
 | `tests/*` | add native-state, parity, readability, and recovery assertions | No golden drift without an explicit contract reason |
 
+## Execution Spine
+
+The implementation order is fixed. This is one spine with merge gates, not five
+independent cleanup ideas.
+
+### Merge gates
+
+| Gate | Must be true before moving on |
+|---|---|
+| Gate 1: native state frozen | `HarnessState` carries every downstream publish/report field and graph-owned draft projection no longer depends on synthetic summary wrappers |
+| Gate 2: selection frozen | `select_best_draft_node(...)` is the only graph-path ranking owner and `reporting.py` no longer makes a second winner decision |
+| Gate 3: publisher frozen | graph-owned success execution publishes deliverables, `summary.json`, and `REPORT.md` from native state without `summary_read_adapter_v1(...)` |
+| Gate 4: compatibility frozen | remaining summary-read seams are explicit, legacy-only, and historical readability still passes |
+| Gate 5: parity frozen | full B3 parity matrix, CLI/readability surfaces, and the deleted bridge-path regression assertions are green |
+
+### `runner.py` touch rule
+
+`anvil/harness/runner.py` is not a default edit target in B3.
+
+Touch it only if one of these becomes true after the projector split:
+
+1. legacy summary-only execution fails to emit the pre-B3 compatibility shape,
+2. historical summary readability tests prove the runner still owns a helper
+   that the new compatibility wrapper must call, or
+3. parity tests show the legacy path now diverges only because runner-local
+   summary assembly still assumes summary-native draft truth.
+
+If none of those trigger, do not edit `runner.py`.
+
 ## Detailed Implementation Plan
 
 ### Phase 1: Complete the native state contract and split draft projection
@@ -376,14 +422,14 @@ publication.**
 Goal: graph-owned success execution must build selection inputs from native
 state, not from synthetic summary wrappers.
 
-Files:
+Primary code surfaces:
 
 - `anvil/harness/state.py`
 - `anvil/harness/selection.py`
 - `anvil/harness/subgraphs/analysis_review_v1.py`
-- targeted compatibility adjustments in `anvil/harness/runner.py` only if needed
+- `anvil/harness/runner.py` only if the touch rule above triggers
 
-Required changes:
+Implementation contract:
 
 1. Expand `HarnessState` so every graph-owned downstream field consumed by
    selection, publication, report rendering, or recovery is explicit and typed.
@@ -401,24 +447,25 @@ Required changes:
 7. Stop setting `bridge_boundary_version` on graph-owned success paths.
    Only `LegacyBridgeBoundary.run(...)` is allowed to stamp that field.
 
-Exit criteria:
+Merge gate to exit Phase 1:
 
 - graph-owned `drafts` are built without `extract_drafts_from_summary(...)`
 - graph-owned success-path state carries all downstream publish/report fields
 - legacy summary parsing still works for historical readability and tests
+- the projector signature and native field names are frozen for downstream work
 
 ### Phase 2: Make `select_best_draft_node(...)` the sole selection owner
 
 Goal: selection truth must exist in one place.
 
-Files:
+Primary code surfaces:
 
 - `anvil/harness/nodes/select_best_draft.py`
 - `anvil/harness/selection.py`
 - `anvil/harness/reporting.py`
 - `anvil/harness/state.py`
 
-Required changes:
+Implementation contract:
 
 1. Keep `anvil/harness/nodes/select_best_draft.py` as the only canonical place
    that chooses `best_draft_id` and `selected_draft_id` on the graph path.
@@ -433,24 +480,25 @@ Required changes:
 5. Keep final artifact choice aligned with `selected_draft_id` and
    `best_draft_id` already present in native state.
 
-Exit criteria:
+Merge gate to exit Phase 2:
 
 - graph-owned success execution has exactly one ranking owner
 - `reporting.py` no longer silently picks a different best draft than the graph
 - legacy summary compatibility remains readable
+- selection ids are now a frozen upstream input for publication work
 
 ### Phase 3: Replace success-path summary round-tripping with state-native artifact publishing
 
 Goal: artifact emission must consume native state directly and project summary
 once at the end.
 
-Files:
+Primary code surfaces:
 
 - `anvil/harness/nodes/write_artifacts.py`
 - `anvil/harness/reporting.py`
 - `anvil/harness/report.py`
 
-Required changes:
+Implementation contract:
 
 1. Add a canonical state-native publisher in `anvil/harness/reporting.py`
    named `publish_state_artifacts_v1(state)`.
@@ -465,29 +513,31 @@ Required changes:
    `artifact_index` and `summary_payload` updated in place. No
    `summary_read_adapter_v1(...)` call on the graph-owned success path.
 6. Treat the current `apply_final_artifacts(summary)` flow as a compatibility
-   surface only if any legacy summary-only paths still require it. It is no
-   longer canonical for graph-owned success execution.
+   helper for summary-native inputs only if a legacy summary-only path still
+   requires it. It is no longer canonical for graph-owned success execution.
 
-Exit criteria:
+Merge gate to exit Phase 3:
 
 - graph-owned success execution does not rehydrate state from summary
 - final deliverables, `summary.json`, and `REPORT.md` are emitted from native
   state via a single publish path
 - `summary_payload` becomes a final projected cache, not an input dependency
+- publisher inputs and outputs are stable enough for boundary cleanup and full
+  parity assertions
 
 ### Phase 4: Reduce the summary boundary surface and lock the recovery contract
 
 Goal: make the remaining compatibility seams explicit, small, and honest.
 
-Files:
+Primary code surfaces:
 
 - `anvil/harness/state.py`
 - `anvil/harness/nodes/write_artifacts.py`
 - `anvil/harness/subgraphs/_bridge.py`
 - `anvil/harness/reporting.py`
-- targeted compatibility adjustments in `anvil/harness/runner.py` only if needed
+- `anvil/harness/runner.py` only if the touch rule above triggers
 
-Required changes:
+Implementation contract:
 
 1. Enumerate the only remaining sanctioned `summary_read_adapter_v1(...)` and
    `state_from_summary(...)` call sites in code comments and tests.
@@ -500,18 +550,19 @@ Required changes:
    remains complete and readable after failed runs.
 6. Do not promise stage-boundary resume. That remains out of scope.
 
-Exit criteria:
+Merge gate to exit Phase 4:
 
 - compatibility seams are explicit and small
 - graph-owned success path is free of summary rehydration
 - historical summary readability still works
 - restart-at-run-boundary remains supported
+- only the sanctioned legacy call sites remain for summary-to-state adaptation
 
 ### Phase 5: Prove B3 parity and compatibility on the canonical matrix
 
 Goal: B3 lands only when native-state truth is real, not just cleaner-looking.
 
-Files:
+Primary code surfaces:
 
 - `tests/test_harness_selection.py`
 - `tests/test_harness_state_boundaries.py`
@@ -523,7 +574,7 @@ Files:
 - `tests/test_harness_example_strategy_wiring.py`
 - `tests/test_run_focus_gate_acceptance.py`
 
-Required changes:
+Implementation contract:
 
 1. Prove native draft projection parity between:
    - historical summary compatibility parsing
@@ -544,11 +595,12 @@ Required changes:
 6. Prove failed-run summaries remain readable and support restart-at-run-boundary
    reasoning.
 
-Exit criteria:
+Merge gate to exit Phase 5:
 
 - parity rows are green for both compatibility and graph-owned success surfaces
 - historical summary readability remains green
 - the deleted success-path rehydration bridge stays dead by test coverage
+- CLI and operator-visible artifact/report surfaces remain stable
 
 ## Test and Parity Plan
 
@@ -633,6 +685,20 @@ This matrix is the milestone gate. No row is optional.
 | partial acceptance | both | included/excluded recommendation indices, admissibility reasons, emitted artifact kind |
 | invalid config / preflight failure | both | readable `summary.json`, readable `REPORT.md`, no success-path rehydration fallback |
 | historical artifact read compatibility | old summaries | `state_from_summary(...)` / `summary_read_adapter_v1(...)` still reconstruct readable compatibility state |
+
+### Operator and user-surface checks
+
+These are the human-visible flows that must stay boring while B3 changes
+internal truth ownership.
+
+| Surface | What must remain true |
+|---|---|
+| `python -m anvil.harness.cli run ...` | still produces the same artifact family and readable failure/success surfaces for equivalent inputs |
+| `summary.json` | remains readable as the canonical machine-readable audit surface |
+| `REPORT.md` | remains readable as the canonical human-readable audit surface |
+| `FINAL_ANSWER.*` / `PARTIAL_ANSWER.*` / `BEST_DRAFT.*` | still match verdict and admissibility rules, with no summary-vs-deliverable drift |
+| old run directories | still load through compatibility tooling without asking the user to regenerate artifacts |
+| failed runs | still leave enough readable state for restart-at-run-boundary reasoning and postmortem inspection |
 
 ### Validation commands
 
@@ -727,17 +793,17 @@ Rollback action:
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| native state contract + draft projection | `anvil/harness/state.py`, `anvil/harness/selection.py`, `anvil/harness/subgraphs/analysis_review_v1.py` | — |
-| selection-owner canonicalization | `anvil/harness/nodes/select_best_draft.py`, `anvil/harness/reporting.py`, `anvil/harness/state.py` | native state contract + draft projection |
-| state-native artifact publishing | `anvil/harness/nodes/write_artifacts.py`, `anvil/harness/reporting.py`, `anvil/harness/report.py` | native state contract + draft projection, selection ids frozen |
-| compatibility boundary cleanup | `anvil/harness/subgraphs/_bridge.py`, `anvil/harness/state.py`, `anvil/harness/runner.py`, `anvil/harness/nodes/write_artifacts.py` | native state contract + artifact publisher contract |
+| native state contract + draft projection | `anvil.harness.state`, `anvil.harness.selection`, `anvil.harness.subgraphs` | — |
+| selection-owner canonicalization | `anvil.harness.nodes`, `anvil.harness.reporting`, `anvil.harness.state` | native state contract + draft projection |
+| state-native artifact publishing | `anvil.harness.nodes`, `anvil.harness.reporting`, `anvil.harness.report` | native state contract + draft projection, selection ids frozen |
+| compatibility boundary cleanup | `anvil.harness.subgraphs`, `anvil.harness.runner`, `anvil.harness.state`, `anvil.harness.nodes` | native state contract + artifact publisher contract |
 | parity and compatibility tests | `tests/` | each lane above as its contract freezes |
 
 ### Parallel lanes
 
 Lane A: native state contract + draft projection  
-Sequential within the lane. It freezes field names and the canonical draft
-projector signature.
+Sequential within the lane. It freezes the native field names, the canonical
+draft-projector signature, and the graph-owned merge contract.
 
 Lane B: selection-owner canonicalization  
 Starts after Lane A freezes `drafts`, `current_draft_id`, `best_draft_id`, and
@@ -768,14 +834,14 @@ Split into two passes:
 
 ### Conflict flags
 
-- Lanes A, B, and D all touch `anvil/harness/state.py`, so they cannot merge
-  independently without coordination.
-- Lanes B and C both touch `anvil/harness/reporting.py`, so selection ownership
-  must freeze before final publisher work lands.
-- Lanes C and D both touch `anvil/harness/nodes/write_artifacts.py`, so D
-  cannot start early.
-- Lanes C and E2 both touch reporting-focused tests. Keep test ownership crisp
-  to avoid merge churn.
+- Lanes A, B, and D all touch the `anvil.harness.state` surface, so they cannot
+  merge independently without coordination.
+- Lanes B and C both touch the `anvil.harness.reporting` surface, so selection
+  ownership must freeze before final publisher work lands.
+- Lanes C and D both touch node-layer publication behavior, so D cannot start
+  early without rebase churn.
+- Lanes C and E2 both touch reporting-focused test surfaces. Keep test
+  ownership crisp to avoid merge noise.
 
 Verdict:
 
@@ -784,14 +850,16 @@ serial. Treat it like one primary spine with a test lane running beside it.
 
 ## NOT in scope
 
-- changing B2 topology ownership
-- changing `legacy_bridge` / `graph_owned` rollout semantics or defaults
-- deleting the legacy bridge entirely
-- `single_pass` or `pfr_v1` state/reporting cleanup
-- stage-boundary resume
-- artifact contract v2
-- public DAG or graph compiler work
-- C1, C2, or C3 future-state work
+| Deferred item | Why not in B3 |
+|---|---|
+| changing B2 topology ownership | B2 already owns topology parity; reopening it would hide whether B3 actually fixed state truth |
+| changing `legacy_bridge` / `graph_owned` rollout semantics or defaults | rollout changes would spend the rollback safety margin on operator behavior instead of correctness |
+| deleting the legacy bridge entirely | B3 still needs the boring rollback path while native-state publication hardens |
+| `single_pass` or `pfr_v1` state/reporting cleanup | nearby code is not part of the migrated `analysis_review` truth surface for this milestone |
+| stage-boundary resume | that is a larger recovery-contract milestone and would blur the B3 acceptance target |
+| artifact contract v2 | external surface versioning is a separate product decision, not a prerequisite for native-state truth |
+| public DAG or graph compiler work | that belongs to C-series follow-on work after internal graph/state parity is real |
+| C1, C2, or C3 future-state work | directional future architecture is already captured in the design doc and should not leak into B3 execution |
 
 ## Completion Checklist
 
