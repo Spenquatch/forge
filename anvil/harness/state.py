@@ -115,6 +115,17 @@ class ReviewScores(TypedDict, total=False):
     scope_compliance_score: float
 
 
+class AnalysisReviewRuntimeState(TypedDict, total=False):
+    current_analysis_payload: dict[str, Any] | None
+    current_review_payload: dict[str, Any] | None
+    latest_validator_round: list[dict[str, Any]]
+    revisions_completed: int
+    max_loops: int
+    focus_refinement: dict[str, Any] | None
+    transition_reason: str | None
+    review_loop_exercised: bool
+
+
 class HarnessState(TypedDict, total=False):
     run_id: str
     thread_id: str
@@ -166,6 +177,7 @@ class HarnessState(TypedDict, total=False):
     summary_payload: dict[str, Any]
     serialization_version: str
     analysis_review_contract: dict[str, Any]
+    analysis_review_runtime: AnalysisReviewRuntimeState
     strategy_graph_spec: dict[str, Any]
     strategy_graph_spec_id: str | None
     strategy_graph_subset: str | None
@@ -181,6 +193,8 @@ class HarnessState(TypedDict, total=False):
     strategy_path: str
     config_path: str
     auto_fit_strategy: bool
+    analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"]
+    analysis_review_runtime: AnalysisReviewRuntimeState
 
 
 def initialize_harness_state(
@@ -192,6 +206,7 @@ def initialize_harness_state(
     config_path: str = "config/models.yaml",
     thread_id: str | None = None,
     auto_fit_strategy: bool = True,
+    analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"] = "legacy_bridge",
 ) -> HarnessState:
     now = dt.datetime.now(dt.UTC)
     return HarnessState(
@@ -243,6 +258,8 @@ def initialize_harness_state(
         strategy_path=strategy_path,
         config_path=config_path,
         auto_fit_strategy=auto_fit_strategy,
+        analysis_review_execution_mode=analysis_review_execution_mode,
+        analysis_review_runtime={},
     )
 
 
@@ -471,6 +488,7 @@ def summary_read_adapter_v1(
             summary.get("serialization_version") or HARNESS_STATE_SERIALIZATION_VERSION
         ),
         analysis_review_contract=_summary_dict(summary, "analysis_review_contract"),
+        analysis_review_runtime=_summary_dict(summary, "analysis_review_runtime"),
         strategy_graph_spec=_summary_dict(summary, "strategy_graph_spec"),
         strategy_graph_spec_id=(
             None

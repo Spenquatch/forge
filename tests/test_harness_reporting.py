@@ -3298,6 +3298,134 @@ def test_write_artifacts_node_round_trips_b1_boundary_fields(tmp_path):
     )
 
 
+def test_summary_projection_v1_projects_graph_trace_metadata_and_graph_execution(
+    tmp_path,
+):
+    state = {
+        "run_id": "run-graph-trace",
+        "thread_id": "thread-graph-trace",
+        "workspace_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_spec": {
+            "id": "task-graph-trace",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "analysis_review_execution_mode": "graph_owned",
+        "stage_history": [
+            {
+                "stage_index": 1,
+                "role_name": "focus_gate",
+                "semantic_validation_path": str(tmp_path / "focus_gate.semantic.json"),
+                "metadata": {
+                    "graph_stage_id": "focus_gate",
+                    "transition_reason": "focus_gate_required",
+                },
+            }
+        ],
+    }
+
+    summary = summary_projection_v1(state)
+
+    stage_metadata = summary["agent_stages"][0]["metadata"]
+    assert stage_metadata["graph_stage_id"] == "focus_gate"
+    assert stage_metadata["graph_node_id"] == "focus_gate"
+    assert stage_metadata["transition_reason"] == "focus_gate_required"
+    assert stage_metadata["semantic_validation_outcome"] == "passed"
+    assert stage_metadata["execution_mode"] == "graph_owned"
+    assert summary["run_details"]["graph_execution"] == {
+        "execution_mode": "graph_owned",
+        "graph_owned": True,
+        "fallback_used": False,
+        "transition_log": [
+            {
+                "graph_node_id": "focus_gate",
+                "transition_reason": "focus_gate_required",
+                "semantic_validation_outcome": "passed",
+                "execution_mode": "graph_owned",
+            }
+        ],
+    }
+
+    summary["agent_stages"][0]["metadata"]["graph_node_id"] = "mutated"
+    assert state["stage_history"][0]["metadata"] == {
+        "graph_stage_id": "focus_gate",
+        "transition_reason": "focus_gate_required",
+    }
+
+
+def test_write_state_artifacts_projects_legacy_bridge_graph_execution(tmp_path):
+    state = {
+        "run_id": "run-legacy-trace",
+        "thread_id": "thread-legacy-trace",
+        "workspace_root": str(tmp_path),
+        "out_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_spec": {
+            "id": "task-legacy-trace",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "analysis_review_execution_mode": "legacy_bridge",
+        "warnings": [],
+        "run_verdict": "accepted",
+        "content_verdict": "accepted",
+        "validator_verdict": "pass",
+        "policy_verdict": "pass",
+        "config_verdict": "pass",
+        "summary_text": "Legacy bridge trace projection.",
+        "policy_checks": [],
+        "stage_history": [
+            {
+                "stage_index": 1,
+                "role_name": "proposer",
+                "metadata": {
+                    "graph_stage_id": "proposer",
+                    "transition_reason": "analysis_entry",
+                },
+            }
+        ],
+        "validator_rounds": [],
+        "drafts": [],
+        "issue_history": [],
+    }
+
+    updated_state = write_state_artifacts(state)
+    summary_json = json.loads(
+        Path(updated_state["summary_payload"]["artifacts"]["summary_json"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    report = Path(updated_state["summary_payload"]["artifacts"]["report_md"]).read_text(
+        encoding="utf-8"
+    )
+
+    assert summary_json["agent_stages"][0]["metadata"]["graph_node_id"] == "proposer"
+    assert (
+        summary_json["agent_stages"][0]["metadata"]["semantic_validation_outcome"]
+        == "not_run"
+    )
+    assert summary_json["run_details"]["graph_execution"] == {
+        "execution_mode": "legacy_bridge",
+        "graph_owned": False,
+        "fallback_used": True,
+        "transition_log": [
+            {
+                "graph_node_id": "proposer",
+                "transition_reason": "analysis_entry",
+                "semantic_validation_outcome": "not_run",
+                "execution_mode": "legacy_bridge",
+            }
+        ],
+    }
+    assert '"graph_execution": {' in report
+    assert '"fallback_used": true' in report
+
+
 def _recommendation_payload(*titles: str) -> dict[str, object]:
     return {
         "summary": "Trusted analysis payload.",

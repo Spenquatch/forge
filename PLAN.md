@@ -1,427 +1,654 @@
-# PLAN: B1 Harness Seam Extraction for the State-Graph Strangler
+# PLAN: B3 Graph-Native State / Selection / Artifact Canonicalization for the Harness Strangler
 
-Status: ready for implementation
-Branch: `main`
-Milestone: `B1`
+Status: ready for implementation after B2 parity lands on `main`  
+Target branch: `main`  
+Prepared from repo state on: `codex/b2-graph-owned-analysis-review-parity`  
+Milestone: `B3`  
 Design source: `/Users/spensermcconnell/.gstack/projects/Spenquatch-forge/spensermcconnell-main-design-20260513-215858.md`
+
 Supersedes:
-- none
-- this is the active implementation plan for B1 on `main`
+- the prior root `PLAN.md` B2 graph-owned parity plan
+- the B3 milestone sketch inside the design doc
 
-## Plan Summary
+## Executive Summary
 
-B1 is the seam-extraction milestone for the harness strangler migration.
+B3 ends fake state.
 
-It does **not** move `analysis_review` topology into real graph-owned execution
-yet. It makes the codebase honest about where topology, stage semantics, state
-projection, selection, validation, and artifact publication live today, and it
-creates the exact seams B2 will consume later.
+Today the harness graph owns most of the `analysis_review` topology, but the
+success path still treats summary-shaped data as the durable source of truth in
+three places:
 
-Right now the LangGraph harness surface is mostly a shell:
+1. `anvil/harness/subgraphs/analysis_review_v1.py` still reconstructs
+   `drafts` by calling
+   `extract_drafts_from_summary(_draft_summary_from_runner(runner))`.
+2. `anvil/harness/nodes/write_artifacts.py` still performs the round-trip
+   `summary_projection_v1(...) -> apply_final_artifacts(...) -> summary_read_adapter_v1(...)`
+   before returning state.
+3. `anvil/harness/reporting.py` still reranks drafts during artifact emission,
+   so selection truth is duplicated between the graph node
+   `select_best_draft_node(...)` and the reporting layer.
 
-- `anvil/harness/builder.py` routes into `analysis_review_v1_subgraph(...)`
-- `anvil/harness/subgraphs/analysis_review_v1.py` immediately delegates to
-  `anvil/harness/subgraphs/_bridge.py`
-- `_bridge.py` instantiates `HarnessRunner.run()`
-- the graph then reconstructs state from summary-shaped output through
-  `state_from_summary(...)`
-- `anvil/harness/nodes/write_artifacts.py` repeats that same pattern after
-  `apply_final_artifacts(...)`
+That means B2 can prove topology parity, but B3 still has split truth for state,
+selection, and artifact emission.
 
-That means the graph exists, but topology truth and most product semantics still
-live inside `anvil/harness/runner.py`, while the graph crosses the boundary by
-round-tripping through summary artifacts as if that were neutral transport. It
-is not neutral. B1 fixes the naming, ownership, and observability of that
-reality without changing user-facing harness behavior.
+B3 fixes that split in one milestone:
+
+- graph-native `HarnessState` becomes canonical for migrated surfaces
+- native draft projection replaces summary-derived draft reconstruction on the
+  graph-owned success path
+- `select_best_draft_node(...)` becomes the only ranking owner
+- artifact publishing becomes state-native
+- `summary_projection_v1(...)` remains, but only as the final one-way summary
+  projection seam
+- `summary_read_adapter_v1(...)` remains compatibility-only and is removed from
+  the graph-owned success path
+- legacy summaries and reports remain readable, and restart-at-run-boundary
+  remains the minimum recovery contract
 
 The milestone question is simple:
 
-**Which current files become permanent graph-era seams, and which current files
-are temporary bridges that are not allowed to grow?**
+**Can the harness keep the B2 graph-owned topology, but make state, selection,
+and artifact publishing canonical on native graph state without changing the
+artifact contract?**
 
-This plan answers that explicitly and turns it into an implementable, testable
-change contract.
+This plan says yes, but only if native state completion, single-owner
+selection, state-native artifact publishing, compatibility-boundary reduction,
+and full parity coverage land together.
 
 ## Success Criteria
 
-- `StrategyGraphSpec` exists as an internal harness concept and can represent
-  the approved bounded graph subset without implying arbitrary DAG support.
-- `StageSpec` exists and names the current `analysis_review` topology in graph
-  vocabulary, even though `HarnessRunner` still executes it.
-- `HarnessState` becomes an explicit B1 state contract with
-  `serialization_version`, contract ownership, graph metadata, focus/topic
-  state, and sanctioned summary-boundary helpers.
-- `summary_read_adapter_v1(...)` becomes the only sanctioned summary-to-state
-  compatibility boundary.
-- `summary_projection_v1(...)` becomes the only sanctioned state-to-summary
-  compatibility boundary.
-- `state_from_summary(...)` remains only as a backwards-compatible wrapper
-  around `summary_read_adapter_v1(...)` during B1, not as a second concept.
-- `write_state_artifacts(...)` remains only as the public artifact-writing entry
-  point and delegates into `summary_projection_v1(...)`.
-- `anvil/harness/subgraphs/_bridge.py` and
-  `anvil/harness/nodes/write_artifacts.py` are clearly marked as temporary
-  bridge/projection boundaries and do not gain new semantics.
-- `anvil/harness/runner.py` remains the only topology truth for B1 execution.
-- B1 adds the observability B2 parity work will need without changing final
-  artifacts, validator behavior, or review semantics.
-- Existing canonical harness tests remain green.
-- New seam and boundary tests prevent silent growth of bridge code.
+- no graph-owned success path calls `summary_read_adapter_v1(...)`
+- no graph-owned success path calls `state_from_summary(...)`
+- graph-owned `drafts` are built from native stage history plus validator state,
+  not from a synthetic summary wrapper
+- `select_best_draft_node(...)` is the only canonical draft-ranking owner on
+  the graph path
+- artifact publishing on the graph-owned success path consumes
+  `HarnessState`, not rehydrated summary-derived state
+- `summary_projection_v1(...)` remains the only sanctioned summary write
+  boundary
+- `summary_read_adapter_v1(...)` remains allowed only:
+  - inside `LegacyBridgeBoundary.run(...)`
+  - in historical summary/readability tooling
+  - in compatibility and parity tests
+- `bridge_boundary_version` is stamped only by the actual legacy bridge path,
+  never by graph-owned success-path execution
+- final artifact kind and payload remain stable across `legacy_bridge` and
+  `graph_owned` runs for the canonical parity corpus
+- `summary.json` and `REPORT.md` remain readable and stable except for approved
+  graph-trace metadata
+- failed-run recovery remains supported at restart-at-run-boundary minimum
+- at least one named bridge-only path is deleted:
+  `write_artifacts_node -> summary_read_adapter_v1(...)` on the graph-owned
+  success path
 
 ## Step 0: Scope Challenge
 
 ### What already exists
 
-| Sub-problem | Existing code | B1 decision |
+| Sub-problem | Existing code | B3 decision |
 |---|---|---|
-| Parent graph exists but does not own strategy topology | `anvil/harness/builder.py` wires `prepare_run -> validator_preflight -> select_strategy -> analysis_review_v1 -> select_best_draft -> write_artifacts -> finalize`, while `anvil/harness/nodes/select_strategy.py` is a no-op | Keep the parent graph. Make strategy selection emit explicit graph vocabulary instead of pretending routing is already modeled. |
-| `analysis_review` subgraph is only a bridge | `anvil/harness/subgraphs/analysis_review_v1.py` immediately calls `run_harness_runner(...)` from `anvil/harness/subgraphs/_bridge.py` | Keep this as the sanctioned temporary bridge in B1. Do not add product logic here. |
-| State is reconstructed from summary output | `anvil/harness/state.py` exposes `stage_records_from_summary(...)` and `state_from_summary(...)` | Promote this into an explicit compatibility seam named `summary_read_adapter_v1(...)`. Keep `state_from_summary(...)` only as a compatibility wrapper during B1. |
-| Artifact writing also round-trips through summary output | `anvil/harness/nodes/write_artifacts.py` calls `apply_final_artifacts(...)` and then `state_from_summary(...)`; `anvil/harness/reporting.py` exposes `write_state_artifacts(...)` | Promote the write side into explicit `summary_projection_v1(...)` ownership. Keep `write_state_artifacts(...)` as the public entry point that delegates to the explicit projection seam. |
-| Contract resolution already exists as real product logic | `anvil/harness/contracts.py` exposes `build_analysis_review_contract(...)` and `AnalysisReviewContract` | Treat this module as the `ContractResolver` seam in B1. Reuse it instead of inventing a second policy layer. |
-| Validator behavior already exists as real product logic | `anvil/harness/validation.py` exposes `preflight_validators(...)` and `run_validators(...)` | Keep validators as an adjacent orchestration seam, not graph stages, through B1-B3. |
-| Draft projection and selection already exist as real semantics | `anvil/harness/selection.py` exposes `extract_drafts_from_summary(...)` and `select_best_draft(...)` | Keep this as the canonical selection seam. Do not rewrite ranking in B1. |
-| Artifact/report shaping already exists as real semantics | `anvil/harness/reporting.py` owns `apply_final_artifacts(...)`, `write_state_artifacts(...)`, and report rendering flow | Keep this as the artifact seam. Make the boundary explicit, not a hidden side effect. |
-| Stage execution and semantic normalization are still fused into the runner | `HarnessRunner._run_agent_stage(...)` in `anvil/harness/runner.py` handles provider invocation, normalization, schema validation, semantic validation, and stage recording | Leave execution truth in the runner for B1. Do not split it twice. Only extract ownership and observability seams now. |
-| B2 parity corpus already exists | `tests/test_run_focus_gate_acceptance.py`, `tests/test_harness_prompt_consistency.py`, `tests/test_harness_reporting.py`, `tests/test_harness_example_strategy_wiring.py`, `tests/test_lg_offline_smoke.py`, and `tests/test_harness_selection.py` | Reuse these as the parity oracle floor. B1 adds seam/boundary coverage, not a fake parity rewrite. |
+| Native graph state carrier already exists | `anvil/harness/state.py` already defines `HarnessState`, `drafts`, `stage_history`, `issue_history`, `artifact_index`, `summary_payload`, `analysis_review_runtime`, and selection ids | Keep `HarnessState` as the canonical carrier. Expand it to include every graph-owned field downstream reporting and publication actually consume. |
+| Graph-owned subgraph already merges most runtime outputs into state | `anvil/harness/subgraphs/analysis_review_v1.py` already copies stage history, validator rounds, policy checks, issue/topic ledgers, verdicts, and analysis details into state | Finish the migration here. Remove summary-derived draft reconstruction and stop stamping legacy bridge metadata on graph-owned success paths. |
+| Draft ranking logic already accepts native drafts | `anvil/harness/selection.py` exposes `select_best_draft(drafts)` and `anvil/harness/nodes/select_best_draft.py` already selects from `state["drafts"]` | Keep the ranking rules. Change only how drafts are projected and lock the graph node as the sole ranking owner. |
+| Draft projection logic already exists, but it is summary-shaped | `extract_drafts_from_summary(...)` in `anvil/harness/selection.py` rebuilds draft semantics from `summary["agent_stages"]` and `summary["validator_rounds"]` | Split this into a canonical native projector plus a thin summary compatibility wrapper. |
+| Artifact publishing seam already exists | `anvil/harness/reporting.py` owns `summary_projection_v1(...)`, `apply_final_artifacts(...)`, and `write_state_artifacts(...)` | Keep module ownership here, but invert the control flow so state-native publication is canonical and summary projection happens once at the end. |
+| Current artifact node still round-trips through summary | `anvil/harness/nodes/write_artifacts.py` projects summary, writes artifacts, then rehydrates state with `summary_read_adapter_v1(...)` | Delete this success-path round-trip in B3. This is the named bridge-only path that must go away. |
+| Report rendering surface already exists | `anvil/harness/report.py` renders `REPORT.md` from the summary contract | Keep `REPORT.md` stable. Make `summary_projection_v1(...)` responsible for producing a complete report-ready summary from state. |
+| Legacy bridge boundary is already explicit | `anvil/harness/subgraphs/_bridge.py` re-enters `HarnessRunner` and rehydrates state from summary | Keep this path compatibility-only. No B3 semantics land here. |
+| Regression floor already exists | `tests/test_harness_selection.py`, `tests/test_harness_state_boundaries.py`, `tests/test_harness_reporting.py`, `tests/test_harness_analysis_review_graph.py`, `tests/test_harness_runner.py` | Expand these. Do not create a parallel test universe that ignores the existing seams. |
 
 ### Minimum complete scope
 
-This is the minimum complete B1 slice. If any item is skipped, the milestone
-stays fuzzy and B2 will drift.
+This is the minimum complete B3 slice. If any item is skipped, the milestone is
+not actually graph-native state canonicalization.
 
-1. `PLAN.md`
-2. `anvil/harness/strategy_graph.py`
-3. `anvil/harness/state.py`
-4. `anvil/harness/builder.py`
-5. `anvil/harness/nodes/select_strategy.py`
-6. `anvil/harness/subgraphs/_bridge.py`
-7. `anvil/harness/nodes/write_artifacts.py`
-8. `anvil/harness/reporting.py`
-9. `anvil/harness/runner.py`
-10. `anvil/harness/contracts.py`
-11. targeted seam/boundary regression tests under `tests/`
-12. observability assertions added to existing harness runner/reporting surfaces
+1. root `PLAN.md`
+2. `anvil/harness/state.py`
+3. `anvil/harness/selection.py`
+4. `anvil/harness/subgraphs/analysis_review_v1.py`
+5. `anvil/harness/nodes/select_best_draft.py`
+6. `anvil/harness/nodes/write_artifacts.py`
+7. `anvil/harness/reporting.py`
+8. `anvil/harness/report.py`
+9. `anvil/harness/subgraphs/_bridge.py`
+10. targeted compatibility adjustments in `anvil/harness/runner.py` only if
+    needed to preserve legacy summary behavior after the draft-projection split
+11. targeted test expansions under `tests/`
 
 ### Complexity verdict
 
-This milestone touches more than 8 files. That normally smells.
+This milestone crosses more than 8 files. That is justified.
 
-Here it is justified because the problem is split ownership, not one isolated
-bug. B1 is the point where the codebase stops pretending the graph is already in
-charge and starts naming the real seams.
+The problem is not one bad helper. The problem is split ownership between:
+
+- a graph that now owns topology
+- a subgraph merge step that still reconstructs drafts from summary-shaped data
+- a selection node that ranks drafts correctly
+- a reporting layer that reranks drafts again
+- a write-artifacts node that still treats summary rehydration as normal
+
+A smaller diff that removes one `summary_read_adapter_v1(...)` call but leaves
+duplicate ranking, seeded-summary overrides, or legacy bridge metadata on
+graph-owned runs will create a fake B3.
 
 What would be overbuilt:
 
-- a generalized graph compiler
-- a public DAG or YAML graph surface
-- converting validators into first-class stages
-- deleting the runner path during the seam milestone
-- versioning the artifact contract in the same slice
-- extracting a broad `StageRegistry` or custom-stage system in B1
+- a new artifact contract version in the same milestone
+- stage-boundary resume
+- a generic graph-state persistence framework
+- a full rewrite of `report.py`
+- public DAG/compiler work from C1-C3
+- touching `single_pass` or `pfr_v1` just because the files are nearby
 
 ### Search/build verdict
 
-This is a Layer 1 reuse milestone, not a framework milestone.
+This is a Layer 1 reuse milestone with one Layer 3 rule.
 
-Reuse what already exists:
+Reuse:
 
-- `contracts.py` as `ContractResolver`
-- `validation.py` as validator orchestration
-- `selection.py` as draft projection/selection
-- `reporting.py` as artifact publication
-- `runner.py` as the B1 execution truth
-- the existing parity corpus as the future oracle
+- `HarnessState` as the canonical native carrier
+- `select_best_draft(drafts)` as the ranking algorithm
+- `summary_projection_v1(...)` as the only sanctioned write-side summary seam
+- `render_report(...)` as the existing report renderer
+- `LegacyBridgeBoundary` as the compatibility fallback
+- the existing canonical parity corpus and artifact-diff assertions
 
-Do **not** invent:
+First-principles rule:
 
-- a second harness beside the current one
-- a second artifact pipeline
-- graph-only semantics duplicated outside the runner
-- a public configuration promise the runtime cannot honor yet
+- state is truth, summary is projection
+
+That means B3 must not keep treating `summary_payload` as a shadow source of
+truth just because it is convenient. If the graph-owned success path needs a
+field, that field belongs in `HarnessState`.
 
 ### TODOS cross-reference
 
-`docs/project_management/future/TODOS.md` contains future product and auditability
-follow-ups, but nothing there blocks B1.
+`docs/project_management/future/TODOS.md` has no blocker for B3.
 
-Do not bundle those items into this milestone unless implementation uncovers a
-hard blocker for explicit seam extraction. New B2/B3 follow-up work discovered
-during B1 should be captured after B1 lands, not smuggled into this PR.
+Do not pull stage-boundary resume, artifact-contract v2 work, or public graph
+config into this milestone. If B3 exposes new follow-up work, capture it after
+native-state parity is green.
 
 ### Completeness verdict
 
-The shortcut is "add a graph-spec file and call it progress." That does not
-solve the problem.
+The shortcut is "stop rehydrating in `write_artifacts_node(...)`, but keep
+reconstructing drafts from summary-shaped data and let reporting rerank them."
 
-The complete B1 version must do all of this together:
+That is fake progress.
 
-- define the graph-era vocabulary
-- classify permanent seams versus temporary bridges
-- make the summary read/write boundaries explicit
-- preserve current behavior
-- add the observability B2 needs
-- lock regression tests around the bridge boundaries
+The complete B3 version must do all of this together:
+
+- define the full native state contract for migrated surfaces
+- split canonical draft projection from summary compatibility parsing
+- make `select_best_draft_node(...)` the only ranking owner
+- make artifact publishing consume native state directly
+- keep summary projection as a final one-way serialization step
+- preserve historical summary readability and restart-at-run-boundary recovery
+- prove parity on summary/report/final-artifact surfaces and failure paths
 
 ### Distribution and DX verdict
 
-Forge is a developer tool. B1 is incomplete if it makes the internal
-architecture cleaner while making the harness surface harder to understand or
-less testable.
+Forge is a developer tool. B3 is incomplete if native-state publication only
+works in unit tests.
 
-That means B1 must preserve:
+B3 must preserve:
 
 - `python -m anvil.harness.cli run ...`
-- `HarnessLangGraphExecutor`
-- checkpoint mode behavior
-- current examples and acceptance fixtures
+- readable `summary.json`
+- readable `REPORT.md`
+- stable `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, and `BEST_DRAFT.*` semantics
+- replay/readability of old summaries produced before B3
 
-No new user-facing config surface ships in B1.
+It does not need to change CLI flags or rollout defaults. This is a state and
+artifact-truth milestone, not a product-surface rewrite.
 
 ## Locked Decisions
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| Milestone scope | B1 is seam extraction only | Topology migration belongs to B2. |
-| Topology truth in B1 | `HarnessRunner` remains the execution truth | Do not move topology and semantics in the same slice. |
-| Validator positioning | validators stay adjacent orchestration, not graph stages | This is explicit in the design and avoids fake generality. |
-| Summary read boundary | `summary_read_adapter_v1(...)` is the only sanctioned summary-to-state path | The current implicit helper needs a real name and ownership. |
-| Legacy read helper | `state_from_summary(...)` becomes a compatibility wrapper that forwards into `summary_read_adapter_v1(...)` | This keeps the diff small while collapsing to one real concept. |
-| Summary write boundary | `summary_projection_v1(...)` is the only sanctioned state-to-summary path | B1 must make this boundary honest before B2 relies on it. |
-| Legacy write helper | `write_state_artifacts(...)` stays public but delegates through `summary_projection_v1(...)` | Existing callers stay stable while the seam becomes explicit. |
-| Artifact contract | no version bump in B1 | Seam extraction should not change the external surface. |
-| Graph subset | linear flows, bounded single back-edge loops, conditional branching only | No arbitrary DAG promise. |
-| New semantics in bridges | forbidden | Temporary bridge code must shrink, not attract new truth. |
-| Stage semantics extraction | only extract what B1 needs to name and observe | Full registry generalization is explicitly deferred out of B1. |
-| Selection truth | keep `selection.py` canonical | Ranking is product behavior, not cleanup glue. |
-| Reporting truth | keep `reporting.py` canonical | Publication authority already lives there. |
-| Observability shape | preserve existing top-level stage record fields; add new seam metadata under `StageRecord.metadata` unless a matching field already exists | Minimal diff, explicit ownership, no second telemetry model. |
-| Rollout | keep legacy runner path as the default execution mode | B2 needs a safe fallback. |
+| Milestone scope | B3 is state/reporting/selection cleanup only | No new topology rewrite. B2 remains the topology milestone. |
+| Native truth | `HarnessState` is canonical for graph-owned migrated surfaces | The graph already owns topology. State must now own execution truth. |
+| Draft projection truth | add a canonical native draft projector in `anvil/harness/selection.py`; keep `extract_drafts_from_summary(...)` compatibility-only | Drafts must stop depending on synthetic summary wrappers. |
+| Ranking owner | `anvil/harness/nodes/select_best_draft.py` is the only canonical draft-ranking owner | Selection truth cannot be duplicated in `reporting.py`. |
+| Reporting behavior | reporting may validate selected ids, but may not silently rerank drafts on the graph-owned success path | One ranking owner. No shadow decision logic. |
+| Summary write boundary | `summary_projection_v1(...)` stays canonical | This is still the only sanctioned graph-to-summary projection. |
+| Summary read boundary | `summary_read_adapter_v1(...)` and `state_from_summary(...)` are compatibility-only in B3 | They remain useful for historical readability, not graph-owned success execution. |
+| Artifact truth | state-native publisher in `anvil/harness/reporting.py` becomes canonical | Artifact emission must consume native state directly. |
+| Legacy bridge metadata | `bridge_boundary_version` is set only by `LegacyBridgeBoundary.run(...)` | Graph-owned paths must stop pretending they crossed the bridge. |
+| Recovery contract | restart-at-run-boundary only | Stage-boundary resume remains deferred. |
+| Rollout control | B3 does not change `legacy_bridge` / `graph_owned` flag semantics or defaults | Keep rollback boring while state truth changes under the hood. |
 
-## Architecture Review
+## Source of Truth and Contracts
 
-### B1 source-of-truth table
+### B3 source-of-truth table
 
-| Concern | Canonical owner in B1 | Notes |
+| Concern | Canonical owner in B3 | Notes |
 |---|---|---|
-| Topology truth | `anvil/harness/runner.py` | The runner still decides stage order and loop behavior. |
-| Graph vocabulary | new `anvil/harness/strategy_graph.py` | Internal declaration only. No public DAG claim. |
-| Strategy-to-graph resolution | `anvil/harness/nodes/select_strategy.py` | Must stop being a no-op and stamp graph metadata into state. |
-| Stage semantics truth | existing seam modules behind runner calls | `contracts.py`, `semantic_validation.py`, `validation.py`, `selection.py`, `reporting.py` |
-| State truth | `HarnessState` plus `summary_read_adapter_v1(...)`/`summary_projection_v1(...)` | Explicit compatibility boundary, not hidden transport. |
-| Selection truth | `anvil/harness/selection.py` | Draft projection and best-draft ranking stay canonical. |
-| Artifact truth | `anvil/harness/reporting.py` | External artifact surface stays stable. |
-| Direct legacy re-entry | `anvil/harness/subgraphs/_bridge.py` | Temporary bridge only. |
+| Topology truth for migrated `analysis_review` | `anvil/harness/subgraphs/analysis_review_v1.py` | Unchanged from B2. B3 does not reopen topology ownership. |
+| Stage-semantics execution | `anvil/harness/analysis_review_runtime.py` plus existing runner-backed stage helpers | Reused. No new semantics copied into compatibility glue. |
+| Native state truth | `anvil/harness/state.py` | Must carry every downstream field required for selection, artifacts, and reports. |
+| Draft projection truth | canonical native draft projector in `anvil/harness/selection.py` | Graph-owned success path uses this directly; summary parser becomes compatibility-only. |
+| Selection truth | `anvil/harness/nodes/select_best_draft.py` | Sole owner of best/selected draft choice on the graph path. |
+| Artifact truth | state-native publisher in `anvil/harness/reporting.py` | Produces deliverables, `summary.json`, `REPORT.md`, and `artifact_index` from state. |
+| Summary/report contract | `summary_projection_v1(...)` + `render_report(...)` | One-way projection from state into stable external surfaces. |
+| Historical summary read compatibility | `summary_read_adapter_v1(...)` / `state_from_summary(...)` | Legacy/historical only. Not success-path execution helpers. |
+| Rollback path | `anvil/harness/subgraphs/_bridge.py` | Remains the only sanctioned legacy bridge. |
 
-### Permanent seams vs temporary bridges
-
-| Module / surface | Classification in B1 | Why |
-|---|---|---|
-| `anvil/harness/contracts.py` | permanent seam | Contract resolution is already stable product logic. |
-| `anvil/harness/semantic_validation.py` | permanent seam | Semantic validation is real behavior, not bridge glue. |
-| `anvil/harness/validation.py` | permanent seam | Validator applicability and execution are first-class semantics. |
-| `anvil/harness/selection.py` | permanent seam | Draft extraction and ranking are product semantics. |
-| `anvil/harness/reporting.py` | permanent seam with explicit compatibility boundary | Artifact publication stays here; summary projection must be named. |
-| `anvil/harness/state.py` | permanent seam | Graph-era state and boundary adapters belong here. |
-| new `anvil/harness/strategy_graph.py` | permanent seam | B1 needs one internal topology vocabulary. |
-| `anvil/harness/runner.py::_run_agent_stage(...)` | legacy implementation behind a future permanent seam | Worth preserving, but do not fully extract in B1. |
-| `anvil/harness/runner.py` strategy-specific flow methods | temporary bridge / legacy implementation | Current topology truth lives here and must shrink in B2. |
-| `anvil/harness/builder.py` routing shell | temporary bridge | Parent graph exists, but it still routes into legacy execution. |
-| `anvil/harness/subgraphs/_bridge.py` | temporary bridge | Explicit legacy re-entry seam. No new semantics allowed. |
-| `anvil/harness/subgraphs/analysis_review_v1.py` | temporary bridge wrapper | Thin wrapper only until B2. |
-| `anvil/harness/nodes/write_artifacts.py` summary rehydration path | temporary bridge until B3 | Current artifact flow still round-trips through summary state. |
-| `examples/harness/*` and acceptance fixtures | stable contract surface | Must remain valid while internals shift. |
-| harness parity tests under `tests/` | stable oracle | Migration is judged against these surfaces. |
-
-### Current-to-B1 dependency graph
+### Current-to-B3 dependency graph
 
 ```text
 CURRENT
 =======
-prepare_run
-  -> validator_preflight
-  -> select_strategy (no-op)
-  -> analysis_review_v1_subgraph
-       -> _bridge.run_harness_runner
-            -> HarnessRunner.run()
-            -> summary payload
-            -> state_from_summary(...)
-  -> select_best_draft
-  -> write_artifacts_node
-       -> apply_final_artifacts(...)
-       -> state_from_summary(...)
-  -> finalize
-
-
-B1 TARGET
-=========
-prepare_run
-  -> validator_preflight
-  -> select_strategy
-       -> resolve contract ownership
-       -> build StrategyGraphSpec
-       -> emit StageSpec identities
-       -> stamp strategy_graph_spec_id / subset / boundary versions
-  -> analysis_review_v1_subgraph
-       -> LegacyBridgeBoundary.run(...)
-            -> HarnessRunner.run()
-       -> summary_read_adapter_v1(...)
-  -> select_best_draft
+analysis_review_v1_subgraph
+  -> graph-owned stage execution
+  -> _merge_runner_state(...)
+       -> stage_records_from_summary(...)
+       -> extract_drafts_from_summary(_draft_summary_from_runner(...))
+       -> select_best_draft(drafts)
+       -> bridge_boundary_version = legacy_bridge_boundary_v1
+  -> parent graph select_best_draft node
   -> write_artifacts_node
        -> summary_projection_v1(...)
        -> apply_final_artifacts(...)
+            -> select_best_draft(summary["drafts"])
        -> summary_read_adapter_v1(...)
   -> finalize
+
+
+B3 TARGET
+=========
+analysis_review_v1_subgraph
+  -> graph-owned stage execution
+  -> native state merge
+       -> stage_history
+       -> drafts_from_stage_history_v1(...)
+       -> issue_history / topic_ledger / recommendation_reviews
+       -> best/selected ids left for select_best_draft node
+       -> no legacy bridge metadata on graph-owned path
+  -> parent graph select_best_draft node
+       -> sole ranking owner
+  -> write_artifacts_node
+       -> publish_state_artifacts_v1(state)
+            -> choose deliverable from selected ids + native verdict state
+            -> summary_projection_v1(state)
+            -> write summary/report/deliverables
+            -> update artifact_index + summary_payload in place
+       -> no summary_read_adapter_v1(...)
+  -> finalize
+
+
+COMPATIBILITY PATHS THAT REMAIN
+===============================
+LegacyBridgeBoundary.run(...)
+  -> summary_read_adapter_v1(...)
+
+historical summary tooling / compatibility tests
+  -> state_from_summary(...)
 ```
+
+### Graph-native state and artifact flow
+
+```text
+graph-owned stage execution
+  -> stage_history
+  -> validator_rounds
+  -> issue_history / topic_ledger
+  -> analysis_review_status / recommendation_reviews / final_answer
+  -> drafts_from_stage_history_v1(...)
+  -> select_best_draft_node(...)
+       -> best_draft_id / selected_draft_id
+  -> publish_state_artifacts_v1(...)
+       -> FINAL_ANSWER / PARTIAL_ANSWER / BEST_DRAFT
+       -> summary_projection_v1(...)
+       -> REPORT.md
+       -> summary.json
+       -> artifact_index
+```
+
+### Native state contract
+
+These names are fixed for B3. Do not rename them during implementation.
+
+| Surface | Exact contract |
+|---|---|
+| Native draft truth | `HarnessState.drafts` |
+| Native selection ids | `current_draft_id`, `best_draft_id`, `selected_draft_id` |
+| Native issue truth | `issue_history`, `open_issue_ids` |
+| Native topic truth | `topic_ledger` |
+| Native publishability truth | `run_verdict`, `content_verdict`, `validator_verdict`, `policy_verdict`, `analysis_review_status`, `recommendation_reviews`, `final_answer`, `bounded_review_summary`, `bounded_attestation_input` |
+| Native observability truth | `stage_history`, `validator_rounds`, `policy_checks`, `changed_files`, `validator_summary`, `analysis_review_coverage` |
+| External artifact refs | `artifact_index` |
+| Final projected summary cache | `summary_payload` |
+| Legacy bridge marker | `bridge_boundary_version`, set only by the actual legacy bridge |
+
+Rules:
+
+- graph-owned success-path helpers may append or transform native state
+- graph-owned success-path helpers may not rebuild required fields from
+  `summary_payload`
+- if `report.py` or artifact emission needs a field and that field is not in
+  `HarnessState`, B3 adds it to native state rather than teaching reporting to
+  read around the gap from seeded summary data
+
+### Summary boundary rules
+
+Allowed uses of `summary_read_adapter_v1(...)` and `state_from_summary(...)` in
+B3:
+
+1. `LegacyBridgeBoundary.run(...)`
+2. historical summary/readability tooling
+3. compatibility and parity tests
+
+Forbidden uses on the graph-owned success path in B3:
+
+- inside `_merge_runner_state(...)`
+- inside `select_best_draft_node(...)`
+- inside `write_artifacts_node(...)`
+- after `summary_projection_v1(...)`
+- as a fallback to refill missing native state fields that should be explicit in
+  `HarnessState`
+
+The rule is simple:
+
+**Graph-owned execution carries native state all the way through artifact
+publication.**
 
 ### File change contract
 
-This is the core anti-ambiguity section. Each file has an explicit change budget.
-
-| File | Allowed change in B1 | Forbidden change in B1 |
+| File | Allowed change in B3 | Forbidden change in B3 |
 |---|---|---|
-| `anvil/harness/strategy_graph.py` | Define internal `StrategyGraphSpec`, `StageSpec`, bounded-subset constants, and the spec builder for existing strategy kinds | No public config parser, no DAG compiler, no execution runtime |
-| `anvil/harness/nodes/select_strategy.py` | Resolve the internal spec, stamp graph metadata into state, and remain side-effect free | No execution routing, no validator logic, no artifact shaping |
-| `anvil/harness/builder.py` | Continue routing exactly as today while preserving the new strategy metadata through the graph | No topology generalization driven from spec |
-| `anvil/harness/state.py` | Add B1 state fields and the explicit summary read boundary; keep `state_from_summary(...)` as a wrapper only | No new product semantics, no second projection layer |
-| `anvil/harness/reporting.py` | Add `summary_projection_v1(...)`, keep `apply_final_artifacts(...)` canonical, make `write_state_artifacts(...)` delegate through the projection seam | No contract version bump, no new publication semantics |
-| `anvil/harness/subgraphs/_bridge.py` | Rename the seam in code/comments to an explicit legacy bridge boundary and call `summary_read_adapter_v1(...)` | No new policy, selection, or validation rules |
-| `anvil/harness/nodes/write_artifacts.py` | Route through explicit projection/read boundaries and keep orchestration thin | No publication policy, no ranking logic, no artifact contract changes |
-| `anvil/harness/contracts.py` | Add seam-naming helper such as `resolve_analysis_review_contract(...)` while keeping `build_analysis_review_contract(...)` stable | No duplicate contract model |
-| `anvil/harness/runner.py` | Preserve execution truth; add explicit seam metadata to stage records and boundary output | No topology migration, no validator-as-stage rewrite |
-| `tests/*` | Add direct regression coverage for graph vocabulary, state boundaries, runner observability, and artifact parity | No fake green tests that only assert helper existence |
+| `anvil/harness/state.py` | expand `HarnessState` and compatibility comments so all graph-owned downstream fields are first-class | No artifact-contract version bump here |
+| `anvil/harness/selection.py` | add canonical native draft projection and keep summary parsing as compatibility-only | No ranking-rule rewrite unless parity proves current ordering is wrong |
+| `anvil/harness/subgraphs/analysis_review_v1.py` | replace summary-derived draft reconstruction with native projection and remove legacy bridge metadata from graph-owned runs | No topology rewrite, no new reporting semantics hidden here |
+| `anvil/harness/nodes/select_best_draft.py` | remain the sole ranking owner and update native draft ids deterministically | No artifact-writing or summary-repair logic here |
+| `anvil/harness/nodes/write_artifacts.py` | call a state-native publisher and stop rehydrating state from summary on success paths | No hidden compatibility fallbacks that recreate native state from summary |
+| `anvil/harness/reporting.py` | publish artifacts from native state and project the final summary once | No reranking drafts on graph-owned success paths |
+| `anvil/harness/report.py` | continue rendering from the stable summary contract only | No new required report-only fields that cannot be projected from state |
+| `anvil/harness/subgraphs/_bridge.py` | remain legacy-only and preserve compatibility behavior | No new graph-owned logic |
+| `anvil/harness/runner.py` | adjust only as needed so legacy summary behavior still works after the projector split | No new canonical state truth here |
+| `tests/*` | add native-state, parity, readability, and recovery assertions | No golden drift without an explicit contract reason |
 
-### Architecture constraints
+## Detailed Implementation Plan
 
-- `select_strategy_node` must stop being a no-op. It must emit explicit internal
-  topology metadata for the chosen strategy.
-- The graph-spec layer may describe only the bounded subset already approved in
-  the design doc.
-- `subgraphs/_bridge.py` may adapt request/state into `HarnessRunner`, but it
-  may not introduce policy, routing, selection, or publication semantics.
-- `nodes/write_artifacts.py` may orchestrate the boundary, but publication
-  authority remains in `reporting.py`.
-- `runner.py` remains the only place allowed to define actual stage ordering and
-  loop control in B1.
-- Any new field crossing the summary boundary must be optional or derivable from
-  the existing artifact contract.
-- B1 may add observability, but not new user-visible harness semantics.
+### Phase 1: Complete the native state contract and split draft projection
 
-## Code Quality Review
+Goal: graph-owned success execution must build selection inputs from native
+state, not from synthetic summary wrappers.
 
-### Guardrail rules
+Files:
 
-1. No new semantics in bridge code.
-2. No duplicate topology truth outside `runner.py` in B1.
-3. No artifact-contract decisions outside `reporting.py`.
-4. No validator applicability rules outside `validation.py`.
-5. No second ranking implementation outside `selection.py`.
-6. No public DAG language, schema, or config keys in B1.
-7. No broad `StageRegistry` abstraction in B1.
-8. No field crosses the summary boundary invisibly.
+- `anvil/harness/state.py`
+- `anvil/harness/selection.py`
+- `anvil/harness/subgraphs/analysis_review_v1.py`
+- targeted compatibility adjustments in `anvil/harness/runner.py` only if needed
 
-### DRY rules
+Required changes:
 
-- Do not define executable stage ordering in both `StrategyGraphSpec` and graph
-  routing logic. In B1, the spec is declarative vocabulary; execution still
-  belongs to the runner.
-- Do not keep both `state_from_summary(...)` and `summary_read_adapter_v1(...)`
-  as parallel concepts. The former must forward to the latter.
-- Do not keep both `write_state_artifacts(...)` and a second summary builder as
-  separate truth. `write_state_artifacts(...)` must delegate through
-  `summary_projection_v1(...)`.
-- Do not add a second contract resolver when `build_analysis_review_contract(...)`
-  already exists.
+1. Expand `HarnessState` so every graph-owned downstream field consumed by
+   selection, publication, report rendering, or recovery is explicit and typed.
+2. Add a canonical native draft projection helper in `anvil/harness/selection.py`
+   named `drafts_from_stage_history_v1(...)`.
+3. Define `drafts_from_stage_history_v1(...)` to accept stage history plus
+   validator-round context, not summary blobs.
+4. Refactor `extract_drafts_from_summary(...)` into a compatibility wrapper that
+   unpacks summary fields and delegates to `drafts_from_stage_history_v1(...)`.
+5. Update `_merge_runner_state(...)` in
+   `anvil/harness/subgraphs/analysis_review_v1.py` to use
+   `drafts_from_stage_history_v1(...)` directly.
+6. Preserve the current ranking algorithm in `select_best_draft(drafts)`.
+   B3 changes draft projection ownership, not ranking semantics.
+7. Stop setting `bridge_boundary_version` on graph-owned success paths.
+   Only `LegacyBridgeBoundary.run(...)` is allowed to stamp that field.
 
-### Naming and structure rules
+Exit criteria:
 
-- `StrategyGraphSpec` means declared topology, not executable graph runtime.
-- `StageSpec` means declared stage identity and capabilities, not provider run
-  output.
-- `summary_read_adapter_v1` means legacy summary -> graph-state compatibility.
-- `summary_projection_v1` means graph-state -> stable summary/report projection.
-- `LegacyBridgeBoundary` means direct re-entry into runner-owned execution.
+- graph-owned `drafts` are built without `extract_drafts_from_summary(...)`
+- graph-owned success-path state carries all downstream publish/report fields
+- legacy summary parsing still works for historical readability and tests
 
-### Explicit-over-clever rules
+### Phase 2: Make `select_best_draft_node(...)` the sole selection owner
 
-- Prefer one small new vocabulary module over a premature compiler package.
-- Prefer explicit boundary functions over hidden helper chains.
-- Prefer clear dataclasses or `TypedDict` additions over meta-factories.
-- Prefer comments and tests that label bridge ownership over a broad refactor
-  that hides the same truth under more files.
+Goal: selection truth must exist in one place.
 
-## Test Review
+Files:
 
-B1 is a seam milestone. Coverage here means boundary coverage, ownership
-coverage, and observability coverage, not just happy-path execution.
+- `anvil/harness/nodes/select_best_draft.py`
+- `anvil/harness/selection.py`
+- `anvil/harness/reporting.py`
+- `anvil/harness/state.py`
+
+Required changes:
+
+1. Keep `anvil/harness/nodes/select_best_draft.py` as the only canonical place
+   that chooses `best_draft_id` and `selected_draft_id` on the graph path.
+2. Ensure graph-owned state entering `select_best_draft_node(...)` has
+   deterministic `drafts` and `current_draft_id`, but does not pretend ranking
+   is final before the node runs.
+3. Remove graph-owned success-path reranking from the reporting layer.
+   `reporting.py` may look up the selected draft by id, but it may not call
+   `select_best_draft(...)` to make a second decision.
+4. Preserve summary-read compatibility by allowing summary adapters to compute
+   missing selection ids only when reading old summaries that predate B3.
+5. Keep final artifact choice aligned with `selected_draft_id` and
+   `best_draft_id` already present in native state.
+
+Exit criteria:
+
+- graph-owned success execution has exactly one ranking owner
+- `reporting.py` no longer silently picks a different best draft than the graph
+- legacy summary compatibility remains readable
+
+### Phase 3: Replace success-path summary round-tripping with state-native artifact publishing
+
+Goal: artifact emission must consume native state directly and project summary
+once at the end.
+
+Files:
+
+- `anvil/harness/nodes/write_artifacts.py`
+- `anvil/harness/reporting.py`
+- `anvil/harness/report.py`
+
+Required changes:
+
+1. Add a canonical state-native publisher in `anvil/harness/reporting.py`
+   named `publish_state_artifacts_v1(state)`.
+2. Move graph-owned success-path deliverable selection, artifact emission, and
+   artifact-index population under `publish_state_artifacts_v1(state)`.
+3. Make `publish_state_artifacts_v1(state)` consume native verdicts, selected
+   ids, ledgers, publishability details, and final-answer payloads directly from
+   `HarnessState`.
+4. Keep `summary_projection_v1(...)` as the final one-way projection used to
+   materialize `summary.json` and feed `render_report(...)`.
+5. Update `write_artifacts_node(...)` to return the same native state with
+   `artifact_index` and `summary_payload` updated in place. No
+   `summary_read_adapter_v1(...)` call on the graph-owned success path.
+6. Treat the current `apply_final_artifacts(summary)` flow as a compatibility
+   surface only if any legacy summary-only paths still require it. It is no
+   longer canonical for graph-owned success execution.
+
+Exit criteria:
+
+- graph-owned success execution does not rehydrate state from summary
+- final deliverables, `summary.json`, and `REPORT.md` are emitted from native
+  state via a single publish path
+- `summary_payload` becomes a final projected cache, not an input dependency
+
+### Phase 4: Reduce the summary boundary surface and lock the recovery contract
+
+Goal: make the remaining compatibility seams explicit, small, and honest.
+
+Files:
+
+- `anvil/harness/state.py`
+- `anvil/harness/nodes/write_artifacts.py`
+- `anvil/harness/subgraphs/_bridge.py`
+- `anvil/harness/reporting.py`
+- targeted compatibility adjustments in `anvil/harness/runner.py` only if needed
+
+Required changes:
+
+1. Enumerate the only remaining sanctioned `summary_read_adapter_v1(...)` and
+   `state_from_summary(...)` call sites in code comments and tests.
+2. Remove any graph-owned success-path fallback branches that treat summary as a
+   general-purpose state carrier.
+3. Ensure seeded summary data in `summary_projection_v1(...)` never overrides
+   canonical native state on graph-owned success execution.
+4. Keep historical summary readability intact for old artifacts.
+5. Preserve restart-at-run-boundary recovery by ensuring the projected summary
+   remains complete and readable after failed runs.
+6. Do not promise stage-boundary resume. That remains out of scope.
+
+Exit criteria:
+
+- compatibility seams are explicit and small
+- graph-owned success path is free of summary rehydration
+- historical summary readability still works
+- restart-at-run-boundary remains supported
+
+### Phase 5: Prove B3 parity and compatibility on the canonical matrix
+
+Goal: B3 lands only when native-state truth is real, not just cleaner-looking.
+
+Files:
+
+- `tests/test_harness_selection.py`
+- `tests/test_harness_state_boundaries.py`
+- `tests/test_harness_reporting.py`
+- `tests/test_harness_analysis_review_graph.py`
+- `tests/test_harness_runner.py`
+- `tests/test_harness_cli_command.py`
+- `tests/test_harness_standalone_cli.py`
+- `tests/test_harness_example_strategy_wiring.py`
+- `tests/test_run_focus_gate_acceptance.py`
+
+Required changes:
+
+1. Prove native draft projection parity between:
+   - historical summary compatibility parsing
+   - graph-owned native stage-history projection
+2. Prove `select_best_draft_node(...)` is the only graph-path ranking owner.
+3. Prove graph-owned success-path artifact publication never calls
+   `summary_read_adapter_v1(...)`.
+4. Diff `legacy_bridge` and `graph_owned` runs on:
+   - final artifact kind
+   - emitted payload
+   - `summary.json`
+   - `REPORT.md`
+   - `analysis_review_status`
+   - `recommendation_reviews`
+   - issue/topic ledgers
+   - selection ids and publishability surface
+5. Prove historical summary readability still works for pre-B3 artifact shapes.
+6. Prove failed-run summaries remain readable and support restart-at-run-boundary
+   reasoning.
+
+Exit criteria:
+
+- parity rows are green for both compatibility and graph-owned success surfaces
+- historical summary readability remains green
+- the deleted success-path rehydration bridge stays dead by test coverage
+
+## Test and Parity Plan
 
 ### Existing regression floor
 
-These are the non-negotiable regression floor. B1 must not break them.
+These are non-negotiable and must stay green:
 
+- `tests/test_harness_selection.py`
+- `tests/test_harness_state_boundaries.py`
+- `tests/test_harness_reporting.py`
+- `tests/test_harness_analysis_review_graph.py`
+- `tests/test_harness_runner.py`
+- `tests/test_harness_cli_command.py`
+- `tests/test_harness_standalone_cli.py`
+- `tests/test_harness_example_strategy_wiring.py`
 - `tests/test_run_focus_gate_acceptance.py`
 - `tests/test_harness_prompt_consistency.py`
-- `tests/test_harness_reporting.py`
-- `tests/test_harness_example_strategy_wiring.py`
-- `tests/test_harness_selection.py`
-- `tests/test_lg_offline_smoke.py`
+- `tests/fixtures/harness/analysis_review_semantic_cases.json`
+- `tests/fixtures/harness/m2_focus_gate_fixture_wiring/triads.yaml`
 
 ### Required new and expanded tests
 
 | Test file | Required assertions |
 |---|---|
-| new `tests/test_harness_strategy_graph.py` | `StrategyGraphSpec` can represent the current `analysis_review` loop, rejects unsupported arbitrary-DAG shapes, and `select_strategy_node` emits `strategy_graph_spec`, `strategy_graph_spec_id`, and `strategy_graph_subset` for existing strategy kinds |
-| new `tests/test_harness_state_boundaries.py` | `summary_read_adapter_v1(...)` preserves run identity, selected draft, focus decision, contract payload, topic ledger, and issue/stage history; `state_from_summary(...)` is just a compatibility wrapper; `summary_projection_v1(...)` emits the stable summary/report surface without silently depending on non-contract fields |
-| expand `tests/test_harness_reporting.py` | artifact-writing path still yields the same externally visible summary, deliverable choice, artifact keys, and report content after the boundary is made explicit |
-| expand `tests/test_harness_runner.py` | analysis-review stage records carry the new seam metadata under `metadata`, and runner topology/order remains unchanged |
-| expand `tests/test_harness_example_strategy_wiring.py` | existing strategy fixtures still resolve the same effective contract while the graph metadata is added |
+| expand `tests/test_harness_selection.py` | `drafts_from_stage_history_v1(...)` matches expected draft semantics; `extract_drafts_from_summary(...)` is a compatibility wrapper, not a second source of truth |
+| expand `tests/test_harness_state_boundaries.py` | graph-owned success path never calls `summary_read_adapter_v1(...)`; graph-owned success path never stamps `bridge_boundary_version`; historical summaries still adapt cleanly |
+| expand `tests/test_harness_reporting.py` | `publish_state_artifacts_v1(state)` emits stable deliverables, `summary.json`, and `REPORT.md` from native state; reporting does not rerank drafts on graph-owned success paths |
+| expand `tests/test_harness_analysis_review_graph.py` | graph-owned runs populate native drafts, selection ids, and artifact-ready state before `write_artifacts_node(...)` |
+| expand `tests/test_harness_runner.py` | legacy runner summary output remains readable and compatible with the new compatibility wrappers |
+| expand `tests/test_harness_cli_command.py` | CLI output and exit codes stay stable after the publisher path changes |
+| expand `tests/test_harness_standalone_cli.py` | memory and sqlite checkpoint modes keep stable user-visible artifact/report surfaces |
+| expand `tests/test_harness_example_strategy_wiring.py` | strategy wiring still yields the same migrated surface outputs after selection and publication truth move fully into state |
+| expand `tests/test_run_focus_gate_acceptance.py` | blocked, selected, and no-viable-focus outcomes still produce stable artifacts and report/readability behavior in both execution modes |
 
 ### Coverage diagram
 
 ```text
 CODE PATH COVERAGE
 ===========================
-[+] strategy selection
-    ├── [GAP]  select_strategy_node is currently a no-op
-    ├── [PLAN] build StrategyGraphSpec and stamp StageSpec metadata
-    └── [TEST] tests/test_harness_strategy_graph.py
+[+] Native draft projection
+    ├── [GAP]  graph-owned drafts are still reconstructed via summary-shaped data
+    ├── [PLAN] add drafts_from_stage_history_v1(...)
+    └── [TEST] tests/test_harness_selection.py, tests/test_harness_analysis_review_graph.py
 
-[+] legacy execution bridge
-    ├── [GAP]  _bridge.py silently re-enters HarnessRunner and silently rehydrates state
-    ├── [PLAN] route through LegacyBridgeBoundary + summary_read_adapter_v1
-    └── [TEST] tests/test_harness_state_boundaries.py
+[+] Selection ownership
+    ├── [GAP]  select_best_draft node and reporting both participate in ranking
+    ├── [PLAN] keep ranking in select_best_draft_node(...) only
+    └── [TEST] tests/test_harness_reporting.py, tests/test_harness_state_boundaries.py
 
-[+] artifact projection boundary
-    ├── [GAP]  write_artifacts_node currently applies artifacts then rehydrates state without named ownership
-    ├── [PLAN] route through summary_projection_v1 + apply_final_artifacts + summary_read_adapter_v1
+[+] Artifact publishing
+    ├── [GAP]  write_artifacts still projects summary then rehydrates state
+    ├── [PLAN] publish artifacts directly from native state
+    └── [TEST] tests/test_harness_reporting.py, tests/test_harness_state_boundaries.py
+
+[+] Report and summary projection
+    ├── [GAP]  seeded summary data can still behave like shadow state
+    ├── [PLAN] summary_projection_v1(...) is final one-way projection only
     └── [TEST] tests/test_harness_reporting.py
 
-[+] runner seam ownership
-    ├── [GAP]  topology truth and stage semantics are mixed but unlabeled
-    ├── [PLAN] preserve runner truth and add explicit seam metadata
-    └── [TEST] tests/test_harness_runner.py
+[+] Compatibility readability
+    ├── [GAP]  summary adapters are still normalized as general execution helpers
+    ├── [PLAN] restrict them to legacy/historical compatibility only
+    └── [TEST] tests/test_harness_state_boundaries.py, tests/test_harness_runner.py
 
-[+] regression floor
-    ├── [PLAN] keep focus-gate, reporting, prompt consistency, selection, example wiring, and offline smoke tests green
-    └── [TEST] existing canonical corpus
+[+] Recovery contract
+    ├── [GAP]  B3 could accidentally shrink failed-run readability while cleaning state seams
+    ├── [PLAN] keep restart-at-run-boundary and readable final artifacts
+    └── [TEST] tests/test_harness_reporting.py, tests/test_harness_analysis_review_graph.py
 ```
+
+### B3 parity matrix
+
+This matrix is the milestone gate. No row is optional.
+
+| Scenario family | Mode | Must match |
+|---|---|---|
+| bounded, no focus gate | `legacy_bridge` vs `graph_owned` | selected/best draft ids, final artifact kind, emitted payload, `summary.json`, `REPORT.md`, ledgers |
+| bounded, focus gate selected | both | `focus_decision`, downstream selection ids, summary/report parity |
+| bounded, focus gate blocked | both | early stop readability, no bogus selected draft, artifact/report parity |
+| bounded, no viable focus | both | early stop readability, no downstream publication drift |
+| trust, `attestation_over_bounded` | both | bounded-review summary, attestation-derived publication surfaces, final artifacts, report parity |
+| partial acceptance | both | included/excluded recommendation indices, admissibility reasons, emitted artifact kind |
+| invalid config / preflight failure | both | readable `summary.json`, readable `REPORT.md`, no success-path rehydration fallback |
+| historical artifact read compatibility | old summaries | `state_from_summary(...)` / `summary_read_adapter_v1(...)` still reconstruct readable compatibility state |
 
 ### Validation commands
 
-Run these commands before calling B1 done:
+Run these commands before calling B3 done:
 
 ```bash
 poetry run pytest -q \
-  tests/test_harness_strategy_graph.py \
+  tests/test_harness_selection.py \
   tests/test_harness_state_boundaries.py \
   tests/test_harness_reporting.py \
+  tests/test_harness_analysis_review_graph.py \
   tests/test_harness_runner.py \
-  tests/test_harness_selection.py \
+  tests/test_harness_cli_command.py \
+  tests/test_harness_standalone_cli.py \
   tests/test_harness_example_strategy_wiring.py \
-  tests/test_harness_prompt_consistency.py \
   tests/test_run_focus_gate_acceptance.py
-
-poetry run pytest -q tests/test_lg_offline_smoke.py
 
 poetry run python -m anvil.harness.cli run --help
 poetry run python -m anvil list
@@ -429,353 +656,167 @@ poetry run python -m anvil list
 
 Expected result:
 
-- all targeted tests pass
-- the harness CLI help path still works
-- the existing Forge CLI still lists commands successfully
-
-### Done criteria for test coverage
-
-This plan is not complete until all of these are true:
-
-1. the strategy-graph vocabulary has direct tests
-2. the summary read/write boundaries have direct tests
-3. the runner observability additions have direct tests
-4. the existing harness contract/reporting corpus still passes
-5. no B1 change depends on an untested implicit summary field
-
-## Performance and Reversibility Review
-
-The main risk in B1 is architecture drag, not runtime latency.
-
-### Risks to avoid
-
-- extracting a fancy topology language before the current graph can even name
-  the existing loop honestly
-- letting bridge files accumulate new policy because they are "already there"
-- changing artifact structure and seam ownership in the same slice
-- deleting the runner path before B2 parity exists
-- over-generalizing stage capabilities in B1 and creating dead abstractions
-
-### Boring implementation sequence
-
-1. define vocabulary and ownership first
-2. make the summary boundaries explicit second
-3. add runner observability third
-4. add seam tests fourth
-5. leave actual graph-owned topology migration for B2
-
-That order keeps the blast radius readable and reversible.
-
-## Detailed Implementation Plan
-
-### Phase 1: Introduce graph vocabulary without claiming graph-owned execution
-
-Goal: create the internal declaration layer B2 will consume later.
-
-Files touched:
-
-- `anvil/harness/strategy_graph.py` (new)
-- `anvil/harness/builder.py`
-- `anvil/harness/nodes/select_strategy.py`
-
-Required changes:
-
-1. Add `StrategyGraphSpec` with only the bounded subset approved by the design:
-   - linear stages
-   - bounded single back-edge loop metadata
-   - conditional branch metadata
-   - terminal outcome metadata
-2. Add `StageSpec` with minimum viable fields:
-   - `stage_id`
-   - `archetype`
-   - `provider_role`
-   - `capabilities`
-   - `prompt_builder_key`
-   - `schema_key`
-3. Add one explicit builder in `strategy_graph.py` for current strategy kinds.
-   The builder must cover:
-   - `single_pass`
-   - `pfr_v1`
-   - `analysis_review_*`
-4. Update `select_strategy_node` so it resolves the chosen internal spec and
-   records it in state under these exact keys:
-   - `strategy_graph_spec`
-   - `strategy_graph_spec_id`
-   - `strategy_graph_subset`
-5. When graph metadata needs contract context, read it from the canonical
-   contract seam. Do not recalculate policy rules inside the node.
-6. Keep executable routing behavior unchanged. B1 names topology; it does not
-   execute from spec yet.
-
-Forbidden changes:
-
-- no executable graph compiler
-- no public config surface
-- no routing decisions derived from spec at runtime
-
-Exit criteria:
-
-- `select_strategy_node` is no longer a no-op
-- the chosen strategy has an explicit internal graph spec in state
-- no new public config surface exists
-
-### Phase 2: Make state and compatibility boundaries explicit
-
-Goal: stop treating summary round-tripping as an unnamed helper chain.
-
-Files touched:
-
-- `anvil/harness/state.py`
-- `anvil/harness/reporting.py`
-- `anvil/harness/subgraphs/_bridge.py`
-- `anvil/harness/nodes/write_artifacts.py`
-
-Required changes:
-
-1. Extend `HarnessState` for B1 with explicit migration fields:
-   - `serialization_version`
-   - `analysis_review_contract`
-   - `strategy_graph_spec`
-   - `strategy_graph_spec_id`
-   - `strategy_graph_subset`
-   - `focus_decision`
-   - `topic_ledger`
-   - `summary_boundary_version`
-   - `bridge_boundary_version`
-2. Add `summary_read_adapter_v1(...)` in `state.py`.
-3. Convert `state_from_summary(...)` into a compatibility wrapper that forwards
-   to `summary_read_adapter_v1(...)` so existing callers stay stable while the
-   real seam name becomes explicit.
-4. Add `summary_projection_v1(...)` in `anvil/harness/reporting.py`.
-5. Make `write_state_artifacts(...)` delegate through `summary_projection_v1(...)`
-   instead of acting like a second unnamed summary builder.
-6. Rewire `_bridge.py` to call the explicit read boundary.
-7. Rewire `write_artifacts_node` to use this exact order:
-   - project summary through `summary_projection_v1(...)`
-   - finalize artifacts through `apply_final_artifacts(...)`
-   - rehydrate graph-adjacent state through `summary_read_adapter_v1(...)`
-8. Add short comments at the boundary call sites stating that no new semantics
-   may land there.
-
-Forbidden changes:
-
-- no artifact contract changes
-- no second summary builder
-- no direct business logic added inside `_bridge.py` or `write_artifacts_node`
-
-Exit criteria:
-
-- there is exactly one sanctioned summary->state path
-- there is exactly one sanctioned state->summary path
-- bridge files are labeled and testable as compatibility seams
-
-### Phase 3: Freeze runner ownership and add observability
-
-Goal: preserve current execution truth while making its ownership visible.
-
-Files touched:
-
-- `anvil/harness/runner.py`
-- `anvil/harness/contracts.py`
-
-Required changes:
-
-1. Route contract resolution through an explicit helper naming the seam:
-   - add `resolve_analysis_review_contract(...)` in `anvil/harness/contracts.py`
-   - keep `build_analysis_review_contract(...)` as the stable public builder
-2. Keep validators adjacent to the runner/graph orchestration path. Do not
-   model them as stages.
-3. Preserve `_run_agent_stage(...)` in the runner, but add the metadata B2 will
-   need.
-   Add these keys under `StageRecord.metadata` unless an existing typed field
-   already carries the value:
-   - `graph_stage_id`
-   - `transition_reason`
-   - `boundary_source`
-   - `semantic_validation_path` when a separate artifact exists
-4. Reuse existing path fields such as `normalized_json_path` instead of creating
-   parallel observability fields for the same artifact.
-5. Ensure the runner remains the only executable topology truth for
-   `analysis_review` in B1.
-6. Do not change stage-ordering behavior, loop policy, validator scheduling, or
-   publication outcomes.
-
-Forbidden changes:
-
-- no stage registry rollout
-- no topology migration into the graph
-- no validator behavior change
-
-Exit criteria:
-
-- runner ownership is explicit
-- no new product semantics were introduced outside canonical seam modules
-- observability is richer without changing artifacts
-
-### Phase 4: Add seam and boundary regression coverage
-
-Goal: prove the boundaries are explicit and stable enough for B2.
-
-Files touched:
-
-- `tests/test_harness_strategy_graph.py` (new)
-- `tests/test_harness_state_boundaries.py` (new)
-- `tests/test_harness_reporting.py`
-- `tests/test_harness_runner.py`
-
-Required changes:
-
-1. Add direct tests for graph-spec construction and bounded-subset guarantees.
-2. Add direct tests for summary read/write boundary behavior.
-3. Add reporting-path regression assertions proving the same external artifact
-   surface still emerges after the explicit boundary extraction.
-4. Add runner assertions proving the new seam metadata is emitted without
-   changing stage order or verdict behavior.
-5. Keep the canonical parity floor green, including
-   `tests/test_lg_offline_smoke.py` as a required validation command even if it
-   does not need file edits.
-
-Exit criteria:
-
-- the new boundaries have direct regression tests
-- the runner observability additions have direct regression tests
-- the old public behavior still passes its current corpus
+- graph-owned success-path artifact publication is state-native
+- legacy rollback and historical summary readability remain green
+- no parity drift appears outside approved graph-trace metadata
 
 ## Failure Modes Registry
 
-| Failure mode | Covered by test | Error handling | User-visible impact | Plan response |
+| Codepath | Realistic production failure | Test required | Error handling required | User-visible outcome |
 |---|---|---|---|---|
-| Bridge files gain new semantics because they are convenient | `tests/test_harness_state_boundaries.py` and review comments at bridge call sites | failing regression tests + code review guardrails | B2 inherits dual truth and parity becomes fake | boundary comments + explicit tests + file change contract |
-| `StrategyGraphSpec` overclaims support for arbitrary DAGs | `tests/test_harness_strategy_graph.py` | design-time validation failure | future work is built on a dishonest contract | keep bounded subset explicit and enforced |
-| Summary read boundary silently drops state needed for B2 | `tests/test_harness_state_boundaries.py` | failing adapter tests | parity work later loses focus, topic, contract, or draft truth | explicit adapters + state contract extensions |
-| Summary write boundary leaks non-contract fields into published artifacts | `tests/test_harness_reporting.py` | regression test failure | downstream tools start depending on accidental fields | explicit projection seam + contract-preserving assertions |
-| Runner observability stays too thin for parity diffs | `tests/test_harness_runner.py` and targeted reporting assertions | failing tests | B2 cannot explain mismatches or rollback triggers | add stage/transition metadata in B1 |
-| Validators accidentally drift into graph-stage semantics | existing validator tests + code review guardrails | failing tests or review rejection | execution semantics split across two models | keep validator orchestration adjacent and explicit |
-| B1 changes artifacts or publication behavior by accident | `tests/test_harness_reporting.py` and existing harness corpus | regression test failure | users see artifact drift before parity is even attempted | artifact contract stays stable in B1 |
+| native draft projection | draft projector drops validator failures or topic debt, so the wrong draft wins | yes | yes | user gets the wrong `BEST_DRAFT` or `FINAL_ANSWER` with no obvious crash |
+| selection ownership | reporting silently reranks drafts and picks a different winner than the graph | yes | yes | `summary.json`, `REPORT.md`, and deliverables disagree |
+| graph-owned merge | graph-owned success path still stamps `bridge_boundary_version` | yes | yes | operators think the legacy bridge ran when it did not |
+| artifact publication | state-native publisher emits a different final artifact kind than B2 for the same verdict | yes | yes | user sees `BEST_DRAFT` where `FINAL_ANSWER` or `PARTIAL_ANSWER` should exist |
+| partial acceptance | included/excluded recommendation indices drift between deliverable and summary/report | yes | yes | user sees contradictory acceptance surfaces |
+| summary projection | seeded summary data overrides newer native state during final projection | yes | yes | silent summary/report drift |
+| compatibility adapter | old summaries stop being readable after the projector split | yes | yes | users cannot inspect or replay old runs |
+| failed-run recovery | B3 cleanup accidentally makes failed runs unreadable even if execution cannot resume | yes | yes | postmortem quality regresses and restart-at-run-boundary becomes guesswork |
 
-Critical gap definition for B1:
+Critical-gap rule:
 
-Any bridge or boundary change that is untested **and** can silently redefine
-state, topology truth, or artifact truth is a critical gap.
+Any failure mode with no test, no guard, and silent user impact blocks the
+milestone. No exceptions.
 
-This plan closes those gaps with one explicit ownership map plus direct boundary
-tests.
+## Rollout and Reversibility
 
-## NOT in Scope
+### Risks to avoid
 
-- graph-owned `analysis_review` execution
-- public DAG or YAML graph configuration
-- arbitrary fork/join or parallel stage execution as a product feature
-- full `StageRegistry` generalization
-- converting validators into ordinary graph stages
-- artifact contract version bumps
-- deleting legacy summary rehydration entirely
-- deleting the runner path
-- new trust/bounded product semantics
-- example or docs redesign outside what is required to keep current surfaces honest
+- topology stays graph-owned, but state truth remains split
+- reporting continues to rerank drafts after the graph already chose one
+- graph-owned success execution still advertises the legacy bridge boundary
+- seeded summary data silently wins over native state on projection
+- compatibility cleanup breaks old artifact readability
+- B3 accidentally changes rollout defaults instead of just fixing state truth
+
+### Boring implementation sequence
+
+1. finish the native state contract and split draft projection
+2. make the select-best-draft node the only ranking owner
+3. switch artifact publication to state-native flow
+4. reduce compatibility boundaries and lock recovery rules
+5. prove parity and readability on the full matrix
+
+### Rollout and rollback criteria
+
+Roll forward rules:
+
+- do not start B3 until B2 parity is already green
+- do not change `legacy_bridge` / `graph_owned` rollout semantics or defaults
+- keep legacy summary readability intact throughout the milestone
+
+Rollback triggers:
+
+- any mismatch in final artifact kind or emitted payload between modes
+- any mismatch in selected/best draft ids between graph-owned state and emitted
+  artifacts
+- any graph-owned success path calling `summary_read_adapter_v1(...)`
+- any graph-owned success path stamping `bridge_boundary_version`
+- any historical summary that stops adapting cleanly through compatibility
+  tooling
+
+Rollback action:
+
+- rerun with `--analysis-review-execution-mode legacy_bridge`
+- keep the B2 compatibility path as the safe operational fallback until the B3
+  drift is fixed
 
 ## Worktree Parallelization Strategy
-
-Parallelization exists, but only after the milestone is decomposed by module
-ownership instead of by file count.
 
 ### Dependency table
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Graph vocabulary and strategy selection | `anvil/harness/strategy_graph.py`, `anvil/harness/builder.py`, `anvil/harness/nodes/` | — |
-| B. Runner seam ownership and observability | `anvil/harness/runner.py`, `anvil/harness/contracts.py` | — |
-| C. State and summary-boundary extraction | `anvil/harness/state.py`, `anvil/harness/reporting.py`, `anvil/harness/subgraphs/`, `anvil/harness/nodes/` | A, B |
-| D. Regression coverage and acceptance | `tests/` | A, B, C |
+| native state contract + draft projection | `anvil/harness/state.py`, `anvil/harness/selection.py`, `anvil/harness/subgraphs/analysis_review_v1.py` | — |
+| selection-owner canonicalization | `anvil/harness/nodes/select_best_draft.py`, `anvil/harness/reporting.py`, `anvil/harness/state.py` | native state contract + draft projection |
+| state-native artifact publishing | `anvil/harness/nodes/write_artifacts.py`, `anvil/harness/reporting.py`, `anvil/harness/report.py` | native state contract + draft projection, selection ids frozen |
+| compatibility boundary cleanup | `anvil/harness/subgraphs/_bridge.py`, `anvil/harness/state.py`, `anvil/harness/runner.py`, `anvil/harness/nodes/write_artifacts.py` | native state contract + artifact publisher contract |
+| parity and compatibility tests | `tests/` | each lane above as its contract freezes |
 
 ### Parallel lanes
 
-- Lane A: graph vocabulary and selection plumbing
-  - internal `StrategyGraphSpec`
-  - `StageSpec`
-  - `select_strategy_node`
-  - parent graph metadata wiring
-- Lane B: runner seam ownership and observability
-  - contract seam naming
-  - stage trace and transition metadata
-  - preserve validator and selection ownership exactly as-is
-- Lane C: state and boundary extraction
-  - `summary_read_adapter_v1`
-  - `summary_projection_v1`
-  - bridge node rewiring
-- Lane D: tests and acceptance
-  - seam tests
-  - boundary tests
-  - runner observability assertions
-  - reporting regressions
-  - canonical corpus run
+Lane A: native state contract + draft projection  
+Sequential within the lane. It freezes field names and the canonical draft
+projector signature.
+
+Lane B: selection-owner canonicalization  
+Starts after Lane A freezes `drafts`, `current_draft_id`, `best_draft_id`, and
+`selected_draft_id`.
+
+Lane C: state-native artifact publishing  
+Starts after Lane A freezes the native publish inputs. Finishes after Lane B
+freezes selection ownership.
+
+Lane D: compatibility boundary cleanup  
+Starts after Lane C freezes the final publisher contract.
+
+Lane E: tests  
+Split into two passes:
+- E1: native draft projection and state-boundary assertions can start after
+  Lane A
+- E2: reporting/parity/readability assertions finish after Lanes B, C, and D
 
 ### Execution order
 
-Launch Lane A and Lane B in parallel worktrees.
-
-After both land, run Lane C.
-
-After Lane C lands, run Lane D.
-
-Do not start any B2 topology work until Lane D is green.
+1. Launch Lane A first and merge it.
+2. Start Lane B after A freezes state and draft contracts.
+3. Start Lane E1 in parallel with Lane B for native-state and boundary tests.
+4. Start Lane C after A, but do not finish it until B freezes selection
+   ownership.
+5. Start Lane D after C freezes the state-native publisher contract.
+6. Finish Lane E2 after B, C, and D merge.
 
 ### Conflict flags
 
-- Lanes A and C both touch `anvil/harness/nodes/`. Keep C behind A.
-- Lanes B and C both influence the state/observability contract. C must wait for
-  B's field names and metadata shape to settle.
-- Lane D depends on the final public interface of A, B, and C. Run it last.
+- Lanes A, B, and D all touch `anvil/harness/state.py`, so they cannot merge
+  independently without coordination.
+- Lanes B and C both touch `anvil/harness/reporting.py`, so selection ownership
+  must freeze before final publisher work lands.
+- Lanes C and D both touch `anvil/harness/nodes/write_artifacts.py`, so D
+  cannot start early.
+- Lanes C and E2 both touch reporting-focused tests. Keep test ownership crisp
+  to avoid merge churn.
 
-### Merge gates
+Verdict:
 
-- Merge gate after Lane A: `select_strategy_node` emits graph metadata and the
-  graph still routes exactly as before.
-- Merge gate after Lane B: runner stage records expose the new seam metadata and
-  no topology or verdict behavior changes.
-- Merge gate after Lane C: there is one sanctioned read boundary and one
-  sanctioned write boundary.
-- Merge gate after Lane D: all targeted tests and CLI smoke commands are green.
+This is partially parallel, but the core state and publisher contracts are
+serial. Treat it like one primary spine with a test lane running beside it.
 
-## Acceptance Checklist
+## NOT in scope
 
-- [ ] `StrategyGraphSpec` exists and represents the approved bounded subset only
-- [ ] `StageSpec` exists for current harness strategy families
-- [ ] `select_strategy_node` emits explicit strategy graph metadata
-- [ ] `HarnessState` carries `serialization_version` and the B1 state fields
-  required for seam ownership and B2 parity setup
-- [ ] `summary_read_adapter_v1(...)` is the only sanctioned summary->state path
-- [ ] `state_from_summary(...)` is only a compatibility wrapper around
-  `summary_read_adapter_v1(...)`
-- [ ] `summary_projection_v1(...)` is the only sanctioned state->summary path
-- [ ] `write_state_artifacts(...)` delegates through `summary_projection_v1(...)`
-- [ ] `_bridge.py` is explicitly bridge-only and does not gain new semantics
-- [ ] `write_artifacts_node` is explicitly projection-only and does not gain new
-  publication semantics
-- [ ] `runner.py` remains the only topology truth for B1 execution
-- [ ] existing harness reporting/prompt/acceptance/example/selection tests remain green
-- [ ] new seam, boundary, and runner-observability tests are added and green
-- [ ] harness CLI help still works
-- [ ] existing Forge CLI still works
+- changing B2 topology ownership
+- changing `legacy_bridge` / `graph_owned` rollout semantics or defaults
+- deleting the legacy bridge entirely
+- `single_pass` or `pfr_v1` state/reporting cleanup
+- stage-boundary resume
+- artifact contract v2
+- public DAG or graph compiler work
+- C1, C2, or C3 future-state work
 
-## Completion Summary
+## Completion Checklist
 
-- Step 0: Scope Challenge — scope accepted as seam extraction only, with no
-  graph-owned topology migration in B1
-- Architecture Review: one explicit ownership map for permanent seams versus
-  temporary bridges, plus a file-level change contract
-- Code Quality Review: bridge files frozen, DRY truth boundaries locked, no new
-  semantics outside canonical seam modules
-- Test Review: direct graph-spec, state-boundary, runner-observability, and
-  artifact-projection coverage added on top of the existing harness corpus
-- Performance Review: boring, reversible sequencing chosen over speculative
-  framework work
-- NOT in scope: written
-- What already exists: written
-- TODOS.md updates: none required to start B1
-- Failure modes: critical architecture gaps closed by explicit boundaries and
-  direct regression tests
-- Parallelization: 4 steps total, 2 initial parallel lanes, 2 sequential
-  follow-ons, explicit merge gates
-- Lake Score: choose the complete seam milestone, not the fake-compiler
-  shortcut
+- `HarnessState` carries all graph-owned downstream publication fields
+- graph-owned draft projection no longer depends on synthetic summary wrappers
+- `select_best_draft_node(...)` is the only graph-path ranking owner
+- graph-owned success-path artifact publication is state-native
+- graph-owned success path never calls `summary_read_adapter_v1(...)`
+- graph-owned success path never stamps `bridge_boundary_version`
+- `summary_projection_v1(...)` remains the sole summary write boundary
+- historical summary readability still works
+- restart-at-run-boundary readability remains supported
+- full B3 parity matrix is green
+
+## Done Criteria
+
+This milestone is done when a developer can run the same canonical
+`analysis_review` task/strategy pair in both `legacy_bridge` and `graph_owned`
+mode, and:
+
+- the graph-owned success path publishes deliverables directly from native state
+- `summary.json` and `REPORT.md` are still stable projections of that state
+- no success-path summary rehydration occurs
+- no second ranking decision occurs after `select_best_draft_node(...)`
+- old summaries are still readable through compatibility tooling
+
+At that point, B3 has actually made graph-native state canonical instead of
+just making the code look cleaner.

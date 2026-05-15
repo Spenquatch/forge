@@ -17,6 +17,7 @@ from anvil.harness.runner import HarnessRunner
 from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.semantic_validation import BOUNDED_ATTESTATION_INPUT_KEY
+from anvil.harness.state import initialize_harness_state, state_from_summary
 from anvil.harness.types import ProviderRun
 
 _PRIMARY_SEAM_PATHS = [
@@ -8961,6 +8962,67 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
         encoding="utf-8"
     )
     assert "not evaluated by a successful critic/auditor stage" in best_draft_text
+    runtime = summary["run_details"]["analysis_review_runtime"]
+    assert runtime["current_analysis_payload"]["status"] == "done"
+    assert runtime["current_review_payload"] is None
+    assert runtime["latest_validator_round"] == []
+    assert runtime["revisions_completed"] == 0
+    assert runtime["focus_refinement"] is None
+    assert runtime["transition_reason"] == "critic_failed"
+    assert runtime["review_loop_exercised"] is False
+
+
+def test_analysis_review_runtime_bag_is_initialized_and_projected_from_summary(
+    tmp_path,
+    monkeypatch,
+):
+    state = initialize_harness_state(
+        task_path="task.yaml",
+        strategy_path="strategy.yaml",
+        workspace_root="/tmp/workspace",
+        out_root="/tmp/runs",
+    )
+    assert state["analysis_review_runtime"] == {}
+
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    runtime = summary["run_details"]["analysis_review_runtime"]
+    assert {
+        "current_analysis_payload",
+        "current_review_payload",
+        "latest_validator_round",
+        "revisions_completed",
+        "max_loops",
+        "focus_refinement",
+        "transition_reason",
+        "review_loop_exercised",
+    } <= set(runtime)
+    assert runtime["current_analysis_payload"] == summary["run_details"]["final_analysis"]
+    assert runtime["current_review_payload"] == summary["run_details"]["final_review"]
+    assert runtime["latest_validator_round"] == []
+    assert runtime["revisions_completed"] == summary["run_details"]["revisions_completed"]
+    assert runtime["max_loops"] >= runtime["revisions_completed"]
+    assert runtime["focus_refinement"] is None
+    assert runtime["transition_reason"] == "stop_policy_satisfied"
+    assert runtime["review_loop_exercised"] is True
+
+    projected_state = state_from_summary(summary)
+    assert projected_state["analysis_review_runtime"] == runtime
 
 
 def test_analysis_review_runner_preserves_focus_decision_on_late_review_failure(

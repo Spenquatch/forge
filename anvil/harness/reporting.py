@@ -73,6 +73,163 @@ def _sync_focus_decision_into_summary(summary: dict[str, Any]) -> None:
         summary["focus_decision"] = copy.deepcopy(run_details_focus)
 
 
+def _semantic_validation_outcome_for_stage(
+    stage: dict[str, Any],
+    metadata: dict[str, Any],
+) -> str:
+    outcome = str(metadata.get("semantic_validation_outcome") or "").strip()
+    if outcome:
+        return outcome
+    if stage.get("semantic_validation_errors"):
+        return "failed"
+    if stage.get("semantic_validation_warnings"):
+        return "warnings"
+    if stage.get("semantic_validation_path"):
+        return "passed"
+    return "not_run"
+
+
+def _project_stage_trace_metadata(
+    stage: dict[str, Any],
+    *,
+    execution_mode: str,
+) -> dict[str, Any]:
+    metadata = (
+        copy.deepcopy(stage.get("metadata"))
+        if isinstance(stage.get("metadata"), dict)
+        else {}
+    )
+    nested_metadata = (
+        metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}
+    )
+    graph_stage_id = str(
+        metadata.get("graph_stage_id")
+        or nested_metadata.get("graph_stage_id")
+        or ""
+    ).strip()
+    if graph_stage_id:
+        metadata["graph_stage_id"] = graph_stage_id
+    graph_node_id = str(
+        metadata.get("graph_node_id")
+        or graph_stage_id
+        or stage.get("role_name")
+        or ""
+    ).strip()
+    if graph_node_id:
+        metadata["graph_node_id"] = graph_node_id
+    transition_reason = str(
+        metadata.get("transition_reason") or nested_metadata.get("transition_reason") or ""
+    ).strip()
+    if transition_reason:
+        metadata["transition_reason"] = transition_reason
+    metadata["semantic_validation_outcome"] = _semantic_validation_outcome_for_stage(
+        stage,
+        metadata,
+    )
+    if execution_mode:
+        metadata["execution_mode"] = execution_mode
+    return metadata
+
+
+def _project_agent_stages(
+    raw_stages: Any,
+    *,
+    execution_mode: str,
+) -> list[Any]:
+    projected: list[Any] = []
+    for raw_stage in raw_stages or []:
+        if not isinstance(raw_stage, dict):
+            projected.append(copy.deepcopy(raw_stage))
+            continue
+        stage = copy.deepcopy(raw_stage)
+        stage["metadata"] = _project_stage_trace_metadata(
+            stage,
+            execution_mode=execution_mode,
+        )
+        projected.append(stage)
+    return projected
+
+
+def _graph_execution_mode(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+) -> str:
+    execution_mode = str(state.get("analysis_review_execution_mode") or "").strip()
+    if execution_mode:
+        return execution_mode
+    run_details = seeded_summary.get("run_details")
+    if isinstance(run_details, dict):
+        graph_execution = run_details.get("graph_execution")
+        if isinstance(graph_execution, dict):
+            execution_mode = str(graph_execution.get("execution_mode") or "").strip()
+            if execution_mode:
+                return execution_mode
+    for raw_stage in state.get("stage_history") or seeded_summary.get("agent_stages") or []:
+        if not isinstance(raw_stage, dict):
+            continue
+        metadata = raw_stage.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        execution_mode = str(metadata.get("execution_mode") or "").strip()
+        if execution_mode:
+            return execution_mode
+    return ""
+
+
+def _project_graph_execution(
+    *,
+    execution_mode: str,
+    agent_stages: list[Any],
+    seeded_summary: dict[str, Any],
+) -> dict[str, Any]:
+    run_details = seeded_summary.get("run_details")
+    existing_graph_execution = (
+        copy.deepcopy(run_details.get("graph_execution"))
+        if isinstance(run_details, dict)
+        and isinstance(run_details.get("graph_execution"), dict)
+        else {}
+    )
+    transition_log = [
+        {
+            key: copy.deepcopy(metadata[key])
+            for key in (
+                "graph_node_id",
+                "transition_reason",
+                "semantic_validation_outcome",
+                "execution_mode",
+            )
+            if key in metadata and metadata.get(key) not in (None, "", [])
+        }
+        for stage in agent_stages
+        if isinstance(stage, dict)
+        and isinstance((metadata := stage.get("metadata")), dict)
+        and metadata
+    ]
+    projected = dict(existing_graph_execution)
+    if execution_mode:
+        projected["execution_mode"] = execution_mode
+        projected["graph_owned"] = execution_mode == "graph_owned"
+        projected["fallback_used"] = execution_mode != "graph_owned"
+    if transition_log:
+        projected["transition_log"] = transition_log
+    elif isinstance(existing_graph_execution.get("transition_log"), list):
+        projected["transition_log"] = copy.deepcopy(
+            existing_graph_execution["transition_log"]
+        )
+    if not any(
+        key in projected
+        for key in (
+            "execution_mode",
+            "graph_owned",
+            "fallback_used",
+            "transition_log",
+        )
+    ):
+        return {}
+    return projected
+
+
 def _accepted_recommendation_indices(summary: dict[str, Any]) -> list[int]:
     reviews = summary.get("recommendation_reviews") or []
     indices: list[int] = []
@@ -1729,17 +1886,24 @@ def summary_projection_v1(
         if isinstance(seeded_summary.get("verdicts"), dict)
         else {}
     )
+    execution_mode = _graph_execution_mode(state, seeded_summary=seeded_summary)
+    agent_stages = _project_agent_stages(
+        state.get("stage_history") or seeded_summary.get("agent_stages") or [],
+        execution_mode=execution_mode,
+    )
     summary = dict(seeded_summary)
     summary.update(
         {
             "run_id": state.get("run_id") or seeded_summary.get("run_id"),
             "thread_id": state.get("thread_id") or seeded_summary.get("thread_id"),
             "workspace": state.get("workspace_root") or seeded_summary.get("workspace"),
+            "config_path": state.get("config_path") or seeded_summary.get("config_path"),
             "task": state.get("task_spec") or seeded_summary.get("task") or {},
             "strategy_name": (state.get("strategy_spec") or {}).get("name")
             or seeded_summary.get("strategy_name"),
             "strategy_kind": state.get("strategy_kind")
             or seeded_summary.get("strategy_kind"),
+            "created_at": state.get("created_at") or seeded_summary.get("created_at"),
             "serialization_version": str(
                 state.get("serialization_version")
                 or seeded_summary.get("serialization_version")
@@ -1753,6 +1917,7 @@ def summary_projection_v1(
             "warnings": list(
                 state.get("warnings") or seeded_summary.get("warnings") or []
             ),
+            "errors": list(state.get("errors") or seeded_summary.get("errors") or []),
             "verdict": state.get("run_verdict")
             or state.get("content_verdict")
             or seeded_summary.get("verdict")
@@ -1771,33 +1936,95 @@ def summary_projection_v1(
             },
             "final_summary": state.get("summary_text")
             or seeded_summary.get("final_summary"),
+            "failure_details": (
+                copy.deepcopy(state.get("failure_details"))
+                if isinstance(state.get("failure_details"), dict)
+                else copy.deepcopy(seeded_summary.get("failure_details"))
+                if isinstance(seeded_summary.get("failure_details"), dict)
+                else None
+            ),
             "workspace_write_policy": (
                 (state.get("task_spec") or {}).get("workspace_write_policy")
                 or seeded_summary.get("workspace_write_policy")
                 or {}
+            ),
+            "workspace_policy_ignored_rel_paths": list(
+                state.get("workspace_policy_ignored_rel_paths")
+                or seeded_summary.get("workspace_policy_ignored_rel_paths")
+                or []
             ),
             "workspace_policy_checks": list(
                 state.get("policy_checks")
                 or seeded_summary.get("workspace_policy_checks")
                 or []
             ),
-            "agent_stages": list(
-                state.get("stage_history") or seeded_summary.get("agent_stages") or []
+            "final_workspace_policy_evaluation": (
+                copy.deepcopy(state.get("final_workspace_policy_evaluation"))
+                if isinstance(state.get("final_workspace_policy_evaluation"), dict)
+                else copy.deepcopy(seeded_summary.get("final_workspace_policy_evaluation"))
+                if isinstance(seeded_summary.get("final_workspace_policy_evaluation"), dict)
+                else None
             ),
+            "agent_stages": agent_stages,
             "validator_rounds": list(
                 state.get("validator_rounds")
                 or seeded_summary.get("validator_rounds")
                 or []
             ),
+            "validator_summary": (
+                copy.deepcopy(state.get("validator_summary"))
+                if isinstance(state.get("validator_summary"), dict)
+                else copy.deepcopy(seeded_summary.get("validator_summary"))
+                if isinstance(seeded_summary.get("validator_summary"), dict)
+                else {}
+            ),
             "drafts": list(state.get("drafts") or seeded_summary.get("drafts") or []),
+            "best_draft_id": state.get("best_draft_id")
+            or seeded_summary.get("best_draft_id"),
+            "selected_draft_id": state.get("selected_draft_id")
+            or seeded_summary.get("selected_draft_id"),
             "issue_ledger": list(
                 state.get("issue_history") or seeded_summary.get("issue_ledger") or []
+            ),
+            "changed_files": list(
+                state.get("changed_files") or seeded_summary.get("changed_files") or []
+            ),
+            "initial_git_snapshot": (
+                copy.deepcopy(state.get("initial_git_snapshot"))
+                if isinstance(state.get("initial_git_snapshot"), dict)
+                else copy.deepcopy(seeded_summary.get("initial_git_snapshot"))
+                if isinstance(seeded_summary.get("initial_git_snapshot"), dict)
+                else {}
+            ),
+            "final_git_snapshot": (
+                copy.deepcopy(state.get("current_git_snapshot"))
+                if isinstance(state.get("current_git_snapshot"), dict)
+                else copy.deepcopy(seeded_summary.get("final_git_snapshot"))
+                if isinstance(seeded_summary.get("final_git_snapshot"), dict)
+                else {}
             ),
         }
     )
     artifacts = dict(seeded_summary.get("artifacts") or {})
     artifacts["run_dir"] = projection_run_dir
     summary["artifacts"] = artifacts
+    run_details = (
+        copy.deepcopy(seeded_summary.get("run_details"))
+        if isinstance(seeded_summary.get("run_details"), dict)
+        else {}
+    )
+    state_run_details = state.get("run_details")
+    if isinstance(state_run_details, dict):
+        run_details.update(copy.deepcopy(state_run_details))
+    graph_execution = _project_graph_execution(
+        execution_mode=execution_mode,
+        agent_stages=agent_stages,
+        seeded_summary=seeded_summary,
+    )
+    if graph_execution:
+        run_details["graph_execution"] = graph_execution
+    if run_details:
+        summary["run_details"] = run_details
     analysis_review_contract = state.get("analysis_review_contract")
     if isinstance(analysis_review_contract, dict) and analysis_review_contract:
         summary["analysis_review_contract"] = copy.deepcopy(analysis_review_contract)
@@ -1811,8 +2038,77 @@ def summary_projection_v1(
     if strategy_graph_subset not in (None, ""):
         summary["strategy_graph_subset"] = str(strategy_graph_subset)
     focus_decision = state.get("focus_decision")
-    if isinstance(focus_decision, dict) and focus_decision:
+    if isinstance(focus_decision, dict):
         summary["focus_decision"] = copy.deepcopy(focus_decision)
+    elif "focus_decision" in state or "focus_decision" in seeded_summary:
+        summary["focus_decision"] = (
+            copy.deepcopy(seeded_summary.get("focus_decision"))
+            if seeded_summary.get("focus_decision") is not None
+            else None
+        )
+    analysis_review_status = state.get("analysis_review_status")
+    if isinstance(analysis_review_status, dict) and analysis_review_status:
+        summary["analysis_review_status"] = copy.deepcopy(analysis_review_status)
+    elif "analysis_review_status" in state or "analysis_review_status" in seeded_summary:
+        summary["analysis_review_status"] = (
+            copy.deepcopy(seeded_summary.get("analysis_review_status"))
+            if seeded_summary.get("analysis_review_status") is not None
+            else None
+        )
+    else:
+        summary["analysis_review_status"] = None
+    analysis_review_coverage = state.get("analysis_review_coverage")
+    if isinstance(analysis_review_coverage, dict) and analysis_review_coverage:
+        summary["analysis_review_coverage"] = copy.deepcopy(analysis_review_coverage)
+    elif isinstance(seeded_summary.get("analysis_review_coverage"), dict):
+        summary["analysis_review_coverage"] = copy.deepcopy(
+            seeded_summary["analysis_review_coverage"]
+        )
+    recommendation_reviews = state.get("recommendation_reviews")
+    if isinstance(recommendation_reviews, list):
+        summary["recommendation_reviews"] = [
+            copy.deepcopy(item) for item in recommendation_reviews if isinstance(item, dict)
+        ]
+    elif isinstance(seeded_summary.get("recommendation_reviews"), list):
+        summary["recommendation_reviews"] = [
+            copy.deepcopy(item)
+            for item in seeded_summary["recommendation_reviews"]
+            if isinstance(item, dict)
+        ]
+    else:
+        summary["recommendation_reviews"] = []
+    closure_proof_by_id = state.get("closure_proof_by_id")
+    if isinstance(closure_proof_by_id, dict):
+        summary["closure_proof_by_id"] = copy.deepcopy(closure_proof_by_id)
+    elif isinstance(seeded_summary.get("closure_proof_by_id"), dict):
+        summary["closure_proof_by_id"] = copy.deepcopy(
+            seeded_summary["closure_proof_by_id"]
+        )
+    else:
+        summary["closure_proof_by_id"] = {}
+    bounded_review_summary = state.get("bounded_review_summary")
+    if isinstance(bounded_review_summary, dict):
+        summary["bounded_review_summary"] = copy.deepcopy(bounded_review_summary)
+    elif isinstance(seeded_summary.get("bounded_review_summary"), dict):
+        summary["bounded_review_summary"] = copy.deepcopy(
+            seeded_summary["bounded_review_summary"]
+        )
+    bounded_attestation_input = state.get("bounded_attestation_input")
+    if isinstance(bounded_attestation_input, dict):
+        summary["bounded_attestation_input"] = copy.deepcopy(
+            bounded_attestation_input
+        )
+    elif isinstance(seeded_summary.get("bounded_attestation_input"), dict):
+        summary["bounded_attestation_input"] = copy.deepcopy(
+            seeded_summary["bounded_attestation_input"]
+        )
+    final_answer = state.get("final_answer")
+    if isinstance(final_answer, dict) and final_answer:
+        summary["final_answer"] = copy.deepcopy(final_answer)
+    elif isinstance(seeded_summary.get("final_answer"), dict):
+        summary["final_answer"] = copy.deepcopy(seeded_summary["final_answer"])
+    else:
+        summary["final_answer"] = None
     topic_ledger = state.get("topic_ledger")
     if isinstance(topic_ledger, list):
         summary["topic_ledger"] = [
