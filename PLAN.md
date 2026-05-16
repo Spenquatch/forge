@@ -1,791 +1,852 @@
-# PLAN: B3 Graph-Native State / Selection / Artifact Canonicalization for the Harness Strangler
+# PLAN: C1 Deterministic Planning Compiler Wedge
 
-Status: ready for implementation after B2 parity lands on `main`  
+Status: ready for implementation on `main`  
 Target branch: `main`  
-Prepared from repo state on: `codex/b2-graph-owned-analysis-review-parity`  
-Milestone: `B3`  
-Design source: `/Users/spensermcconnell/.gstack/projects/Spenquatch-forge/spensermcconnell-main-design-20260513-215858.md`
+Prepared from repo state on: `main`  
+Milestone: `C1`  
+Design source: `/Users/spensermcconnell/.gstack/projects/Spenquatch-forge/spensermcconnell-main-design-20260515-231048.md`
 
 Supersedes:
-- the prior root `PLAN.md` B2 graph-owned parity plan
-- the B3 milestone sketch inside the design doc
+- the prior root `PLAN.md` for B3 graph-native state / selection / artifact canonicalization
+- the C1 milestone sketch inside the 2026-05-15 deterministic planning design doc
 
 ## Executive Summary
 
-B3 ends fake state.
+C1 is where `forge` stops proving only fixed review and repair runtimes and starts
+proving a compiled planning runtime.
 
-Today the harness graph owns most of the `analysis_review` topology, but the
-success path still treats summary-shaped data as the durable source of truth in
-three places:
+Right now the harness has good bones:
 
-1. `anvil/harness/subgraphs/analysis_review_v1.py` still reconstructs
-   `drafts` by calling
-   `extract_drafts_from_summary(_draft_summary_from_runner(runner))`.
-2. `anvil/harness/nodes/write_artifacts.py` still performs the round-trip
-   `summary_projection_v1(...) -> apply_final_artifacts(...) -> summary_read_adapter_v1(...)`
-   before returning state.
-3. `anvil/harness/reporting.py` still reranks drafts during artifact emission,
-   so selection truth is duplicated between the graph node
-   `select_best_draft_node(...)` and the reporting layer.
+- typed task and strategy specs in [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py)
+- strategy graph metadata in [anvil/harness/strategy_graph.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/strategy_graph.py)
+- a shared LangGraph wrapper in [anvil/harness/builder.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/builder.py)
+- artifact publication in [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py)
+- strong graph, CLI, and artifact regression coverage under `tests/`
 
-That means B2 can prove topology parity, but B3 still has split truth for state,
-selection, and artifact emission.
+But the planning claim is still false.
 
-B3 fixes that split in one milestone:
+The current harness only knows three runtime families:
 
-- graph-native `HarnessState` becomes canonical for migrated surfaces
-- native draft projection replaces summary-derived draft reconstruction on the
-  graph-owned success path
-- `select_best_draft_node(...)` becomes the only ranking owner
-- artifact publishing becomes state-native
-- `summary_projection_v1(...)` remains, but only as the final one-way summary
-  projection seam
-- `summary_read_adapter_v1(...)` remains compatibility-only and is removed from
-  the graph-owned success path
-- legacy summaries and reports remain readable, and restart-at-run-boundary
-  remains the minimum recovery contract
+- `single_pass`
+- `pfr_v1`
+- `analysis_review_v1`
 
-The milestone question is simple:
+That hard-coding shows up in all the places that matter:
 
-**Can the harness keep the B2 graph-owned topology, but make state, selection,
-and artifact publishing canonical on native graph state without changing the
-artifact contract?**
+- `TaskSpec.from_dict(...)` only accepts `patch` and `analysis_review`
+- `HarnessState` only types the existing runtime families
+- `route_after_strategy_selection(...)` only routes to `single_pass`, `pfr_v1`, or `analysis_review_v1`
+- `build_harness_langgraph(...)` only mounts those three runtime nodes and always runs `select_best_draft`
+- `validator_preflight_node(...)` only knows how to auto-fit between patch and analysis-review tasks
+- artifact publishing assumes the existing summary/report/draft deliverable family
 
-This plan says yes, but only if native state completion, single-owner
-selection, state-native artifact publishing, compatibility-boundary reduction,
-and full parity coverage land together.
+C1 fixes that by adding one real compiled planning runtime, `planning_v1`, and one
+curated strategy, `deterministic_feature_planning_v1`, that can be declared in
+repo-managed config and executed end to end without strategy-specific core-engine
+edits for that strategy.
+
+The runtime proof is narrow on purpose:
+
+1. input is one feature request in one or two sentences
+2. execution is one four-phase planning flow
+3. output is one canonical planning package:
+   - `PLAN.md`
+   - `plan.json`
+4. blocked runs stop honestly with structured clarification requests
+
+This milestone is not "build a public workflow DSL."
+
+It is "prove the harness can compile and run one useful planning strategy through
+shared runtime seams, shared policy lookup, shared validation, and shared artifact
+publication."
 
 ## Preconditions and Non-Negotiables
 
-These are implementation gates, not suggestions.
-
-- B2 parity must already be green on `main` before B3 starts. B3 is not allowed
-  to debug unfinished B2 topology drift at the same time it changes state truth.
-- B3 only covers the `analysis_review` migrated surface. Do not widen into
-  `single_pass`, `pfr_v1`, or future C-series graph/compiler work.
-- External artifact semantics stay stable in this milestone. `summary.json`,
-  `REPORT.md`, `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, and `BEST_DRAFT.*` may gain
-  approved graph-trace metadata, but they may not change contract shape or
-  meaning.
-- `legacy_bridge` remains the boring rollback path for the whole milestone. B3
-  does not change rollout defaults, flags, or operator playbooks.
-- No merge is complete until the parity matrix, readability checks, and the
-  named deleted bridge path are all proven green.
+- B3 is already landed on `main`. C1 must build on the current graph-owned harness surface, not reopen B3 state-canonicalization work.
+- The planning wedge stays curated and internal in C1. No public workflow DSL, no user-authored custom graph composition, no plugin marketplace story.
+- The new strategy must be declared in repo-managed strategy config and run without new per-strategy branches in the core runtime for `deterministic_feature_planning_v1`.
+- `planning_v1` is a new runtime family, not a disguised `analysis_review_v1` variant.
+- Parallel workstream output is advisory metadata only. C1 does not create worktrees, branches, jobs, or agent dispatch automatically.
+- Existing harness families must keep working exactly as they do today:
+  - `single_pass`
+  - `pfr_v1`
+  - `analysis_review_bounded_v1`
+  - `analysis_review_trust_v1`
+- The primary documented CLI surface stays `poetry run python -m anvil.cli harness-run`.
+- Planning artifacts must be deterministic in structure, IDs, and stop behavior on the bounded fixture corpus.
+- No second parser stack. Task and strategy declarations must still flow through the existing structured file loading and typed config surfaces.
 
 ## Success Criteria
 
-- no graph-owned success path calls `summary_read_adapter_v1(...)`
-- no graph-owned success path calls `state_from_summary(...)`
-- graph-owned `drafts` are built from native stage history plus validator state,
-  not from a synthetic summary wrapper
-- `select_best_draft_node(...)` is the only canonical draft-ranking owner on
-  the graph path
-- artifact publishing on the graph-owned success path consumes
-  `HarnessState`, not rehydrated summary-derived state
-- `summary_projection_v1(...)` remains the only sanctioned summary write
-  boundary
-- `summary_read_adapter_v1(...)` remains allowed only:
-  - inside `LegacyBridgeBoundary.run(...)`
-  - in historical summary/readability tooling
-  - in compatibility and parity tests
-- `bridge_boundary_version` is stamped only by the actual legacy bridge path,
-  never by graph-owned success-path execution
-- final artifact kind and payload remain stable across `legacy_bridge` and
-  `graph_owned` runs for the canonical parity corpus
-- `summary.json` and `REPORT.md` remain readable and stable except for approved
-  graph-trace metadata
-- failed-run recovery remains supported at restart-at-run-boundary minimum
-- at least one named bridge-only path is deleted:
-  `write_artifacts_node -> summary_read_adapter_v1(...)` on the graph-owned
-  success path
+- A new strategy declaration with `kind: deterministic_feature_planning_v1` and `runtime_target: planning_v1` loads through the existing harness config path.
+- The graph runtime routes planning runs through a shared `planning_v1` path without hard-coding logic for this one strategy name.
+- A successful planning run emits:
+  - `PLAN.md`
+  - `plan.json`
+  - `artifact_index` entries for both
+  - `summary_payload` populated with the canonical `plan.json` payload for CLI compatibility
+- A blocked planning run emits:
+  - `terminal_status: clarification_needed`
+  - non-empty `clarification_requests[]`
+  - empty or partial downstream records, depending on where the stop occurred
+- A failed planning run emits:
+  - `terminal_status: failed`
+  - non-empty `stop_reason`
+- The planning runtime executes four declared phases in order:
+  - `rubric_design_doc`
+  - `architecture_seam_decomposition`
+  - `parallel_workstream_planning`
+  - `executable_slice_emission`
+- `PLAN.md` always renders the same five top-level sections in canonical order:
+  - problem statement
+  - rubric results
+  - architectural seams
+  - parallel workstreams/worktrees
+  - executable slices
+- `plan.json` passes schema validation and carries stable IDs for selected seams, workstreams, and slices across three repeated runs per fixture.
+- The bounded fixture corpus proves both outcomes:
+  - at least one fixture succeeds with credible artifacts
+  - at least one fixture blocks with honest clarification requests
+- Existing non-planning harness tests stay green.
 
 ## Step 0: Scope Challenge
 
 ### What already exists
 
-| Sub-problem | Existing code | B3 decision |
+| Sub-problem | Existing code | C1 decision |
 |---|---|---|
-| Native graph state carrier already exists | `anvil/harness/state.py` already defines `HarnessState`, `drafts`, `stage_history`, `issue_history`, `artifact_index`, `summary_payload`, `analysis_review_runtime`, and selection ids | Keep `HarnessState` as the canonical carrier. Expand it to include every graph-owned field downstream reporting and publication actually consume. |
-| Graph-owned subgraph already merges most runtime outputs into state | `anvil/harness/subgraphs/analysis_review_v1.py` already copies stage history, validator rounds, policy checks, issue/topic ledgers, verdicts, and analysis details into state | Finish the migration here. Remove summary-derived draft reconstruction and stop stamping legacy bridge metadata on graph-owned success paths. |
-| Draft ranking logic already accepts native drafts | `anvil/harness/selection.py` exposes `select_best_draft(drafts)` and `anvil/harness/nodes/select_best_draft.py` already selects from `state["drafts"]` | Keep the ranking rules. Change only how drafts are projected and lock the graph node as the sole ranking owner. |
-| Draft projection logic already exists, but it is summary-shaped | `extract_drafts_from_summary(...)` in `anvil/harness/selection.py` rebuilds draft semantics from `summary["agent_stages"]` and `summary["validator_rounds"]` | Split this into a canonical native projector plus a thin summary compatibility wrapper. |
-| Artifact publishing seam already exists | `anvil/harness/reporting.py` owns `summary_projection_v1(...)`, `apply_final_artifacts(...)`, and `write_state_artifacts(...)` | Keep module ownership here, but invert the control flow so state-native publication is canonical and summary projection happens once at the end. |
-| Current artifact node still round-trips through summary | `anvil/harness/nodes/write_artifacts.py` projects summary, writes artifacts, then rehydrates state with `summary_read_adapter_v1(...)` | Delete this success-path round-trip in B3. This is the named bridge-only path that must go away. |
-| Report rendering surface already exists | `anvil/harness/report.py` renders `REPORT.md` from the summary contract | Keep `REPORT.md` stable. Make `summary_projection_v1(...)` responsible for producing a complete report-ready summary from state. |
-| Legacy bridge boundary is already explicit | `anvil/harness/subgraphs/_bridge.py` re-enters `HarnessRunner` and rehydrates state from summary | Keep this path compatibility-only. No B3 semantics land here. |
-| Regression floor already exists | `tests/test_harness_selection.py`, `tests/test_harness_state_boundaries.py`, `tests/test_harness_reporting.py`, `tests/test_harness_analysis_review_graph.py`, `tests/test_harness_runner.py` | Expand these. Do not create a parallel test universe that ignores the existing seams. |
+| Typed task parsing exists, but only for review and patch tasks | [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py) only accepts `patch` and `analysis_review` in `VALID_TASK_KINDS`, and `TaskSpec.from_dict(...)` defaults based on write policy | Extend the existing task surface with `planning`. Do not overload `analysis_review` for feature-planning requests. |
+| Typed strategy parsing exists, but planning fields do not | `StrategyConfig` already loads `kind`, `roles`, validators, loops, focus-gate, and trust-review fields | Extend `StrategyConfig` with generic planning keys: `runtime_target`, `phases[]`, `artifact_policy`, `determinism_policy`, `discovery_policy`, `rubric_policy`, and `stop_policy`. Keep one loader. |
+| Strategy graph metadata already exists | [anvil/harness/strategy_graph.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/strategy_graph.py) builds structured specs for `single_pass`, `pfr_v1`, and `analysis_review_*` | Reuse this file as the canonical strategy-to-runtime metadata builder. Add `planning_v1` as a new runtime family and add one generic post-runtime routing field so planning can bypass draft selection cleanly. |
+| The shared graph wrapper already exists | [anvil/harness/builder.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/builder.py) builds a LangGraph wrapper with shared preflight, selection, artifact, and finalize nodes | Keep the shared wrapper. Add one `planning_v1` node and one generic post-runtime route. Do not create a second graph builder. |
+| Executor, checkpointing, and streaming already exist | [anvil/harness/executor.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/executor.py) and [anvil/harness/graph_factory.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/graph_factory.py) already manage memory/sqlite graph execution | Reuse them unchanged except where new planning verdict semantics must flow through. |
+| Preflight and task/strategy compatibility checks exist | [anvil/harness/nodes/validator_preflight.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py) auto-fits between patch and analysis-review surfaces | Extend preflight to validate planning tasks and planning strategies explicitly. Do not let auto-fit rewrite planning into review or patch flows. |
+| Artifact publication seam already exists | [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py) already owns publication and projection logic, and [anvil/harness/artifacts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/artifacts.py) already owns run directory helpers | Reuse those modules. Add planning-specific projection and publication functions alongside the existing summary/report functions. |
+| CLI entrypoints already exist | [anvil/harness/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/cli.py) and [anvil/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/cli.py) already expose `harness-run` and JSON mode | Keep those entrypoints. Extend printed fields and exit-code semantics so planning runs report `success`, `clarification_needed`, and `failed` clearly. |
+| Example strategy and graph regression coverage already exists | `examples/harness/strategies/`, `tests/test_harness_strategy_graph.py`, `tests/test_harness_example_strategy_wiring.py`, `tests/test_harness_cli_command.py`, `tests/test_harness_standalone_cli.py`, `tests/test_harness_analysis_review_graph.py`, `tests/test_harness_reporting.py` | Extend this suite. Do not create a parallel, unconnected test surface that ignores the existing harness contracts. |
 
 ### Minimum complete scope
 
-This is the minimum complete B3 slice. If any item is skipped, the milestone is
-not actually graph-native state canonicalization.
+This is the minimum complete C1 slice. If any item below is skipped, the repo
+still does not honestly prove compiled planning strategies.
 
 1. root `PLAN.md`
-2. `anvil/harness/state.py`
-3. `anvil/harness/selection.py`
-4. `anvil/harness/subgraphs/analysis_review_v1.py`
-5. `anvil/harness/nodes/select_best_draft.py`
-6. `anvil/harness/nodes/write_artifacts.py`
-7. `anvil/harness/reporting.py`
-8. `anvil/harness/report.py`
-9. `anvil/harness/subgraphs/_bridge.py`
-10. targeted compatibility adjustments in `anvil/harness/runner.py` only if
-    needed to preserve legacy summary behavior after the draft-projection split
-11. targeted test expansions under `tests/`
+2. [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py)
+3. [anvil/harness/state.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/state.py)
+4. [anvil/harness/strategy_graph.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/strategy_graph.py)
+5. [anvil/harness/builder.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/builder.py)
+6. [anvil/harness/nodes/validator_preflight.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py)
+7. [anvil/harness/nodes/select_strategy.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/select_strategy.py)
+8. [anvil/harness/nodes/write_artifacts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/write_artifacts.py)
+9. [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py)
+10. [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py)
+11. [anvil/harness/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/cli.py)
+12. [anvil/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/cli.py)
+13. one new planning runtime module
+14. one new planning subgraph module
+15. strategy/task example fixtures under `examples/harness/`
+16. targeted test additions under `tests/`
+17. README / examples doc updates
 
 ### Complexity verdict
 
 This milestone crosses more than 8 files. That is justified.
 
-The problem is not one bad helper. The problem is split ownership between:
+The C1 problem is not one missing helper.
 
-- a graph that now owns topology
-- a subgraph merge step that still reconstructs drafts from summary-shaped data
-- a selection node that ranks drafts correctly
-- a reporting layer that reranks drafts again
-- a write-artifacts node that still treats summary rehydration as normal
+It is a cross-cutting runtime-family addition that touches:
 
-A smaller diff that removes one `summary_read_adapter_v1(...)` call but leaves
-duplicate ranking, seeded-summary overrides, or legacy bridge metadata on
-graph-owned runs will create a fake B3.
+- task/strategy parsing
+- preflight compatibility
+- runtime routing
+- graph construction
+- state shape
+- artifact publication
+- CLI verdict handling
+- fixture-backed tests
+
+A smaller diff that only adds a new YAML example or a new subgraph file while
+keeping task parsing, runtime routing, or artifact publication hard-coded will
+create a fake C1.
 
 What would be overbuilt:
 
-- a new artifact contract version in the same milestone
-- stage-boundary resume
-- a generic graph-state persistence framework
-- a full rewrite of `report.py`
-- public DAG/compiler work from C1-C3
-- touching `single_pass` or `pfr_v1` just because the files are nearby
+- a public workflow DSL
+- generic multi-strategy planning families beyond what this one wedge needs
+- automatic branch/worktree orchestration
+- phase-specific model optimization
+- a broad rename of `summary_payload` or a generic executor-wide payload refactor
+- touching orchestration/leadership surfaces outside the harness
 
 ### Search/build verdict
 
-This is a Layer 1 reuse milestone with one Layer 3 rule.
+This is mostly a Layer 1 reuse milestone with one Layer 3 constraint.
 
-Reuse:
+Layer 1 reuse:
 
-- `HarnessState` as the canonical native carrier
-- `select_best_draft(drafts)` as the ranking algorithm
-- `summary_projection_v1(...)` as the only sanctioned write-side summary seam
-- `render_report(...)` as the existing report renderer
-- `LegacyBridgeBoundary` as the compatibility fallback
-- the existing canonical parity corpus and artifact-diff assertions
+- keep `TaskSpec`, `StrategyConfig`, and structured YAML loading as the only config path
+- keep `StrategyGraphSpec` as the strategy metadata authority
+- keep `build_harness_langgraph(...)` as the only graph builder
+- keep `HarnessLangGraphExecutor` as the only executor wrapper
+- keep `publish_state_artifacts_v1(...)` as the write-artifacts entrypoint, but make it runtime-aware
+- keep the existing CLI entrypoints and artifact-index pattern
 
-First-principles rule:
+Layer 3 rule:
 
-- state is truth, summary is projection
+- runtime family is not strategy name
 
-That means B3 must not keep treating `summary_payload` as a shadow source of
-truth just because it is convenient. If the graph-owned success path needs a
-field, that field belongs in `HarnessState`.
+That means the runtime must route on declared `runtime_target`, not on a one-off
+check for `deterministic_feature_planning_v1`.
 
 ### TODOS cross-reference
 
-`docs/project_management/future/TODOS.md` has no blocker for B3.
+[docs/project_management/future/TODOS.md](/Users/spensermcconnell/__Active_Code/forge/docs/project_management/future/TODOS.md) has no blocker for C1.
 
-Do not pull stage-boundary resume, artifact-contract v2 work, or public graph
-config into this milestone. If B3 exposes new follow-up work, capture it after
-native-state parity is green.
+Nothing in the current TODO backlog should be bundled into this milestone. C1 is
+already a big enough lake:
+
+- compiled planning runtime
+- planning artifacts
+- deterministic IDs
+- bounded fixture proof
+
+If C1 uncovers later work, capture it after the wedge is green.
 
 ### Completeness verdict
 
-The shortcut is "stop rehydrating in `write_artifacts_node(...)`, but keep
-reconstructing drafts from summary-shaped data and let reporting rerank them."
+The shortcut is:
+
+- add a planning strategy YAML
+- branch on its `kind` somewhere inside the runtime
+- emit one pretty markdown plan
+- skip schema, blocked-run payloads, stable IDs, and bounded fixture coverage
 
 That is fake progress.
 
-The complete B3 version must do all of this together:
+The complete C1 version must do all of this together:
 
-- define the full native state contract for migrated surfaces
-- split canonical draft projection from summary compatibility parsing
-- make `select_best_draft_node(...)` the only ranking owner
-- make artifact publishing consume native state directly
-- keep summary projection as a final one-way serialization step
-- preserve historical summary readability and restart-at-run-boundary recovery
-- prove parity on summary/report/final-artifact surfaces and failure paths
+- add a real planning task/strategy contract
+- route through a shared `planning_v1` runtime family
+- resolve policy objects generically
+- execute declared phases generically
+- emit `PLAN.md` and `plan.json`
+- enforce blocked-run and success payload contracts
+- prove determinism on a bounded fixture corpus
+- preserve existing runtime families
 
 ### Distribution and DX verdict
 
-Forge is a developer tool. B3 is incomplete if native-state publication only
+Forge is a developer tool. C1 is incomplete if the new planning runtime only
 works in unit tests.
 
-B3 must preserve:
+C1 must preserve the documented harness surface:
 
-- `python -m anvil.harness.cli run ...`
-- readable `summary.json`
-- readable `REPORT.md`
-- stable `FINAL_ANSWER.*`, `PARTIAL_ANSWER.*`, and `BEST_DRAFT.*` semantics
-- replay/readability of old summaries produced before B3
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task <task.yaml> \
+  --strategy <strategy.yaml> \
+  --workspace <repo-root> \
+  --out-root <artifacts-dir> \
+  --json
+```
 
-It does not need to change CLI flags or rollout defaults. This is a state and
-artifact-truth milestone, not a product-surface rewrite.
+Required C1 distribution behavior:
+
+- planning strategy files live under `examples/harness/strategies/`
+- planning task files live under `examples/harness/tasks/`
+- artifacts land under the existing run directory surface
+- JSON mode returns the planning terminal payload cleanly
+- README and examples docs explain supported planning request classes
+
+No new packaging, publishing, or installer work is required in C1. The existing
+CLI distribution surface is the product surface.
 
 ## Locked Decisions
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| Milestone scope | B3 is state/reporting/selection cleanup only | No new topology rewrite. B2 remains the topology milestone. |
-| Native truth | `HarnessState` is canonical for graph-owned migrated surfaces | The graph already owns topology. State must now own execution truth. |
-| Draft projection truth | add a canonical native draft projector in `anvil/harness/selection.py`; keep `extract_drafts_from_summary(...)` compatibility-only | Drafts must stop depending on synthetic summary wrappers. |
-| Ranking owner | `anvil/harness/nodes/select_best_draft.py` is the only canonical draft-ranking owner | Selection truth cannot be duplicated in `reporting.py`. |
-| Reporting behavior | reporting may validate selected ids, but may not silently rerank drafts on the graph-owned success path | One ranking owner. No shadow decision logic. |
-| Summary write boundary | `summary_projection_v1(...)` stays canonical | This is still the only sanctioned graph-to-summary projection. |
-| Summary read boundary | `summary_read_adapter_v1(...)` and `state_from_summary(...)` are compatibility-only in B3 | They remain useful for historical readability, not graph-owned success execution. |
-| Artifact truth | state-native publisher in `anvil/harness/reporting.py` becomes canonical | Artifact emission must consume native state directly. |
-| Legacy bridge metadata | `bridge_boundary_version` is set only by `LegacyBridgeBoundary.run(...)` | Graph-owned paths must stop pretending they crossed the bridge. |
-| Recovery contract | restart-at-run-boundary only | Stage-boundary resume remains deferred. |
-| Rollout control | B3 does not change `legacy_bridge` / `graph_owned` flag semantics or defaults | Keep rollback boring while state truth changes under the hood. |
+| Task kind | add `planning` to `TaskSpec` and `HarnessState` | A feature-planning request is not an `analysis_review` task and should not inherit review-only defaults. |
+| Strategy declaration surface | extend `StrategyConfig` with `runtime_target`, `phases[]`, and versioned policy refs | The wedge must be config-declared or it does not prove C1. |
+| Runtime routing | route on `runtime_target: planning_v1`, not on `kind == deterministic_feature_planning_v1` | Runtime family must stay generic and future-proof. |
+| Graph shape | add one `planning_v1` runtime node plus one generic post-runtime routing decision | Planning runs do not produce drafts and should not be forced through `select_best_draft`. |
+| Post-runtime behavior | add a generic `post_runtime_action` or equivalent metadata to the strategy graph spec | Existing families still select drafts; planning goes directly to artifact publication. |
+| Planning runtime implementation | one new shared planning runtime module plus one new `planning_v1` subgraph module | This is the smallest explicit boundary that keeps planning semantics out of analysis-review files. |
+| Policy resolution | versioned policy lookup through shared runtime code | Policy behavior must be declarative, not hidden inside strategy-specific branches. |
+| Artifact publication | keep `publish_state_artifacts_v1(...)` as the top-level write seam, but dispatch by runtime family internally | Minimal diff, one artifact entrypoint, clear runtime-specific projection helpers. |
+| Terminal payload carrier | keep `state["summary_payload"]` as the executor-to-CLI payload field in C1, even for planning runs | Avoids a broad executor/CLI refactor in the same milestone while still allowing `plan.json` as the canonical on-disk artifact. |
+| Planning artifact family | `PLAN.md` plus `plan.json` only | One canonical human artifact and one canonical machine artifact keeps the wedge honest. |
+| Stop semantics | `success`, `clarification_needed`, and `failed` are planning terminal states | The runtime must distinguish honest clarification from hard failure. |
+| CLI exit codes | `0` for `success`, `1` for `clarification_needed` or `failed`, `2` for invalid invocation/runtime errors | Matches the design doc and keeps operator behavior simple. |
+| Workstream semantics | `worktree_recommended` is advisory metadata only | C1 outputs planning, not orchestration. |
+| Model policy | one fixed planning model policy across all four planning phases in C1 | C1 proves compiled strategy first, not model-mix optimization. |
 
-## Source of Truth and Contracts
+## Architecture Review
 
-### B3 source-of-truth table
+### Current blocker map
 
-| Concern | Canonical owner in B3 | Notes |
-|---|---|---|
-| Topology truth for migrated `analysis_review` | `anvil/harness/subgraphs/analysis_review_v1.py` | Unchanged from B2. B3 does not reopen topology ownership. |
-| Stage-semantics execution | `anvil/harness/analysis_review_runtime.py` plus existing runner-backed stage helpers | Reused. No new semantics copied into compatibility glue. |
-| Native state truth | `anvil/harness/state.py` | Must carry every downstream field required for selection, artifacts, and reports. |
-| Draft projection truth | canonical native draft projector in `anvil/harness/selection.py` | Graph-owned success path uses this directly; summary parser becomes compatibility-only. |
-| Selection truth | `anvil/harness/nodes/select_best_draft.py` | Sole owner of best/selected draft choice on the graph path. |
-| Artifact truth | state-native publisher in `anvil/harness/reporting.py` | Produces deliverables, `summary.json`, `REPORT.md`, and `artifact_index` from state. |
-| Summary/report contract | `summary_projection_v1(...)` + `render_report(...)` | One-way projection from state into stable external surfaces. |
-| Historical summary read compatibility | `summary_read_adapter_v1(...)` / `state_from_summary(...)` | Legacy/historical only. Not success-path execution helpers. |
-| Rollback path | `anvil/harness/subgraphs/_bridge.py` | Remains the only sanctioned legacy bridge. |
-
-### Current-to-B3 dependency graph
+The current harness is still hard-coded at the runtime-family boundary.
 
 ```text
-CURRENT
-=======
-analysis_review_v1_subgraph
-  -> graph-owned stage execution
-  -> _merge_runner_state(...)
-       -> stage_records_from_summary(...)
-       -> extract_drafts_from_summary(_draft_summary_from_runner(...))
-       -> select_best_draft(drafts)
-       -> bridge_boundary_version = legacy_bridge_boundary_v1
-  -> parent graph select_best_draft node
-  -> write_artifacts_node
-       -> summary_projection_v1(...)
-       -> apply_final_artifacts(...)
-            -> select_best_draft(summary["drafts"])
-       -> summary_read_adapter_v1(...)
-  -> finalize
-
-
-B3 TARGET
-=========
-analysis_review_v1_subgraph
-  -> graph-owned stage execution
-  -> native state merge
-       -> stage_history
-       -> drafts_from_stage_history_v1(...)
-       -> issue_history / topic_ledger / recommendation_reviews
-       -> best/selected ids left for select_best_draft node
-       -> no legacy bridge metadata on graph-owned path
-  -> parent graph select_best_draft node
-       -> sole ranking owner
-  -> write_artifacts_node
-       -> publish_state_artifacts_v1(state)
-            -> choose deliverable from selected ids + native verdict state
-            -> summary_projection_v1(state)
-            -> write summary/report/deliverables
-            -> update artifact_index + summary_payload in place
-       -> no summary_read_adapter_v1(...)
-  -> finalize
-
-
-COMPATIBILITY PATHS THAT REMAIN
-===============================
-LegacyBridgeBoundary.run(...)
-  -> summary_read_adapter_v1(...)
-
-historical summary tooling / compatibility tests
-  -> state_from_summary(...)
+task.yaml + strategy.yaml
+        │
+        ▼
+prepare_run
+        │
+        ▼
+validator_preflight
+        │
+        ▼
+select_strategy
+        │
+        ▼
+route_after_strategy_selection(...)
+        ├── single_pass
+        ├── pfr_v1
+        └── analysis_review_v1
+                │
+                ▼
+        select_best_draft
+                │
+                ▼
+        write_artifacts
+                │
+                ▼
+             finalize
 ```
 
-### Graph-native state and artifact flow
+That shape cannot express C1 honestly because:
+
+- planning does not fit `patch` or `analysis_review`
+- planning needs declared phases, not fixed reviewer loops
+- planning does not produce draft candidates that need ranking
+- planning needs `PLAN.md` and `plan.json`, not the current summary/report/final-answer family
+
+### Target architecture
 
 ```text
-graph-owned stage execution
-  -> stage_history
-  -> validator_rounds
-  -> issue_history / topic_ledger
-  -> analysis_review_status / recommendation_reviews / final_answer
-  -> drafts_from_stage_history_v1(...)
-  -> select_best_draft_node(...)
-       -> best_draft_id / selected_draft_id
-  -> publish_state_artifacts_v1(...)
-       -> FINAL_ANSWER / PARTIAL_ANSWER / BEST_DRAFT
-       -> summary_projection_v1(...)
-       -> REPORT.md
-       -> summary.json
-       -> artifact_index
+task.yaml (task_kind=planning)
+strategy.yaml (runtime_target=planning_v1, declared phases, policy refs)
+        │
+        ▼
+prepare_run
+        │
+        ▼
+validator_preflight
+        │
+        ▼
+select_strategy
+        │
+        ▼
+build_strategy_graph_spec(...)
+        │
+        ▼
+route_after_strategy_selection(...)
+        ├── single_pass
+        ├── pfr_v1
+        ├── analysis_review_v1
+        └── planning_v1
+                │
+                ▼
+       planning phase registry
+                │
+                ├── rubric_design_doc
+                ├── architecture_seam_decomposition
+                ├── parallel_workstream_planning
+                └── executable_slice_emission
+                │
+                ▼
+       route_post_runtime(...)
+                ├── select_best_draft     (existing families)
+                └── write_artifacts       (planning)
+                        │
+                        ▼
+                   finalize
 ```
 
-### Native state contract
+### C1 source-of-truth table
 
-These names are fixed for B3. Do not rename them during implementation.
-
-| Surface | Exact contract |
-|---|---|
-| Native draft truth | `HarnessState.drafts` |
-| Native selection ids | `current_draft_id`, `best_draft_id`, `selected_draft_id` |
-| Native issue truth | `issue_history`, `open_issue_ids` |
-| Native topic truth | `topic_ledger` |
-| Native publishability truth | `run_verdict`, `content_verdict`, `validator_verdict`, `policy_verdict`, `analysis_review_status`, `recommendation_reviews`, `final_answer`, `bounded_review_summary`, `bounded_attestation_input` |
-| Native observability truth | `stage_history`, `validator_rounds`, `policy_checks`, `changed_files`, `validator_summary`, `analysis_review_coverage` |
-| External artifact refs | `artifact_index` |
-| Final projected summary cache | `summary_payload` |
-| Legacy bridge marker | `bridge_boundary_version`, set only by the actual legacy bridge |
-
-Rules:
-
-- graph-owned success-path helpers may append or transform native state
-- graph-owned success-path helpers may not rebuild required fields from
-  `summary_payload`
-- if `report.py` or artifact emission needs a field and that field is not in
-  `HarnessState`, B3 adds it to native state rather than teaching reporting to
-  read around the gap from seeded summary data
-
-### Summary boundary rules
-
-Allowed uses of `summary_read_adapter_v1(...)` and `state_from_summary(...)` in
-B3:
-
-1. `LegacyBridgeBoundary.run(...)`
-2. historical summary/readability tooling
-3. compatibility and parity tests
-
-Forbidden uses on the graph-owned success path in B3:
-
-- inside `_merge_runner_state(...)`
-- inside `select_best_draft_node(...)`
-- inside `write_artifacts_node(...)`
-- after `summary_projection_v1(...)`
-- as a fallback to refill missing native state fields that should be explicit in
-  `HarnessState`
-
-The rule is simple:
-
-**Graph-owned execution carries native state all the way through artifact
-publication.**
-
-### File change contract
-
-| File | Allowed change in B3 | Forbidden change in B3 |
+| Concern | Canonical owner in C1 | Notes |
 |---|---|---|
-| `anvil/harness/state.py` | expand `HarnessState` and compatibility comments so all graph-owned downstream fields are first-class | No artifact-contract version bump here |
-| `anvil/harness/selection.py` | add canonical native draft projection and keep summary parsing as compatibility-only | No ranking-rule rewrite unless parity proves current ordering is wrong |
-| `anvil/harness/subgraphs/analysis_review_v1.py` | replace summary-derived draft reconstruction with native projection and remove legacy bridge metadata from graph-owned runs | No topology rewrite, no new reporting semantics hidden here |
-| `anvil/harness/nodes/select_best_draft.py` | remain the sole ranking owner and update native draft ids deterministically | No artifact-writing or summary-repair logic here |
-| `anvil/harness/nodes/write_artifacts.py` | call a state-native publisher and stop rehydrating state from summary on success paths | No hidden compatibility fallbacks that recreate native state from summary |
-| `anvil/harness/reporting.py` | publish artifacts from native state and project the final summary once | No reranking drafts on graph-owned success paths |
-| `anvil/harness/report.py` | continue rendering from the stable summary contract only | No new required report-only fields that cannot be projected from state |
-| `anvil/harness/subgraphs/_bridge.py` | remain legacy-only and preserve compatibility behavior | No new graph-owned logic |
-| `anvil/harness/runner.py` | adjust only as needed so legacy summary behavior still works after the projector split | No new canonical state truth here |
-| `tests/*` | add native-state, parity, readability, and recovery assertions | No golden drift without an explicit contract reason |
+| Task kind and strategy declaration parsing | [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py) | One typed config surface for all harness families. |
+| Runtime-family metadata | [anvil/harness/strategy_graph.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/strategy_graph.py) | `runtime_target`, declared phases, and post-runtime behavior live here. |
+| Preflight compatibility and surface validation | [anvil/harness/nodes/validator_preflight.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py) | Planning incompatibilities fail before model work. |
+| Shared graph construction | [anvil/harness/builder.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/builder.py) | One graph builder, one new planning node, one generic post-runtime route. |
+| Planning phase execution and policy lookup | new `anvil/harness/planning_runtime.py` | Shared registry and executor helpers for the four planning phase types. |
+| Planning subgraph entrypoint | new `anvil/harness/subgraphs/planning_v1.py` | Thin graph wrapper around the planning runtime helpers. |
+| Runtime state and determinism counters | [anvil/harness/state.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/state.py) | Planning records, terminal state, counters, and artifact refs live here. |
+| Planning artifact projection and publication | [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py) | Add planning publication helpers here, do not create a sidecar artifact writer. |
+| Machine schema validation | [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py) | Add `plan_json` schema in the shared schema surface. |
+| Operator-facing invocation and exit semantics | [anvil/harness/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/cli.py), [anvil/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/cli.py) | Existing CLI stays canonical. |
 
-## Execution Spine
+### Subsystem implementation plan
 
-The implementation order is fixed. This is one spine with merge gates, not five
-independent cleanup ideas.
+#### 1. Contract surface
 
-### Merge gates
+Files:
 
-| Gate | Must be true before moving on |
-|---|---|
-| Gate 1: native state frozen | `HarnessState` carries every downstream publish/report field and graph-owned draft projection no longer depends on synthetic summary wrappers |
-| Gate 2: selection frozen | `select_best_draft_node(...)` is the only graph-path ranking owner and `reporting.py` no longer makes a second winner decision |
-| Gate 3: publisher frozen | graph-owned success execution publishes deliverables, `summary.json`, and `REPORT.md` from native state without `summary_read_adapter_v1(...)` |
-| Gate 4: compatibility frozen | remaining summary-read seams are explicit, legacy-only, and historical readability still passes |
-| Gate 5: parity frozen | full B3 parity matrix, CLI/readability surfaces, and the deleted bridge-path regression assertions are green |
+- [anvil/harness/types.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/types.py)
+- [anvil/harness/state.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/state.py)
+- [anvil/harness/nodes/validator_preflight.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py)
 
-### `runner.py` touch rule
+Required changes:
 
-`anvil/harness/runner.py` is not a default edit target in B3.
+- Add `planning` to `VALID_TASK_KINDS`.
+- Extend `TaskSpec.from_dict(...)` so `planning` is valid and does not inherit analysis-review-specific `review_requirements`.
+- Extend `StrategyConfig` to carry:
+  - `runtime_target`
+  - `phases[]`
+  - `artifact_policy`
+  - `determinism_policy`
+  - `discovery_policy`
+  - `rubric_policy`
+  - `stop_policy`
+- Keep these keys optional for existing runtime families and required for `runtime_target: planning_v1`.
+- Extend `HarnessState` with planning-native fields:
+  - `planning_terminal_status`
+  - `planning_stop_reason`
+  - `clarification_requests`
+  - `repo_evidence_refs`
+  - `planning_seams`
+  - `planning_workstreams`
+  - `planning_slices`
+  - `planning_phase_results`
+  - `planning_policy_versions`
+  - `search_pass_count`
+  - `inspected_file_count`
+  - `discovery_budget_escalated`
+- Keep existing summary/reporting fields intact for current runtime families.
+- In `validator_preflight_node(...)`:
+  - forbid auto-fit between planning and non-planning runtime families
+  - validate declared phase order
+  - validate required planning policy refs
+  - fail fast on unsupported `runtime_target`
 
-Touch it only if one of these becomes true after the projector split:
+#### 2. Runtime routing and graph construction
 
-1. legacy summary-only execution fails to emit the pre-B3 compatibility shape,
-2. historical summary readability tests prove the runner still owns a helper
-   that the new compatibility wrapper must call, or
-3. parity tests show the legacy path now diverges only because runner-local
-   summary assembly still assumes summary-native draft truth.
+Files:
 
-If none of those trigger, do not edit `runner.py`.
+- [anvil/harness/strategy_graph.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/strategy_graph.py)
+- [anvil/harness/builder.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/builder.py)
+- [anvil/harness/nodes/select_strategy.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/nodes/select_strategy.py)
 
-## Detailed Implementation Plan
+Required changes:
 
-### Phase 1: Complete the native state contract and split draft projection
+- Teach `build_strategy_graph_spec(...)` to build a planning spec from declared phases instead of a hard-coded strategy name.
+- Add `runtime_target: planning_v1`.
+- Add a generic field in the strategy graph spec for post-runtime behavior:
+  - `post_runtime_action = select_best_draft` for existing families
+  - `post_runtime_action = write_artifacts` for planning
+- Keep `route_after_strategy_selection(...)` runtime-family based, not strategy-name based.
+- Add one new node to `build_harness_langgraph(...)`: `planning_v1`.
+- Add one generic route after runtime execution so planning bypasses `select_best_draft`.
+- Keep existing families on the current route.
 
-Goal: graph-owned success execution must build selection inputs from native
-state, not from synthetic summary wrappers.
+#### 3. Planning runtime and phase registry
 
-Primary code surfaces:
+Files:
 
-- `anvil/harness/state.py`
-- `anvil/harness/selection.py`
-- `anvil/harness/subgraphs/analysis_review_v1.py`
-- `anvil/harness/runner.py` only if the touch rule above triggers
+- new `anvil/harness/planning_runtime.py`
+- new `anvil/harness/subgraphs/planning_v1.py`
 
-Implementation contract:
+Required changes:
 
-1. Expand `HarnessState` so every graph-owned downstream field consumed by
-   selection, publication, report rendering, or recovery is explicit and typed.
-2. Add a canonical native draft projection helper in `anvil/harness/selection.py`
-   named `drafts_from_stage_history_v1(...)`.
-3. Define `drafts_from_stage_history_v1(...)` to accept stage history plus
-   validator-round context, not summary blobs.
-4. Refactor `extract_drafts_from_summary(...)` into a compatibility wrapper that
-   unpacks summary fields and delegates to `drafts_from_stage_history_v1(...)`.
-5. Update `_merge_runner_state(...)` in
-   `anvil/harness/subgraphs/analysis_review_v1.py` to use
-   `drafts_from_stage_history_v1(...)` directly.
-6. Preserve the current ranking algorithm in `select_best_draft(drafts)`.
-   B3 changes draft projection ownership, not ranking semantics.
-7. Stop setting `bridge_boundary_version` on graph-owned success paths.
-   Only `LegacyBridgeBoundary.run(...)` is allowed to stamp that field.
+- Implement one registry for the four planning phase types:
+  - `rubric_design_doc`
+  - `architecture_seam_decomposition`
+  - `parallel_workstream_planning`
+  - `executable_slice_emission`
+- Policy lookup must be versioned and generic.
+- Every phase must accept and return shared planning state rather than phase-specific ad hoc payloads.
+- The runtime must record:
+  - evidence refs
+  - stable IDs
+  - dependency reasoning
+  - ambiguity flags
+  - clarification requests
+  - deterministic counters
+- The runtime must stop honestly when:
+  - rubric coverage is insufficient
+  - no trustworthy primary seam exists
+  - dependency ambiguity blocks workstream planning
+  - slice emission cannot map cleanly to seams/workstreams
 
-Merge gate to exit Phase 1:
+#### 4. Artifact publication and CLI semantics
 
-- graph-owned `drafts` are built without `extract_drafts_from_summary(...)`
-- graph-owned success-path state carries all downstream publish/report fields
-- legacy summary parsing still works for historical readability and tests
-- the projector signature and native field names are frozen for downstream work
+Files:
 
-### Phase 2: Make `select_best_draft_node(...)` the sole selection owner
+- [anvil/harness/reporting.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/reporting.py)
+- [anvil/harness/artifacts.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/artifacts.py)
+- [anvil/harness/schemas.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/schemas.py)
+- [anvil/harness/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/harness/cli.py)
+- [anvil/cli.py](/Users/spensermcconnell/__Active_Code/forge/anvil/cli.py)
 
-Goal: selection truth must exist in one place.
+Required changes:
 
-Primary code surfaces:
+- Keep `publish_state_artifacts_v1(...)` as the write node entrypoint, but dispatch internally on runtime family.
+- Add:
+  - `plan_projection_v1(...)`
+  - `publish_planning_artifacts_v1(...)`
+  - `render_plan_markdown_v1(...)`
+- Planning publication must write:
+  - `PLAN.md`
+  - `plan.json`
+- Planning publication must also populate:
+  - `artifact_index["plan_md"]`
+  - `artifact_index["plan_json"]`
+  - `summary_payload = <plan_json payload>` for executor/CLI compatibility
+- Add shared schema validation for `plan.json`.
+- Update CLI summary printing and exit-code behavior for planning terminal states.
 
-- `anvil/harness/nodes/select_best_draft.py`
-- `anvil/harness/selection.py`
-- `anvil/harness/reporting.py`
-- `anvil/harness/state.py`
+#### 5. Fixtures, docs, and proof corpus
 
-Implementation contract:
+Files:
 
-1. Keep `anvil/harness/nodes/select_best_draft.py` as the only canonical place
-   that chooses `best_draft_id` and `selected_draft_id` on the graph path.
-2. Ensure graph-owned state entering `select_best_draft_node(...)` has
-   deterministic `drafts` and `current_draft_id`, but does not pretend ranking
-   is final before the node runs.
-3. Remove graph-owned success-path reranking from the reporting layer.
-   `reporting.py` may look up the selected draft by id, but it may not call
-   `select_best_draft(...)` to make a second decision.
-4. Preserve summary-read compatibility by allowing summary adapters to compute
-   missing selection ids only when reading old summaries that predate B3.
-5. Keep final artifact choice aligned with `selected_draft_id` and
-   `best_draft_id` already present in native state.
+- `examples/harness/strategies/`
+- `examples/harness/tasks/`
+- [README.md](/Users/spensermcconnell/__Active_Code/forge/README.md)
+- [examples/README.md](/Users/spensermcconnell/__Active_Code/forge/examples/README.md)
 
-Merge gate to exit Phase 2:
+Required changes:
 
-- graph-owned success execution has exactly one ranking owner
-- `reporting.py` no longer silently picks a different best draft than the graph
-- legacy summary compatibility remains readable
-- selection ids are now a frozen upstream input for publication work
+- Add one canonical planning strategy example:
+  - `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+- Add a small bounded planning task fixture surface:
+  - one success case
+  - one clarification-needed case
+  - one out-of-scope failure case
+- Document supported request classes and CLI usage.
+- Do not document public workflow composition or phase-specific model selection in C1 docs.
 
-### Phase 3: Replace success-path summary round-tripping with state-native artifact publishing
+## Code Quality Review
 
-Goal: artifact emission must consume native state directly and project summary
-once at the end.
+### DRY and ownership rules
 
-Primary code surfaces:
+These are hard rules for C1 implementation, not soft preferences.
 
-- `anvil/harness/nodes/write_artifacts.py`
-- `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
+- One parser stack:
+  - `TaskSpec.from_dict(...)`
+  - `StrategyConfig.from_dict(...)`
+- One runtime metadata builder:
+  - `build_strategy_graph_spec(...)`
+- One graph builder:
+  - `build_harness_langgraph(...)`
+- One planning runtime family:
+  - `planning_v1`
+- One write-artifacts entrypoint:
+  - `publish_state_artifacts_v1(...)`
+- One machine schema surface:
+  - `anvil/harness/schemas.py`
 
-Implementation contract:
+Do not duplicate any of these with planning-only alternatives.
 
-1. Add a canonical state-native publisher in `anvil/harness/reporting.py`
-   named `publish_state_artifacts_v1(state)`.
-2. Move graph-owned success-path deliverable selection, artifact emission, and
-   artifact-index population under `publish_state_artifacts_v1(state)`.
-3. Make `publish_state_artifacts_v1(state)` consume native verdicts, selected
-   ids, ledgers, publishability details, and final-answer payloads directly from
-   `HarnessState`.
-4. Keep `summary_projection_v1(...)` as the final one-way projection used to
-   materialize `summary.json` and feed `render_report(...)`.
-5. Update `write_artifacts_node(...)` to return the same native state with
-   `artifact_index` and `summary_payload` updated in place. No
-   `summary_read_adapter_v1(...)` call on the graph-owned success path.
-6. Treat the current `apply_final_artifacts(summary)` flow as a compatibility
-   helper for summary-native inputs only if a legacy summary-only path still
-   requires it. It is no longer canonical for graph-owned success execution.
+### Explicit-over-clever rules
 
-Merge gate to exit Phase 3:
+- `runtime_target` is explicit config, not inferred from strategy name patterns.
+- `phases[]` is explicit order, not synthesized from missing keys.
+- `terminal_status` is explicit state, not inferred later from artifact presence.
+- `worktree_recommended` is explicit advisory output, not an implicit side effect.
+- Stable IDs must be computed in deterministic code, not left to model prose.
 
-- graph-owned success execution does not rehydrate state from summary
-- final deliverables, `summary.json`, and `REPORT.md` are emitted from native
-  state via a single publish path
-- `summary_payload` becomes a final projected cache, not an input dependency
-- publisher inputs and outputs are stable enough for boundary cleanup and full
-  parity assertions
+### Minimal-diff rules
 
-### Phase 4: Reduce the summary boundary surface and lock the recovery contract
+- Do not rename `summary_payload` in C1. Keep it as the in-memory terminal payload carrier and document that planning reuses it for compatibility.
+- Do not move existing analysis-review contract logic into the planning runtime.
+- Do not add a second CLI command for planning. Extend `harness-run`.
+- Do not make `select_best_draft_node(...)` understand planning. Route planning around it generically instead.
 
-Goal: make the remaining compatibility seams explicit, small, and honest.
+### New modules allowed
 
-Primary code surfaces:
+Exactly two new code modules are justified:
 
-- `anvil/harness/state.py`
-- `anvil/harness/nodes/write_artifacts.py`
-- `anvil/harness/subgraphs/_bridge.py`
-- `anvil/harness/reporting.py`
-- `anvil/harness/runner.py` only if the touch rule above triggers
+- `anvil/harness/planning_runtime.py`
+- `anvil/harness/subgraphs/planning_v1.py`
 
-Implementation contract:
+Anything beyond that needs a very strong reason because it likely means the
+runtime is being abstracted before it is proven.
 
-1. Enumerate the only remaining sanctioned `summary_read_adapter_v1(...)` and
-   `state_from_summary(...)` call sites in code comments and tests.
-2. Remove any graph-owned success-path fallback branches that treat summary as a
-   general-purpose state carrier.
-3. Ensure seeded summary data in `summary_projection_v1(...)` never overrides
-   canonical native state on graph-owned success execution.
-4. Keep historical summary readability intact for old artifacts.
-5. Preserve restart-at-run-boundary recovery by ensuring the projected summary
-   remains complete and readable after failed runs.
-6. Do not promise stage-boundary resume. That remains out of scope.
+## Executable Slices
 
-Merge gate to exit Phase 4:
+### Slice 1: Contract and routing foundation
 
-- compatibility seams are explicit and small
-- graph-owned success path is free of summary rehydration
-- historical summary readability still works
-- restart-at-run-boundary remains supported
-- only the sanctioned legacy call sites remain for summary-to-state adaptation
+- Goal: make planning a first-class harness family in config, state, and graph metadata
+- Files:
+  - `anvil/harness/types.py`
+  - `anvil/harness/state.py`
+  - `anvil/harness/strategy_graph.py`
+  - `anvil/harness/nodes/validator_preflight.py`
+  - `anvil/harness/nodes/select_strategy.py`
+- Deliverables:
+  - `planning` task kind
+  - extended strategy declaration contract
+  - planning-capable strategy graph spec
+  - preflight validation for planning declarations
+- Blocking dependencies: none
+- Acceptance checks:
+  - planning task/strategy files parse
+  - invalid planning declarations fail at preflight
+  - strategy graph spec serializes with `runtime_target: planning_v1`
 
-### Phase 5: Prove B3 parity and compatibility on the canonical matrix
+### Slice 2: Planning runtime execution
 
-Goal: B3 lands only when native-state truth is real, not just cleaner-looking.
+- Goal: execute declared planning phases through a shared `planning_v1` runtime
+- Files:
+  - `anvil/harness/builder.py`
+  - `anvil/harness/planning_runtime.py`
+  - `anvil/harness/subgraphs/planning_v1.py`
+- Deliverables:
+  - mounted `planning_v1` node
+  - phase registry
+  - deterministic counters and stable ID helpers
+  - honest stop behavior for clarification/failure
+- Blocking dependencies:
+  - Slice 1
+- Acceptance checks:
+  - planning strategy routes through `planning_v1`
+  - successful runs emit seams/workstreams/slices in state
+  - blocked runs emit clarification payloads without fake downstream records
 
-Primary code surfaces:
+### Slice 3: Artifact publication and CLI surfacing
 
-- `tests/test_harness_selection.py`
-- `tests/test_harness_state_boundaries.py`
-- `tests/test_harness_reporting.py`
-- `tests/test_harness_analysis_review_graph.py`
-- `tests/test_harness_runner.py`
+- Goal: publish planning outputs as first-class harness artifacts
+- Files:
+  - `anvil/harness/reporting.py`
+  - `anvil/harness/artifacts.py`
+  - `anvil/harness/schemas.py`
+  - `anvil/harness/cli.py`
+  - `anvil/cli.py`
+- Deliverables:
+  - `PLAN.md`
+  - `plan.json`
+  - planning artifact-index entries
+  - CLI verdict / exit-code updates
+- Blocking dependencies:
+  - Slice 1
+  - Slice 2
+- Acceptance checks:
+  - `plan.json` passes schema validation
+  - `PLAN.md` renders canonical sections
+  - CLI JSON mode returns planning terminal payload
+  - CLI exit code is `0` only for `success`
+
+### Slice 4: Fixture corpus, docs, and regression proof
+
+- Goal: prove C1 on a bounded corpus and document the supported surface
+- Files:
+  - `examples/harness/strategies/`
+  - `examples/harness/tasks/`
+  - `README.md`
+  - `examples/README.md`
+  - targeted tests under `tests/`
+- Deliverables:
+  - success fixture
+  - clarification-needed fixture
+  - failure fixture
+  - updated docs
+  - deterministic repeat-run proof
+- Blocking dependencies:
+  - Slices 1-3
+- Acceptance checks:
+  - three repeated runs preserve selected IDs on each fixture
+  - docs match the shipped CLI surface
+  - existing harness families still pass regression coverage
+
+## Test Review
+
+Framework: `pytest`
+
+Primary existing coverage to extend:
+
+- `tests/test_harness_strategy_graph.py`
+- `tests/test_harness_example_strategy_wiring.py`
 - `tests/test_harness_cli_command.py`
 - `tests/test_harness_standalone_cli.py`
-- `tests/test_harness_example_strategy_wiring.py`
-- `tests/test_run_focus_gate_acceptance.py`
-
-Implementation contract:
-
-1. Prove native draft projection parity between:
-   - historical summary compatibility parsing
-   - graph-owned native stage-history projection
-2. Prove `select_best_draft_node(...)` is the only graph-path ranking owner.
-3. Prove graph-owned success-path artifact publication never calls
-   `summary_read_adapter_v1(...)`.
-4. Diff `legacy_bridge` and `graph_owned` runs on:
-   - final artifact kind
-   - emitted payload
-   - `summary.json`
-   - `REPORT.md`
-   - `analysis_review_status`
-   - `recommendation_reviews`
-   - issue/topic ledgers
-   - selection ids and publishability surface
-5. Prove historical summary readability still works for pre-B3 artifact shapes.
-6. Prove failed-run summaries remain readable and support restart-at-run-boundary
-   reasoning.
-
-Merge gate to exit Phase 5:
-
-- parity rows are green for both compatibility and graph-owned success surfaces
-- historical summary readability remains green
-- the deleted success-path rehydration bridge stays dead by test coverage
-- CLI and operator-visible artifact/report surfaces remain stable
-
-## Test and Parity Plan
-
-### Existing regression floor
-
-These are non-negotiable and must stay green:
-
-- `tests/test_harness_selection.py`
-- `tests/test_harness_state_boundaries.py`
 - `tests/test_harness_reporting.py`
+- `tests/test_harness_state_boundaries.py`
 - `tests/test_harness_analysis_review_graph.py`
-- `tests/test_harness_runner.py`
-- `tests/test_harness_cli_command.py`
-- `tests/test_harness_standalone_cli.py`
-- `tests/test_harness_example_strategy_wiring.py`
-- `tests/test_run_focus_gate_acceptance.py`
-- `tests/test_harness_prompt_consistency.py`
-- `tests/fixtures/harness/analysis_review_semantic_cases.json`
-- `tests/fixtures/harness/m2_focus_gate_fixture_wiring/triads.yaml`
 
-### Required new and expanded tests
+New coverage files that are justified:
 
-| Test file | Required assertions |
-|---|---|
-| expand `tests/test_harness_selection.py` | `drafts_from_stage_history_v1(...)` matches expected draft semantics; `extract_drafts_from_summary(...)` is a compatibility wrapper, not a second source of truth |
-| expand `tests/test_harness_state_boundaries.py` | graph-owned success path never calls `summary_read_adapter_v1(...)`; graph-owned success path never stamps `bridge_boundary_version`; historical summaries still adapt cleanly |
-| expand `tests/test_harness_reporting.py` | `publish_state_artifacts_v1(state)` emits stable deliverables, `summary.json`, and `REPORT.md` from native state; reporting does not rerank drafts on graph-owned success paths |
-| expand `tests/test_harness_analysis_review_graph.py` | graph-owned runs populate native drafts, selection ids, and artifact-ready state before `write_artifacts_node(...)` |
-| expand `tests/test_harness_runner.py` | legacy runner summary output remains readable and compatible with the new compatibility wrappers |
-| expand `tests/test_harness_cli_command.py` | CLI output and exit codes stay stable after the publisher path changes |
-| expand `tests/test_harness_standalone_cli.py` | memory and sqlite checkpoint modes keep stable user-visible artifact/report surfaces |
-| expand `tests/test_harness_example_strategy_wiring.py` | strategy wiring still yields the same migrated surface outputs after selection and publication truth move fully into state |
-| expand `tests/test_run_focus_gate_acceptance.py` | blocked, selected, and no-viable-focus outcomes still produce stable artifacts and report/readability behavior in both execution modes |
+- `tests/test_harness_planning_graph.py`
+- `tests/test_harness_planning_artifacts.py`
 
-### Coverage diagram
+### Code path coverage
 
 ```text
-CODE PATH COVERAGE
-===========================
-[+] Native draft projection
-    ├── [GAP]  graph-owned drafts are still reconstructed via summary-shaped data
-    ├── [PLAN] add drafts_from_stage_history_v1(...)
-    └── [TEST] tests/test_harness_selection.py, tests/test_harness_analysis_review_graph.py
+CODE PATH COVERAGE TO ADD
+=========================
+[+] Config parsing and preflight
+    │
+    ├── TaskSpec.from_dict(task_kind=planning)
+    │   ├── [GAP] accepts valid planning task
+    │   └── [GAP] rejects unsupported planning task shape
+    │
+    ├── StrategyConfig.from_dict(runtime_target=planning_v1, phases[])
+    │   ├── [GAP] accepts valid planning declaration
+    │   ├── [GAP] rejects missing policy refs
+    │   └── [GAP] rejects invalid phase ordering
+    │
+    └── validator_preflight_node(...)
+        ├── [GAP] planning + planning strategy passes
+        ├── [GAP] planning + pfr_v1 fails without auto-fit rewrite
+        └── [GAP] invalid runtime_target fails before model work
 
-[+] Selection ownership
-    ├── [GAP]  select_best_draft node and reporting both participate in ranking
-    ├── [PLAN] keep ranking in select_best_draft_node(...) only
-    └── [TEST] tests/test_harness_reporting.py, tests/test_harness_state_boundaries.py
+[+] Runtime routing
+    │
+    ├── build_strategy_graph_spec(...)
+    │   ├── [GAP] emits runtime_target=planning_v1
+    │   ├── [GAP] emits declared stages in canonical order
+    │   └── [GAP] emits post_runtime_action=write_artifacts
+    │
+    └── build_harness_langgraph(...)
+        ├── [GAP] mounts planning_v1 node
+        ├── [GAP] routes planning runs around select_best_draft
+        └── [GAP] preserves existing families unchanged
 
-[+] Artifact publishing
-    ├── [GAP]  write_artifacts still projects summary then rehydrates state
-    ├── [PLAN] publish artifacts directly from native state
-    └── [TEST] tests/test_harness_reporting.py, tests/test_harness_state_boundaries.py
+[+] Planning runtime
+    │
+    ├── rubric_design_doc
+    │   ├── [GAP] pass case with bounded repo evidence
+    │   └── [GAP] clarification_needed when required rubric fields are missing
+    │
+    ├── architecture_seam_decomposition
+    │   ├── [GAP] primary seam selected with evidence refs
+    │   └── [GAP] clarification_needed when no trustworthy seam exists
+    │
+    ├── parallel_workstream_planning
+    │   ├── [GAP] emits dependency-aware workstreams
+    │   └── [GAP] emits limited-parallelism explanation when split is not honest
+    │
+    └── executable_slice_emission
+        ├── [GAP] emits slices with acceptance checks
+        └── [GAP] fails honestly when slice boundary is incoherent
 
-[+] Report and summary projection
-    ├── [GAP]  seeded summary data can still behave like shadow state
-    ├── [PLAN] summary_projection_v1(...) is final one-way projection only
-    └── [TEST] tests/test_harness_reporting.py
+[+] Artifact publication
+    │
+    ├── publish_planning_artifacts_v1(...)
+    │   ├── [GAP] writes PLAN.md
+    │   ├── [GAP] writes plan.json
+    │   ├── [GAP] sets artifact_index correctly
+    │   └── [GAP] sets summary_payload to plan payload for CLI compatibility
+    │
+    └── plan.json schema
+        ├── [GAP] success payload validation
+        ├── [GAP] clarification payload validation
+        └── [GAP] failed payload validation
 
-[+] Compatibility readability
-    ├── [GAP]  summary adapters are still normalized as general execution helpers
-    ├── [PLAN] restrict them to legacy/historical compatibility only
-    └── [TEST] tests/test_harness_state_boundaries.py, tests/test_harness_runner.py
+[+] CLI and operator behavior
+    │
+    ├── harness-run --json for success
+    ├── harness-run --json for clarification_needed
+    ├── harness-run --json for failed
+    ├── [GAP] exit code 0 only for success
+    └── [GAP] printed summary includes PLAN.md and plan.json artifact refs
 
-[+] Recovery contract
-    ├── [GAP]  B3 could accidentally shrink failed-run readability while cleaning state seams
-    ├── [PLAN] keep restart-at-run-boundary and readable final artifacts
-    └── [TEST] tests/test_harness_reporting.py, tests/test_harness_analysis_review_graph.py
+[+] Determinism proof
+    │
+    ├── [GAP] repeat-run stable seam IDs
+    ├── [GAP] repeat-run stable workstream IDs
+    ├── [GAP] repeat-run stable slice IDs
+    └── [GAP] prose may vary, structure may not
 ```
 
-### B3 parity matrix
+### Test requirements to add to the plan
 
-This matrix is the milestone gate. No row is optional.
+- Extend `tests/test_harness_strategy_graph.py` for planning graph spec emission.
+- Extend `tests/test_harness_cli_command.py` and `tests/test_harness_standalone_cli.py` for planning exit-code and JSON behavior.
+- Add `tests/test_harness_planning_graph.py` for end-to-end `HarnessLangGraphExecutor` planning runs.
+- Add `tests/test_harness_planning_artifacts.py` for `PLAN.md` / `plan.json` publication and blocked-run payload shape.
+- Add repeat-run determinism tests for the bounded fixture corpus.
+- Extend `tests/test_harness_example_strategy_wiring.py` so examples/docs cannot drift from the planning strategy surface.
 
-| Scenario family | Mode | Must match |
-|---|---|---|
-| bounded, no focus gate | `legacy_bridge` vs `graph_owned` | selected/best draft ids, final artifact kind, emitted payload, `summary.json`, `REPORT.md`, ledgers |
-| bounded, focus gate selected | both | `focus_decision`, downstream selection ids, summary/report parity |
-| bounded, focus gate blocked | both | early stop readability, no bogus selected draft, artifact/report parity |
-| bounded, no viable focus | both | early stop readability, no downstream publication drift |
-| trust, `attestation_over_bounded` | both | bounded-review summary, attestation-derived publication surfaces, final artifacts, report parity |
-| partial acceptance | both | included/excluded recommendation indices, admissibility reasons, emitted artifact kind |
-| invalid config / preflight failure | both | readable `summary.json`, readable `REPORT.md`, no success-path rehydration fallback |
-| historical artifact read compatibility | old summaries | `state_from_summary(...)` / `summary_read_adapter_v1(...)` still reconstruct readable compatibility state |
+### Regression rule
 
-### Operator and user-surface checks
+If any existing harness family regresses because of planning runtime changes, add a
+regression test in the existing relevant test file before merging C1.
 
-These are the human-visible flows that must stay boring while B3 changes
-internal truth ownership.
+That includes:
 
-| Surface | What must remain true |
-|---|---|
-| `python -m anvil.harness.cli run ...` | still produces the same artifact family and readable failure/success surfaces for equivalent inputs |
-| `summary.json` | remains readable as the canonical machine-readable audit surface |
-| `REPORT.md` | remains readable as the canonical human-readable audit surface |
-| `FINAL_ANSWER.*` / `PARTIAL_ANSWER.*` / `BEST_DRAFT.*` | still match verdict and admissibility rules, with no summary-vs-deliverable drift |
-| old run directories | still load through compatibility tooling without asking the user to regenerate artifacts |
-| failed runs | still leave enough readable state for restart-at-run-boundary reasoning and postmortem inspection |
+- strategy graph routing
+- analysis-review artifact publication
+- CLI summary printing
+- state boundary compatibility
 
-### Validation commands
+## Performance Review
 
-Run these commands before calling B3 done:
+### Discovery performance
 
-```bash
-poetry run pytest -q \
-  tests/test_harness_selection.py \
-  tests/test_harness_state_boundaries.py \
-  tests/test_harness_reporting.py \
-  tests/test_harness_analysis_review_graph.py \
-  tests/test_harness_runner.py \
-  tests/test_harness_cli_command.py \
-  tests/test_harness_standalone_cli.py \
-  tests/test_harness_example_strategy_wiring.py \
-  tests/test_run_focus_gate_acceptance.py
+The runtime must stay bounded.
 
-poetry run python -m anvil.harness.cli run --help
-poetry run python -m anvil list
-```
+Required defaults:
 
-Expected result:
+- small repo:
+  - 2 search passes
+  - 20 inspected files
+- medium repo:
+  - 3 search passes
+  - 35 inspected files
+- one justified escalation:
+  - record `discovery_budget_escalated`
+  - record `additional_files_inspected`
+  - record `discovery_escalation_reason`
 
-- graph-owned success-path artifact publication is state-native
-- legacy rollback and historical summary readability remain green
-- no parity drift appears outside approved graph-trace metadata
+### State and checkpoint size
+
+- Store evidence refs and metadata in state, not full file bodies.
+- Keep `summary_payload` / plan payload machine-shaped and compact.
+- Do not checkpoint giant raw repo scans.
+- Keep repeated phase inputs derived from recorded evidence, not repeated full scans when possible.
+
+### Stability over raw speed
+
+The important performance bar in C1 is repeat-run stability, not minimum latency.
+
+If a faster implementation weakens:
+
+- stable IDs
+- bounded discovery accounting
+- honest clarification behavior
+
+then the faster implementation is wrong.
+
+### Caching opportunities
+
+- cache normalized evidence refs per inspected file path within one run
+- cache deterministic ID inputs after seam ranking
+- do not rerender unchanged planning sections twice during one publication pass
 
 ## Failure Modes Registry
 
-| Codepath | Realistic production failure | Test required | Error handling required | User-visible outcome |
-|---|---|---|---|---|
-| native draft projection | draft projector drops validator failures or topic debt, so the wrong draft wins | yes | yes | user gets the wrong `BEST_DRAFT` or `FINAL_ANSWER` with no obvious crash |
-| selection ownership | reporting silently reranks drafts and picks a different winner than the graph | yes | yes | `summary.json`, `REPORT.md`, and deliverables disagree |
-| graph-owned merge | graph-owned success path still stamps `bridge_boundary_version` | yes | yes | operators think the legacy bridge ran when it did not |
-| artifact publication | state-native publisher emits a different final artifact kind than B2 for the same verdict | yes | yes | user sees `BEST_DRAFT` where `FINAL_ANSWER` or `PARTIAL_ANSWER` should exist |
-| partial acceptance | included/excluded recommendation indices drift between deliverable and summary/report | yes | yes | user sees contradictory acceptance surfaces |
-| summary projection | seeded summary data overrides newer native state during final projection | yes | yes | silent summary/report drift |
-| compatibility adapter | old summaries stop being readable after the projector split | yes | yes | users cannot inspect or replay old runs |
-| failed-run recovery | B3 cleanup accidentally makes failed runs unreadable even if execution cannot resume | yes | yes | postmortem quality regresses and restart-at-run-boundary becomes guesswork |
+| New codepath | Realistic production failure | Test covers it? | Error handling exists? | User-visible outcome | Status |
+|---|---|---:|---:|---|---|
+| planning task parse | user provides `task_kind: planning` but missing required workspace policy | must add | must add | clear invalid-config error before model work | required |
+| planning strategy parse | strategy declares `runtime_target: planning_v1` but omits `phases[]` | must add | must add | clear invalid-config error | required |
+| planning runtime routing | graph routes planning run to `write_artifacts` without running phases | must add | must add | empty fake plan or malformed payload if unguarded | critical gap until covered |
+| rubric gate | design-doc phase passes without repo evidence | must add | must add | misleading success with fake seams | critical gap until covered |
+| seam decomposition | two primary seams are tied and the runtime picks one nondeterministically | must add | must add | unstable IDs across repeated runs | critical gap until covered |
+| parallel planning | workstreams emitted with circular dependencies | must add | must add | unusable worktree advice | required |
+| slice emission | slice points to seam/workstream IDs that do not exist | must add | must add | invalid `plan.json` and broken markdown | critical gap until covered |
+| plan publication | `PLAN.md` and `plan.json` disagree on selected workstream order | must add | must add | operator mistrust, impossible review | critical gap until covered |
+| CLI exit handling | `clarification_needed` exits `0` | must add | must add | automation falsely treats blocked planning as success | critical gap until covered |
 
-Critical-gap rule:
+Any row with "must add" in both the test and error-handling columns is a merge
+blocker until the plan covers it and the implementation adds it.
 
-Any failure mode with no test, no guard, and silent user impact blocks the
-milestone. No exceptions.
+## NOT in scope
 
-## Rollout and Reversibility
-
-### Risks to avoid
-
-- topology stays graph-owned, but state truth remains split
-- reporting continues to rerank drafts after the graph already chose one
-- graph-owned success execution still advertises the legacy bridge boundary
-- seeded summary data silently wins over native state on projection
-- compatibility cleanup breaks old artifact readability
-- B3 accidentally changes rollout defaults instead of just fixing state truth
-
-### Boring implementation sequence
-
-1. finish the native state contract and split draft projection
-2. make the select-best-draft node the only ranking owner
-3. switch artifact publication to state-native flow
-4. reduce compatibility boundaries and lock recovery rules
-5. prove parity and readability on the full matrix
-
-### Rollout and rollback criteria
-
-Roll forward rules:
-
-- do not start B3 until B2 parity is already green
-- do not change `legacy_bridge` / `graph_owned` rollout semantics or defaults
-- keep legacy summary readability intact throughout the milestone
-
-Rollback triggers:
-
-- any mismatch in final artifact kind or emitted payload between modes
-- any mismatch in selected/best draft ids between graph-owned state and emitted
-  artifacts
-- any graph-owned success path calling `summary_read_adapter_v1(...)`
-- any graph-owned success path stamping `bridge_boundary_version`
-- any historical summary that stops adapting cleanly through compatibility
-  tooling
-
-Rollback action:
-
-- rerun with `--analysis-review-execution-mode legacy_bridge`
-- keep the B2 compatibility path as the safe operational fallback until the B3
-  drift is fixed
+- Public custom workflow DSL
+  - Rationale: C1 proves one curated compiled strategy first.
+- Automatic worktree, branch, or agent orchestration
+  - Rationale: C1 outputs advisory planning metadata only.
+- Phase-specific model selection
+  - Rationale: model-mix optimization is a later milestone, not required for the compiler proof.
+- Cross-repo or multi-team planning
+  - Rationale: the supported corpus stays repo-local and bounded.
+- Replacing analysis-review artifact contracts
+  - Rationale: current families must remain stable while planning lands.
+- Renaming `summary_payload` across the executor/CLI stack
+  - Rationale: that is worthwhile cleanup later, but it is not part of the C1 proof.
+- Generic planning strategy family beyond what this one wedge needs
+  - Rationale: do not abstract for the second strategy before the first is proven.
 
 ## Worktree Parallelization Strategy
 
@@ -793,98 +854,111 @@ Rollback action:
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| native state contract + draft projection | `anvil.harness.state`, `anvil.harness.selection`, `anvil.harness.subgraphs` | — |
-| selection-owner canonicalization | `anvil.harness.nodes`, `anvil.harness.reporting`, `anvil.harness.state` | native state contract + draft projection |
-| state-native artifact publishing | `anvil.harness.nodes`, `anvil.harness.reporting`, `anvil.harness.report` | native state contract + draft projection, selection ids frozen |
-| compatibility boundary cleanup | `anvil.harness.subgraphs`, `anvil.harness.runner`, `anvil.harness.state`, `anvil.harness.nodes` | native state contract + artifact publisher contract |
-| parity and compatibility tests | `tests/` | each lane above as its contract freezes |
+| A. Contract + routing freeze | `anvil/harness/types.py`, `anvil/harness/state.py`, `anvil/harness/strategy_graph.py`, `anvil/harness/nodes/` | — |
+| B. Planning runtime implementation | `anvil/harness/subgraphs/`, new planning runtime module | A |
+| C. Artifact + CLI publication | `anvil/harness/reporting.py`, `anvil/harness/artifacts.py`, `anvil/harness/schemas.py`, `anvil/harness/cli.py`, `anvil/cli.py` | A |
+| D. Fixtures + deterministic regression coverage | `examples/harness/`, `tests/` | A, B, C |
+| E. Docs polish and final plan/demo alignment | `README.md`, `examples/README.md`, repo root plan/docs surface | D |
 
 ### Parallel lanes
 
-Lane A: native state contract + draft projection  
-Sequential within the lane. It freezes the native field names, the canonical
-draft-projector signature, and the graph-owned merge contract.
+Lane A: contract + routing freeze  
+Sequential, foundation lane.  
+Shared modules:
 
-Lane B: selection-owner canonicalization  
-Starts after Lane A freezes `drafts`, `current_draft_id`, `best_draft_id`, and
-`selected_draft_id`.
+- `anvil/harness/types.py`
+- `anvil/harness/state.py`
+- `anvil/harness/strategy_graph.py`
+- `anvil/harness/nodes/validator_preflight.py`
 
-Lane C: state-native artifact publishing  
-Starts after Lane A freezes the native publish inputs. Finishes after Lane B
-freezes selection ownership.
+Lane B: planning runtime  
+Starts after Lane A freezes planning state keys, declared phase shape, and runtime metadata.  
+Shared modules:
 
-Lane D: compatibility boundary cleanup  
-Starts after Lane C freezes the final publisher contract.
+- `anvil/harness/subgraphs/`
+- new planning runtime module
 
-Lane E: tests  
-Split into two passes:
-- E1: native draft projection and state-boundary assertions can start after
-  Lane A
-- E2: reporting/parity/readability assertions finish after Lanes B, C, and D
+Lane C: planning artifacts + CLI  
+Starts after Lane A freezes planning terminal payload shape and post-runtime routing.  
+Shared modules:
+
+- `anvil/harness/reporting.py`
+- `anvil/harness/schemas.py`
+- CLI surfaces
+
+Lane D: fixtures + regression proof  
+Starts after Lane B and Lane C freeze:
+
+- phase outputs
+- artifact names
+- exit semantics
+
+Lane E: docs and final surface alignment  
+Runs last after D proves the shipped surface.
 
 ### Execution order
 
+```text
+Lane A
+  │
+  ├──────────────► Lane B
+  │
+  └──────────────► Lane C
+                     │
+           Lane B + Lane C complete
+                     │
+                     ▼
+                   Lane D
+                     │
+                     ▼
+                   Lane E
+```
+
 1. Launch Lane A first and merge it.
-2. Start Lane B after A freezes state and draft contracts.
-3. Start Lane E1 in parallel with Lane B for native-state and boundary tests.
-4. Start Lane C after A, but do not finish it until B freezes selection
-   ownership.
-5. Start Lane D after C freezes the state-native publisher contract.
-6. Finish Lane E2 after B, C, and D merge.
+2. Launch Lane B and Lane C in parallel worktrees after A freezes the contract.
+3. Merge B and C.
+4. Run Lane D after both runtime behavior and artifact shapes are frozen.
+5. Run Lane E last so docs describe the actual shipped surface, not a guessed one.
 
 ### Conflict flags
 
-- Lanes A, B, and D all touch the `anvil.harness.state` surface, so they cannot
-  merge independently without coordination.
-- Lanes B and C both touch the `anvil.harness.reporting` surface, so selection
-  ownership must freeze before final publisher work lands.
-- Lanes C and D both touch node-layer publication behavior, so D cannot start
-  early without rebase churn.
-- Lanes C and E2 both touch reporting-focused test surfaces. Keep test
-  ownership crisp to avoid merge noise.
+- Lanes A, B, and C all depend on the exact planning state shape. B and C must not start before A freezes it.
+- Lanes B and C both depend on runtime terminal payload semantics. If either changes `summary_payload` structure late, Lane D will churn.
+- Lanes C and D both touch examples and output names. Keep artifact filenames frozen before D starts.
+- Lane E touches the same docs surfaces that D validates. E must be last.
 
-Verdict:
+## Acceptance Checklist
 
-This is partially parallel, but the core state and publisher contracts are
-serial. Treat it like one primary spine with a test lane running beside it.
+- [ ] `TaskSpec` accepts `task_kind: planning`
+- [ ] `StrategyConfig` accepts declared planning phase and policy fields
+- [ ] `validator_preflight_node(...)` rejects invalid planning declarations before model work
+- [ ] `build_strategy_graph_spec(...)` emits `runtime_target: planning_v1`
+- [ ] the strategy graph spec serializes declared planning phases in canonical order
+- [ ] `build_harness_langgraph(...)` mounts `planning_v1`
+- [ ] planning runs bypass `select_best_draft` through a generic post-runtime route
+- [ ] the planning runtime executes four declared phases in order
+- [ ] blocked runs emit structured clarification requests
+- [ ] failed runs emit explicit `stop_reason`
+- [ ] successful runs emit `PLAN.md`
+- [ ] successful runs emit `plan.json`
+- [ ] `plan.json` passes schema validation
+- [ ] `summary_payload` contains the planning terminal payload for CLI compatibility
+- [ ] CLI JSON mode returns the planning payload
+- [ ] CLI exit code is `0` only for `success`
+- [ ] example planning strategy and task files exist and are runnable
+- [ ] repeat-run determinism tests pass for the bounded fixture corpus
+- [ ] existing `single_pass`, `pfr_v1`, and `analysis_review_*` tests stay green
 
-## NOT in scope
+## Completion Summary
 
-| Deferred item | Why not in B3 |
-|---|---|
-| changing B2 topology ownership | B2 already owns topology parity; reopening it would hide whether B3 actually fixed state truth |
-| changing `legacy_bridge` / `graph_owned` rollout semantics or defaults | rollout changes would spend the rollback safety margin on operator behavior instead of correctness |
-| deleting the legacy bridge entirely | B3 still needs the boring rollback path while native-state publication hardens |
-| `single_pass` or `pfr_v1` state/reporting cleanup | nearby code is not part of the migrated `analysis_review` truth surface for this milestone |
-| stage-boundary resume | that is a larger recovery-contract milestone and would blur the B3 acceptance target |
-| artifact contract v2 | external surface versioning is a separate product decision, not a prerequisite for native-state truth |
-| public DAG or graph compiler work | that belongs to C-series follow-on work after internal graph/state parity is real |
-| C1, C2, or C3 future-state work | directional future architecture is already captured in the design doc and should not leak into B3 execution |
-
-## Completion Checklist
-
-- `HarnessState` carries all graph-owned downstream publication fields
-- graph-owned draft projection no longer depends on synthetic summary wrappers
-- `select_best_draft_node(...)` is the only graph-path ranking owner
-- graph-owned success-path artifact publication is state-native
-- graph-owned success path never calls `summary_read_adapter_v1(...)`
-- graph-owned success path never stamps `bridge_boundary_version`
-- `summary_projection_v1(...)` remains the sole summary write boundary
-- historical summary readability still works
-- restart-at-run-boundary readability remains supported
-- full B3 parity matrix is green
-
-## Done Criteria
-
-This milestone is done when a developer can run the same canonical
-`analysis_review` task/strategy pair in both `legacy_bridge` and `graph_owned`
-mode, and:
-
-- the graph-owned success path publishes deliverables directly from native state
-- `summary.json` and `REPORT.md` are still stable projections of that state
-- no success-path summary rehydration occurs
-- no second ranking decision occurs after `select_best_draft_node(...)`
-- old summaries are still readable through compatibility tooling
-
-At that point, B3 has actually made graph-native state canonical instead of
-just making the code look cleaner.
+- Step 0: Scope Challenge — scope accepted with one explicit architectural addition: a real `planning` task family
+- Architecture Review: locked around one new `planning_v1` runtime family, one shared planning runtime module, and one generic post-runtime route
+- Code Quality Review: DRY authority map locked, no second parser stack, no second graph builder, no per-strategy core-engine branch
+- Test Review: full planning coverage diagram produced, all new codepaths mapped to required tests
+- Performance Review: bounded discovery counters and repeat-run stability are mandatory, not nice-to-have
+- NOT in scope: written
+- What already exists: written
+- TODOS.md updates: none bundled into C1
+- Failure modes: nine concrete failure modes identified, four are critical gaps until test and stop behavior land
+- Parallelization: 5 steps total, 2 middle lanes can run in parallel after the contract freeze
+- Lake Score: choose the complete compiler/runtime proof, not the markdown-only shortcut
