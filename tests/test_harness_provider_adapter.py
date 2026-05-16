@@ -21,6 +21,13 @@ class _FakeApiProvider:
         return '{"status":"done","summary":"ok","workspace_write_intent":"none","changes_made":[],"claims_to_verify":[],"tests_recommended":[],"known_risks":[],"confidence":0.72}'
 
 
+class _FakeBytesApiProvider(_FakeApiProvider):
+    async def generate(self, prompt: str, role: str = "execute", **kwargs):
+        assert role == "execute"
+        assert "JSON schema" in prompt
+        return b'{"status":"done","summary":"ok","workspace_write_intent":"none","changes_made":[],"claims_to_verify":[],"tests_recommended":[],"known_risks":[],"confidence":0.72}'
+
+
 class _FakeCfg:
     type = "api"
 
@@ -76,6 +83,28 @@ class _FakeSuccessfulCliWarningProvider:
 
     async def generate(self, prompt: str, role: str = "execute", **kwargs):
         self.last_cli_result = _FakeSuccessfulCliWarningResult()
+        return self.last_cli_result.stdout_text
+
+
+class _FakeSuccessfulCliBytesResult:
+    def __init__(self):
+        self.exit_code = 0
+        self.stdout_text = b'{"summary":"ok"}'
+        self.stderr_text = b""
+        self.command = ["fake-claude"]
+        self.structured_output = None
+        self.metadata = {}
+        self.usage = None
+
+
+class _FakeSuccessfulCliBytesProvider:
+    model_name = "fake-cli-model"
+
+    def __init__(self):
+        self.last_cli_result = None
+
+    async def generate(self, prompt: str, role: str = "execute", **kwargs):
+        self.last_cli_result = _FakeSuccessfulCliBytesResult()
         return self.last_cli_result.stdout_text
 
 
@@ -210,6 +239,61 @@ def test_provider_aliases_and_non_cli_json_parsing(tmp_path, monkeypatch):
     assert Path(result.output_path or "").exists()
 
 
+def test_provider_adapter_decodes_bytes_from_non_cli_provider(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact",
+        lambda name: _FakeBytesApiProvider(),
+    )
+    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCfg())
+
+    adapter = ForgeProviderAdapter("openai")
+    request = StageRequest(
+        role_name="solver",
+        role_config=RoleConfig(provider="openai", model="ignored-model", access="read"),
+        prompt_text="Solve the task.",
+        schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["done"]},
+                "summary": {"type": "string"},
+                "workspace_write_intent": {"type": "string", "enum": ["none"]},
+                "changes_made": {"type": "array", "items": {"type": "string"}},
+                "claims_to_verify": {"type": "array", "items": {"type": "string"}},
+                "tests_recommended": {"type": "array", "items": {"type": "string"}},
+                "known_risks": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": [
+                "status",
+                "summary",
+                "workspace_write_intent",
+                "changes_made",
+                "claims_to_verify",
+                "tests_recommended",
+                "known_risks",
+                "confidence",
+            ],
+        },
+        cwd=str(tmp_path),
+        out_dir=str(tmp_path / "stage-bytes-api"),
+    )
+
+    result = adapter.run(request)
+
+    assert result.ok is True
+    assert result.structured_output == {
+        "status": "done",
+        "summary": "ok",
+        "workspace_write_intent": "none",
+        "changes_made": [],
+        "claims_to_verify": [],
+        "tests_recommended": [],
+        "known_risks": [],
+        "confidence": 0.72,
+    }
+    assert Path(result.stdout_path).read_text(encoding="utf-8").startswith('{"status":"done"')
+
+
 def test_provider_adapter_classifies_provider_failures_before_schema_validation(tmp_path, monkeypatch):
     monkeypatch.setattr("anvil.harness.providers.get_provider_exact", lambda name: _FakeCliFailureProvider())
     monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
@@ -313,6 +397,37 @@ def test_provider_adapter_keeps_successful_cli_stderr_in_error_artifact_only(
     assert Path(result.stderr_path).read_text(encoding="utf-8") == (
         "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
     )
+
+
+def test_provider_adapter_decodes_bytes_from_cli_provider(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact",
+        lambda name: _FakeSuccessfulCliBytesProvider(),
+    )
+    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
+
+    adapter = ForgeProviderAdapter("claude_code")
+    request = StageRequest(
+        role_name="critic",
+        role_config=RoleConfig(provider="claude_code", model="sonnet", access="read"),
+        prompt_text="Critique this draft.",
+        schema={
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+            },
+            "required": ["summary"],
+        },
+        cwd=str(tmp_path),
+        out_dir=str(tmp_path / "stage-success-bytes-cli"),
+    )
+
+    result = adapter.run(request)
+
+    assert result.ok is True
+    assert result.structured_output == {"summary": "ok"}
+    assert Path(result.stdout_path).read_text(encoding="utf-8") == '{"summary":"ok"}'
+    assert Path(result.stderr_path).read_text(encoding="utf-8") == ""
 
 
 def test_provider_adapter_inherits_cli_role_defaults_for_mapped_analysis_review_roles(
