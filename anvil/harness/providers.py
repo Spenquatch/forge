@@ -130,14 +130,19 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         command: list[str] = []
 
         try:
-            raw_text = _run_provider_call(provider, prompt_text, mapped_role, kwargs)
+            raw_text = _coerce_text(
+                _run_provider_call(provider, prompt_text, mapped_role, kwargs)
+            )
         except Exception as exc:  # pragma: no cover - exercised in integration scenarios
-            raw_text = getattr(provider, "last_response_text", "") or ""
+            raw_text = _coerce_text(getattr(provider, "last_response_text", ""))
             cli_result = getattr(provider, "last_cli_result", None)
             if cli_result is not None:
                 exit_code = int(getattr(cli_result, "exit_code", 1) or 1)
-                raw_text = getattr(cli_result, "stdout_text", raw_text) or raw_text
-                stderr_text = getattr(cli_result, "stderr_text", None) or None
+                cli_stdout_text = _coerce_text(getattr(cli_result, "stdout_text", ""))
+                if cli_stdout_text:
+                    raw_text = cli_stdout_text
+                cli_stderr_text = _coerce_text(getattr(cli_result, "stderr_text", ""))
+                stderr_text = cli_stderr_text or None
                 error_text = stderr_text or str(exc)
                 command = list(getattr(cli_result, "command", []) or [])
                 raw_meta.update(_cli_result_meta(cli_result))
@@ -157,10 +162,12 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             cli_result = getattr(provider, "last_cli_result", None)
             if cli_result is not None:
                 exit_code = int(getattr(cli_result, "exit_code", exit_code) or exit_code)
-                raw_text = getattr(cli_result, "stdout_text", raw_text) or raw_text
+                cli_stdout_text = _coerce_text(getattr(cli_result, "stdout_text", ""))
+                if cli_stdout_text:
+                    raw_text = cli_stdout_text
                 command = list(getattr(cli_result, "command", []) or command)
                 raw_meta.update(_cli_result_meta(cli_result))
-                cli_stderr_text = getattr(cli_result, "stderr_text", "") or ""
+                cli_stderr_text = _coerce_text(getattr(cli_result, "stderr_text", ""))
                 stderr_text = cli_stderr_text or stderr_text
                 if error_text is None and exit_code != 0:
                     error_text = stderr_text or None
@@ -272,7 +279,9 @@ def get_provider(name: str) -> BaseProviderAdapter:
     return ForgeProviderAdapter(name)
 
 
-def _run_provider_call(provider: Any, prompt_text: str, mapped_role: str, kwargs: dict[str, Any]) -> str:
+def _run_provider_call(
+    provider: Any, prompt_text: str, mapped_role: str, kwargs: dict[str, Any]
+) -> str | bytes:
     async def _invoke() -> str:
         if hasattr(provider, "generate"):
             return await provider.generate(prompt_text, role=mapped_role, **kwargs)
@@ -345,6 +354,16 @@ def _render_prompt_for_provider(prompt_text: str, schema: dict[str, Any], *, pro
         + schema_text
         + "\n"
     )
+
+
+def _coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def _extract_structured_output(text: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:

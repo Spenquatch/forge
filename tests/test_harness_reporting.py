@@ -15,8 +15,10 @@ from anvil.harness.reporting import (
     apply_final_artifacts,
     build_partial_answer_payload,
     render_deliverable_markdown,
+    summary_projection_v1,
     write_state_artifacts,
 )
+from anvil.harness.state import state_from_summary
 
 
 def _rendered_section(markdown: str, heading_prefix: str) -> str:
@@ -1834,6 +1836,184 @@ def test_apply_final_artifacts_prefers_clean_accepted_draft_over_caveated_accept
     )
 
 
+def test_apply_final_artifacts_graph_owned_uses_frozen_selection_ids(tmp_path):
+    summary = {
+        "task": {"id": "task-selection-frozen"},
+        "verdict": "accepted_with_warnings",
+        "artifacts": {"run_dir": str(tmp_path)},
+        "best_draft_id": "draft-caveated",
+        "selected_draft_id": "draft-caveated",
+        "run_details": {
+            "graph_execution": {
+                "execution_mode": "graph_owned",
+                "graph_owned": True,
+                "fallback_used": False,
+            }
+        },
+        "drafts": [
+            {
+                "draft_id": "draft-clean",
+                "review_status": "accepted",
+                "review_state": "evaluated",
+                "round_index": 0,
+                "summary": "Cleaner but not graph-selected draft.",
+                "issue_counts": {
+                    "blocking_medium_or_higher": 0,
+                    "medium_or_higher": 0,
+                    "accepted_recommendations": 1,
+                    "required_validator_failures": 0,
+                    "topics": 0,
+                    "open_topics": 0,
+                },
+                "scores": {
+                    "grounding_score": 0.62,
+                    "actionability_score": 0.80,
+                    "scope_compliance_score": 0.90,
+                },
+                "metadata": {
+                    "stage_index": 1,
+                    "payload": _recommendation_payload("Clean recommendation"),
+                },
+            },
+            {
+                "draft_id": "draft-caveated",
+                "review_status": "accepted",
+                "review_state": "evaluated",
+                "round_index": 1,
+                "summary": "Graph-selected draft.",
+                "issue_counts": {
+                    "blocking_medium_or_higher": 0,
+                    "medium_or_higher": 0,
+                    "accepted_recommendations": 1,
+                    "required_validator_failures": 0,
+                    "topics": 1,
+                    "open_topics": 1,
+                },
+                "scores": {
+                    "grounding_score": 0.55,
+                    "actionability_score": 0.79,
+                    "scope_compliance_score": 0.88,
+                },
+                "metadata": {
+                    "stage_index": 2,
+                    "payload": _recommendation_payload("Frozen graph-owned recommendation"),
+                },
+            },
+        ],
+    }
+
+    updated = apply_final_artifacts(summary)
+
+    assert updated["best_draft_id"] == "draft-caveated"
+    assert updated["selected_draft_id"] == "draft-caveated"
+    assert updated["final_answer"]["recommendations"][0]["title"] == (
+        "Frozen graph-owned recommendation"
+    )
+
+
+def test_state_from_summary_preserves_explicit_selection_ids_without_reranking():
+    summary = {
+        "run_id": "run-selection-frozen",
+        "thread_id": "thread-selection-frozen",
+        "task": {"id": "task-selection-frozen", "task_kind": "analysis_review"},
+        "strategy_kind": "analysis_review_v1",
+        "agent_stages": [
+            {
+                "stage_index": 1,
+                "role_name": "proposer_round_0",
+                "ok": True,
+                "structured_output": {"summary": "First draft."},
+                "stdout_path": "draft-1.txt",
+            },
+            {
+                "stage_index": 2,
+                "role_name": "critic_round_0",
+                "ok": True,
+                "structured_output": {
+                    "verdict": "accept",
+                    "issues": [],
+                    "recommendation_reviews": [
+                        {"recommendation_index": 0, "verdict": "accept"}
+                    ],
+                    "grounding_score": 0.95,
+                    "actionability_score": 0.90,
+                    "scope_compliance_score": 0.93,
+                },
+            },
+            {
+                "stage_index": 3,
+                "role_name": "proposer_round_1",
+                "ok": True,
+                "structured_output": {"summary": "Second draft."},
+                "stdout_path": "draft-2.txt",
+            },
+            {
+                "stage_index": 4,
+                "role_name": "critic_round_1",
+                "ok": True,
+                "structured_output": {
+                    "verdict": "accept",
+                    "issues": [],
+                    "recommendation_reviews": [
+                        {"recommendation_index": 0, "verdict": "accept"}
+                    ],
+                    "grounding_score": 0.40,
+                    "actionability_score": 0.50,
+                    "scope_compliance_score": 0.60,
+                    "topics": [{"topic_id": "TOPIC-1"}],
+                },
+            },
+        ],
+        "best_draft_id": "draft-proposer-round-1",
+        "selected_draft_id": "draft-proposer-round-1",
+        "verdicts": {"content_verdict": "accepted"},
+    }
+
+    state = state_from_summary(summary)
+
+    assert state["best_draft_id"] == "draft-proposer-round-1"
+    assert state["selected_draft_id"] == "draft-proposer-round-1"
+
+
+def test_state_from_summary_backfills_missing_selection_ids_for_legacy_summaries():
+    summary = {
+        "run_id": "run-selection-legacy",
+        "thread_id": "thread-selection-legacy",
+        "task": {"id": "task-selection-legacy", "task_kind": "analysis_review"},
+        "strategy_kind": "analysis_review_v1",
+        "agent_stages": [
+            {
+                "stage_index": 1,
+                "role_name": "proposer_round_0",
+                "ok": True,
+                "structured_output": {"summary": "First draft."},
+                "stdout_path": "draft-1.txt",
+            },
+            {
+                "stage_index": 2,
+                "role_name": "critic_round_0",
+                "ok": True,
+                "structured_output": {
+                    "verdict": "accept",
+                    "issues": [],
+                    "recommendation_reviews": [
+                        {"recommendation_index": 0, "verdict": "accept"}
+                    ],
+                    "grounding_score": 0.80,
+                    "actionability_score": 0.75,
+                    "scope_compliance_score": 0.77,
+                },
+            },
+        ],
+        "verdicts": {"content_verdict": "accepted"},
+    }
+
+    state = state_from_summary(summary)
+
+    assert state["best_draft_id"] == "draft-proposer_round_0"
+    assert state["selected_draft_id"] == "draft-proposer_round_0"
+
+
 def test_artifact_label_for_kind_rejects_unknown_values():
     try:
         _artifact_label_for_kind("mystery_artifact")
@@ -3181,6 +3361,248 @@ def test_write_state_artifacts_preserves_clarification_focus_decision_and_report
         in section
     )
     assert "The task mixes release and rollback concerns." in section
+
+
+def test_summary_projection_v1_projects_b1_boundary_fields(tmp_path):
+    summary = summary_projection_v1(
+        {
+            "run_id": "run-boundary",
+            "thread_id": "thread-boundary",
+            "workspace_root": str(tmp_path),
+            "run_dir": str(tmp_path),
+            "task_spec": {
+                "id": "task-boundary",
+                "task_kind": "analysis_review",
+                "workspace_write_policy": {},
+            },
+            "strategy_spec": {"name": "analysis_review_v1"},
+            "strategy_kind": "analysis_review_v1",
+            "serialization_version": "custom-serialization-v1",
+            "summary_boundary_version": "summary_projection_v1",
+            "bridge_boundary_version": "legacy_bridge_boundary_v1",
+            "analysis_review_contract": {"mode": "bounded"},
+            "strategy_graph_spec": {"runtime_target": "analysis_review_v1"},
+            "strategy_graph_spec_id": "analysis-review-spec",
+            "strategy_graph_subset": "bounded_strategy_graph_v1",
+            "focus_decision": _selected_focus_decision(),
+            "topic_ledger": [
+                {"topic_id": "TOPIC-1", "resolution_status": "open"}
+            ],
+            "warnings": [],
+            "policy_checks": [],
+            "stage_history": [],
+            "validator_rounds": [],
+            "drafts": [],
+            "issue_history": [],
+        }
+    )
+
+    assert summary["serialization_version"] == "custom-serialization-v1"
+    assert summary["summary_boundary_version"] == "summary_projection_v1"
+    assert summary["bridge_boundary_version"] == "legacy_bridge_boundary_v1"
+    assert summary["analysis_review_contract"] == {"mode": "bounded"}
+    assert summary["strategy_graph_spec"] == {"runtime_target": "analysis_review_v1"}
+    assert summary["strategy_graph_spec_id"] == "analysis-review-spec"
+    assert summary["strategy_graph_subset"] == "bounded_strategy_graph_v1"
+    assert summary["focus_decision"]["selected_focus_id"] == "release-trigger-automation"
+    assert summary["run_details"]["focus_decision"]["selected_focus_id"] == (
+        "release-trigger-automation"
+    )
+    assert summary["topic_ledger"] == [
+        {"topic_id": "TOPIC-1", "resolution_status": "open"}
+    ]
+
+
+def test_write_artifacts_node_round_trips_b1_boundary_fields(tmp_path):
+    state = {
+        "run_id": "run-boundary-roundtrip",
+        "thread_id": "thread-boundary-roundtrip",
+        "workspace_root": str(tmp_path),
+        "out_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_path": "task.md",
+        "strategy_path": "strategy.md",
+        "config_path": "config/models.yaml",
+        "auto_fit_strategy": True,
+        "task_spec": {
+            "id": "task-boundary-roundtrip",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "serialization_version": "custom-serialization-v1",
+        "summary_boundary_version": "summary_projection_v1",
+        "bridge_boundary_version": "legacy_bridge_boundary_v1",
+        "analysis_review_contract": {"mode": "bounded"},
+        "strategy_graph_spec": {"runtime_target": "analysis_review_v1"},
+        "strategy_graph_spec_id": "analysis-review-spec",
+        "strategy_graph_subset": "bounded_strategy_graph_v1",
+        "focus_decision": _selected_focus_decision(),
+        "topic_ledger": [{"topic_id": "TOPIC-1", "resolution_status": "open"}],
+        "warnings": [],
+        "run_verdict": "blocked_for_clarification",
+        "content_verdict": "blocked_for_clarification",
+        "validator_verdict": "not_run",
+        "policy_verdict": "pass",
+        "config_verdict": "pass",
+        "summary_text": "Boundary-only round trip.",
+        "policy_checks": [],
+        "stage_history": [],
+        "validator_rounds": [],
+        "drafts": [],
+        "issue_history": [],
+    }
+
+    updated_state = write_artifacts_node(state)
+
+    assert updated_state["serialization_version"] == "custom-serialization-v1"
+    assert updated_state["summary_boundary_version"] == "summary_projection_v1"
+    assert updated_state["bridge_boundary_version"] == "legacy_bridge_boundary_v1"
+    assert updated_state["analysis_review_contract"] == {"mode": "bounded"}
+    assert updated_state["strategy_graph_spec"] == {
+        "runtime_target": "analysis_review_v1"
+    }
+    assert updated_state["strategy_graph_spec_id"] == "analysis-review-spec"
+    assert updated_state["strategy_graph_subset"] == "bounded_strategy_graph_v1"
+    assert updated_state["focus_decision"]["selected_focus_id"] == (
+        "release-trigger-automation"
+    )
+    assert updated_state["topic_ledger"] == [
+        {"topic_id": "TOPIC-1", "resolution_status": "open"}
+    ]
+    assert updated_state["task_path"] == "task.md"
+    assert updated_state["summary_payload"]["bridge_boundary_version"] == (
+        "legacy_bridge_boundary_v1"
+    )
+
+
+def test_summary_projection_v1_projects_graph_trace_metadata_and_graph_execution(
+    tmp_path,
+):
+    state = {
+        "run_id": "run-graph-trace",
+        "thread_id": "thread-graph-trace",
+        "workspace_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_spec": {
+            "id": "task-graph-trace",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "analysis_review_execution_mode": "graph_owned",
+        "stage_history": [
+            {
+                "stage_index": 1,
+                "role_name": "focus_gate",
+                "semantic_validation_path": str(tmp_path / "focus_gate.semantic.json"),
+                "metadata": {
+                    "graph_stage_id": "focus_gate",
+                    "transition_reason": "focus_gate_required",
+                },
+            }
+        ],
+    }
+
+    summary = summary_projection_v1(state)
+
+    stage_metadata = summary["agent_stages"][0]["metadata"]
+    assert stage_metadata["graph_stage_id"] == "focus_gate"
+    assert stage_metadata["graph_node_id"] == "focus_gate"
+    assert stage_metadata["transition_reason"] == "focus_gate_required"
+    assert stage_metadata["semantic_validation_outcome"] == "passed"
+    assert stage_metadata["execution_mode"] == "graph_owned"
+    assert summary["run_details"]["graph_execution"] == {
+        "execution_mode": "graph_owned",
+        "graph_owned": True,
+        "fallback_used": False,
+        "transition_log": [
+            {
+                "graph_node_id": "focus_gate",
+                "transition_reason": "focus_gate_required",
+                "semantic_validation_outcome": "passed",
+                "execution_mode": "graph_owned",
+            }
+        ],
+    }
+
+    summary["agent_stages"][0]["metadata"]["graph_node_id"] = "mutated"
+    assert state["stage_history"][0]["metadata"] == {
+        "graph_stage_id": "focus_gate",
+        "transition_reason": "focus_gate_required",
+    }
+
+
+def test_write_state_artifacts_projects_legacy_bridge_graph_execution(tmp_path):
+    state = {
+        "run_id": "run-legacy-trace",
+        "thread_id": "thread-legacy-trace",
+        "workspace_root": str(tmp_path),
+        "out_root": str(tmp_path),
+        "run_dir": str(tmp_path),
+        "task_spec": {
+            "id": "task-legacy-trace",
+            "task_kind": "analysis_review",
+            "workspace_write_policy": {},
+        },
+        "strategy_spec": {"name": "analysis_review_v1"},
+        "strategy_kind": "analysis_review_v1",
+        "analysis_review_execution_mode": "legacy_bridge",
+        "warnings": [],
+        "run_verdict": "accepted",
+        "content_verdict": "accepted",
+        "validator_verdict": "pass",
+        "policy_verdict": "pass",
+        "config_verdict": "pass",
+        "summary_text": "Legacy bridge trace projection.",
+        "policy_checks": [],
+        "stage_history": [
+            {
+                "stage_index": 1,
+                "role_name": "proposer",
+                "metadata": {
+                    "graph_stage_id": "proposer",
+                    "transition_reason": "analysis_entry",
+                },
+            }
+        ],
+        "validator_rounds": [],
+        "drafts": [],
+        "issue_history": [],
+    }
+
+    updated_state = write_state_artifacts(state)
+    summary_json = json.loads(
+        Path(updated_state["summary_payload"]["artifacts"]["summary_json"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    report = Path(updated_state["summary_payload"]["artifacts"]["report_md"]).read_text(
+        encoding="utf-8"
+    )
+
+    assert summary_json["agent_stages"][0]["metadata"]["graph_node_id"] == "proposer"
+    assert (
+        summary_json["agent_stages"][0]["metadata"]["semantic_validation_outcome"]
+        == "not_run"
+    )
+    assert summary_json["run_details"]["graph_execution"] == {
+        "execution_mode": "legacy_bridge",
+        "graph_owned": False,
+        "fallback_used": True,
+        "transition_log": [
+            {
+                "graph_node_id": "proposer",
+                "transition_reason": "analysis_entry",
+                "semantic_validation_outcome": "not_run",
+                "execution_mode": "legacy_bridge",
+            }
+        ],
+    }
+    assert '"graph_execution": {' in report
+    assert '"fallback_used": true' in report
 
 
 def _recommendation_payload(*titles: str) -> dict[str, object]:

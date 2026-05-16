@@ -11,7 +11,11 @@ from typing import Annotated, Any, Literal
 from typing_extensions import TypedDict
 
 from .reporting import artifact_ref
-from .selection import extract_drafts_from_summary, select_best_draft
+from .selection import drafts_from_stage_history_v1, select_best_draft
+
+HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
+SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
+LEGACY_BRIDGE_BOUNDARY_VERSION = "legacy_bridge_boundary_v1"
 
 
 class ArtifactRef(TypedDict, total=False):
@@ -41,6 +45,10 @@ class StageRecord(TypedDict, total=False):
     usage: dict[str, Any] | None
     warnings: list[str]
     error: str | None
+    structured_output: dict[str, Any] | None
+    failure_kind: str | None
+    failure_summary: str | None
+    semantic_validation_payload_provenance: dict[str, Any] | None
     metadata: dict[str, Any]
 
 
@@ -111,6 +119,36 @@ class ReviewScores(TypedDict, total=False):
     scope_compliance_score: float
 
 
+class AnalysisReviewRuntimeState(TypedDict, total=False):
+    current_analysis_payload: dict[str, Any] | None
+    current_review_payload: dict[str, Any] | None
+    latest_validator_round: list[dict[str, Any]]
+    revisions_completed: int
+    max_loops: int
+    focus_refinement: dict[str, Any] | None
+    transition_reason: str | None
+    review_loop_exercised: bool
+
+
+def _normalized_draft_id(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def _draft_by_id(
+    drafts: list[dict[str, Any]],
+    draft_id: str | None,
+) -> dict[str, Any] | None:
+    normalized_id = _normalized_draft_id(draft_id)
+    if not normalized_id:
+        return None
+    for draft in drafts:
+        if not isinstance(draft, dict):
+            continue
+        if _normalized_draft_id(draft.get("draft_id")) == normalized_id:
+            return draft
+    return None
+
+
 class HarnessState(TypedDict, total=False):
     run_id: str
     thread_id: str
@@ -159,6 +197,30 @@ class HarnessState(TypedDict, total=False):
     summary_text: str | None
 
     artifact_index: dict[str, ArtifactRef]
+    summary_payload: dict[str, Any]
+    analysis_review_status: dict[str, Any]
+    recommendation_reviews: list[dict[str, Any]]
+    final_answer: dict[str, Any] | None
+    bounded_review_summary: dict[str, Any] | None
+    bounded_attestation_input: dict[str, Any] | None
+    changed_files: list[str]
+    validator_summary: dict[str, Any]
+    analysis_review_coverage: dict[str, Any]
+    run_details: dict[str, Any]
+    failure_details: dict[str, Any]
+    closure_proof_by_id: dict[str, Any]
+    workspace_policy_ignored_rel_paths: list[str]
+    final_workspace_policy_evaluation: dict[str, Any]
+    serialization_version: str
+    analysis_review_contract: dict[str, Any]
+    analysis_review_runtime: AnalysisReviewRuntimeState
+    strategy_graph_spec: dict[str, Any]
+    strategy_graph_spec_id: str | None
+    strategy_graph_subset: str | None
+    focus_decision: dict[str, Any]
+    topic_ledger: list[dict[str, Any]]
+    summary_boundary_version: str
+    bridge_boundary_version: str | None
 
     # Execution request metadata used by the wrapper graph. These keys are not
     # part of the ADR's durable contract, but they make it possible to re-enter
@@ -167,6 +229,7 @@ class HarnessState(TypedDict, total=False):
     strategy_path: str
     config_path: str
     auto_fit_strategy: bool
+    analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"]
 
 
 def initialize_harness_state(
@@ -178,6 +241,7 @@ def initialize_harness_state(
     config_path: str = "config/models.yaml",
     thread_id: str | None = None,
     auto_fit_strategy: bool = True,
+    analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"] = "legacy_bridge",
 ) -> HarnessState:
     now = dt.datetime.now(dt.UTC)
     return HarnessState(
@@ -215,10 +279,35 @@ def initialize_harness_state(
         run_verdict=None,
         summary_text=None,
         artifact_index={},
+        summary_payload={},
+        analysis_review_status={},
+        recommendation_reviews=[],
+        final_answer=None,
+        bounded_review_summary=None,
+        bounded_attestation_input=None,
+        changed_files=[],
+        validator_summary={},
+        analysis_review_coverage={},
+        run_details={},
+        failure_details={},
+        closure_proof_by_id={},
+        workspace_policy_ignored_rel_paths=[],
+        final_workspace_policy_evaluation={},
+        serialization_version=HARNESS_STATE_SERIALIZATION_VERSION,
+        analysis_review_contract={},
+        strategy_graph_spec={},
+        strategy_graph_spec_id=None,
+        strategy_graph_subset=None,
+        focus_decision={},
+        topic_ledger=[],
+        summary_boundary_version=SUMMARY_BOUNDARY_VERSION,
+        bridge_boundary_version=None,
         task_path=task_path,
         strategy_path=strategy_path,
         config_path=config_path,
         auto_fit_strategy=auto_fit_strategy,
+        analysis_review_execution_mode=analysis_review_execution_mode,
+        analysis_review_runtime={},
     )
 
 
@@ -263,6 +352,26 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
                 usage=(stage.get("usage") if isinstance(stage.get("usage"), dict) else None),
                 warnings=[str(item) for item in stage.get("warnings", [])],
                 error=(None if stage.get("error") in (None, "") else str(stage.get("error"))),
+                structured_output=(
+                    stage.get("structured_output")
+                    if isinstance(stage.get("structured_output"), dict)
+                    else None
+                ),
+                failure_kind=(
+                    None
+                    if stage.get("failure_kind") in (None, "")
+                    else str(stage.get("failure_kind"))
+                ),
+                failure_summary=(
+                    None
+                    if stage.get("failure_summary") in (None, "")
+                    else str(stage.get("failure_summary"))
+                ),
+                semantic_validation_payload_provenance=(
+                    stage.get("semantic_validation_payload_provenance")
+                    if isinstance(stage.get("semantic_validation_payload_provenance"), dict)
+                    else None
+                ),
                 metadata={
                     key: value
                     for key, value in stage.items()
@@ -287,6 +396,10 @@ def stage_records_from_summary(summary: dict[str, Any]) -> list[StageRecord]:
                         "usage",
                         "warnings",
                         "error",
+                        "structured_output",
+                        "failure_kind",
+                        "failure_summary",
+                        "semantic_validation_payload_provenance",
                     }
                 },
             )
@@ -342,9 +455,68 @@ def _issue_history_from_summary(summary: dict[str, Any], drafts: list[dict[str, 
     return issues
 
 
-def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | None = None) -> HarnessState:
-    drafts = extract_drafts_from_summary(summary)
-    best_draft = select_best_draft(drafts)
+def _summary_dict(summary: dict[str, Any], key: str) -> dict[str, Any]:
+    value = summary.get(key)
+    if isinstance(value, dict):
+        return dict(value)
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        nested_value = run_details.get(key)
+        if isinstance(nested_value, dict):
+            return dict(nested_value)
+    return {}
+
+
+def _summary_optional_dict(summary: dict[str, Any], key: str) -> dict[str, Any] | None:
+    value = _summary_dict(summary, key)
+    return value or None
+
+
+def _summary_list_of_dicts(summary: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = summary.get(key)
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        nested_value = run_details.get(key)
+        if isinstance(nested_value, list):
+            return [dict(item) for item in nested_value if isinstance(item, dict)]
+    return []
+
+
+def summary_read_adapter_v1(
+    summary: dict[str, Any], *, fallback_thread_id: str | None = None
+) -> HarnessState:
+    """Compatibility-only summary reader.
+
+    Sanctioned B3 call sites are limited to the actual legacy bridge,
+    historical summary/readability tooling, and compatibility/parity tests.
+    Graph-owned success paths must carry native state instead of rehydrating it
+    from summary artifacts.
+    """
+    task = summary.get("task") or {}
+    verdicts = summary.get("verdicts") or {}
+    stage_history = stage_records_from_summary(summary)
+    drafts = drafts_from_stage_history_v1(
+        stage_history,
+        task_kind=str(task.get("task_kind") or "patch"),
+        validator_rounds=list(summary.get("validator_rounds") or []),
+        content_verdict=(
+            None
+            if verdicts.get("content_verdict") in (None, "")
+            else str(verdicts.get("content_verdict"))
+        ),
+    )
+    best_draft_id = _normalized_draft_id(summary.get("best_draft_id"))
+    selected_draft_id = _normalized_draft_id(summary.get("selected_draft_id"))
+    best_draft = _draft_by_id(drafts, best_draft_id)
+    if best_draft is None and not best_draft_id:
+        ranked_best_draft = select_best_draft(drafts)
+        if ranked_best_draft is not None:
+            best_draft = ranked_best_draft
+            best_draft_id = _normalized_draft_id(ranked_best_draft.get("draft_id"))
+    if not selected_draft_id:
+        selected_draft_id = best_draft_id
     issue_history = _issue_history_from_summary(summary, drafts)
 
     artifacts = summary.get("artifacts") or {}
@@ -369,8 +541,8 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
             if field_name in best_scores:
                 latest_review_scores[field_name] = float(best_scores[field_name])
 
-    verdicts = summary.get("verdicts") or {}
-    task = summary.get("task") or {}
+    analysis_review_status = _summary_dict(summary, "analysis_review_status")
+    analysis_review_provenance = analysis_review_status.get("provenance")
 
     state = HarnessState(
         run_id=str(summary.get("run_id") or ""),
@@ -390,7 +562,7 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
         initial_workspace_state=None,
         current_git_snapshot=dict(summary.get("final_git_snapshot") or {}),
         current_workspace_state=None,
-        stage_history=stage_records_from_summary(summary),
+        stage_history=stage_history,
         drafts=drafts,
         validator_rounds=list(summary.get("validator_rounds") or []),
         policy_checks=list(summary.get("workspace_policy_checks") or []),
@@ -400,8 +572,8 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
         stage_counter=len(summary.get("agent_stages", [])),
         revision_round=int((summary.get("run_details") or {}).get("revisions_completed") or 0),
         current_draft_id=(drafts[-1].get("draft_id") if drafts else None),
-        best_draft_id=(best_draft.get("draft_id") if best_draft else None),
-        selected_draft_id=(summary.get("selected_draft_id") or (best_draft.get("draft_id") if best_draft else None)),
+        best_draft_id=(best_draft_id or None),
+        selected_draft_id=(selected_draft_id or None),
         open_issue_ids=[
             issue.get("issue_id", "")
             for issue in issue_history
@@ -416,5 +588,71 @@ def state_from_summary(summary: dict[str, Any], *, fallback_thread_id: str | Non
         run_verdict=(None if verdicts.get("run_verdict") in (None, "") else str(verdicts.get("run_verdict"))),
         summary_text=(None if summary.get("final_summary") in (None, "") else str(summary.get("final_summary"))),
         artifact_index=artifact_index,
+        summary_payload=dict(summary),
+        analysis_review_status=analysis_review_status,
+        recommendation_reviews=_summary_list_of_dicts(summary, "recommendation_reviews"),
+        final_answer=_summary_optional_dict(summary, "final_answer"),
+        bounded_review_summary=_summary_optional_dict(summary, "bounded_review_summary"),
+        bounded_attestation_input=_summary_optional_dict(summary, "bounded_attestation_input"),
+        changed_files=[str(item) for item in summary.get("changed_files", []) or []],
+        validator_summary=_summary_dict(summary, "validator_summary"),
+        analysis_review_coverage=_summary_dict(summary, "analysis_review_coverage"),
+        run_details=(
+            dict(summary.get("run_details"))
+            if isinstance(summary.get("run_details"), dict)
+            else {}
+        ),
+        failure_details=(
+            dict(summary.get("failure_details"))
+            if isinstance(summary.get("failure_details"), dict)
+            else {}
+        ),
+        closure_proof_by_id=(
+            dict(analysis_review_provenance.get("closure_proof_by_id", {}))
+            if isinstance(analysis_review_provenance, dict)
+            else {}
+        ),
+        workspace_policy_ignored_rel_paths=[
+            str(item)
+            for item in summary.get("workspace_policy_ignored_rel_paths", []) or []
+        ],
+        final_workspace_policy_evaluation=_summary_dict(
+            summary, "final_workspace_policy_evaluation"
+        ),
+        serialization_version=str(
+            summary.get("serialization_version") or HARNESS_STATE_SERIALIZATION_VERSION
+        ),
+        analysis_review_contract=_summary_dict(summary, "analysis_review_contract"),
+        analysis_review_runtime=_summary_dict(summary, "analysis_review_runtime"),
+        strategy_graph_spec=_summary_dict(summary, "strategy_graph_spec"),
+        strategy_graph_spec_id=(
+            None
+            if summary.get("strategy_graph_spec_id") in (None, "")
+            else str(summary.get("strategy_graph_spec_id"))
+        ),
+        strategy_graph_subset=(
+            None
+            if summary.get("strategy_graph_subset") in (None, "")
+            else str(summary.get("strategy_graph_subset"))
+        ),
+        focus_decision=_summary_dict(summary, "focus_decision"),
+        topic_ledger=_summary_list_of_dicts(summary, "topic_ledger"),
+        summary_boundary_version=str(
+            summary.get("summary_boundary_version") or SUMMARY_BOUNDARY_VERSION
+        ),
+        bridge_boundary_version=(
+            None
+            if summary.get("bridge_boundary_version") in (None, "")
+            else str(summary.get("bridge_boundary_version"))
+        ),
     )
     return state
+
+
+def state_from_summary(
+    summary: dict[str, Any], *, fallback_thread_id: str | None = None
+) -> HarnessState:
+    """Thin compatibility alias for historical tooling and tests only."""
+    return summary_read_adapter_v1(
+        summary, fallback_thread_id=fallback_thread_id
+    )

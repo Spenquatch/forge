@@ -4,6 +4,7 @@ from pathlib import Path
 
 from anvil.harness.contracts import build_analysis_review_contract
 from anvil.harness.files import load_structured_file
+from anvil.harness.strategy_graph import STRATEGY_GRAPH_SUBSET, build_strategy_graph_spec
 from anvil.harness.types import StrategyConfig, TaskSpec
 
 
@@ -174,13 +175,10 @@ def test_analysis_review_entry_points_document_attestation_first_canonical_trust
     )
 
     assert canonical_trust_path in examples_readme
-    assert canonical_trust_path in root_readme
     assert "attestation-first" in examples_readme
-    assert "attestation-first" in root_readme
     assert "analysis_review_trust_legacy_*" in examples_readme
-    assert "analysis_review_trust_legacy_*" in root_readme
     assert "legacy_full_review" in examples_readme
-    assert "legacy_full_review" in root_readme
+    assert "[Examples](examples/README.md)" in root_readme
     assert canonical_trust_path in run_script
     assert "attestation-first" in run_script
     assert "analysis_review_trust_legacy_*" in run_script
@@ -290,3 +288,41 @@ def test_m2_focus_gate_fixture_wiring_triads_resolve_task_strategy_and_workspace
         for workspace_ref in task["files_hint"]:
             matches = list(workspace_path.glob(workspace_ref))
             assert matches, (case["name"], workspace_ref)
+
+
+def test_example_strategies_resolve_to_expected_internal_graph_family_metadata():
+    cases = [
+        (
+            "examples/harness/strategies/single_pass_codex.yaml",
+            "single_pass",
+            "single_pass",
+            ["solver"],
+        ),
+        (
+            "examples/harness/strategies/pfr_codex_claude.yaml",
+            "pfr_v1",
+            "pfr_v1",
+            ["proposer", "falsifier", "patcher"],
+        ),
+        (
+            "examples/harness/strategies/analysis_review_bounded_codex_claude_focus_gate_adjudicate.yaml",
+            "analysis_review_bounded_v1",
+            "analysis_review_v1",
+            ["focus_gate", "proposer", "critic", "reviser", "auditor"],
+        ),
+        (
+            "examples/harness/strategies/analysis_review_trust_codex_claude.yaml",
+            "analysis_review_trust_v1",
+            "analysis_review_v1",
+            ["proposer", "critic", "reviser", "auditor", "attestation_auditor"],
+        ),
+    ]
+
+    for path, expected_kind, expected_runtime_target, expected_stage_ids in cases:
+        strategy = load_structured_file(Path(path))
+        spec = build_strategy_graph_spec(expected_kind, strategy).to_dict()
+
+        assert spec["subset"] == STRATEGY_GRAPH_SUBSET
+        assert spec["strategy_kind"] == expected_kind
+        assert spec["runtime_target"] == expected_runtime_target
+        assert [stage["stage_id"] for stage in spec["stages"]] == expected_stage_ids

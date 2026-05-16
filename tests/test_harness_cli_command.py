@@ -4,34 +4,56 @@ import asyncio
 from pathlib import Path
 
 import anvil.cli as cli_module
+import pytest
 
 
-class _FakeRunner:
-    def __init__(self, **kwargs):
+class _FakeExecutor:
+    summary_payload = {
+        "verdict": "accepted",
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "final_answer_md": "/tmp/run/FINAL_ANSWER.md",
+        },
+    }
+    execute_error: Exception | None = None
+    instances: list["_FakeExecutor"] = []
+
+    def __init__(self, *, checkpoint: str = "memory", **kwargs):
+        self.checkpoint = checkpoint
         self.kwargs = kwargs
+        self.execute_calls: list[dict[str, object]] = []
+        type(self).instances.append(self)
 
-    def run(self):
-        return {
-            "verdict": "accepted",
-            "artifacts": {
-                "run_dir": "/tmp/run",
-                "report_md": "/tmp/run/REPORT.md",
-                "summary_json": "/tmp/run/summary.json",
-                "final_answer_md": "/tmp/run/FINAL_ANSWER.md",
-            },
-        }
+    async def execute(self, **kwargs):
+        self.execute_calls.append(dict(kwargs))
+        if self.execute_error is not None:
+            raise self.execute_error
+        return {"summary_payload": self.summary_payload}
 
 
-class _FailingRunner:
+class _UnexpectedRunner:
     def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def run(self):
-        raise RuntimeError("PyYAML is required to load Forge YAML config files.")
+        raise AssertionError(
+            "HarnessRunner should not be constructed when harness-run routes through the graph."
+        )
 
 
 def test_harness_run_cli_dispatch(monkeypatch, capsys):
-    monkeypatch.setattr(cli_module, "HarnessRunner", _FakeRunner)
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.summary_payload = {
+        "verdict": "accepted",
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "final_answer_md": "/tmp/run/FINAL_ANSWER.md",
+        },
+    }
+    _FakeExecutor.execute_error = None
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
     asyncio.run(
         cli_module.main_async(
             [
@@ -50,8 +72,55 @@ def test_harness_run_cli_dispatch(monkeypatch, capsys):
     assert "final_answer=/tmp/run/FINAL_ANSWER.md" in captured.out
 
 
+def test_harness_run_cli_dispatches_native_artifact_index_fallback(monkeypatch, capsys):
+    class _NativeStateExecutor:
+        def __init__(self, *, checkpoint: str = "memory", **kwargs):
+            self.checkpoint = checkpoint
+            self.kwargs = kwargs
+
+        async def execute(self, **kwargs):
+            return {
+                "run_verdict": "accepted",
+                "content_verdict": "accepted",
+                "validator_verdict": "pass",
+                "policy_verdict": "pass",
+                "config_verdict": "pass",
+                "artifact_index": {
+                    "run_dir": {"path": "/tmp/run"},
+                    "report_md": {"path": "/tmp/run/REPORT.md"},
+                    "summary_json": {"path": "/tmp/run/summary.json"},
+                    "final_answer_md": {"path": "/tmp/run/FINAL_ANSWER.md"},
+                },
+            }
+
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _NativeStateExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
+    asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                "task.yaml",
+                "--strategy",
+                "strategy.yaml",
+                "--workspace",
+                "/tmp/workspace",
+            ]
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert "verdict=accepted" in captured.out
+    assert "final_answer=/tmp/run/FINAL_ANSWER.md" in captured.out
+
+
 def test_harness_run_cli_reports_runtime_dependency_errors(monkeypatch, capsys):
-    monkeypatch.setattr(cli_module, "HarnessRunner", _FailingRunner)
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = RuntimeError(
+        "PyYAML is required to load Forge YAML config files."
+    )
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
     asyncio.run(
         cli_module.main_async(
             [
@@ -68,26 +137,20 @@ def test_harness_run_cli_reports_runtime_dependency_errors(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "❌ HARNESS RUN FAILED: PyYAML is required" in captured.out
 
-
-
-class _PartialRunner:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def run(self):
-        return {
-            "verdict": "accepted_partial",
-            "artifacts": {
-                "run_dir": "/tmp/run",
-                "report_md": "/tmp/run/REPORT.md",
-                "summary_json": "/tmp/run/summary.json",
-                "partial_answer_md": "/tmp/run/PARTIAL_ANSWER.md",
-            },
-        }
-
-
 def test_harness_run_cli_dispatch_partial_answer(monkeypatch, capsys):
-    monkeypatch.setattr(cli_module, "HarnessRunner", _PartialRunner)
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.summary_payload = {
+        "verdict": "accepted_partial",
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "partial_answer_md": "/tmp/run/PARTIAL_ANSWER.md",
+        },
+    }
+    _FakeExecutor.execute_error = None
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
     asyncio.run(
         cli_module.main_async(
             [
@@ -106,30 +169,26 @@ def test_harness_run_cli_dispatch_partial_answer(monkeypatch, capsys):
     assert "partial_answer=/tmp/run/PARTIAL_ANSWER.md" in captured.out
 
 
-class _HarnessErrorRunner:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def run(self):
-        return {
-            "verdict": "harness_error",
-            "verdicts": {
-                "run_verdict": "harness_error",
-                "content_verdict": "harness_error",
-                "validator_verdict": "not_configured",
-                "policy_verdict": "pass",
-                "config_verdict": "pass",
-            },
-            "artifacts": {
-                "run_dir": "/tmp/run",
-                "report_md": "/tmp/run/REPORT.md",
-                "summary_json": "/tmp/run/summary.json",
-            },
-        }
-
-
 def test_harness_run_cli_returns_nonzero_for_failed_run_verdict(monkeypatch):
-    monkeypatch.setattr(cli_module, "HarnessRunner", _HarnessErrorRunner)
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.summary_payload = {
+        "verdict": "harness_error",
+        "verdicts": {
+            "run_verdict": "harness_error",
+            "content_verdict": "harness_error",
+            "validator_verdict": "not_configured",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+        },
+    }
+    _FakeExecutor.execute_error = None
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
 
     exit_code = asyncio.run(
         cli_module.main_async(
@@ -181,3 +240,166 @@ def test_harness_run_cli_reports_missing_task_file_without_traceback(
     assert exit_code == 2
     assert "❌ HARNESS RUN FAILED: Task spec file not found:" in captured.out
     assert "Traceback" not in captured.err
+
+
+def _write_harness_specs(tmp_path: Path, *, task_kind: str) -> tuple[Path, Path, Path]:
+    task_path = tmp_path / "task.yaml"
+    strategy_path = tmp_path / "strategy.yaml"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    if task_kind == "analysis_review":
+        task_path.write_text(
+            "id: qa-task\n"
+            "task_kind: analysis_review\n"
+            "objective: Verify CLI execution mode plumbing.\n"
+            "workspace_write_policy:\n"
+            "  mode: forbid\n"
+            "review_requirements:\n"
+            "  require_evidence_per_recommendation: true\n"
+            "  require_classification: true\n"
+            "  require_priority: true\n"
+            "  min_recommendations: 1\n",
+            encoding="utf-8",
+        )
+        strategy_path.write_text(
+            "name: qa-analysis\n"
+            "kind: analysis_review_v1\n"
+            "roles:\n"
+            "  solver:\n"
+            "    provider: codex_gpt_5_4_mini\n",
+            encoding="utf-8",
+        )
+    else:
+        task_path.write_text(
+            "id: qa-task\n"
+            "task_kind: patch\n"
+            "objective: Verify non-analysis_review CLI stability.\n"
+            "instructions:\n"
+            "  - Keep behavior stable.\n",
+            encoding="utf-8",
+        )
+        strategy_path.write_text(
+            "name: qa-single-pass\n"
+            "kind: single_pass\n"
+            "roles:\n"
+            "  solver:\n"
+            "    provider: codex_gpt_5_4_mini\n",
+            encoding="utf-8",
+        )
+
+    return task_path, strategy_path, workspace
+
+
+@pytest.mark.parametrize("checkpoint", ["memory", "sqlite"])
+@pytest.mark.parametrize("execution_mode", ["legacy_bridge", "graph_owned"])
+def test_harness_run_cli_accepts_analysis_review_execution_mode_via_executor(
+    monkeypatch, tmp_path: Path, checkpoint: str, execution_mode: str
+) -> None:
+    task_path, strategy_path, workspace = _write_harness_specs(
+        tmp_path, task_kind="analysis_review"
+    )
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = None
+    _FakeExecutor.summary_payload = {
+        "verdict": "accepted",
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "final_answer_md": "/tmp/run/FINAL_ANSWER.md",
+        },
+    }
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                str(task_path),
+                "--strategy",
+                str(strategy_path),
+                "--workspace",
+                str(workspace),
+                "--checkpoint",
+                checkpoint,
+                "--analysis-review-execution-mode",
+                execution_mode,
+            ]
+        )
+    )
+
+    assert exit_code == 0
+    executor = _FakeExecutor.instances[-1]
+    assert executor.checkpoint == checkpoint
+    assert executor.execute_calls == [
+        {
+            "task_path": str(task_path),
+            "strategy_path": str(strategy_path),
+            "workspace": str(workspace),
+            "out_root": ".forge-harness-runs",
+            "config_path": "config/models.yaml",
+            "thread_id": None,
+            "auto_fit_strategy": True,
+            "analysis_review_execution_mode": execution_mode,
+        }
+    ]
+
+
+@pytest.mark.parametrize("checkpoint", ["memory", "sqlite"])
+@pytest.mark.parametrize("execution_mode", ["legacy_bridge", "graph_owned"])
+def test_harness_run_cli_tolerates_execution_mode_for_non_analysis_review_tasks(
+    monkeypatch, tmp_path: Path, checkpoint: str, execution_mode: str
+) -> None:
+    task_path, strategy_path, workspace = _write_harness_specs(
+        tmp_path, task_kind="patch"
+    )
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = None
+    _FakeExecutor.summary_payload = {
+        "verdict": "accepted",
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "final_answer_md": "/tmp/run/FINAL_ANSWER.md",
+        },
+    }
+    monkeypatch.setattr(cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                str(task_path),
+                "--strategy",
+                str(strategy_path),
+                "--workspace",
+                str(workspace),
+                "--checkpoint",
+                checkpoint,
+                "--analysis-review-execution-mode",
+                execution_mode,
+            ]
+        )
+    )
+
+    assert exit_code == 0
+    executor = _FakeExecutor.instances[-1]
+    assert executor.checkpoint == checkpoint
+    assert executor.execute_calls == [
+        {
+            "task_path": str(task_path),
+            "strategy_path": str(strategy_path),
+            "workspace": str(workspace),
+            "out_root": ".forge-harness-runs",
+            "config_path": "config/models.yaml",
+            "thread_id": None,
+            "auto_fit_strategy": True,
+            "analysis_review_execution_mode": execution_mode,
+        }
+    ]

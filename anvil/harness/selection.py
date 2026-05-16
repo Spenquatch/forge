@@ -99,6 +99,10 @@ def _remaining_topic_counts(payload: dict[str, Any]) -> tuple[int, int, int]:
 def _review_provenance_penalty(payload: dict[str, Any], stage: dict[str, Any]) -> tuple[int, int]:
     provenance = stage.get("semantic_validation_payload_provenance")
     if not isinstance(provenance, dict):
+        metadata = stage.get("metadata")
+        if isinstance(metadata, dict):
+            provenance = metadata.get("semantic_validation_payload_provenance")
+    if not isinstance(provenance, dict):
         return (0, 0)
     policy_mode = str(provenance.get("policy_mode") or "").strip().lower()
     if policy_mode != "payload_hash_and_refs":
@@ -136,37 +140,84 @@ def _looks_like_completed_review_payload(payload: dict[str, Any]) -> bool:
     return isinstance(payload, dict) and required_fields.issubset(payload)
 
 
-def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
-    """Project agent stages + validator rounds into the draft contract from ADR-0024.
+def _stage_metadata(stage: dict[str, Any]) -> dict[str, Any]:
+    metadata = stage.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
 
-    The imperative runner records stage envelopes in order. The harness graph uses
-    those envelopes to reconstruct durable draft metadata without replaying the
-    raw transcripts.
+
+def _stage_payload(stage: dict[str, Any]) -> dict[str, Any] | None:
+    payload = stage.get("structured_output")
+    if isinstance(payload, dict):
+        return payload
+    payload = _stage_metadata(stage).get("structured_output")
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _stage_text_path(stage: dict[str, Any]) -> str:
+    value = stage.get("text_path")
+    if value in (None, ""):
+        value = stage.get("stdout_path")
+    return str(value or "")
+
+
+def _stage_json_path(stage: dict[str, Any], key: str, legacy_key: str) -> str | None:
+    value = stage.get(key)
+    if value in (None, ""):
+        value = stage.get(legacy_key)
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _stage_failure_value(stage: dict[str, Any], key: str) -> str | None:
+    value = stage.get(key)
+    if value in (None, ""):
+        value = _stage_metadata(stage).get(key)
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def drafts_from_stage_history_v1(
+    stage_history: list[dict[str, Any]],
+    *,
+    task_kind: str,
+    validator_rounds: list[dict[str, Any]] | None = None,
+    content_verdict: str | None = None,
+) -> list[dict[str, Any]]:
+    """Project native stage history into the durable draft contract from ADR-0024.
+
+    The graph-owned path carries stage_history directly in HarnessState. This
+    projector rebuilds draft semantics from that native state instead of
+    round-tripping through summary-shaped compatibility wrappers.
     """
 
-    task = summary.get("task") or {}
-    task_kind = str(task.get("task_kind", "patch"))
-    validator_rounds = {
+    validator_rounds_by_index = {
         int(round_blob.get("round_index", 0)): list(round_blob.get("results", []))
-        for round_blob in summary.get("validator_rounds", [])
+        for round_blob in (validator_rounds or [])
     }
 
     drafts: list[dict[str, Any]] = []
     latest_draft: dict[str, Any] | None = None
 
-    for stage_index, stage in enumerate(summary.get("agent_stages", []), start=1):
+    for stage_index, stage in enumerate(stage_history, start=1):
         if not isinstance(stage, dict):
             continue
-        payload = stage.get("structured_output")
+        payload = _stage_payload(stage)
         if not isinstance(payload, dict) or not payload:
             continue
 
         role_name = str(stage.get("role_name") or "")
-        stage_id = f"stage-{stage.get('stage_index', stage_index):02d}-{slugify(role_name)}"
+        stage_id = str(
+            stage.get("stage_id")
+            or f"stage-{stage.get('stage_index', stage_index):02d}-{slugify(role_name)}"
+        )
 
         if _is_candidate_stage(stage):
             round_index = _candidate_round_index(role_name)
-            validator_results = validator_rounds.get(round_index, [])
+            validator_results = validator_rounds_by_index.get(round_index, [])
             issue_counts = {
                 "required_validator_failures": _required_validator_failure_count(validator_results),
             }
@@ -176,11 +227,13 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                 "role_name": role_name,
                 "task_kind": task_kind,
                 "round_index": round_index,
-                "text_path": str(stage.get("stdout_path") or ""),
-                "json_path": str(stage.get("output_path") or "") or None,
-                "raw_json_path": str(stage.get("raw_output_path") or "") or None,
-                "normalized_json_path": (
-                    str(stage.get("normalized_output_path") or "") or None
+                "text_path": _stage_text_path(stage),
+                "json_path": _stage_json_path(stage, "json_path", "output_path"),
+                "raw_json_path": _stage_json_path(stage, "raw_json_path", "raw_output_path"),
+                "normalized_json_path": _stage_json_path(
+                    stage,
+                    "normalized_json_path",
+                    "normalized_output_path",
                 ),
                 "summary": str(payload.get("summary", "") or ""),
                 "review_status": "candidate",
@@ -211,10 +264,12 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
             if not stage.get("ok") or not _looks_like_completed_review_payload(payload):
                 latest_draft["review_state"] = "not_evaluated"
                 metadata["review_completed"] = False
-                metadata["review_failure_kind"] = stage.get("failure_kind") or "review_stage_failed"
+                metadata["review_failure_kind"] = (
+                    _stage_failure_value(stage, "failure_kind") or "review_stage_failed"
+                )
                 metadata["review_failure_summary"] = (
-                    stage.get("failure_summary")
-                    or stage.get("error")
+                    _stage_failure_value(stage, "failure_summary")
+                    or _stage_failure_value(stage, "error")
                     or "Review stage did not produce a valid review payload."
                 )
                 metadata["review_attempt_payload"] = copy.deepcopy(payload)
@@ -284,21 +339,38 @@ def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]
                 latest_draft["review_status"] = review_status
             metadata["review_payload"] = copy.deepcopy(payload)
 
-    content_verdict = str((summary.get("verdicts") or {}).get("content_verdict") or "")
+    normalized_content_verdict = str(content_verdict or "").strip().lower()
     if drafts:
-        if content_verdict in {"accepted", "accepted_with_warnings"}:
+        if normalized_content_verdict in {"accepted", "accepted_with_warnings"}:
             drafts[-1]["review_status"] = "accepted"
             drafts[-1]["review_state"] = "evaluated"
-        elif content_verdict == "accepted_partial":
+        elif normalized_content_verdict == "accepted_partial":
             drafts[-1]["review_status"] = "accepted_partial"
             drafts[-1]["review_state"] = "evaluated"
-        elif content_verdict in {"rejected", "best_effort_exhausted"} and not any(
+        elif normalized_content_verdict in {"rejected", "best_effort_exhausted"} and not any(
             draft.get("review_status") in {"accepted", "accepted_partial"} for draft in drafts
         ):
             drafts[-1]["review_status"] = "rejected"
             drafts[-1]["review_state"] = "evaluated"
 
     return drafts
+
+
+def extract_drafts_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compatibility wrapper that delegates summary-shaped inputs to the native projector."""
+
+    task = summary.get("task") or {}
+    verdicts = summary.get("verdicts") or {}
+    return drafts_from_stage_history_v1(
+        list(summary.get("agent_stages") or []),
+        task_kind=str(task.get("task_kind", "patch")),
+        validator_rounds=list(summary.get("validator_rounds", [])),
+        content_verdict=(
+            None
+            if verdicts.get("content_verdict") in (None, "")
+            else str(verdicts.get("content_verdict"))
+        ),
+    )
 
 
 def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:

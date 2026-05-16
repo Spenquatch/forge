@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Auto-fit obviously mismatched task/strategy pairs before model work",
     )
     run.add_argument(
+        "--analysis-review-execution-mode",
+        choices=["legacy_bridge", "graph_owned"],
+        default="legacy_bridge",
+        help="Runtime entrypoint for analysis_review strategies",
+    )
+    run.add_argument(
         "--json",
         action="store_true",
         help="Print the final summary JSON to stdout instead of a short status line",
@@ -88,6 +94,7 @@ async def _run_with_executor(args) -> dict[str, Any]:
         config_path=args.config,
         thread_id=args.thread_id,
         auto_fit_strategy=(args.auto_fit_strategy == "true"),
+        analysis_review_execution_mode=args.analysis_review_execution_mode,
     )
     summary_payload = state.get("summary_payload")
     if isinstance(summary_payload, dict):
@@ -120,20 +127,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         try:
-            if args.checkpoint == "memory":
-                runner = HarnessRunner(
-                    task_path=args.task,
-                    strategy_path=args.strategy,
-                    workspace=args.workspace,
-                    out_root=args.out_root,
-                    config_path=args.config,
-                    thread_id=args.thread_id,
-                    auto_fit_strategy=(args.auto_fit_strategy == "true"),
-                )
-                summary = runner.run()
-            else:
-                summary = asyncio.run(_run_with_executor(args))
-        except (HarnessError, RuntimeError, ValueError, KeyError) as exc:
+            summary = asyncio.run(_run_with_executor(args))
+        except (HarnessError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
             print(f"error={exc}", file=sys.stderr)
             return 2
 

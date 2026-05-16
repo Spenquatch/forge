@@ -17,6 +17,7 @@ from anvil.harness.runner import HarnessRunner
 from anvil.harness.schemas import analysis_review_schema
 from anvil.harness.selection import extract_drafts_from_summary
 from anvil.harness.semantic_validation import BOUNDED_ATTESTATION_INPUT_KEY
+from anvil.harness.state import initialize_harness_state, state_from_summary
 from anvil.harness.types import ProviderRun
 
 _PRIMARY_SEAM_PATHS = [
@@ -3861,6 +3862,13 @@ def test_analysis_review_runner_focus_gate_selected_records_stage_and_prompt_han
         "focus_type": "seam",
         "decision_state": "selected",
     }
+    assert focus_stage["metadata"]["graph_stage_id"] == "focus_gate"
+    assert focus_stage["metadata"]["transition_reason"] == "focus_gate_required"
+    assert focus_stage["metadata"]["boundary_source"] == "runner"
+    assert (
+        focus_stage["metadata"]["semantic_validation_path"]
+        == focus_stage["semantic_validation_path"]
+    )
     assert "focus_gate_probe" not in adapter.prompt_texts
     assert "Focus Gate Decision:" in adapter.prompt_texts["proposer"][-1]
     assert (
@@ -5547,10 +5555,10 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert "## Review Scope" in report_text
     assert "## Bounded Review" not in report_text
     assert "## Analysis Review Status" in report_text
-    assert "- Mode: `bounded`" in report_text
+    assert "- Execution mode: `bounded`" in report_text
     assert "- Provenance status: `not_required`" in report_text
     assert (
-        "- Recommendation indices withheld from `FINAL_ANSWER.*`: none" in report_text
+        "- Withheld recommendation indices for `FINAL_ANSWER.*`: none" in report_text
     )
     assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
     assert '"rendered_in_report_section": true' in report_text
@@ -5561,6 +5569,67 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     )
     assert "- Provenance status: `not_required`" in final_answer_text
     assert "- Provenance status: `bound`" not in final_answer_text
+
+
+def test_analysis_review_runner_emits_stage_observability_metadata_without_behavior_drift(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider", lambda name: _AcceptingHarnessAdapter()
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted"
+    assert [stage["role_name"] for stage in summary["agent_stages"]] == [
+        "proposer",
+        "critic",
+        "reviser_round_1",
+        "auditor",
+    ]
+
+    expected_transition_reasons = {
+        "proposer": "analysis_entry",
+        "critic": "review_loop_entry",
+        "reviser_round_1": "review_feedback_revision",
+        "auditor": "publication_review",
+    }
+    expected_graph_stage_ids = {
+        "proposer": "proposer",
+        "critic": "critic",
+        "reviser_round_1": "reviser",
+        "auditor": "auditor",
+    }
+    for stage in summary["agent_stages"]:
+        assert stage["stage_id"].startswith(f"stage-{stage['stage_index']:02d}-")
+        assert stage["text_path"] == stage["stdout_path"]
+        assert stage["json_path"] == stage["output_path"]
+        assert stage["raw_json_path"] == stage["raw_output_path"]
+        assert stage["normalized_json_path"] == stage["normalized_output_path"]
+        assert (
+            stage["metadata"]["graph_stage_id"]
+            == expected_graph_stage_ids[stage["role_name"]]
+        )
+        assert (
+            stage["metadata"]["transition_reason"]
+            == expected_transition_reasons[stage["role_name"]]
+        )
+        assert stage["metadata"]["boundary_source"] == "runner"
+        assert (
+            stage["metadata"]["semantic_validation_path"]
+            == stage["semantic_validation_path"]
+        )
 
 
 def test_analysis_review_runner_bounded_mode_can_ship_fuller_repo_local_recommendation_set(
@@ -5919,7 +5988,7 @@ def test_analysis_review_runner_trust_mode_preserves_shared_repo_local_seam_and_
         )
 
     report_text = Path(summary["artifacts"]["report_md"]).read_text(encoding="utf-8")
-    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `3`" in report_text
+    assert "- Withheld recommendation indices for `FINAL_ANSWER.*`: `3`" in report_text
     assert "  - `3`: `inferred_grounding`" in report_text
 
 
@@ -6173,9 +6242,9 @@ def test_analysis_review_runner_trust_mode_downgrades_inference_only_acceptance_
     assert "## Review Scope" in report_text
     assert "## Bounded Review" not in report_text
     assert "## Analysis Review Status" in report_text
-    assert "- Mode: `trust`" in report_text
+    assert "- Execution mode: `trust`" in report_text
     assert "- Provenance status: `bound`" in report_text
-    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in report_text
+    assert "- Withheld recommendation indices for `FINAL_ANSWER.*`: `2`" in report_text
     assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_text
     assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in report_text
     assert "  - `2`: `inferred_grounding`" in report_text
@@ -8270,7 +8339,7 @@ def test_analysis_review_runner_preserves_topic_introduction_source_when_carried
         "| `TOPIC-001` | Recommendation 2 needs a concrete fallback classification. | `medium` | `critic` | `carried_forward` | `2` | not_addressed \\| The recommendation text improved, but the fallback classification is still too implicit. \\| Operators still need a concrete fallback label. |"
         in report_text
     )
-    assert "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`" in report_text
+    assert "- Withheld recommendation indices for `FINAL_ANSWER.*`: `2`" in report_text
     assert (
         "- `TOPIC-001` `carried_forward` via `critic`: Recommendation 2 needs a concrete fallback classification. — not_addressed | The recommendation text improved, but the fallback classification is still too implicit. | Operators still need a concrete fallback label."
         in best_draft_text
@@ -8893,6 +8962,67 @@ def test_analysis_review_runner_short_circuits_provider_failures_and_marks_revie
         encoding="utf-8"
     )
     assert "not evaluated by a successful critic/auditor stage" in best_draft_text
+    runtime = summary["run_details"]["analysis_review_runtime"]
+    assert runtime["current_analysis_payload"]["status"] == "done"
+    assert runtime["current_review_payload"] is None
+    assert runtime["latest_validator_round"] == []
+    assert runtime["revisions_completed"] == 0
+    assert runtime["focus_refinement"] is None
+    assert runtime["transition_reason"] == "critic_failed"
+    assert runtime["review_loop_exercised"] is False
+
+
+def test_analysis_review_runtime_bag_is_initialized_and_projected_from_summary(
+    tmp_path,
+    monkeypatch,
+):
+    state = initialize_harness_state(
+        task_path="task.yaml",
+        strategy_path="strategy.yaml",
+        workspace_root="/tmp/workspace",
+        out_root="/tmp/runs",
+    )
+    assert state["analysis_review_runtime"] == {}
+
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _AcceptingHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    runtime = summary["run_details"]["analysis_review_runtime"]
+    assert {
+        "current_analysis_payload",
+        "current_review_payload",
+        "latest_validator_round",
+        "revisions_completed",
+        "max_loops",
+        "focus_refinement",
+        "transition_reason",
+        "review_loop_exercised",
+    } <= set(runtime)
+    assert runtime["current_analysis_payload"] == summary["run_details"]["final_analysis"]
+    assert runtime["current_review_payload"] == summary["run_details"]["final_review"]
+    assert runtime["latest_validator_round"] == []
+    assert runtime["revisions_completed"] == summary["run_details"]["revisions_completed"]
+    assert runtime["max_loops"] >= runtime["revisions_completed"]
+    assert runtime["focus_refinement"] is None
+    assert runtime["transition_reason"] == "stop_policy_satisfied"
+    assert runtime["review_loop_exercised"] is True
+
+    projected_state = state_from_summary(summary)
+    assert projected_state["analysis_review_runtime"] == runtime
 
 
 def test_analysis_review_runner_preserves_focus_decision_on_late_review_failure(
@@ -9454,6 +9584,13 @@ def test_analysis_review_runner_attestation_focus_gate_parity_matches_legacy_tru
                 "recommendations"
             ]
             == legacy_summary["run_details"]["final_analysis"]["recommendations"]
+        )
+        attestation_stage = attestation_summary["agent_stages"][-1]
+        assert attestation_stage["role_name"] == "auditor"
+        assert attestation_stage["metadata"]["graph_stage_id"] == "attestation_auditor"
+        assert (
+            attestation_stage["metadata"]["transition_reason"]
+            == "trust_attestation_review"
         )
     else:
         assert BOUNDED_ATTESTATION_INPUT_KEY not in attestation_summary

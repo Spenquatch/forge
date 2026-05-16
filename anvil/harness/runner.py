@@ -14,14 +14,15 @@ from uuid import uuid4
 
 from anvil.orchestrator import reload_config
 
+from . import analysis_review_runtime
 from .contracts import (
     AnalysisReviewContract,
     BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
     PartialAcceptancePolicy,
     RecommendationAdmissibilityStatus,
-    build_analysis_review_contract,
     canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
+    resolve_analysis_review_contract,
 )
 from .files import load_structured_file, slugify, write_json, write_text
 from .focus_types import focus_type_adapter
@@ -223,7 +224,7 @@ class HarnessRunner:
             self._emit_task_strategy_warnings()
             self._apply_strategy_autofit()
             if is_analysis_review_strategy_kind(self.strategy.kind):
-                self.analysis_review_contract = build_analysis_review_contract(
+                self.analysis_review_contract = resolve_analysis_review_contract(
                     self.task, self.strategy
                 )
             write_json(self.run_dir / "task.effective.json", self.task.to_dict())
@@ -635,28 +636,30 @@ class HarnessRunner:
 
     def _run_analysis_review_v1(self) -> dict[str, Any]:
         contract = self._analysis_contract()
-        focus_gate_cfg = self._focus_gate_role_config()
+        runtime = analysis_review_runtime.new_analysis_review_runtime()
 
         focus_decision: dict[str, Any] | None = None
-        focus_refinement: dict[str, Any] | None = None
         if contract.focus_gate.enabled:
-            focus_gate_outcome = self._run_focus_gate(
+            focus_gate_outcome = analysis_review_runtime.execute_focus_gate(
+                runtime=runtime,
                 contract=contract,
-                role_cfg=focus_gate_cfg,
+                run_focus_gate=self._run_analysis_focus_gate_stage,
             )
             if focus_gate_outcome["kind"] == "blocked":
                 return focus_gate_outcome["outcome"]
             if focus_gate_outcome["kind"] == "failed":
-                return self._analysis_stage_failure_outcome(
-                    stage_label="focus_gate",
-                    run=focus_gate_outcome["run"],
-                    validator_verdict="not_run",
-                    review_loop_exercised=False,
-                    final_analysis=None,
-                    contract=contract,
+                return analysis_review_runtime.attach_runtime_details(
+                    self._analysis_stage_failure_outcome(
+                        stage_label="focus_gate",
+                        run=focus_gate_outcome["run"],
+                        validator_verdict="not_run",
+                        review_loop_exercised=False,
+                        final_analysis=None,
+                        contract=contract,
+                    ),
+                    runtime,
                 )
             focus_decision = focus_gate_outcome["focus_decision"]
-            focus_refinement = focus_gate_outcome.get("focus_refinement")
 
         if (
             contract.mode == "trust"
@@ -665,12 +668,15 @@ class HarnessRunner:
             bounded_strategy_payload = self.strategy.to_dict()
             bounded_strategy_payload["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
             bounded_strategy = StrategyConfig.from_dict(bounded_strategy_payload)
-            bounded_contract = build_analysis_review_contract(self.task, bounded_strategy)
+            bounded_contract = resolve_analysis_review_contract(
+                self.task, bounded_strategy
+            )
             self.analysis_review_contract = bounded_contract
             try:
                 bounded_flow = self._execute_analysis_review_flow(
                     contract=bounded_contract,
                     focus_decision=focus_decision,
+                    runtime=runtime,
                 )
             finally:
                 self.analysis_review_contract = contract
@@ -684,8 +690,8 @@ class HarnessRunner:
                 "topic_ledger": self._serialized_topic_ledger(),
                 "focus_decision": focus_decision,
             }
-            if isinstance(focus_refinement, dict) and focus_refinement:
-                bounded_run_details["focus_refinement"] = focus_refinement
+            if isinstance(runtime.get("focus_refinement"), dict):
+                bounded_run_details["focus_refinement"] = runtime["focus_refinement"]
             bounded_review_summary = self._build_bounded_review_summary(
                 bounded_run_details
             )
@@ -702,162 +708,121 @@ class HarnessRunner:
                     "attestation_over_bounded requires bounded_attestation_input before attestation."
                 )
 
-            auditor_cfg = self._role_or_fallback("auditor", ["critic", "falsifier"])
-            attestation_run = self._run_trust_attestation_review(
+            attestation = analysis_review_runtime.execute_trust_attestation(
                 contract=contract,
-                role_cfg=auditor_cfg,
-                bounded_attestation_input=bounded_attestation_input,
+                runtime=runtime,
+                focus_decision=focus_decision,
+                revisions_completed=bounded_flow["revisions_completed"],
                 validation_runs=bounded_flow["validation_runs"],
                 final_analysis_payload=bounded_flow["final_analysis_payload"],
+                bounded_attestation_input=bounded_attestation_input,
+                run_trust_attestation_stage=self._run_analysis_trust_attestation_stage,
+                ingest_review_payload=self._ingest_review_payload,
+                classify_validator_verdict=self._classify_validator_verdict,
+                build_stage_failure_outcome=self._analysis_stage_failure_outcome,
             )
-            if not attestation_run.ok:
-                return self._analysis_stage_failure_outcome(
-                    stage_label="trust attestation review",
-                    run=attestation_run,
-                    validator_verdict=self._classify_validator_verdict(
-                        bounded_flow["validation_runs"]
-                    ),
-                    review_loop_exercised=True,
-                    final_analysis=bounded_flow["final_analysis_payload"],
-                    contract=contract,
-                    focus_decision=focus_decision,
-                )
-            self._ingest_review_payload(
-                attestation_run.structured_output or {},
-                round_index=bounded_flow["revisions_completed"] + 1,
-                role_name="auditor",
-                reviser_output=None,
-            )
-            final_review_payload = attestation_run.structured_output or {}
-            final_analysis_payload = bounded_flow["final_analysis_payload"]
-            validator_verdict = self._classify_validator_verdict(
-                bounded_flow["validation_runs"]
-            )
-            revisions_completed = bounded_flow["revisions_completed"]
-            max_loops = bounded_flow["max_loops"]
-            accepted_recommendation_count = len(
-                self._accepted_recommendation_reviews(final_review_payload)
-            )
-            content_verdict = self._analysis_content_verdict(
-                final_review_payload,
-                final_analysis_payload=final_analysis_payload,
-                revisions_completed=revisions_completed,
-                max_loops=max_loops,
-            )
-            analysis_review_status = self._build_analysis_review_status(
-                final_analysis_payload=final_analysis_payload,
-                final_review_payload=final_review_payload,
-                content_verdict=content_verdict,
-            )
-            final_summary = self._analysis_final_summary(
-                final_review_payload,
-                final_analysis_payload=final_analysis_payload,
-                content_verdict=content_verdict,
-                revisions_completed=revisions_completed,
-                max_loops=max_loops,
-                validator_verdict=validator_verdict,
-            )
-            return {
-                "run_verdict": self._combine_run_verdict(
-                    content_verdict, validator_verdict
-                ),
-                "content_verdict": content_verdict,
-                "validator_verdict": validator_verdict,
-                "final_summary": final_summary,
-                "details": {
-                    "revisions_completed": revisions_completed,
-                    "review_policy": contract.stop_policy.to_dict(),
-                    "analysis_review_contract": contract.to_dict(),
-                    "final_review": final_review_payload,
-                    "final_analysis": final_analysis_payload,
-                    "issue_ledger": self._serialized_issue_ledger(),
-                    "topic_ledger": self._serialized_topic_ledger(),
-                    "recommendation_reviews": self._recommendation_reviews(
-                        final_review_payload
-                    ),
-                    "accepted_recommendation_count": accepted_recommendation_count,
-                    "analysis_review_status": analysis_review_status,
-                    "focus_decision": focus_decision,
-                    "focus_refinement": focus_refinement,
-                    "review_loop_exercised": True,
+            if "failure_outcome" in attestation:
+                return attestation["failure_outcome"]
+            return analysis_review_runtime.build_success_outcome(
+                runtime=runtime,
+                contract=contract,
+                validation_runs=bounded_flow["validation_runs"],
+                final_review_payload=attestation["attestation_run"].structured_output
+                or {},
+                final_analysis_payload=bounded_flow["final_analysis_payload"],
+                focus_decision=focus_decision,
+                classify_validator_verdict=self._classify_validator_verdict,
+                analysis_content_verdict=self._analysis_content_verdict,
+                build_analysis_review_status=self._build_analysis_review_status,
+                analysis_final_summary=self._analysis_final_summary,
+                combine_run_verdict=self._combine_run_verdict,
+                serialized_issue_ledger=self._serialized_issue_ledger,
+                serialized_topic_ledger=self._serialized_topic_ledger,
+                recommendation_reviews=self._recommendation_reviews,
+                accepted_recommendation_reviews=self._accepted_recommendation_reviews,
+                extra_details={
                     "bounded_review_summary": bounded_review_summary,
                     BOUNDED_ATTESTATION_INPUT_KEY: bounded_attestation_input,
                 },
-            }
+            )
 
         flow = self._execute_analysis_review_flow(
             contract=contract,
             focus_decision=focus_decision,
+            runtime=runtime,
         )
         if "failure_outcome" in flow:
             return flow["failure_outcome"]
 
-        final_review_payload = flow["final_review_payload"]
-        final_analysis_payload = flow["final_analysis_payload"]
-        validator_verdict = self._classify_validator_verdict(flow["validation_runs"])
-        revisions_completed = flow["revisions_completed"]
-        max_loops = flow["max_loops"]
-        content_verdict = self._analysis_content_verdict(
-            final_review_payload,
-            final_analysis_payload=final_analysis_payload,
-            revisions_completed=revisions_completed,
-            max_loops=max_loops,
+        return analysis_review_runtime.build_success_outcome(
+            runtime=runtime,
+            contract=contract,
+            validation_runs=flow["validation_runs"],
+            final_review_payload=flow["final_review_payload"],
+            final_analysis_payload=flow["final_analysis_payload"],
+            focus_decision=focus_decision,
+            classify_validator_verdict=self._classify_validator_verdict,
+            analysis_content_verdict=self._analysis_content_verdict,
+            build_analysis_review_status=self._build_analysis_review_status,
+            analysis_final_summary=self._analysis_final_summary,
+            combine_run_verdict=self._combine_run_verdict,
+            serialized_issue_ledger=self._serialized_issue_ledger,
+            serialized_topic_ledger=self._serialized_topic_ledger,
+            recommendation_reviews=self._recommendation_reviews,
+            accepted_recommendation_reviews=self._accepted_recommendation_reviews,
         )
-        analysis_review_status = self._build_analysis_review_status(
-            final_analysis_payload=final_analysis_payload,
-            final_review_payload=final_review_payload,
-            content_verdict=content_verdict,
-        )
-
-        final_summary = self._analysis_final_summary(
-            final_review_payload,
-            final_analysis_payload=final_analysis_payload,
-            content_verdict=content_verdict,
-            revisions_completed=revisions_completed,
-            max_loops=max_loops,
-                validator_verdict=validator_verdict,
-        )
-        accepted_recommendation_count = len(
-            self._accepted_recommendation_reviews(final_review_payload)
-        )
-
-        return {
-            "run_verdict": self._combine_run_verdict(
-                content_verdict, validator_verdict
-            ),
-            "content_verdict": content_verdict,
-            "validator_verdict": validator_verdict,
-            "final_summary": final_summary,
-            "details": {
-                "revisions_completed": revisions_completed,
-                "review_policy": contract.stop_policy.to_dict(),
-                "analysis_review_contract": contract.to_dict(),
-                "final_review": final_review_payload,
-                "final_analysis": final_analysis_payload,
-                "issue_ledger": self._serialized_issue_ledger(),
-                "topic_ledger": self._serialized_topic_ledger(),
-                "recommendation_reviews": self._recommendation_reviews(
-                    final_review_payload
-                ),
-                "accepted_recommendation_count": accepted_recommendation_count,
-                "analysis_review_status": analysis_review_status,
-                "focus_decision": focus_decision,
-                "focus_refinement": focus_refinement,
-                "review_loop_exercised": True,
-            },
-        }
 
     def _execute_analysis_review_flow(
         self,
         *,
         contract: AnalysisReviewContract,
         focus_decision: dict[str, Any] | None,
+        runtime: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        proposer_cfg = self._require_role("proposer")
-        critic_cfg = self._role_or_fallback("critic", ["falsifier"])
-        reviser_cfg = self._role_or_fallback("reviser", ["patcher", "proposer"])
-        auditor_cfg = self._role_or_fallback("auditor", ["critic", "falsifier"])
+        return analysis_review_runtime.execute_review_flow(
+            runtime=(
+                runtime
+                if isinstance(runtime, dict)
+                else analysis_review_runtime.new_analysis_review_runtime()
+            ),
+            contract=contract,
+            focus_decision=focus_decision,
+            max_loops=self._analysis_review_max_loops(),
+            run_proposer_stage=self._run_analysis_proposer_stage,
+            run_validator_round=self._run_validator_round,
+            run_critic_stage=self._run_analysis_critic_stage,
+            run_reviser_stage=self._run_analysis_reviser_stage,
+            run_auditor_stage=self._run_analysis_auditor_stage,
+            ingest_review_payload=self._ingest_review_payload,
+            analysis_needs_revision=self._analysis_needs_revision,
+            classify_validator_verdict=self._classify_validator_verdict,
+            build_stage_failure_outcome=self._analysis_stage_failure_outcome,
+        )
 
+    def _analysis_review_max_loops(self) -> int:
+        return max(
+            self.strategy.review_loops.max_loops,
+            self.strategy.review_loops.min_loops,
+            1 if self.strategy.review_loops.always_run_first_revision else 0,
+        )
+
+    def _run_analysis_focus_gate_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+    ) -> dict[str, Any]:
+        return self._run_focus_gate(
+            contract=contract,
+            role_cfg=self._focus_gate_role_config(),
+        )
+
+    def _run_analysis_proposer_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        focus_decision: dict[str, Any] | None,
+    ) -> ProviderRun:
+        proposer_cfg = self._require_role("proposer")
         git_snapshot = capture_git_snapshot(
             self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
         )
@@ -868,7 +833,7 @@ class HarnessRunner:
             contract,
             focus_decision=focus_decision,
         )
-        proposer_run = self._run_agent_stage(
+        return self._run_agent_stage(
             "proposer",
             proposer_cfg.provider,
             proposer_prompt,
@@ -884,161 +849,114 @@ class HarnessRunner:
                 ),
             },
         )
-        if not proposer_run.ok:
-            return {
-                "failure_outcome": self._analysis_stage_failure_outcome(
-                    stage_label="proposer",
-                    run=proposer_run,
-                    validator_verdict=self._classify_validator_verdict([]),
-                    review_loop_exercised=False,
-                    final_analysis=None,
-                    contract=contract,
-                    focus_decision=focus_decision,
-                )
-            }
 
-        validation_runs = self._run_validator_round(round_index=0)
-        critic_run = self._run_analysis_reviewer(
+    def _run_analysis_critic_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        prior_output: dict[str, Any] | None,
+        validation_runs: list[ValidationRun],
+    ) -> ProviderRun:
+        del contract
+        return self._run_analysis_reviewer(
             role_name="critic",
-            role_cfg=critic_cfg,
-            prior_output=proposer_run.structured_output,
+            role_cfg=self._role_or_fallback("critic", ["falsifier"]),
+            prior_output=prior_output,
             validation_runs=validation_runs,
             round_index=0,
             reviser_output=None,
         )
-        if not critic_run.ok:
-            return {
-                "failure_outcome": self._analysis_stage_failure_outcome(
-                    stage_label="critic",
-                    run=critic_run,
-                    validator_verdict=self._classify_validator_verdict(
-                        validation_runs
-                    ),
-                    review_loop_exercised=False,
-                    final_analysis=proposer_run.structured_output,
-                    contract=contract,
-                    focus_decision=focus_decision,
-                )
-            }
-        self._ingest_review_payload(
-            critic_run.structured_output or {},
-            round_index=0,
-            role_name="critic",
-            reviser_output=None,
+
+    def _run_analysis_reviser_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        focus_decision: dict[str, Any] | None,
+        latest_analysis_payload: dict[str, Any] | None,
+        latest_review_payload: dict[str, Any] | None,
+        validation_runs: list[ValidationRun],
+        revision_round: int,
+    ) -> ProviderRun:
+        reviser_cfg = self._role_or_fallback("reviser", ["patcher", "proposer"])
+        reviser_prompt = build_analysis_reviser_prompt(
+            self.task,
+            self.strategy.prompt_preamble,
+            latest_analysis_payload,
+            latest_review_payload,
+            validation_runs,
+            capture_git_snapshot(
+                self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
+            ),
+            revision_round=revision_round,
+            contract=contract,
+            open_issues=self._open_issue_records(),
+            open_topics=self._open_topic_records(),
+            focus_decision=focus_decision,
+        )
+        return self._run_agent_stage(
+            f"reviser_round_{revision_round}",
+            reviser_cfg.provider,
+            reviser_prompt,
+            analysis_output_schema(
+                require_issue_resolution_map=True,
+                require_topic_resolution_map=bool(self._open_topic_records()),
+            ),
+            reviser_cfg,
+            semantic_context={
+                "contract": contract,
+                "open_issue_ids": [
+                    str(item.get("issue_id"))
+                    for item in self._open_issue_records()
+                    if str(item.get("issue_id") or "").strip()
+                ],
+                "expected_open_topic_ids": [
+                    str(item.get("topic_id"))
+                    for item in self._open_topic_records()
+                    if str(item.get("topic_id") or "").strip()
+                ],
+                "expected_primary_seam_id": self._downstream_primary_seam_id(
+                    focus_decision
+                ),
+                "expected_primary_seam_paths": self._downstream_primary_seam_paths(
+                    focus_decision
+                ),
+            },
         )
 
-        latest_analysis_run = proposer_run
-        latest_review_run = critic_run
-        revisions_completed = 0
-        max_loops = max(
-            self.strategy.review_loops.max_loops,
-            self.strategy.review_loops.min_loops,
-            1 if self.strategy.review_loops.always_run_first_revision else 0,
+    def _run_analysis_auditor_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        prior_output: dict[str, Any] | None,
+        validation_runs: list[ValidationRun],
+        round_index: int,
+        reviser_output: dict[str, Any] | None,
+    ) -> ProviderRun:
+        del contract
+        return self._run_analysis_reviewer(
+            role_name="auditor",
+            role_cfg=self._role_or_fallback("auditor", ["critic", "falsifier"]),
+            prior_output=prior_output,
+            validation_runs=validation_runs,
+            round_index=round_index,
+            reviser_output=reviser_output,
         )
 
-        while revisions_completed < max_loops:
-            if not self._analysis_needs_revision(
-                latest_review_run.structured_output or {}, revisions_completed
-            ):
-                break
-            revisions_completed += 1
-            reviser_prompt = build_analysis_reviser_prompt(
-                self.task,
-                self.strategy.prompt_preamble,
-                latest_analysis_run.structured_output,
-                latest_review_run.structured_output,
-                validation_runs,
-                capture_git_snapshot(
-                    self.workspace, ignored_rel_paths=self.policy_ignored_rel_paths
-                ),
-                revision_round=revisions_completed,
-                contract=contract,
-                open_issues=self._open_issue_records(),
-                open_topics=self._open_topic_records(),
-                focus_decision=focus_decision,
-            )
-            prior_analysis_payload = latest_analysis_run.structured_output
-            next_analysis_run = self._run_agent_stage(
-                f"reviser_round_{revisions_completed}",
-                reviser_cfg.provider,
-                reviser_prompt,
-                analysis_output_schema(
-                    require_issue_resolution_map=True,
-                    require_topic_resolution_map=bool(self._open_topic_records()),
-                ),
-                reviser_cfg,
-                semantic_context={
-                    "contract": contract,
-                    "open_issue_ids": [
-                        str(item.get("issue_id"))
-                        for item in self._open_issue_records()
-                        if str(item.get("issue_id") or "").strip()
-                    ],
-                    "expected_open_topic_ids": [
-                        str(item.get("topic_id"))
-                        for item in self._open_topic_records()
-                        if str(item.get("topic_id") or "").strip()
-                    ],
-                    "expected_primary_seam_id": self._downstream_primary_seam_id(
-                        focus_decision
-                    ),
-                    "expected_primary_seam_paths": self._downstream_primary_seam_paths(
-                        focus_decision
-                    ),
-                },
-            )
-            if not next_analysis_run.ok:
-                return {
-                    "failure_outcome": self._analysis_stage_failure_outcome(
-                        stage_label=f"reviser round {revisions_completed}",
-                        run=next_analysis_run,
-                        validator_verdict=self._classify_validator_verdict(
-                            validation_runs
-                        ),
-                        review_loop_exercised=True,
-                        final_analysis=prior_analysis_payload,
-                        contract=contract,
-                        focus_decision=focus_decision,
-                    )
-                }
-            latest_analysis_run = next_analysis_run
-
-            latest_review_run = self._run_analysis_reviewer(
-                role_name="auditor",
-                role_cfg=auditor_cfg,
-                prior_output=latest_analysis_run.structured_output,
-                validation_runs=validation_runs,
-                round_index=revisions_completed,
-                reviser_output=latest_analysis_run.structured_output,
-            )
-            if not latest_review_run.ok:
-                return {
-                    "failure_outcome": self._analysis_stage_failure_outcome(
-                        stage_label="auditor",
-                        run=latest_review_run,
-                        validator_verdict=self._classify_validator_verdict(
-                            validation_runs
-                        ),
-                        review_loop_exercised=True,
-                        final_analysis=latest_analysis_run.structured_output,
-                        contract=contract,
-                        focus_decision=focus_decision,
-                    )
-                }
-            self._ingest_review_payload(
-                latest_review_run.structured_output or {},
-                round_index=revisions_completed,
-                role_name="auditor",
-                reviser_output=latest_analysis_run.structured_output,
-            )
-
-        return {
-            "validation_runs": validation_runs,
-            "revisions_completed": revisions_completed,
-            "max_loops": max_loops,
-            "final_review_payload": latest_review_run.structured_output or {},
-            "final_analysis_payload": latest_analysis_run.structured_output or {},
-        }
+    def _run_analysis_trust_attestation_stage(
+        self,
+        *,
+        contract: AnalysisReviewContract,
+        bounded_attestation_input: dict[str, Any],
+        validation_runs: list[ValidationRun],
+        final_analysis_payload: dict[str, Any],
+    ) -> ProviderRun:
+        return self._run_trust_attestation_review(
+            contract=contract,
+            role_cfg=self._role_or_fallback("auditor", ["critic", "falsifier"]),
+            bounded_attestation_input=bounded_attestation_input,
+            validation_runs=validation_runs,
+            final_analysis_payload=final_analysis_payload,
+        )
 
     def _run_trust_attestation_review(
         self,
@@ -1445,9 +1363,18 @@ class HarnessRunner:
         if record_stage:
             self.stage_counter = stage_index
         stage_record = asdict(run)
+        stage_record["stage_id"] = self._stage_record_id(stage_index, role_name)
         stage_record["stage_index"] = stage_index
         stage_record["requested_access"] = role_config.access
         stage_record["effective_access"] = effective_role_config.access
+        if run.stdout_path:
+            stage_record["text_path"] = run.stdout_path
+        if run.output_path:
+            stage_record["json_path"] = run.output_path
+        if run.raw_output_path:
+            stage_record["raw_json_path"] = run.raw_output_path
+        if run.normalized_output_path:
+            stage_record["normalized_json_path"] = run.normalized_output_path
         if role_name == "focus_gate":
             stage_record["round_index"] = 0
         if run.failure_kind:
@@ -1470,14 +1397,18 @@ class HarnessRunner:
             stage_record["access_override_reason"] = (
                 "Task-level workspace_write_policy forced this stage to run read-only."
             )
+        stage_metadata = self._stage_observability_metadata(
+            role_name=role_name,
+            semantic_context=context,
+            semantic_validation_path=semantic_validation_path,
+        )
         if role_name == "focus_gate" and isinstance(run.structured_output, dict):
-            stage_record["metadata"] = {
-                "focus_gate": {
-                    "gate_path": run.structured_output.get("gate_path"),
-                    "focus_type": run.structured_output.get("focus_type"),
-                    "decision_state": run.structured_output.get("decision_state"),
-                }
-            }
+            stage_metadata.update(self._focus_gate_stage_metadata(run.structured_output))
+        elif role_name == "focus_gate_probe" and isinstance(run.structured_output, dict):
+            stage_metadata.update(
+                self._focus_gate_probe_stage_metadata(run.structured_output)
+            )
+        stage_record["metadata"] = stage_metadata
         if record_stage:
             self.agent_stages.append(stage_record)
             write_json(stage_dir / "run.envelope.json", stage_record)
@@ -2368,10 +2299,75 @@ class HarnessRunner:
 
     def _analysis_contract(self) -> AnalysisReviewContract:
         if self.analysis_review_contract is None:
-            self.analysis_review_contract = build_analysis_review_contract(
+            self.analysis_review_contract = resolve_analysis_review_contract(
                 self.task, self.strategy
             )
         return self.analysis_review_contract
+
+    @staticmethod
+    def _stage_record_id(stage_index: int, role_name: str) -> str:
+        return f"stage-{stage_index:02d}-{slugify(role_name)}"
+
+    @staticmethod
+    def _stage_transition_reason(graph_stage_id: str) -> str:
+        normalized = str(graph_stage_id or "").strip()
+        if normalized == "solver":
+            return "single_pass_entry"
+        if normalized == "proposer":
+            return "analysis_entry"
+        if normalized == "falsifier":
+            return "falsifier_review"
+        if normalized == "critic":
+            return "review_loop_entry"
+        if normalized == "reviser":
+            return "review_feedback_revision"
+        if normalized == "patcher":
+            return "repair_requested"
+        if normalized == "auditor":
+            return "publication_review"
+        if normalized == "attestation_auditor":
+            return "trust_attestation_review"
+        if normalized == "focus_gate_probe":
+            return "focus_probe_required"
+        if normalized == "focus_gate":
+            return "focus_gate_required"
+        return "stage_requested"
+
+    @classmethod
+    def _stage_observability_metadata(
+        cls,
+        *,
+        role_name: str,
+        semantic_context: dict[str, Any] | None,
+        semantic_validation_path: str | None,
+    ) -> dict[str, Any]:
+        graph_stage_id = cls._graph_stage_id(
+            role_name=role_name,
+            semantic_context=semantic_context,
+        )
+        metadata: dict[str, Any] = {
+            "graph_stage_id": graph_stage_id,
+            "transition_reason": cls._stage_transition_reason(graph_stage_id),
+            "boundary_source": "runner",
+        }
+        if semantic_validation_path:
+            metadata["semantic_validation_path"] = semantic_validation_path
+        return metadata
+
+    @classmethod
+    def _graph_stage_id(
+        cls,
+        *,
+        role_name: str,
+        semantic_context: dict[str, Any] | None,
+    ) -> str:
+        canonical_role_name = cls._canonical_stage_role_name(role_name)
+        if (
+            canonical_role_name == "auditor"
+            and isinstance((semantic_context or {}).get(BOUNDED_ATTESTATION_INPUT_KEY), dict)
+        ):
+            return "attestation_auditor"
+        return canonical_role_name
 
     def _next_issue_id(self, reserved_ids: set[str] | None = None) -> str:
         reserved = set(self._issue_ledger_by_id)
@@ -5781,7 +5777,17 @@ class HarnessRunner:
             if stage_record.get("role_name") != "focus_gate":
                 continue
             stage_record["structured_output"] = deepcopy(focus_decision)
-            stage_record["metadata"] = self._focus_gate_stage_metadata(focus_decision)
+            stage_record["metadata"] = self._stage_observability_metadata(
+                role_name="focus_gate",
+                semantic_context=None,
+                semantic_validation_path=str(
+                    stage_record.get("semantic_validation_path") or ""
+                ).strip()
+                or None,
+            )
+            stage_record["metadata"].update(
+                self._focus_gate_stage_metadata(focus_decision)
+            )
 
             stdout_path = str(stage_record.get("stdout_path") or "").strip()
             if stdout_path:

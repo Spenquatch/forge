@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from anvil.harness.selection import extract_drafts_from_summary, select_best_draft
+from anvil.harness.selection import (
+    drafts_from_stage_history_v1,
+    extract_drafts_from_summary,
+    select_best_draft,
+)
+from anvil.harness.state import stage_records_from_summary
 
 
 def _candidate_stage(
@@ -80,6 +85,52 @@ def test_extract_drafts_counts_carried_forward_topics_as_remaining_debt():
     assert drafts[0]["issue_counts"]["open_topics"] == 1
     assert drafts[0]["issue_counts"]["carried_forward_topics"] == 1
     assert drafts[0]["issue_counts"]["new_topics"] == 0
+
+
+def test_extract_drafts_from_summary_matches_native_stage_history_projection():
+    summary = {
+        "task": {"task_kind": "patch"},
+        "verdicts": {"content_verdict": "accepted_with_warnings"},
+        "validator_rounds": [
+            {
+                "round_index": 0,
+                "results": [
+                    {
+                        "required": True,
+                        "status": "passed",
+                    }
+                ],
+            }
+        ],
+        "agent_stages": [
+            _candidate_stage(stage_index=1),
+            {
+                **_review_stage(
+                    stage_index=2,
+                    payload=_completed_review_payload(
+                        carried_forward_topic_ids=["AT-001"],
+                    ),
+                ),
+                "semantic_validation_payload_provenance": {
+                    "policy_mode": "payload_hash_and_refs",
+                    "closure_provenance_satisfied": True,
+                    "uncovered_global_issue_ids": [],
+                    "uncovered_global_topic_ids": [],
+                    "uncovered_recommendation_indices": [],
+                },
+            },
+        ],
+    }
+
+    native_drafts = drafts_from_stage_history_v1(
+        stage_records_from_summary(summary),
+        task_kind="patch",
+        validator_rounds=list(summary["validator_rounds"]),
+        content_verdict="accepted_with_warnings",
+    )
+    compatibility_drafts = extract_drafts_from_summary(summary)
+
+    assert compatibility_drafts == native_drafts
 
 
 def test_extract_drafts_sums_new_and_carried_forward_topics_into_open_topic_count():

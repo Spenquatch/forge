@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Mapping, Optional, cast
+from typing import Any, AsyncIterator, Dict, Literal, Mapping, Optional, cast
 
 from anvil.langgraph_compat import close_sqlite_saver, open_sqlite_saver
 
@@ -21,11 +21,13 @@ class HarnessLangGraphExecutor:
         checkpoint: str = "memory",
         db_path: str = "forge_harness_checkpoints.db",
         auto_fit_strategy: bool = True,
+        analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"] = "legacy_bridge",
     ) -> None:
         self.max_attempts = max_attempts
         self.checkpoint = checkpoint
         self.db_path = db_path
         self.auto_fit_strategy = auto_fit_strategy
+        self.analysis_review_execution_mode = analysis_review_execution_mode
         self._graph = build_harness_langgraph() if checkpoint == "memory" else None
 
     def _get_graph(self):
@@ -53,6 +55,9 @@ class HarnessLangGraphExecutor:
         config_path: str = "config/models.yaml",
         thread_id: Optional[str] = None,
         auto_fit_strategy: Optional[bool] = None,
+        analysis_review_execution_mode: Optional[
+            Literal["legacy_bridge", "graph_owned"]
+        ] = None,
     ) -> HarnessState:
         request: Dict[str, Any] = {
             "task_path": task_path,
@@ -62,6 +67,11 @@ class HarnessLangGraphExecutor:
             "config_path": config_path,
             "thread_id": thread_id or str(uuid.uuid4()),
             "auto_fit_strategy": self.auto_fit_strategy if auto_fit_strategy is None else auto_fit_strategy,
+            "analysis_review_execution_mode": (
+                self.analysis_review_execution_mode
+                if analysis_review_execution_mode is None
+                else analysis_review_execution_mode
+            ),
             "max_attempts": self.max_attempts,
         }
         return await self.run(request)
@@ -90,6 +100,9 @@ class HarnessLangGraphExecutor:
         config_path: str = "config/models.yaml",
         thread_id: Optional[str] = None,
         auto_fit_strategy: Optional[bool] = None,
+        analysis_review_execution_mode: Optional[
+            Literal["legacy_bridge", "graph_owned"]
+        ] = None,
     ) -> AsyncIterator[dict[str, Any]]:
         request: Dict[str, Any] = {
             "task_path": task_path,
@@ -99,6 +112,11 @@ class HarnessLangGraphExecutor:
             "config_path": config_path,
             "thread_id": thread_id or str(uuid.uuid4()),
             "auto_fit_strategy": self.auto_fit_strategy if auto_fit_strategy is None else auto_fit_strategy,
+            "analysis_review_execution_mode": (
+                self.analysis_review_execution_mode
+                if analysis_review_execution_mode is None
+                else analysis_review_execution_mode
+            ),
             "max_attempts": self.max_attempts,
         }
         cfg = {"configurable": {"thread_id": request["thread_id"]}}

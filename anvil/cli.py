@@ -1043,46 +1043,36 @@ async def harness_run_command(
     thread_id: str | None = None,
     checkpoint: str = "memory",
     auto_fit_strategy: bool = True,
+    analysis_review_execution_mode: str = "legacy_bridge",
 ) -> int:
     try:
-        if checkpoint == "memory":
-            runner = HarnessRunner(
-                task_path=task_path,
-                strategy_path=strategy_path,
-                workspace=workspace,
-                out_root=out_root,
-                config_path=config_path,
-                thread_id=thread_id,
-                auto_fit_strategy=auto_fit_strategy,
-            )
-            summary = await asyncio.to_thread(runner.run)
-        else:
-            executor = HarnessLangGraphExecutor(checkpoint=checkpoint)
-            state = await executor.execute(
-                task_path=task_path,
-                strategy_path=strategy_path,
-                workspace=workspace,
-                out_root=out_root,
-                config_path=config_path,
-                thread_id=thread_id,
-                auto_fit_strategy=auto_fit_strategy,
-            )
-            summary = state.get("summary_payload") or {
-                "verdict": state.get("run_verdict"),
-                "verdicts": {
-                    "run_verdict": state.get("run_verdict"),
-                    "content_verdict": state.get("content_verdict"),
-                    "validator_verdict": state.get("validator_verdict"),
-                    "policy_verdict": state.get("policy_verdict"),
-                    "config_verdict": state.get("config_verdict"),
-                },
-                "artifacts": {
-                    key: value.get("path")
-                    for key, value in dict(state.get("artifact_index") or {}).items()
-                    if isinstance(value, dict) and value.get("path")
-                },
-            }
-    except (HarnessError, RuntimeError, ValueError, KeyError) as exc:
+        executor = HarnessLangGraphExecutor(checkpoint=checkpoint)
+        state = await executor.execute(
+            task_path=task_path,
+            strategy_path=strategy_path,
+            workspace=workspace,
+            out_root=out_root,
+            config_path=config_path,
+            thread_id=thread_id,
+            auto_fit_strategy=auto_fit_strategy,
+            analysis_review_execution_mode=analysis_review_execution_mode,
+        )
+        summary = state.get("summary_payload") or {
+            "verdict": state.get("run_verdict"),
+            "verdicts": {
+                "run_verdict": state.get("run_verdict"),
+                "content_verdict": state.get("content_verdict"),
+                "validator_verdict": state.get("validator_verdict"),
+                "policy_verdict": state.get("policy_verdict"),
+                "config_verdict": state.get("config_verdict"),
+            },
+            "artifacts": {
+                key: value.get("path")
+                for key, value in dict(state.get("artifact_index") or {}).items()
+                if isinstance(value, dict) and value.get("path")
+            },
+        }
+    except (HarnessError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
         print(f"❌ HARNESS RUN FAILED: {exc}")
         return 2
 
@@ -1188,6 +1178,12 @@ async def main_async(argv=None) -> int:
         help="Auto-fit obviously mismatched task/strategy pairs before model work",
     )
     harness_parser.add_argument(
+        "--analysis-review-execution-mode",
+        choices=["legacy_bridge", "graph_owned"],
+        default="legacy_bridge",
+        help="Runtime entrypoint for analysis_review strategies",
+    )
+    harness_parser.add_argument(
         "--json",
         action="store_true",
         help="Print the final harness summary JSON to stdout",
@@ -1249,6 +1245,7 @@ async def main_async(argv=None) -> int:
             thread_id=args.thread_id,
             checkpoint=args.checkpoint,
             auto_fit_strategy=(args.auto_fit_strategy == "true"),
+            analysis_review_execution_mode=args.analysis_review_execution_mode,
         )
     elif args.command == "test":
         return await test_provider(args.provider)

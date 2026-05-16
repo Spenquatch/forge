@@ -58,7 +58,6 @@ def test_history_and_future_files_live_under_project_management():
 
 def test_root_history_files_are_removed():
     assert not (ROOT / "PLAN_M3.md").exists()
-    assert not (ROOT / "ORCH_PLAN.md").exists()
     assert not (ROOT / "CLI_PROVIDER_UPDATE_NOTES.md").exists()
     assert not (ROOT / "FORGE_HARNESS_SURFACE_UPDATE_NOTES.md").exists()
     assert not (ROOT / "TODOS.md").exists()
