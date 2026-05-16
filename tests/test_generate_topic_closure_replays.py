@@ -167,7 +167,7 @@ def test_generate_topic_closure_replays_produces_expected_artifacts(tmp_path):
     )
     _assert_contains_exact_line(
         resolved_report_text,
-        "- Recommendation indices withheld from `FINAL_ANSWER.*`: `2`",
+        "- Withheld recommendation indices for `FINAL_ANSWER.*`: `2`",
     )
     assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in resolved_report_text
     assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in resolved_report_text
