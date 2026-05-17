@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 
 from anvil.harness.reporting import summary_projection_v1
-from anvil.harness.subgraphs.analysis_review_v1 import analysis_review_v1_subgraph
 from anvil.harness.state import (
     HARNESS_STATE_SERIALIZATION_VERSION,
     SUMMARY_BOUNDARY_VERSION,
     initialize_harness_state,
     state_from_summary,
     summary_read_adapter_v1,
+)
+from anvil.harness.subgraphs.analysis_review_v1 import analysis_review_v1_subgraph
+from anvil.harness.types import (
+    DETERMINISTIC_FEATURE_PLANNING_KIND,
+    PLANNING_RUNTIME_TARGET,
 )
 
 
@@ -63,6 +67,70 @@ def test_summary_read_adapter_v1_reads_b1_boundary_fields(tmp_path):
     assert state["bridge_boundary_version"] == "legacy_bridge_boundary_v1"
     assert state["revision_round"] == 2
     assert state["summary_payload"] == summary
+
+
+def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
+    summary = {
+        "run_id": "run-plan-123",
+        "thread_id": "thread-plan-123",
+        "workspace": "/tmp/workspace",
+        "task": {"id": "task-plan-123", "task_kind": "planning"},
+        "strategy_name": "deterministic-feature-planning",
+        "strategy_kind": DETERMINISTIC_FEATURE_PLANNING_KIND,
+        "strategy_graph_spec": {
+            "runtime_target": PLANNING_RUNTIME_TARGET,
+            "phases": [
+                {"id": "design_doc", "stage_type": "rubric_design_doc"},
+                {
+                    "id": "seam_decomposition",
+                    "stage_type": "architecture_seam_decomposition",
+                },
+            ],
+        },
+        "strategy_graph_spec_id": (
+            f"{DETERMINISTIC_FEATURE_PLANNING_KIND}.{PLANNING_RUNTIME_TARGET}"
+        ),
+        "strategy_graph_subset": "bounded_strategy_graph_v1",
+        "planning_terminal_status": "clarification_needed",
+        "planning_stop_reason": "needs_scope_clarification",
+        "clarification_requests": [
+            {"request_id": "clarify-1", "question": "Which release train is in scope?"}
+        ],
+        "repo_evidence_refs": ["src/release/watch.py"],
+        "planning_seams": [{"seam_id": "seam-release-watch"}],
+        "planning_workstreams": [{"workstream_id": "stream-a"}],
+        "planning_slices": [{"slice_id": "slice-1"}],
+        "planning_phase_results": [{"phase_id": "design_doc", "status": "complete"}],
+        "artifacts": {"run_dir": str(tmp_path / "run")},
+        "run_details": {
+            "planning_policy_versions": {"artifact_policy": "planning_package_v1"},
+            "search_pass_count": 2,
+            "inspected_file_count": 7,
+            "discovery_budget_escalated": True,
+        },
+    }
+
+    state = summary_read_adapter_v1(summary)
+
+    assert state["strategy_graph_spec"]["runtime_target"] == PLANNING_RUNTIME_TARGET
+    assert state["planning_terminal_status"] == "clarification_needed"
+    assert state["planning_stop_reason"] == "needs_scope_clarification"
+    assert state["clarification_requests"] == [
+        {"request_id": "clarify-1", "question": "Which release train is in scope?"}
+    ]
+    assert state["repo_evidence_refs"] == ["src/release/watch.py"]
+    assert state["planning_seams"] == [{"seam_id": "seam-release-watch"}]
+    assert state["planning_workstreams"] == [{"workstream_id": "stream-a"}]
+    assert state["planning_slices"] == [{"slice_id": "slice-1"}]
+    assert state["planning_phase_results"] == [
+        {"phase_id": "design_doc", "status": "complete"}
+    ]
+    assert state["planning_policy_versions"] == {
+        "artifact_policy": "planning_package_v1"
+    }
+    assert state["search_pass_count"] == 2
+    assert state["inspected_file_count"] == 7
+    assert state["discovery_budget_escalated"] is True
 
 
 def test_state_from_summary_is_a_compatibility_wrapper():
