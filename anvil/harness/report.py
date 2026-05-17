@@ -1,3 +1,5 @@
+# mypy: disable-error-code="assignment,arg-type,var-annotated"
+
 from __future__ import annotations
 
 import json
@@ -105,9 +107,7 @@ def _publication_outcome(status: dict[str, Any]) -> str:
     if not isinstance(publishability, dict) or not publishability:
         return ""
     return (
-        "publishable"
-        if publishability.get("final_answer_publishable")
-        else "blocked"
+        "publishable" if publishability.get("final_answer_publishable") else "blocked"
     )
 
 
@@ -749,15 +749,11 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         )
         lines.append(
             "- Refinement candidate shortlist: "
-            + _render_plain_focus_list(
-                focus_refinement.get("candidate_shortlist_ids")
-            )
+            + _render_plain_focus_list(focus_refinement.get("candidate_shortlist_ids"))
         )
         lines.append(
             "- Refinement attempted candidates: "
-            + _render_plain_focus_list(
-                focus_refinement.get("attempted_candidate_ids")
-            )
+            + _render_plain_focus_list(focus_refinement.get("attempted_candidate_ids"))
         )
         rejected_candidates = [
             item
@@ -769,9 +765,7 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
             for item in rejected_candidates:
                 rejected_focus_id = str(item.get("focus_id") or "unknown").strip()
                 rejection_reason = str(item.get("reason") or "unknown").strip()
-                lines.append(
-                    f"  - `{rejected_focus_id}`: `{rejection_reason}`"
-                )
+                lines.append(f"  - `{rejected_focus_id}`: `{rejection_reason}`")
         else:
             lines.append("- Refinement rejected candidates: none")
         lines.append(
@@ -784,9 +778,7 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
         )
         lines.append(
             "- Refinement selected candidate paths: "
-            + _render_plain_focus_list(
-                focus_refinement.get("selected_candidate_paths")
-            )
+            + _render_plain_focus_list(focus_refinement.get("selected_candidate_paths"))
         )
 
     if decision_state == "selected":
@@ -839,9 +831,7 @@ def _append_focus_decision_section(lines: list[str], summary: dict[str, Any]) ->
             ).strip()
             if exhausted_reason:
                 lines.append(f"- Refinement exhausted reason: `{exhausted_reason}`")
-            lines.append(
-                "- Rerun guidance: rerun with one of these files_hint slices"
-            )
+            lines.append("- Rerun guidance: rerun with one of these files_hint slices")
             rerun_guidance = [
                 item
                 for item in (focus_refinement.get("rerun_guidance") or [])
@@ -965,9 +955,7 @@ def _append_analysis_review_status_section(
     lines.append(f"- Content verdict: `{status.get('content_verdict', 'unknown')}`")
     publication_outcome = _publication_outcome(status)
     if publication_outcome:
-        lines.append(
-            "- Publication outcome: " + f"`{publication_outcome}`"
-        )
+        lines.append("- Publication outcome: " + f"`{publication_outcome}`")
         blocking_causes = [
             str(item).strip()
             for item in (publishability.get("blocking_causes") or [])

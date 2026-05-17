@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from ..state import HarnessState
 from ..types import (
@@ -16,7 +16,9 @@ from ..types import (
 from ..validation import preflight_validators
 
 
-def _copy_role_if_missing(strategy_spec: dict[str, Any], missing_role: str, source_roles: list[str]) -> None:
+def _copy_role_if_missing(
+    strategy_spec: dict[str, Any], missing_role: str, source_roles: list[str]
+) -> None:
     roles = strategy_spec.setdefault("roles", {})
     if missing_role in roles:
         return
@@ -47,7 +49,9 @@ def _mark_invalid_preflight(
 
 def validator_preflight_node(state: HarnessState) -> HarnessState:
     strategy_spec_dict = deepcopy(dict(state.get("strategy_spec") or {}))
-    strategy_kind = str(state.get("strategy_kind") or strategy_spec_dict.get("kind") or "single_pass")
+    strategy_kind = str(
+        state.get("strategy_kind") or strategy_spec_dict.get("kind") or "single_pass"
+    )
     auto_fit = bool(state.get("auto_fit_strategy", True))
 
     warnings = list(state.get("warnings") or [])
@@ -96,8 +100,12 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
         if auto_fit:
             strategy_spec_dict["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
             _copy_role_if_missing(strategy_spec_dict, "critic", ["falsifier"])
-            _copy_role_if_missing(strategy_spec_dict, "reviser", ["patcher", "proposer"])
-            _copy_role_if_missing(strategy_spec_dict, "auditor", ["critic", "falsifier"])
+            _copy_role_if_missing(
+                strategy_spec_dict, "reviser", ["patcher", "proposer"]
+            )
+            _copy_role_if_missing(
+                strategy_spec_dict, "auditor", ["critic", "falsifier"]
+            )
             strategy_kind = ANALYSIS_REVIEW_BOUNDED_KIND
             warnings.append(
                 "Auto-fit changed strategy kind from pfr_v1 to analysis_review_bounded_v1 for an analysis_review task."
@@ -107,12 +115,18 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
             errors.append(
                 "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
             )
-    elif task_spec.task_kind == "patch" and is_analysis_review_strategy_kind(strategy_kind):
+    elif task_spec.task_kind == "patch" and is_analysis_review_strategy_kind(
+        strategy_kind
+    ):
         if auto_fit:
             original_kind = strategy_kind
             strategy_spec_dict["kind"] = "pfr_v1"
-            _copy_role_if_missing(strategy_spec_dict, "falsifier", ["critic", "auditor"])
-            _copy_role_if_missing(strategy_spec_dict, "patcher", ["reviser", "proposer"])
+            _copy_role_if_missing(
+                strategy_spec_dict, "falsifier", ["critic", "auditor"]
+            )
+            _copy_role_if_missing(
+                strategy_spec_dict, "patcher", ["reviser", "proposer"]
+            )
             strategy_kind = "pfr_v1"
             warnings.append(
                 f"Auto-fit changed strategy kind from {original_kind} to pfr_v1 for a patch task."
@@ -131,12 +145,24 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
     )
     for item in preflight:
         if item.get("required") and item.get("status") in {"failed", "not_applicable"}:
-            reason = str(item.get("reason") or f"Validator {item.get('name')} is not applicable")
+            reason = str(
+                item.get("reason") or f"Validator {item.get('name')} is not applicable"
+            )
             errors.append(reason)
 
     state["task_spec"] = {**dict(state.get("task_spec") or {}), **task_spec.to_dict()}
     state["strategy_spec"] = {**strategy_spec_dict, **strategy_spec.to_dict()}
-    state["strategy_kind"] = strategy_kind  # type: ignore[assignment]
+    state["strategy_kind"] = cast(
+        Literal[
+            "single_pass",
+            "pfr_v1",
+            "analysis_review_bounded_v1",
+            "analysis_review_trust_v1",
+            "analysis_review_v1",
+            "deterministic_feature_planning_v1",
+        ],
+        strategy_kind,
+    )
     state["warnings"] = warnings
     state["errors"] = errors
 

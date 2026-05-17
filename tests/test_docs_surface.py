@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(".")
 README = ROOT / "README.md"
 DOCS_ROADMAP = ROOT / "docs" / "roadmap.md"
@@ -45,8 +44,12 @@ def test_contributor_and_project_management_indexes_exist():
 
 
 def test_history_and_future_files_live_under_project_management():
-    assert (ROOT / "docs/project_management/history/feature_specification_vnext_roadmap.md").is_file()
-    assert (ROOT / "docs/project_management/history/notes/CLI_PROVIDER_UPDATE_NOTES.md").is_file()
+    assert (
+        ROOT / "docs/project_management/history/feature_specification_vnext_roadmap.md"
+    ).is_file()
+    assert (
+        ROOT / "docs/project_management/history/notes/CLI_PROVIDER_UPDATE_NOTES.md"
+    ).is_file()
     assert (
         ROOT
         / "docs/project_management/history/notes/FORGE_HARNESS_SURFACE_UPDATE_NOTES.md"

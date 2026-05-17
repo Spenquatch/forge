@@ -28,7 +28,9 @@ from anvil.harness.types import (
     canonical_seam_path_list,
 )
 
-DEFAULT_CONFIG_PATH = REPO_ROOT / ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml"
+DEFAULT_CONFIG_PATH = (
+    REPO_ROOT / ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml"
+)
 CANONICAL_TEMPLATE_PATH = (
     REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
 )
@@ -948,7 +950,9 @@ def preflight_shard_manifest(
     start = time.monotonic()
     git_binary = shutil.which("git")
     if git_binary is None:
-        raise AcceptanceError("git is required for shard execution and was not found on PATH.")
+        raise AcceptanceError(
+            "git is required for shard execution and was not found on PATH."
+        )
     if not manifest.workspace_seed.is_dir():
         raise AcceptanceError(
             f"workspace_seed is missing or not a directory: {manifest.workspace_seed}"
@@ -1013,13 +1017,17 @@ def provision_git_workspace(
     _git_stdout(["git", "add", "."], cwd=workspace)
     _git_stdout(["git", "commit", "-m", "baseline fixture seed"], cwd=workspace)
 
-    is_work_tree = _git_stdout(["git", "rev-parse", "--is-inside-work-tree"], cwd=workspace)
+    is_work_tree = _git_stdout(
+        ["git", "rev-parse", "--is-inside-work-tree"], cwd=workspace
+    )
     status_short = _git_stdout(["git", "status", "--short"], cwd=workspace)
     baseline_commit = _git_stdout(["git", "rev-parse", "HEAD"], cwd=workspace)
     if is_work_tree != "true":
         raise AcceptanceError("provisioned workspace did not become a git work tree.")
     if status_short:
-        raise AcceptanceError("provisioned workspace is not clean after baseline commit.")
+        raise AcceptanceError(
+            "provisioned workspace is not clean after baseline commit."
+        )
 
     verification = {
         "temp_root": str(temp_root),
@@ -1215,7 +1223,9 @@ def run_shard(
     out_root: Path,
 ) -> int:
     shard = _select_shard(manifest, shard_name)
-    preflight = preflight_shard_manifest(manifest, shard_name=shard_name, out_root=out_root)
+    preflight = preflight_shard_manifest(
+        manifest, shard_name=shard_name, out_root=out_root
+    )
     if not pass_id.strip():
         raise AcceptanceError("--pass-id must be a non-empty string.")
     repo_head = _repo_head()
@@ -1225,7 +1235,9 @@ def run_shard(
         shard_name=shard.name,
         repo_head=repo_head,
     )
-    provisioned = provision_git_workspace(manifest, shard_name=shard.name, pass_id=pass_id)
+    provisioned = provision_git_workspace(
+        manifest, shard_name=shard.name, pass_id=pass_id
+    )
 
     started_at = time.time()
     deadline = time.monotonic() + manifest.shard_timeout_sec

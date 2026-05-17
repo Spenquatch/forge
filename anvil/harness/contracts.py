@@ -10,7 +10,7 @@ runner, schema, and test updates that enforce the new contract.
 import hashlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from .files import slugify
 from .types import (
@@ -75,7 +75,9 @@ TRUST_EXECUTION_MODE_VALUES: tuple[TrustExecutionMode, ...] = (
     "legacy_full_review",
     "attestation_over_bounded",
 )
-RECOMMENDATION_ADMISSIBILITY_REASON_VALUES: tuple[RecommendationAdmissibilityReason, ...] = (
+RECOMMENDATION_ADMISSIBILITY_REASON_VALUES: tuple[
+    RecommendationAdmissibilityReason, ...
+] = (
     "accepted_with_caveat",
     "inferred_grounding",
     "not_accepted",
@@ -84,7 +86,9 @@ RECOMMENDATION_ADMISSIBILITY_REASON_VALUES: tuple[RecommendationAdmissibilityRea
 
 
 def canonical_seam_id_for_paths(paths: list[str]) -> str:
-    normalized_paths = sorted({str(path).strip() for path in paths if str(path).strip()})
+    normalized_paths = sorted(
+        {str(path).strip() for path in paths if str(path).strip()}
+    )
     if not normalized_paths:
         return "seam-empty"
 
@@ -113,9 +117,9 @@ class RecommendationAdmissibilityStatus:
     final_answer_recommendation_indices: list[int] = field(default_factory=list)
     partial_only_recommendation_indices: list[int] = field(default_factory=list)
     excluded_recommendation_indices: list[int] = field(default_factory=list)
-    reasons_by_recommendation_index: dict[str, list[RecommendationAdmissibilityReason]] = field(
-        default_factory=dict
-    )
+    reasons_by_recommendation_index: dict[
+        str, list[RecommendationAdmissibilityReason]
+    ] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -125,7 +129,9 @@ class RecommendationAdmissibilityStatus:
             "partial_only_recommendation_indices": list(
                 self.partial_only_recommendation_indices
             ),
-            "excluded_recommendation_indices": list(self.excluded_recommendation_indices),
+            "excluded_recommendation_indices": list(
+                self.excluded_recommendation_indices
+            ),
             "reasons_by_recommendation_index": {
                 str(index): list(reasons)
                 for index, reasons in self.reasons_by_recommendation_index.items()
@@ -208,11 +214,14 @@ class FocusGatePolicy:
     enabled: bool = False
     default_path: Literal["adjudicate", "deliberate"] = "adjudicate"
     allowed_focus_types: list[Literal["seam", "artifact"]] = field(
-        default_factory=lambda: list(DEFAULT_ALLOWED_FOCUS_TYPES)
+        default_factory=lambda: cast(
+            list[Literal["seam", "artifact"]],
+            list(DEFAULT_ALLOWED_FOCUS_TYPES),
+        )
     )
-    clarification_policy: Literal[
-        "block_for_clarification", "never_ask"
-    ] = "block_for_clarification"
+    clarification_policy: Literal["block_for_clarification", "never_ask"] = (
+        "block_for_clarification"
+    )
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -226,8 +235,12 @@ class AnalysisReviewContract:
     stop_policy: ReviewLoopPolicy
     reviser_goal: Literal["close_all_open_blockers"] = "close_all_open_blockers"
     discovery_policy: DiscoveryPolicy = field(default_factory=DiscoveryPolicy)
-    partial_acceptance: PartialAcceptancePolicy = field(default_factory=PartialAcceptancePolicy)
-    required_sections: RequiredSectionPolicy = field(default_factory=RequiredSectionPolicy)
+    partial_acceptance: PartialAcceptancePolicy = field(
+        default_factory=PartialAcceptancePolicy
+    )
+    required_sections: RequiredSectionPolicy = field(
+        default_factory=RequiredSectionPolicy
+    )
     bounded_review: BoundedReviewPolicy = field(default_factory=BoundedReviewPolicy)
     trust_review: TrustReviewPolicy = field(default_factory=TrustReviewPolicy)
     focus_gate: FocusGatePolicy = field(default_factory=FocusGatePolicy)
@@ -258,7 +271,9 @@ class AnalysisReviewContract:
             "confidence_rubric_version": self.confidence_rubric_version,
             "confidence_rubric": list(CONFIDENCE_RUBRIC_LINES),
             "issue_taxonomy_version": self.issue_taxonomy_version,
-            "issue_kind_default_blocking_class": dict(ISSUE_KIND_DEFAULT_BLOCKING_CLASS),
+            "issue_kind_default_blocking_class": dict(
+                ISSUE_KIND_DEFAULT_BLOCKING_CLASS
+            ),
         }
 
 
@@ -272,20 +287,31 @@ def resolve_analysis_review_contract(
         if strategy.trust_review is None
         else strategy.trust_review.execution_mode
     )
-    min_accepted_recommendations = max(1, int(task.review_requirements.min_recommendations or 0))
+    min_accepted_recommendations = max(
+        1, int(task.review_requirements.min_recommendations or 0)
+    )
     focus_gate = FocusGatePolicy()
     if strategy.focus_gate is not None:
         if strategy.focus_gate.enabled is not None:
             focus_gate.enabled = strategy.focus_gate.enabled
         if strategy.focus_gate.default_path is not None:
-            focus_gate.default_path = strategy.focus_gate.default_path
+            focus_gate.default_path = cast(
+                Literal["adjudicate", "deliberate"],
+                strategy.focus_gate.default_path,
+            )
     if task.focus_gate is not None:
         if task.focus_gate.enabled is not None:
             focus_gate.enabled = task.focus_gate.enabled
         if task.focus_gate.allowed_focus_types is not None:
-            focus_gate.allowed_focus_types = list(task.focus_gate.allowed_focus_types)
+            focus_gate.allowed_focus_types = cast(
+                list[Literal["seam", "artifact"]],
+                list(task.focus_gate.allowed_focus_types),
+            )
         if task.focus_gate.clarification_policy is not None:
-            focus_gate.clarification_policy = task.focus_gate.clarification_policy
+            focus_gate.clarification_policy = cast(
+                Literal["block_for_clarification", "never_ask"],
+                task.focus_gate.clarification_policy,
+            )
     if task.focus_gate_answer is not None:
         if not focus_gate.enabled:
             raise ValueError(
@@ -316,11 +342,16 @@ def resolve_analysis_review_contract(
             minimum_files_reviewed=1,
         ),
         bounded_review=BoundedReviewPolicy(
-            evidence_cap_policy=task.review_requirements.evidence_cap_policy,
+            evidence_cap_policy=cast(
+                Literal["trim_to_cap", "strict"],
+                task.review_requirements.evidence_cap_policy,
+            ),
         ),
         trust_review=TrustReviewPolicy(
             max_evidence_refs_per_recommendation=(
-                None if mode == "trust" else BoundedReviewPolicy().max_evidence_refs_per_recommendation
+                None
+                if mode == "trust"
+                else BoundedReviewPolicy().max_evidence_refs_per_recommendation
             ),
             execution_mode=trust_execution_mode,
             require_taxonomy_override_reason=(mode == "trust"),
@@ -331,7 +362,9 @@ def resolve_analysis_review_contract(
             ),
             downgrade_on_semantic_warnings=(mode == "trust"),
             downgrade_on_inferred_acceptance=(mode == "trust"),
-            late_auditor_medium_or_higher_policy=("warn" if mode == "trust" else "error"),
+            late_auditor_medium_or_higher_policy=(
+                "warn" if mode == "trust" else "error"
+            ),
         ),
         focus_gate=focus_gate,
         require_issue_ledger=True,

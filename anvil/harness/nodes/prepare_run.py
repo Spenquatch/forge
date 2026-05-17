@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ..artifacts import create_run_id
 from ..files import load_structured_file
@@ -12,7 +12,9 @@ from ..types import StrategyConfig, TaskSpec
 def prepare_run_node(state: dict[str, Any]) -> HarnessState:
     task_path = str(state.get("task_path") or "")
     strategy_path = str(state.get("strategy_path") or "")
-    workspace_root = str(Path(state.get("workspace_root") or state.get("workspace") or ".").resolve())
+    workspace_root = str(
+        Path(state.get("workspace_root") or state.get("workspace") or ".").resolve()
+    )
     out_root = str(Path(state.get("out_root") or ".forge-harness-runs").resolve())
     config_path = str(state.get("config_path") or "config/models.yaml")
     auto_fit_strategy = bool(state.get("auto_fit_strategy", True))
@@ -49,6 +51,19 @@ def prepare_run_node(state: dict[str, Any]) -> HarnessState:
     base["run_dir"] = str(Path(out_root) / run_id)
     base["task_spec"] = {**dict(raw_task_spec), **task_spec.to_dict()}
     base["strategy_spec"] = {**dict(raw_strategy_spec), **strategy_spec.to_dict()}
-    base["task_kind"] = task_spec.task_kind  # type: ignore[assignment]
-    base["strategy_kind"] = strategy_spec.kind  # type: ignore[assignment]
+    base["task_kind"] = cast(
+        Literal["patch", "analysis_review", "planning"],
+        task_spec.task_kind,
+    )
+    base["strategy_kind"] = cast(
+        Literal[
+            "single_pass",
+            "pfr_v1",
+            "analysis_review_bounded_v1",
+            "analysis_review_trust_v1",
+            "analysis_review_v1",
+            "deterministic_feature_planning_v1",
+        ],
+        strategy_spec.kind,
+    )
     return base

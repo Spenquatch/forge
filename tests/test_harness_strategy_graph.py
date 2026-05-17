@@ -82,12 +82,13 @@ def _preflight_state(
 
 
 def test_route_after_strategy_selection_preserves_runtime_family_routing():
-    assert route_after_strategy_selection({"strategy_kind": "single_pass"}) == "single_pass"
+    assert (
+        route_after_strategy_selection({"strategy_kind": "single_pass"})
+        == "single_pass"
+    )
     assert route_after_strategy_selection({"strategy_kind": "pfr_v1"}) == "pfr_v1"
     assert (
-        route_after_strategy_selection(
-            {"strategy_kind": "analysis_review_bounded_v1"}
-        )
+        route_after_strategy_selection({"strategy_kind": "analysis_review_bounded_v1"})
         == "analysis_review_v1"
     )
     assert (
@@ -140,13 +141,16 @@ def test_planning_strategy_config_rejects_out_of_order_declared_phases():
         payload["phases"][3],
     ]
 
-    with pytest.raises(ValueError, match="planning phases must appear in canonical order"):
+    with pytest.raises(
+        ValueError, match="planning phases must appear in canonical order"
+    ):
         StrategyConfig.from_dict(payload)
 
 
 def test_single_pass_graph_spec_is_linear_and_terminal():
     spec = build_strategy_graph_spec(
-        "single_pass", _example_strategy("examples/harness/strategies/single_pass_codex.yaml")
+        "single_pass",
+        _example_strategy("examples/harness/strategies/single_pass_codex.yaml"),
     )
 
     assert spec.subset == STRATEGY_GRAPH_SUBSET
@@ -217,9 +221,7 @@ def test_analysis_review_graph_spec_emits_focus_gate_and_revision_metadata():
             "continue_when": "review_requests_revision",
         }
     ]
-    assert [
-        branch["branch_id"] for branch in spec_dict["conditional_branches"]
-    ] == [
+    assert [branch["branch_id"] for branch in spec_dict["conditional_branches"]] == [
         "focus_gate_decision",
         "critic_revision_gate",
         "auditor_revision_gate",
@@ -234,7 +236,9 @@ def test_analysis_review_graph_spec_emits_focus_gate_and_revision_metadata():
 def test_trust_graph_spec_emits_attestation_stage_after_bounded_review():
     spec = build_strategy_graph_spec(
         "analysis_review_trust_v1",
-        _example_strategy("examples/harness/strategies/analysis_review_trust_codex_claude.yaml"),
+        _example_strategy(
+            "examples/harness/strategies/analysis_review_trust_codex_claude.yaml"
+        ),
     )
     spec_dict = spec.to_dict()
 
@@ -373,4 +377,6 @@ def test_select_strategy_node_stamps_planning_graph_metadata():
     )
     assert state["strategy_graph_spec"]["runtime_target"] == PLANNING_RUNTIME_TARGET
     assert state["strategy_graph_spec"]["post_runtime_action"] == "write_artifacts"
-    assert state["strategy_graph_spec"]["phases"] == _planning_strategy_payload()["phases"]
+    assert (
+        state["strategy_graph_spec"]["phases"] == _planning_strategy_payload()["phases"]
+    )

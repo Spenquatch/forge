@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional
 
 from anvil.cli_agents import BaseCliAgent, render_messages_as_transcript
 from anvil.config_loader import ProviderCfg
@@ -40,7 +39,10 @@ class CliProviderBase(ModelProvider, ABC):
         for model_role_key, config in self.cfg.models.items():
             if "/" in model_role_key:
                 model_part, role_part = model_role_key.rsplit("/", 1)
-                if model_part not in {self.model_name, "default"} and "*" not in model_part:
+                if (
+                    model_part not in {self.model_name, "default"}
+                    and "*" not in model_part
+                ):
                     continue
                 if role_part == "*" and isinstance(config, Mapping):
                     for nested_role, nested_config in config.items():
@@ -48,7 +50,9 @@ class CliProviderBase(ModelProvider, ABC):
                             role_configs[str(nested_role)] = dict(nested_config)
                 elif isinstance(config, Mapping):
                     role_configs[role_part] = dict(config)
-            elif model_role_key in {self.model_name, "default"} and isinstance(config, Mapping):
+            elif model_role_key in {self.model_name, "default"} and isinstance(
+                config, Mapping
+            ):
                 role_configs["default"] = dict(config)
         return role_configs
 
@@ -77,7 +81,11 @@ class CliProviderBase(ModelProvider, ABC):
     def _merge_kwargs(self, role: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         merged = self._get_role_config(role)
         merged.update(kwargs)
-        if self.model_name and "model" not in merged and self.forces_default_model_arg():
+        if (
+            self.model_name
+            and "model" not in merged
+            and self.forces_default_model_arg()
+        ):
             merged["model"] = self.model_name
         return merged
 
@@ -115,13 +123,20 @@ class CliProviderBase(ModelProvider, ABC):
         self.last_structured_output = result.structured_output
 
         if not result.ok:
-            detail = result.error or result.stderr_text or result.stdout_text or "CLI agent failed"
+            detail = (
+                result.error
+                or result.stderr_text
+                or result.stdout_text
+                or "CLI agent failed"
+            )
             raise RuntimeError(detail)
 
         return result.text
 
     async def embed(self, text: str, **kwargs: Any) -> List[float]:
-        logger.warning("CLI providers do not support embeddings. Returning empty vector.")
+        logger.warning(
+            "CLI providers do not support embeddings. Returning empty vector."
+        )
         return []
 
     async def get_model_info(self, **kwargs: Any) -> Dict[str, Any]:

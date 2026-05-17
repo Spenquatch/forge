@@ -51,7 +51,9 @@ def _hash_file(path: Path) -> str:
 def _capture_file_hashes(cwd: str | Path, rel_paths: list[str]) -> dict[str, str]:
     root = Path(cwd)
     hashes: dict[str, str] = {}
-    for rel_path in sorted(set(_normalize_relpath(p) for p in rel_paths if str(p).strip())):
+    for rel_path in sorted(
+        set(_normalize_relpath(p) for p in rel_paths if str(p).strip())
+    ):
         full_path = root / rel_path
         if not full_path.exists() or not full_path.is_file():
             continue
@@ -139,7 +141,9 @@ def capture_git_snapshot(
     status = _run_git(cwd, ["status", "--porcelain=v1"])
     diff_stat = _run_git(cwd, ["diff", "--stat"])
     diff_name_status = _run_git(cwd, ["diff", "--name-status"])
-    status_entries = _filter_status_entries(parse_status_porcelain(status.stdout), ignored)
+    status_entries = _filter_status_entries(
+        parse_status_porcelain(status.stdout), ignored
+    )
     dirty_hash_paths: list[str] = []
     for entry in status_entries:
         dirty_hash_paths.append(str(entry.get("path") or ""))
@@ -166,7 +170,9 @@ def capture_workspace_file_inventory(
     ignored = _normalize_ignored_rel_paths(ignored_rel_paths)
     root = Path(cwd)
     if not is_git_repo(root):
-        return set(capture_non_git_workspace_state(root, ignored).get("file_hashes", {}).keys())
+        return set(
+            capture_non_git_workspace_state(root, ignored).get("file_hashes", {}).keys()
+        )
 
     result = _run_git(root, ["ls-files", "--cached", "--others", "--exclude-standard"])
     if result.returncode != 0:
@@ -206,7 +212,9 @@ def _walk_workspace_files(
             and name != ".git"
         ]
         for filename in filenames:
-            rel_path = _normalize_relpath(str((current_dir / filename).relative_to(root)))
+            rel_path = _normalize_relpath(
+                str((current_dir / filename).relative_to(root))
+            )
             if _path_is_ignored(rel_path, ignored):
                 continue
             full_path = root / rel_path
@@ -385,7 +393,7 @@ def evaluate_workspace_write_policy(
                 modified_files.add(path)
                 touched_files.add(path)
 
-        for path, entry in initial_entries.items():
+        for path, _entry in initial_entries.items():
             if path in current_entries:
                 continue
             if path in renamed_from_paths:
@@ -406,7 +414,10 @@ def evaluate_workspace_write_policy(
                 "modified_files": sorted(modified_files),
                 "added_files": sorted(added_files),
                 "deleted_files": sorted(deleted_files),
-                "renamed_files": sorted(renamed_files, key=lambda item: (item.get("from", ""), item.get("to", ""))),
+                "renamed_files": sorted(
+                    renamed_files,
+                    key=lambda item: (item.get("from", ""), item.get("to", "")),
+                ),
                 "new_untracked_files": sorted(new_untracked_files),
             }
         )
@@ -415,41 +426,50 @@ def evaluate_workspace_write_policy(
         current_hashes = dict((current_non_git_state or {}).get("file_hashes", {}))
         initial_paths = set(initial_hashes)
         current_paths = set(current_hashes)
-        added_files = sorted(current_paths - initial_paths)
-        deleted_files = sorted(initial_paths - current_paths)
-        modified_files = sorted(
-            path for path in (initial_paths & current_paths) if initial_hashes[path] != current_hashes[path]
+        added_files_list = sorted(current_paths - initial_paths)
+        deleted_files_list = sorted(initial_paths - current_paths)
+        modified_files_list = sorted(
+            path
+            for path in (initial_paths & current_paths)
+            if initial_hashes[path] != current_hashes[path]
         )
         result.update(
             {
-                "touched_files": sorted(set(added_files) | set(deleted_files) | set(modified_files)),
-                "modified_files": modified_files,
-                "added_files": added_files,
-                "deleted_files": deleted_files,
+                "touched_files": sorted(
+                    set(added_files_list)
+                    | set(deleted_files_list)
+                    | set(modified_files_list)
+                ),
+                "modified_files": modified_files_list,
+                "added_files": added_files_list,
+                "deleted_files": deleted_files_list,
                 "renamed_files": [],
-                "new_untracked_files": added_files,
-                "notes": result["notes"] + [
+                "new_untracked_files": added_files_list,
+                "notes": result["notes"]
+                + [
                     "Workspace policy was enforced with a full file-hash snapshot because the workspace is not a git repository."
                 ],
             }
         )
 
     violations: list[str] = []
-    touched_files = list(result["touched_files"])
-    added_files = list(result["added_files"])
-    deleted_files = list(result["deleted_files"])
-    new_untracked_files = list(result["new_untracked_files"])
+    touched_files_list = list(result["touched_files"])
+    added_files_list = list(result["added_files"])
+    deleted_files_list = list(result["deleted_files"])
+    new_untracked_files_list = list(result["new_untracked_files"])
     renamed_files = list(result["renamed_files"])
 
     if policy.mode == "forbid":
-        if touched_files:
+        if touched_files_list:
             violations.append(
                 "Workspace writes are forbidden for this task, but changes were detected: "
-                + _summarize_items(touched_files)
+                + _summarize_items(touched_files_list)
             )
     else:
         disallowed_paths: list[str] = []
-        for path in result["modified_files"] + result["added_files"] + result["deleted_files"]:
+        for path in (
+            result["modified_files"] + result["added_files"] + result["deleted_files"]
+        ):
             if not _path_allowed(policy, path):
                 disallowed_paths.append(path)
         for rename in renamed_files:
@@ -462,23 +482,28 @@ def evaluate_workspace_write_policy(
                 "Changes touched paths outside workspace_write_policy.allowed_paths or inside denied_paths: "
                 + _summarize_items(sorted(disallowed_paths))
             )
-        if new_untracked_files and not policy.allow_untracked:
+        if new_untracked_files_list and not policy.allow_untracked:
             violations.append(
                 "New untracked files are not allowed by workspace_write_policy: "
-                + _summarize_items(new_untracked_files)
+                + _summarize_items(new_untracked_files_list)
             )
-        if deleted_files and not policy.allow_deletions:
+        if deleted_files_list and not policy.allow_deletions:
             violations.append(
                 "File deletions are not allowed by workspace_write_policy: "
-                + _summarize_items(deleted_files)
+                + _summarize_items(deleted_files_list)
             )
         if renamed_files and not policy.allow_renames:
-            rename_display = [f"{item.get('from')} -> {item.get('to')}" for item in renamed_files]
+            rename_display = [
+                f"{item.get('from')} -> {item.get('to')}" for item in renamed_files
+            ]
             violations.append(
                 "File renames are not allowed by workspace_write_policy: "
                 + _summarize_items(rename_display)
             )
-        if policy.max_touched_files is not None and len(touched_files) > policy.max_touched_files:
+        if (
+            policy.max_touched_files is not None
+            and len(touched_files) > policy.max_touched_files
+        ):
             violations.append(
                 f"workspace_write_policy.max_touched_files={policy.max_touched_files}, "
                 f"but {len(touched_files)} file(s) were touched."
@@ -498,7 +523,11 @@ def render_git_snapshot(snapshot: dict[str, Any], max_chars: int = 4000) -> str:
         return "Current workspace is not a Git repository."
 
     status_entries = snapshot.get("status_entries", [])
-    status_text = "\n".join(str(entry.get("raw") or "").rstrip() for entry in status_entries if entry.get("raw"))
+    status_text = "\n".join(
+        str(entry.get("raw") or "").rstrip()
+        for entry in status_entries
+        if entry.get("raw")
+    )
     diff_stat = snapshot.get("diff_stat", "").strip()
     changed = changed_files(snapshot)
 

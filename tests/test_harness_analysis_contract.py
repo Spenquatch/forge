@@ -231,9 +231,7 @@ def test_analysis_review_contract_serializes_bounded_trust_and_legacy_alias_mode
 
 
 def test_strategy_trust_review_execution_mode_round_trips_through_to_dict():
-    strategy = _strategy(
-        trust_review={"execution_mode": "attestation_over_bounded"}
-    )
+    strategy = _strategy(trust_review={"execution_mode": "attestation_over_bounded"})
 
     assert strategy.trust_review is not None
     assert strategy.trust_review.execution_mode == "attestation_over_bounded"
@@ -409,7 +407,10 @@ def test_task_focus_gate_answer_accepts_empty_freeform_answer():
     )
 
     assert task.focus_gate_answer is not None
-    assert task.focus_gate_answer.question_prompt == "Which focus should this run prioritize?"
+    assert (
+        task.focus_gate_answer.question_prompt
+        == "Which focus should this run prioritize?"
+    )
     assert task.focus_gate_answer.selected_option == "release-trigger-automation"
     assert task.focus_gate_answer.freeform_answer == ""
 
@@ -571,31 +572,34 @@ def test_bounded_attestation_input_schema_freezes_m1_handoff_shape():
         "enum"
     ] == ["legacy_full_review", "attestation_over_bounded"]
     assert schema["properties"]["bounded_analysis"]["additionalProperties"] is False
-    assert schema["properties"]["bounded_analysis"]["properties"]["recommendations"][
-        "minItems"
-    ] == 1
-    assert schema["properties"]["review_surface"]["additionalProperties"] is False
-    assert schema["properties"]["review_surface"]["properties"]["review_stages"][
-        "type"
-    ] == "array"
-    assert schema["properties"]["ledgers"]["additionalProperties"] is False
-    assert schema["properties"]["ledgers"]["properties"]["issue_ledger"]["type"] == "array"
-    assert schema["properties"]["ledgers"]["properties"]["topic_ledger"]["type"] == "array"
     assert (
-        schema["properties"]["provenance_context"]["additionalProperties"] is False
+        schema["properties"]["bounded_analysis"]["properties"]["recommendations"][
+            "minItems"
+        ]
+        == 1
     )
+    assert schema["properties"]["review_surface"]["additionalProperties"] is False
+    assert (
+        schema["properties"]["review_surface"]["properties"]["review_stages"]["type"]
+        == "array"
+    )
+    assert schema["properties"]["ledgers"]["additionalProperties"] is False
+    assert (
+        schema["properties"]["ledgers"]["properties"]["issue_ledger"]["type"] == "array"
+    )
+    assert (
+        schema["properties"]["ledgers"]["properties"]["topic_ledger"]["type"] == "array"
+    )
+    assert schema["properties"]["provenance_context"]["additionalProperties"] is False
     assert (
         schema["properties"]["provenance_context"]["properties"][
             "recommendation_evidence_index"
         ]["additionalProperties"]
         is False
     )
-    assert (
-        schema["properties"]["provenance_context"]["properties"][
-            "recommendation_evidence_index"
-        ]["patternProperties"]["^[0-9]+$"]["items"]
-        == {"type": "string"}
-    )
+    assert schema["properties"]["provenance_context"]["properties"][
+        "recommendation_evidence_index"
+    ]["patternProperties"]["^[0-9]+$"]["items"] == {"type": "string"}
 
 
 def test_default_blocking_class_for_kind_matches_analysis_issue_taxonomy():
@@ -675,21 +679,28 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
         "canonical operator-facing `analysis_review_trust_*.yaml` examples do not rely on that implicit legacy default anymore"
         in contract_doc
     )
-    assert 'the only allowed singleton values are `["seam"]` and `["artifact"]`' in contract_doc
-    assert 'mixed-type lists such as `["seam", "artifact"]` are rejected explicitly' in contract_doc
+    assert (
+        'the only allowed singleton values are `["seam"]` and `["artifact"]`'
+        in contract_doc
+    )
+    assert (
+        'mixed-type lists such as `["seam", "artifact"]` are rejected explicitly'
+        in contract_doc
+    )
     assert '"focus_type": "seam | artifact"' in contract_doc
     assert "Which focus should this run prioritize?" in contract_doc
     assert "downstream_primary_seam_id" in contract_doc
     assert "downstream_primary_seam_paths" in contract_doc
     assert "adaptation_basis" in contract_doc
-    assert "hard rule: for artifact runs, `selected_focus_*` is not downstream seam truth" in contract_doc
+    assert (
+        "hard rule: for artifact runs, `selected_focus_*` is not downstream seam truth"
+        in contract_doc
+    )
     shared_discovery_phrase = (
         "Shared repo-local discovery applies to both bounded mode and trust mode:"
     )
     bounded_difference_phrase = "Bounded differs by caps and scope discipline:"
-    trust_difference_phrase = (
-        "Trust differs by provenance completeness, evidence completeness, atomicity, and publication:"
-    )
+    trust_difference_phrase = "Trust differs by provenance completeness, evidence completeness, atomicity, and publication:"
     assert shared_discovery_phrase in contract_doc
     assert bounded_difference_phrase in contract_doc
     assert trust_difference_phrase in contract_doc
@@ -823,7 +834,10 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
         "`Open topics:` and `Carried-forward topics:` as separate labels"
         in contract_doc
     )
-    assert "The seam-selection contract is additive to the shared payload family" in contract_doc
+    assert (
+        "The seam-selection contract is additive to the shared payload family"
+        in contract_doc
+    )
     assert "- `primary_seam`" in contract_doc
     assert "- `secondary_seams_considered`" in contract_doc
     assert "- `scope_escapes`" in contract_doc
@@ -840,9 +854,7 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
     assert "- `recommendation_index`" in contract_doc
     assert "- `seam_id`" in contract_doc
     assert "- `seam_expansion_reason`" in contract_doc
-    assert (
-        "`primary_seam` remains the canonical run-context seam." in contract_doc
-    )
+    assert "`primary_seam` remains the canonical run-context seam." in contract_doc
     assert (
         "`secondary_seams_considered` records only seams actually declared or inspected beyond the primary seam."
         in contract_doc
@@ -923,8 +935,7 @@ def test_analysis_review_contract_docs_freeze_v10_admissibility_publishability_a
     )
     assert "Reviser seam-review duties:" in contract_doc
     assert (
-        "In the reviser stage, return to the higher-ranked seam first."
-        in contract_doc
+        "In the reviser stage, return to the higher-ranked seam first." in contract_doc
     )
     assert (
         "In the reviser stage, when an open issue shows the current seam choice is wrong, update `primary_seam`, `secondary_seams_considered`, `recommendations[*].seam_id`, `recommendations[*].seam_expansion_reason`, `review_surface`, and evidence together."

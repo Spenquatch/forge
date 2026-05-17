@@ -82,9 +82,13 @@ class CodexCliAgent(BaseCliAgent):
                 encoding="utf-8",
             )
             cmd.extend(["--output-schema", str(schema_path), "-o", str(output_path)])
-            safe_cmd.extend(["--output-schema", str(schema_path), "-o", str(output_path)])
+            safe_cmd.extend(
+                ["--output-schema", str(schema_path), "-o", str(output_path)]
+            )
 
-        extra_args = self.cfg.default_args + normalize_str_list(options.pop("extra_args", None))
+        extra_args = self.cfg.default_args + normalize_str_list(
+            options.pop("extra_args", None)
+        )
         cmd.extend(extra_args)
         safe_cmd.extend(extra_args)
 
@@ -134,13 +138,19 @@ class CodexCliAgent(BaseCliAgent):
                     thread_id = payload.get("thread_id") or payload.get("threadId")
                 elif event_type == "turn.completed":
                     usage = extract_token_usage(payload.get("usage")) or usage
-                elif event_type == "item.completed" and isinstance(payload.get("item"), dict):
+                elif event_type == "item.completed" and isinstance(
+                    payload.get("item"), dict
+                ):
                     item = payload["item"]
                     item_type = item.get("type")
                     if item_type:
-                        item_type_counts[str(item_type)] = item_type_counts.get(str(item_type), 0) + 1
+                        item_type_counts[str(item_type)] = (
+                            item_type_counts.get(str(item_type), 0) + 1
+                        )
                     if item_type in {"agent_message", "assistant_message"}:
-                        candidate = stringify_content(item.get("text") or item.get("content") or item)
+                        candidate = stringify_content(
+                            item.get("text") or item.get("content") or item
+                        )
                         if candidate:
                             last_agent_message = candidate
 
@@ -156,7 +166,11 @@ class CodexCliAgent(BaseCliAgent):
 
         error = None
         if exit_code != 0:
-            tail = stderr_text.strip() or stdout_text.strip() or "Codex CLI exited with an error"
+            tail = (
+                stderr_text.strip()
+                or stdout_text.strip()
+                or "Codex CLI exited with an error"
+            )
             error = tail[-2000:]
 
         ok = exit_code == 0 and bool(text or structured_output is not None)

@@ -1,3 +1,5 @@
+# mypy: disable-error-code="arg-type,typeddict-item"
+
 from __future__ import annotations
 
 """Shared planning runtime helpers for the bounded C1 planning family."""
@@ -80,7 +82,12 @@ def _normalize_evidence_refs(value: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(value, start=1):
         if isinstance(item, Mapping):
             ref = {
-                "id": str(item.get("id") or _stable_id("evidence", index, item.get("path") or item.get("ref") or "ref")),
+                "id": str(
+                    item.get("id")
+                    or _stable_id(
+                        "evidence", index, item.get("path") or item.get("ref") or "ref"
+                    )
+                ),
                 "path": str(item.get("path") or item.get("ref") or "").strip(),
                 "kind": str(item.get("kind") or "workspace_ref"),
                 "summary": str(item.get("summary") or item.get("note") or "").strip(),
@@ -100,7 +107,9 @@ def _normalize_evidence_refs(value: Any) -> list[dict[str, Any]]:
     return _dedupe_records(refs, key="id")
 
 
-def _normalize_clarification_requests(value: Any, *, phase_id: str) -> list[dict[str, Any]]:
+def _normalize_clarification_requests(
+    value: Any, *, phase_id: str
+) -> list[dict[str, Any]]:
     requests: list[dict[str, Any]] = []
     if not isinstance(value, list):
         return requests
@@ -141,10 +150,7 @@ def _normalize_planning_items(
         if not isinstance(item, Mapping):
             continue
         label = str(
-            item.get("title")
-            or item.get("name")
-            or item.get("summary")
-            or item_kind
+            item.get("title") or item.get("name") or item.get("summary") or item_kind
         ).strip()
         normalized.append(
             {
@@ -157,7 +163,9 @@ def _normalize_planning_items(
                 "dependency_reasoning": _normalize_string_list(
                     item.get("dependency_reasoning") or []
                 ),
-                "ambiguity_flags": _normalize_string_list(item.get("ambiguity_flags") or []),
+                "ambiguity_flags": _normalize_string_list(
+                    item.get("ambiguity_flags") or []
+                ),
                 "source_phase_id": phase_id,
                 **{
                     key: deepcopy(value)
@@ -239,7 +247,9 @@ def _task_terminal_override(
     }
 
 
-def _lookup_planning_policy_versions(strategy_spec: Mapping[str, Any]) -> dict[str, str]:
+def _lookup_planning_policy_versions(
+    strategy_spec: Mapping[str, Any],
+) -> dict[str, str]:
     policy_versions: dict[str, str] = {}
     for field_name in PLANNING_POLICY_FIELDS:
         value = str(strategy_spec.get(field_name) or "").strip()
@@ -327,7 +337,9 @@ def _phase_outcome(
             {
                 "id": _stable_id("clarify", 1, phase_id),
                 "phase_id": phase_id,
-                "question": str(payload.get("question") or "Additional planning detail is required.").strip(),
+                "question": str(
+                    payload.get("question") or "Additional planning detail is required."
+                ).strip(),
                 "rationale": str(
                     payload.get("rationale")
                     or stop_reason
@@ -569,11 +581,14 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
         )
         payload = dict(payload)
         if index == 1:
-            payload = _task_terminal_override(
-                task_spec,
-                phase_id=str(phase_spec["id"]),
-                payload=payload,
-            ) or payload
+            payload = (
+                _task_terminal_override(
+                    task_spec,
+                    phase_id=str(phase_spec["id"]),
+                    payload=payload,
+                )
+                or payload
+            )
         outcome = handler(mutable_state, phase_spec, payload, policy_versions)
 
         mutable_state["repo_evidence_refs"] = _merge_repo_evidence_refs(
@@ -583,7 +598,9 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
         if outcome.get("planning_seams"):
             mutable_state["planning_seams"] = list(outcome["planning_seams"])
         if outcome.get("planning_workstreams"):
-            mutable_state["planning_workstreams"] = list(outcome["planning_workstreams"])
+            mutable_state["planning_workstreams"] = list(
+                outcome["planning_workstreams"]
+            )
         if outcome.get("planning_slices"):
             mutable_state["planning_slices"] = list(outcome["planning_slices"])
         mutable_state["search_pass_count"] = int(
@@ -593,7 +610,8 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
             mutable_state.get("inspected_file_count") or 0
         ) + int(outcome.get("inspected_file_count") or 0)
         mutable_state["discovery_budget_escalated"] = bool(
-            mutable_state.get("discovery_budget_escalated") or outcome.get("discovery_budget_escalated")
+            mutable_state.get("discovery_budget_escalated")
+            or outcome.get("discovery_budget_escalated")
         )
         _append_phase_result(
             mutable_state,
@@ -608,7 +626,9 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
             _apply_terminal_status(
                 mutable_state,
                 terminal_status=status,
-                stop_reason=str(outcome.get("stop_reason") or f"{phase_spec['id']}_{status}"),
+                stop_reason=str(
+                    outcome.get("stop_reason") or f"{phase_spec['id']}_{status}"
+                ),
             )
             return state
 

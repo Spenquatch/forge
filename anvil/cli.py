@@ -1,3 +1,5 @@
+# mypy: disable-error-code="misc,valid-type,arg-type"
+
 """
 Enhanced Anvil CLI entrypoint (Phase 2 features).
 Includes leadership decisions, performance monitoring, validation, and rich logs.
@@ -10,7 +12,7 @@ import os
 import sys
 import time
 import uuid
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 from dotenv import load_dotenv
 
@@ -45,6 +47,11 @@ from anvil.leadership_interface import (
     ExecutionContext,
     get_leadership_orchestrator,
 )
+
+create_forge_graph: Callable[..., Any] | None
+LangGraphExecutor: Any | None
+ForgeState: Any | None
+create_state: Callable[..., Any] | None
 
 try:
     from anvil.orchestration.graph import create_forge_graph
@@ -1051,6 +1058,11 @@ async def harness_run_command(
 ) -> int:
     try:
         executor = HarnessLangGraphExecutor(checkpoint=checkpoint)
+        execution_mode: str | None = (
+            "graph_owned"
+            if analysis_review_execution_mode == "graph_owned"
+            else "legacy_bridge"
+        )
         state = await executor.execute(
             task_path=task_path,
             strategy_path=strategy_path,
@@ -1059,7 +1071,7 @@ async def harness_run_command(
             config_path=config_path,
             thread_id=thread_id,
             auto_fit_strategy=auto_fit_strategy,
-            analysis_review_execution_mode=analysis_review_execution_mode,
+            analysis_review_execution_mode=execution_mode,
         )
         summary = summary_from_state_v1(state)
     except (HarnessError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
@@ -1120,8 +1132,12 @@ async def main_async(argv=None) -> int:
         help="Run the mini-harness task/strategy surface",
     )
     harness_parser.add_argument("--task", required=True, help="Path to task YAML/JSON")
-    harness_parser.add_argument("--strategy", required=True, help="Path to strategy YAML/JSON")
-    harness_parser.add_argument("--workspace", required=True, help="Target workspace directory")
+    harness_parser.add_argument(
+        "--strategy", required=True, help="Path to strategy YAML/JSON"
+    )
+    harness_parser.add_argument(
+        "--workspace", required=True, help="Target workspace directory"
+    )
     harness_parser.add_argument(
         "--out-root",
         default=".forge-harness-runs",

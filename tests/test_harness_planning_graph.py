@@ -161,7 +161,9 @@ def test_planning_runtime_success_populates_frozen_state_fields(
                     {
                         "title": "Coverage",
                         "summary": "Planning graph tests for terminal outcomes.",
-                        "dependency_reasoning": ["Depends on runtime-owned state fields."],
+                        "dependency_reasoning": [
+                            "Depends on runtime-owned state fields."
+                        ],
                         "ambiguity_flags": [],
                     },
                 ],
@@ -300,7 +302,9 @@ def test_planning_runtime_failed_sets_explicit_stop_reason(
     assert result["planning_slices"] == []
 
 
-def test_planning_runtime_bypasses_select_best_draft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_planning_runtime_bypasses_select_best_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     state = _planning_graph_state(
         tmp_path,
         phase_inputs={

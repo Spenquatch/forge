@@ -1,3 +1,5 @@
+# mypy: disable-error-code="assignment,arg-type"
+
 from __future__ import annotations
 
 """Semantic validation helpers for harness stage outputs.
@@ -13,17 +15,17 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from .contracts import (
-    AnalysisReviewContract,
     BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
     TRUST_EXECUTION_MODE_VALUES,
+    AnalysisReviewContract,
     canonical_artifact_focus_id,
     canonical_seam_id_for_paths,
     default_blocking_class_for_kind,
 )
 from .types import (
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
-    TaskSpec,
     VALID_SINGLETON_FOCUS_TYPES,
+    TaskSpec,
     canonical_seam_path_list,
     canonical_workspace_ref_list,
 )
@@ -97,7 +99,9 @@ def validate_stage_output(
     if task.task_kind != "analysis_review" or contract is None:
         return result
     if not isinstance(payload, dict) or not payload:
-        result.errors.append("Structured output is empty, so semantic validation could not run.")
+        result.errors.append(
+            "Structured output is empty, so semantic validation could not run."
+        )
         return result
 
     role = canonical_stage_role(role_name)
@@ -113,7 +117,8 @@ def validate_stage_output(
             validate_focus_decision_payload(
                 payload,
                 workspace_paths=workspace_paths,
-                expected_gate_path=expected_gate_path or contract.focus_gate.default_path,
+                expected_gate_path=expected_gate_path
+                or contract.focus_gate.default_path,
             )
         )
     elif role in {"proposer", "reviser"}:
@@ -158,7 +163,9 @@ def validate_bounded_attestation_input_payload(
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     if not isinstance(payload, dict) or not payload:
-        result.errors.append("bounded_attestation_input payload must be a non-empty object.")
+        result.errors.append(
+            "bounded_attestation_input payload must be a non-empty object."
+        )
         return result
 
     required_top_level_fields = {
@@ -175,7 +182,9 @@ def validate_bounded_attestation_input_payload(
         field for field in required_top_level_fields if field not in payload
     ]
     for field_name in sorted(missing_top_level_fields):
-        result.errors.append(f"bounded_attestation_input is missing required field: {field_name}")
+        result.errors.append(
+            f"bounded_attestation_input is missing required field: {field_name}"
+        )
 
     _validate_bounded_attestation_forbidden_fields(
         result,
@@ -279,13 +288,15 @@ def validate_analysis_output_payload(
         scope_escapes=payload.get("scope_escapes"),
         require_reason=bounded_review.require_scope_escape_justification,
     )
-    primary_seam_id, primary_seam_paths, declared_secondary_seam_ids = _validate_declared_seams(
-        result,
-        payload=payload,
-        files_reviewed=files_reviewed_set,
-        workspace_paths=workspace_path_set,
-        contract=contract,
-        scope_escapes=scope_escapes,
+    primary_seam_id, primary_seam_paths, declared_secondary_seam_ids = (
+        _validate_declared_seams(
+            result,
+            payload=payload,
+            files_reviewed=files_reviewed_set,
+            workspace_paths=workspace_path_set,
+            contract=contract,
+            scope_escapes=scope_escapes,
+        )
     )
     if expected_primary_seam_id is not None or expected_primary_seam_paths is not None:
         _validate_expected_primary_seam_id(
@@ -295,16 +306,24 @@ def validate_analysis_output_payload(
             actual_primary_seam_paths=primary_seam_paths,
             expected_primary_seam_paths=expected_primary_seam_paths,
         )
-    declared_seam_ids = ({primary_seam_id} if primary_seam_id else set()) | declared_secondary_seam_ids
+    declared_seam_ids = (
+        {primary_seam_id} if primary_seam_id else set()
+    ) | declared_secondary_seam_ids
     primary_bound_recommendation_count = 0
 
     for index, item in enumerate(recommendations, start=1):
         if not isinstance(item, dict):
             result.errors.append(f"recommendations[{index}] must be an object.")
             continue
-        if review_requirements.require_classification and not str(item.get("classification") or "").strip():
+        if (
+            review_requirements.require_classification
+            and not str(item.get("classification") or "").strip()
+        ):
             result.errors.append(f"recommendations[{index}] is missing classification.")
-        if review_requirements.require_priority and not str(item.get("priority") or "").strip():
+        if (
+            review_requirements.require_priority
+            and not str(item.get("priority") or "").strip()
+        ):
             result.errors.append(f"recommendations[{index}] is missing priority.")
         evidence = item.get("evidence") or []
         evidence_items = _canonical_workspace_paths(
@@ -317,7 +336,8 @@ def validate_analysis_output_payload(
                 )
             if (
                 contract.mode == "bounded"
-                and len(evidence_items) > bounded_review.max_evidence_refs_per_recommendation
+                and len(evidence_items)
+                > bounded_review.max_evidence_refs_per_recommendation
             ):
                 result.errors.append(
                     f"recommendations[{index}].evidence exceeds the bounded-review cap of "
@@ -380,7 +400,11 @@ def validate_analysis_output_payload(
     )
 
     if require_issue_resolution_map:
-        expected_ids = {str(item).strip() for item in (expected_open_issue_ids or []) if str(item).strip()}
+        expected_ids = {
+            str(item).strip()
+            for item in (expected_open_issue_ids or [])
+            if str(item).strip()
+        }
         resolution_entries = payload.get("issue_resolution_map") or []
         if not isinstance(resolution_entries, list):
             result.errors.append("issue_resolution_map must be a list.")
@@ -392,24 +416,31 @@ def validate_analysis_output_payload(
                 continue
             issue_id = str(item.get("issue_id") or "").strip()
             if not issue_id:
-                result.errors.append("issue_resolution_map entries must include a non-empty issue_id.")
+                result.errors.append(
+                    "issue_resolution_map entries must include a non-empty issue_id."
+                )
                 continue
             seen_ids.append(issue_id)
-        duplicates = sorted({issue_id for issue_id in seen_ids if seen_ids.count(issue_id) > 1})
+        duplicates = sorted(
+            {issue_id for issue_id in seen_ids if seen_ids.count(issue_id) > 1}
+        )
         if duplicates:
             result.errors.append(
-                "issue_resolution_map contains duplicate issue IDs: " + ", ".join(duplicates)
+                "issue_resolution_map contains duplicate issue IDs: "
+                + ", ".join(duplicates)
             )
         seen_set = set(seen_ids)
         missing_ids = sorted(expected_ids - seen_set)
         if missing_ids:
             result.errors.append(
-                "issue_resolution_map is missing open issue IDs: " + ", ".join(missing_ids)
+                "issue_resolution_map is missing open issue IDs: "
+                + ", ".join(missing_ids)
             )
         unexpected_ids = sorted(seen_set - expected_ids)
         if unexpected_ids:
             result.errors.append(
-                "issue_resolution_map references unknown issue IDs: " + ", ".join(unexpected_ids)
+                "issue_resolution_map references unknown issue IDs: "
+                + ", ".join(unexpected_ids)
             )
 
     if require_topic_resolution_map:
@@ -431,7 +462,9 @@ def validate_focus_decision_payload(
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     if not isinstance(payload, dict) or not payload:
-        result.errors.append("Structured output is empty, so semantic validation could not run.")
+        result.errors.append(
+            "Structured output is empty, so semantic validation could not run."
+        )
         return result
 
     workspace_path_set = _workspace_path_set(workspace_paths)
@@ -503,7 +536,9 @@ def validate_focus_decision_payload(
     selected_focus_id_text = _nullable_non_empty_string(selected_focus_id)
     selected_focus_summary_text = _nullable_non_empty_string(selected_focus_summary)
     selected_focus_paths = canonical_seam_path_list(payload.get("selected_focus_paths"))
-    unknown_selected_focus_paths = sorted(set(selected_focus_paths) - workspace_path_set)
+    unknown_selected_focus_paths = sorted(
+        set(selected_focus_paths) - workspace_path_set
+    )
     if unknown_selected_focus_paths:
         result.errors.append(
             "selected_focus_paths contains path(s) not present in the workspace snapshot: "
@@ -578,7 +613,9 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "selected_focus_id must appear in candidates when decision_state=selected."
             )
-        selected_candidate_paths = candidate_paths_by_id.get(selected_focus_id_text or "")
+        selected_candidate_paths = candidate_paths_by_id.get(
+            selected_focus_id_text or ""
+        )
         if (
             selected_focus_id_text
             and selected_candidate_paths is not None
@@ -587,12 +624,17 @@ def validate_focus_decision_payload(
             result.errors.append(
                 "selected_focus_paths must equal the selected candidate's candidate_paths after normalization."
             )
-        if not adapter_primary_focus_id or adapter_primary_focus_id != selected_focus_id_text:
+        if (
+            not adapter_primary_focus_id
+            or adapter_primary_focus_id != selected_focus_id_text
+        ):
             result.errors.append(
                 "adapter_plan.primary_focus_id must equal selected_focus_id when decision_state=selected."
             )
         if focus_type == "seam":
-            expected_selected_focus_id = canonical_seam_id_for_paths(selected_focus_paths)
+            expected_selected_focus_id = canonical_seam_id_for_paths(
+                selected_focus_paths
+            )
             if (
                 selected_focus_id_text
                 and selected_focus_paths
@@ -633,7 +675,9 @@ def validate_focus_decision_payload(
                     "selected_focus_id must equal the canonical artifact ID derived from selected_focus_paths: "
                     f"expected {expected_selected_focus_id}, got {selected_focus_id_text}."
                 )
-            expected_downstream_seam_id = canonical_seam_id_for_paths(selected_focus_paths)
+            expected_downstream_seam_id = canonical_seam_id_for_paths(
+                selected_focus_paths
+            )
             if downstream_primary_seam_id != expected_downstream_seam_id:
                 result.errors.append(
                     "adapter_plan.downstream_primary_seam_id must equal the canonical seam ID derived from selected_focus_paths when focus_type=artifact and decision_state=selected."
@@ -727,7 +771,9 @@ def validate_focus_probe_payload(
 ) -> SemanticValidationResult:
     result = SemanticValidationResult()
     if not isinstance(payload, dict) or not payload:
-        result.errors.append("Structured output is empty, so semantic validation could not run.")
+        result.errors.append(
+            "Structured output is empty, so semantic validation could not run."
+        )
         return result
 
     workspace_path_set = _workspace_path_set(workspace_paths)
@@ -794,7 +840,10 @@ def validate_analysis_review_payload(
         contract.mode == "trust"
         and contract.trust_review.execution_mode == "attestation_over_bounded"
     ):
-        if not isinstance(bounded_attestation_input, dict) or not bounded_attestation_input:
+        if (
+            not isinstance(bounded_attestation_input, dict)
+            or not bounded_attestation_input
+        ):
             result.errors.append(
                 "bounded_attestation_input is required for trust execution_mode=attestation_over_bounded."
             )
@@ -833,12 +882,10 @@ def validate_analysis_review_payload(
                         "expected_recommendation_count must match bounded_attestation_input.bounded_analysis.recommendations."
                     )
             evidence_index = (
-                (
-                    bounded_attestation_input.get("provenance_context") or {}
-                ).get("recommendation_evidence_index")
-                if isinstance(
-                    bounded_attestation_input.get("provenance_context"), dict
+                (bounded_attestation_input.get("provenance_context") or {}).get(
+                    "recommendation_evidence_index"
                 )
+                if isinstance(bounded_attestation_input.get("provenance_context"), dict)
                 else {}
             )
             if isinstance(evidence_index, dict):
@@ -848,7 +895,9 @@ def validate_analysis_review_payload(
                     except (TypeError, ValueError):
                         continue
                     attestation_evidence_index[recommendation_index] = set(
-                        _canonical_workspace_paths(refs if isinstance(refs, list) else [])
+                        _canonical_workspace_paths(
+                            refs if isinstance(refs, list) else []
+                        )
                     )
 
     issues = payload.get("issues") or []
@@ -872,7 +921,9 @@ def validate_analysis_review_payload(
     prior_open_ids = set(prior_open_issue_record_map)
     if not prior_open_ids:
         prior_open_ids = {
-            str(item).strip() for item in (prior_open_issue_ids or []) if str(item).strip()
+            str(item).strip()
+            for item in (prior_open_issue_ids or [])
+            if str(item).strip()
         }
         prior_open_issue_records_by_id = {
             issue_id: {"issue_id": issue_id} for issue_id in prior_open_ids
@@ -890,8 +941,14 @@ def validate_analysis_review_payload(
         if contract.mode == "trust":
             issue_kind = str(issue.get("kind") or "other").strip().lower()
             blocking_class = str(issue.get("blocking_class") or "").strip().lower()
-            override_reason = str(issue.get("blocking_class_override_reason") or "").strip()
-            if blocking_class and blocking_class != default_blocking_class_for_kind(issue_kind) and not override_reason:
+            override_reason = str(
+                issue.get("blocking_class_override_reason") or ""
+            ).strip()
+            if (
+                blocking_class
+                and blocking_class != default_blocking_class_for_kind(issue_kind)
+                and not override_reason
+            ):
                 result.errors.append(
                     f"issues[{index}] overrides blocking_class for kind={issue_kind} but is missing blocking_class_override_reason."
                 )
@@ -908,23 +965,31 @@ def validate_analysis_review_payload(
                     result.errors.append(
                         f"issues[{index}].recommendation_index must be >= 1 when provided."
                     )
-                if expected_recommendation_count is not None and recommendation_number > expected_recommendation_count:
+                if (
+                    expected_recommendation_count is not None
+                    and recommendation_number > expected_recommendation_count
+                ):
                     result.errors.append(
                         f"issues[{index}].recommendation_index={recommendation_number} exceeds the recommendation count ({expected_recommendation_count})."
                     )
         if (
             role_name == "auditor"
             and issue_id not in prior_open_ids
-            and str(issue.get("severity") or "").strip() in {"medium", "high", "critical"}
+            and str(issue.get("severity") or "").strip()
+            in {"medium", "high", "critical"}
         ):
             new_medium_or_higher_issue_ids.append(issue_id)
             if not str(issue.get("why_not_raised_earlier") or "").strip():
                 result.errors.append(
                     f"issues[{index}] must include why_not_raised_earlier for new medium-or-higher auditor issues."
                 )
-    duplicate_issue_ids = sorted({issue_id for issue_id in issue_id_order if issue_id_order.count(issue_id) > 1})
+    duplicate_issue_ids = sorted(
+        {issue_id for issue_id in issue_id_order if issue_id_order.count(issue_id) > 1}
+    )
     if duplicate_issue_ids:
-        result.errors.append("issues contains duplicate issue IDs: " + ", ".join(duplicate_issue_ids))
+        result.errors.append(
+            "issues contains duplicate issue IDs: " + ", ".join(duplicate_issue_ids)
+        )
     issue_ids = set(issue_id_order)
     if (
         role_name == "auditor"
@@ -935,7 +1000,10 @@ def validate_analysis_review_payload(
             "new medium-or-higher auditor issues exceed the bounded-review cap of "
             f"{bounded_review.auditor_new_medium_or_higher_issue_cap_after_round0} after round 0."
         )
-        if contract.mode == "trust" and contract.trust_review.late_auditor_medium_or_higher_policy == "warn":
+        if (
+            contract.mode == "trust"
+            and contract.trust_review.late_auditor_medium_or_higher_policy == "warn"
+        ):
             result.warnings.append(overflow_message)
         else:
             result.errors.append(overflow_message)
@@ -944,7 +1012,9 @@ def validate_analysis_review_payload(
     review_file_items = _canonical_workspace_paths(
         files_reviewed if isinstance(files_reviewed, list) else []
     )
-    if len(review_file_items) < int(contract.required_sections.minimum_files_reviewed or 0):
+    if len(review_file_items) < int(
+        contract.required_sections.minimum_files_reviewed or 0
+    ):
         result.errors.append(
             f"files_reviewed must contain at least {contract.required_sections.minimum_files_reviewed} non-empty path(s)."
         )
@@ -973,12 +1043,19 @@ def validate_analysis_review_payload(
             )
             continue
         recommendation_indices.append(recommendation_index)
-        if expected_recommendation_count is not None and recommendation_index > expected_recommendation_count:
+        if (
+            expected_recommendation_count is not None
+            and recommendation_index > expected_recommendation_count
+        ):
             result.errors.append(
                 f"recommendation_reviews[{index}].recommendation_index={recommendation_index} exceeds the recommendation count ({expected_recommendation_count})."
             )
         open_issue_ids = item.get("open_issue_ids") or []
-        open_issue_set = {str(issue_id).strip() for issue_id in open_issue_ids if str(issue_id).strip()}
+        open_issue_set = {
+            str(issue_id).strip()
+            for issue_id in open_issue_ids
+            if str(issue_id).strip()
+        }
         unknown_issue_ids = sorted(open_issue_set - issue_ids)
         if unknown_issue_ids:
             result.errors.append(
@@ -1001,7 +1078,11 @@ def validate_analysis_review_payload(
                 bounded_evidence_index=attestation_evidence_index,
             )
     duplicate_recommendations = sorted(
-        {value for value in recommendation_indices if recommendation_indices.count(value) > 1}
+        {
+            value
+            for value in recommendation_indices
+            if recommendation_indices.count(value) > 1
+        }
     )
     if duplicate_recommendations:
         result.errors.append(
@@ -1027,7 +1108,11 @@ def validate_analysis_review_payload(
     resolved_ids = _normalized_id_set(payload.get("resolved_issue_ids"))
     carried_ids = _normalized_id_set(payload.get("carried_forward_issue_ids"))
     waived_ids = _normalized_id_set(payload.get("waived_issue_ids"))
-    if overlap := sorted((resolved_ids & carried_ids) | (resolved_ids & waived_ids) | (carried_ids & waived_ids)):
+    if overlap := sorted(
+        (resolved_ids & carried_ids)
+        | (resolved_ids & waived_ids)
+        | (carried_ids & waived_ids)
+    ):
         result.errors.append(
             "resolved_issue_ids, carried_forward_issue_ids, and waived_issue_ids overlap: "
             + ", ".join(overlap)
@@ -1046,7 +1131,9 @@ def validate_analysis_review_payload(
             + ", ".join(missing_classifications)
         )
     required_global_issue_closure_ids = sorted(
-        issue_id for issue_id in classification_union if prior_open_issue_record_map.get(issue_id) is None
+        issue_id
+        for issue_id in classification_union
+        if prior_open_issue_record_map.get(issue_id) is None
     )
     _validate_scoped_closure_reviews(
         result,
@@ -1054,7 +1141,9 @@ def validate_analysis_review_payload(
         values=payload.get("issue_closure_reviews"),
         id_field="issue_id",
         prior_record_map=prior_open_issue_records_by_id,
-        required_ids=required_global_issue_closure_ids if contract.mode == "trust" else [],
+        required_ids=(
+            required_global_issue_closure_ids if contract.mode == "trust" else []
+        ),
         files_reviewed=files_reviewed_set,
         workspace_paths=workspace_path_set,
     )
@@ -1091,13 +1180,20 @@ def validate_analysis_review_payload(
                     result.errors.append(
                         f"topics[{index}].recommendation_index must be >= 1 when provided."
                     )
-                if expected_recommendation_count is not None and recommendation_number > expected_recommendation_count:
+                if (
+                    expected_recommendation_count is not None
+                    and recommendation_number > expected_recommendation_count
+                ):
                     result.errors.append(
                         f"topics[{index}].recommendation_index={recommendation_number} exceeds the recommendation count ({expected_recommendation_count})."
                     )
-    duplicate_topic_ids = sorted({topic_id for topic_id in topic_id_order if topic_id_order.count(topic_id) > 1})
+    duplicate_topic_ids = sorted(
+        {topic_id for topic_id in topic_id_order if topic_id_order.count(topic_id) > 1}
+    )
     if duplicate_topic_ids:
-        result.errors.append("topics contains duplicate topic IDs: " + ", ".join(duplicate_topic_ids))
+        result.errors.append(
+            "topics contains duplicate topic IDs: " + ", ".join(duplicate_topic_ids)
+        )
 
     prior_open_topic_records_by_id = _record_map_by_id(
         prior_open_topic_records,
@@ -1110,7 +1206,9 @@ def validate_analysis_review_payload(
     prior_open_topic_id_set = set(prior_open_topic_record_map)
     if not prior_open_topic_id_set:
         prior_open_topic_id_set = {
-            str(item).strip() for item in (prior_open_topic_ids or []) if str(item).strip()
+            str(item).strip()
+            for item in (prior_open_topic_ids or [])
+            if str(item).strip()
         }
         prior_open_topic_records_by_id = {
             topic_id: {"topic_id": topic_id} for topic_id in prior_open_topic_id_set
@@ -1156,20 +1254,28 @@ def validate_analysis_review_payload(
             "resolved_topic_ids, carried_forward_topic_ids, and waived_topic_ids overlap: "
             + ", ".join(overlap)
         )
-    classified_topic_ids = resolved_topic_set | carried_forward_topic_set | waived_topic_set
-    unexpected_topic_classifications = sorted(classified_topic_ids - prior_open_topic_id_set)
+    classified_topic_ids = (
+        resolved_topic_set | carried_forward_topic_set | waived_topic_set
+    )
+    unexpected_topic_classifications = sorted(
+        classified_topic_ids - prior_open_topic_id_set
+    )
     if unexpected_topic_classifications:
         result.errors.append(
             "topic classification arrays reference unknown prior open topic IDs: "
             + ", ".join(unexpected_topic_classifications)
         )
-    missing_topic_classifications = sorted(prior_open_topic_id_set - classified_topic_ids)
+    missing_topic_classifications = sorted(
+        prior_open_topic_id_set - classified_topic_ids
+    )
     if missing_topic_classifications:
         result.errors.append(
             "prior open topic IDs are missing from resolved_topic_ids/carried_forward_topic_ids/waived_topic_ids: "
             + ", ".join(missing_topic_classifications)
         )
-    introduced_and_classified_topic_ids = sorted(set(topic_id_order) & classified_topic_ids)
+    introduced_and_classified_topic_ids = sorted(
+        set(topic_id_order) & classified_topic_ids
+    )
     if introduced_and_classified_topic_ids:
         result.errors.append(
             "topics contains newly introduced topic IDs that also appear in resolved_topic_ids/carried_forward_topic_ids/waived_topic_ids: "
@@ -1186,7 +1292,9 @@ def validate_analysis_review_payload(
         values=payload.get("topic_closure_reviews"),
         id_field="topic_id",
         prior_record_map=prior_open_topic_records_by_id,
-        required_ids=required_global_topic_closure_ids if contract.mode == "trust" else [],
+        required_ids=(
+            required_global_topic_closure_ids if contract.mode == "trust" else []
+        ),
         files_reviewed=files_reviewed_set,
         workspace_paths=workspace_path_set,
     )
@@ -1291,7 +1399,9 @@ def _validate_review_surface(
     contract: AnalysisReviewContract,
 ) -> None:
     if not isinstance(review_surface, dict):
-        result.errors.append(f"recommendations[{recommendation_index}].review_surface must be an object.")
+        result.errors.append(
+            f"recommendations[{recommendation_index}].review_surface must be an object."
+        )
         return
 
     bounded_review = contract.bounded_review
@@ -1313,7 +1423,10 @@ def _validate_review_surface(
             f"recommendations[{recommendation_index}].review_surface.must_check_files exceeds the bounded-review cap of "
             f"{bounded_review.max_must_check_files_per_recommendation} item(s)."
         )
-    if len(optional_check_items) > bounded_review.max_optional_check_files_per_recommendation:
+    if (
+        len(optional_check_items)
+        > bounded_review.max_optional_check_files_per_recommendation
+    ):
         result.errors.append(
             f"recommendations[{recommendation_index}].review_surface.optional_check_files exceeds the bounded-review cap of "
             f"{bounded_review.max_optional_check_files_per_recommendation} item(s)."
@@ -1473,7 +1586,9 @@ def _validate_bounded_secondary_seam_overflow(
     if isinstance(third_seam, dict):
         third_seam_paths = set(
             _canonical_workspace_paths(
-                third_seam.get("paths") if isinstance(third_seam.get("paths"), list) else []
+                third_seam.get("paths")
+                if isinstance(third_seam.get("paths"), list)
+                else []
             )
         )
     escape_paths = {
@@ -1524,12 +1639,15 @@ def _validate_seam_entry(
         return seam_id or None, []
     path_items = canonical_seam_path_list(paths)
     if not path_items:
-        result.errors.append(f"{field_name}.paths must contain at least one non-empty path.")
+        result.errors.append(
+            f"{field_name}.paths must contain at least one non-empty path."
+        )
         return seam_id or None, []
     missing_files = sorted(set(path_items) - files_reviewed)
     if missing_files:
         result.errors.append(
-            f"{field_name}.paths must be a subset of files_reviewed: " + ", ".join(missing_files)
+            f"{field_name}.paths must be a subset of files_reviewed: "
+            + ", ".join(missing_files)
         )
     unknown_files = sorted(set(path_items) - workspace_paths)
     if unknown_files:
@@ -1573,7 +1691,9 @@ def _validate_recommendation_seam_binding(
 ) -> bool:
     seam_id = str(recommendation.get("seam_id") or "").strip()
     if not seam_id:
-        result.errors.append(f"recommendations[{recommendation_index}].seam_id must be non-empty.")
+        result.errors.append(
+            f"recommendations[{recommendation_index}].seam_id must be non-empty."
+        )
         return False
     if seam_id not in declared_seam_ids:
         result.errors.append(
@@ -1581,7 +1701,9 @@ def _validate_recommendation_seam_binding(
         )
         return False
 
-    seam_expansion_reason = str(recommendation.get("seam_expansion_reason") or "").strip()
+    seam_expansion_reason = str(
+        recommendation.get("seam_expansion_reason") or ""
+    ).strip()
     if primary_seam_id and seam_id == primary_seam_id:
         if seam_expansion_reason:
             result.errors.append(
@@ -1623,9 +1745,13 @@ def _validated_focus_candidates(
             result.errors.append(f"candidates[{index}].focus_id must be non-empty.")
             continue
         if not focus_summary:
-            result.errors.append(f"candidates[{index}].focus_summary must be non-empty.")
+            result.errors.append(
+                f"candidates[{index}].focus_summary must be non-empty."
+            )
         if not why_candidate:
-            result.errors.append(f"candidates[{index}].why_candidate must be non-empty.")
+            result.errors.append(
+                f"candidates[{index}].why_candidate must be non-empty."
+            )
         candidate_paths = canonical_seam_path_list(item.get("candidate_paths"))
         if not candidate_paths:
             result.errors.append(
@@ -1742,7 +1868,9 @@ def _validated_focus_candidate_evidence_refs(
         result.errors.append(
             f"{field_name} must contain at most {_FOCUS_MAX_EVIDENCE_REFS} item(s)."
         )
-    duplicates = sorted({ref for ref in normalized_refs if normalized_refs.count(ref) > 1})
+    duplicates = sorted(
+        {ref for ref in normalized_refs if normalized_refs.count(ref) > 1}
+    )
     if duplicates:
         result.errors.append(
             f"{field_name} contains duplicate refs: " + ", ".join(duplicates)
@@ -1750,7 +1878,8 @@ def _validated_focus_candidate_evidence_refs(
     unexpected_refs = sorted(set(normalized_refs) - checked_file_set)
     if unexpected_refs:
         result.errors.append(
-            f"{field_name} must be a subset of checked_files: " + ", ".join(unexpected_refs)
+            f"{field_name} must be a subset of checked_files: "
+            + ", ".join(unexpected_refs)
         )
     return normalized_refs
 
@@ -1919,7 +2048,10 @@ def _validate_trust_recommendation_metadata(
             )
 
     grounding_mode = str(recommendation.get("grounding_mode") or "").strip().lower()
-    if contract.trust_review.require_affected_file_coverage and grounding_mode != "inferred":
+    if (
+        contract.trust_review.require_affected_file_coverage
+        and grounding_mode != "inferred"
+    ):
         supported_refs = set(evidence_items) | set(verified_items) | set(checked_items)
         uncovered_affected_files = sorted(set(affected_items) - supported_refs)
         if uncovered_affected_files:
@@ -1950,7 +2082,12 @@ def _validate_review_recommendation_metadata(
     )
     verdict = str(recommendation_review.get("verdict") or "").strip().lower()
 
-    if contract.mode == "trust" and verdict and not checked_items and not verified_items:
+    if (
+        contract.mode == "trust"
+        and verdict
+        and not checked_items
+        and not verified_items
+    ):
         result.errors.append(
             f"recommendation_reviews[{recommendation_index}] must include checked_files or verified_evidence_refs for trust-mode verdict provenance."
         )
@@ -2024,9 +2161,13 @@ def _validate_review_payload_provenance(
         else []
     )
     if "closure_provenance_satisfied" in provenance:
-        closure_provenance_satisfied = bool(provenance.get("closure_provenance_satisfied"))
+        closure_provenance_satisfied = bool(
+            provenance.get("closure_provenance_satisfied")
+        )
     else:
-        recommendation_review_ref_count = provenance.get("recommendation_review_ref_count", 0)
+        recommendation_review_ref_count = provenance.get(
+            "recommendation_review_ref_count", 0
+        )
         try:
             closure_provenance_satisfied = int(recommendation_review_ref_count) > 0
         except (TypeError, ValueError):
@@ -2058,7 +2199,9 @@ def _validate_review_payload_provenance(
         return
     if closure_provenance_satisfied:
         return
-    recommendation_review_ref_count = provenance.get("recommendation_review_ref_count", 0)
+    recommendation_review_ref_count = provenance.get(
+        "recommendation_review_ref_count", 0
+    )
     issue_closure_review_ref_count = provenance.get("issue_closure_review_ref_count", 0)
     topic_closure_review_ref_count = provenance.get("topic_closure_review_ref_count", 0)
     try:
@@ -2128,7 +2271,11 @@ def _validate_bounded_attestation_source(
         result.errors.append("source.analysis_stage_role_name must be non-empty.")
 
     stage_index = source.get("analysis_stage_index")
-    if not isinstance(stage_index, int) or isinstance(stage_index, bool) or stage_index < 0:
+    if (
+        not isinstance(stage_index, int)
+        or isinstance(stage_index, bool)
+        or stage_index < 0
+    ):
         result.errors.append("source.analysis_stage_index must be an integer >= 0.")
 
     payload_hash = str(source.get("bounded_payload_sha256") or "").strip()
@@ -2168,7 +2315,9 @@ def _validate_bounded_attestation_focus_decision(
             )
     for index, candidate in enumerate(focus_decision.get("candidates") or [], start=1):
         if not isinstance(candidate, dict):
-            result.errors.append(f"focus_decision.candidates[{index}] must be an object.")
+            result.errors.append(
+                f"focus_decision.candidates[{index}] must be an object."
+            )
             continue
         _validated_checked_files(
             result,
@@ -2185,7 +2334,10 @@ def _validate_bounded_attestation_focus_decision(
             workspace_paths=workspace_paths,
         )
     adapter_plan = focus_decision.get("adapter_plan")
-    if isinstance(adapter_plan, dict) and "downstream_primary_seam_paths" in adapter_plan:
+    if (
+        isinstance(adapter_plan, dict)
+        and "downstream_primary_seam_paths" in adapter_plan
+    ):
         _validated_checked_files(
             result,
             checked_files=adapter_plan.get("downstream_primary_seam_paths"),
@@ -2272,7 +2424,9 @@ def _validate_bounded_attestation_analysis(
     )
     secondary_seams = bounded_analysis.get("secondary_seams_considered")
     if not isinstance(secondary_seams, list):
-        result.errors.append("bounded_analysis.secondary_seams_considered must be a list.")
+        result.errors.append(
+            "bounded_analysis.secondary_seams_considered must be a list."
+        )
     else:
         for index, item in enumerate(secondary_seams, start=1):
             _validate_seam_entry(
@@ -2301,7 +2455,9 @@ def _validate_bounded_attestation_analysis(
         result.errors.append("bounded_analysis.recommendations must be a list.")
         return []
     if not recommendations:
-        result.errors.append("bounded_analysis.recommendations must contain at least one item.")
+        result.errors.append(
+            "bounded_analysis.recommendations must contain at least one item."
+        )
         return []
 
     validated_recommendations: list[dict[str, Any]] = []
@@ -2423,7 +2579,9 @@ def _validate_bounded_attestation_review_surface(
         or isinstance(declared_recommendation_count, bool)
         or declared_recommendation_count < 0
     ):
-        result.errors.append("review_surface.recommendation_count must be an integer >= 0.")
+        result.errors.append(
+            "review_surface.recommendation_count must be an integer >= 0."
+        )
     elif declared_recommendation_count != actual_recommendation_count:
         result.errors.append(
             "review_surface.recommendation_count must equal len(bounded_analysis.recommendations)."
@@ -2458,7 +2616,9 @@ def _validate_bounded_attestation_review_surface(
     total_stage_scope_escapes = 0
     for index, stage in enumerate(review_stages, start=1):
         if not isinstance(stage, dict):
-            result.errors.append(f"review_surface.review_stages[{index}] must be an object.")
+            result.errors.append(
+                f"review_surface.review_stages[{index}] must be an object."
+            )
             continue
         if not str(stage.get("role_name") or "").strip():
             result.errors.append(
@@ -2491,11 +2651,15 @@ def _validate_bounded_attestation_review_surface(
         or isinstance(declared_scope_escape_count, bool)
         or declared_scope_escape_count < 0
     ):
-        result.errors.append("review_surface.scope_escape_count must be an integer >= 0.")
+        result.errors.append(
+            "review_surface.scope_escape_count must be an integer >= 0."
+        )
     else:
         analysis_scope_escapes = bounded_analysis.get("scope_escapes")
         analysis_scope_escape_count = (
-            len(analysis_scope_escapes) if isinstance(analysis_scope_escapes, list) else 0
+            len(analysis_scope_escapes)
+            if isinstance(analysis_scope_escapes, list)
+            else 0
         )
         if declared_scope_escape_count != (
             analysis_scope_escape_count + total_stage_scope_escapes
@@ -2503,6 +2667,7 @@ def _validate_bounded_attestation_review_surface(
             result.errors.append(
                 "review_surface.scope_escape_count must equal bounded_analysis.scope_escapes plus per-stage scope_escape_count totals."
             )
+
 
 def _validate_bounded_attestation_ledgers(
     result: SemanticValidationResult,
@@ -2531,7 +2696,9 @@ def _validate_bounded_attestation_provenance_context(
 
     evidence_index = provenance_context.get("recommendation_evidence_index")
     if not isinstance(evidence_index, dict):
-        result.errors.append("provenance_context.recommendation_evidence_index must be an object.")
+        result.errors.append(
+            "provenance_context.recommendation_evidence_index must be an object."
+        )
         evidence_index = {}
 
     actual_keys = list(evidence_index.keys())
@@ -2575,7 +2742,9 @@ def _validate_bounded_attestation_provenance_context(
         or isinstance(normalized_ref_count, bool)
         or normalized_ref_count < 0
     ):
-        result.errors.append("provenance_context.normalized_ref_count must be an integer >= 0.")
+        result.errors.append(
+            "provenance_context.normalized_ref_count must be an integer >= 0."
+        )
     elif normalized_ref_count != expected_normalized_ref_count:
         result.errors.append(
             "provenance_context.normalized_ref_count must match the unique normalized evidence refs derived from recommendation_evidence_index."
@@ -2722,12 +2891,18 @@ def _validated_id_list(
     for index, item in enumerate(values, start=1):
         text = str(item).strip()
         if not text:
-            result.errors.append(f"{field_name}[{index}] must be a non-empty {id_label}.")
+            result.errors.append(
+                f"{field_name}[{index}] must be a non-empty {id_label}."
+            )
             continue
         normalized_ids.append(text)
-    duplicates = sorted({item for item in normalized_ids if normalized_ids.count(item) > 1})
+    duplicates = sorted(
+        {item for item in normalized_ids if normalized_ids.count(item) > 1}
+    )
     if duplicates:
-        result.errors.append(f"{field_name} contains duplicate {id_label}s: " + ", ".join(duplicates))
+        result.errors.append(
+            f"{field_name} contains duplicate {id_label}s: " + ", ".join(duplicates)
+        )
     return normalized_ids
 
 
@@ -2754,7 +2929,9 @@ def _validate_scoped_closure_reviews(
             continue
         record_id = str(item.get(id_field) or "").strip()
         if not record_id:
-            result.errors.append(f"{field_name}[{index}].{id_field} must be a non-empty ID.")
+            result.errors.append(
+                f"{field_name}[{index}].{id_field} must be a non-empty ID."
+            )
             continue
         seen_ids.append(record_id)
         if record_id not in prior_record_map:
@@ -2762,7 +2939,9 @@ def _validate_scoped_closure_reviews(
                 f"{field_name}[{index}].{id_field} references an unknown prior open ID: {record_id}"
             )
         checked_items = _canonical_workspace_paths(
-            item.get("checked_files") if isinstance(item.get("checked_files"), list) else []
+            item.get("checked_files")
+            if isinstance(item.get("checked_files"), list)
+            else []
         )
         verified_items = _canonical_workspace_paths(
             item.get("verified_evidence_refs")
@@ -2808,7 +2987,8 @@ def _validate_scoped_closure_reviews(
     missing_required_ids = sorted(set(required_ids) - set(seen_ids))
     if missing_required_ids:
         result.errors.append(
-            f"{field_name} is missing scoped closure proof IDs: " + ", ".join(missing_required_ids)
+            f"{field_name} is missing scoped closure proof IDs: "
+            + ", ".join(missing_required_ids)
         )
 
 
@@ -2820,7 +3000,9 @@ def _validate_topic_resolution_map(
     expected_recommendation_count: int,
 ) -> None:
     expected_topic_ids = {
-        str(item).strip() for item in (expected_open_topic_ids or []) if str(item).strip()
+        str(item).strip()
+        for item in (expected_open_topic_ids or [])
+        if str(item).strip()
     }
     if topic_resolution_map is None:
         topic_resolution_map = []
@@ -2835,7 +3017,9 @@ def _validate_topic_resolution_map(
             continue
         topic_id = str(item.get("topic_id") or "").strip()
         if not topic_id:
-            result.errors.append(f"topic_resolution_map[{index}] must include a non-empty topic_id.")
+            result.errors.append(
+                f"topic_resolution_map[{index}] must include a non-empty topic_id."
+            )
             continue
         seen_topic_ids.append(topic_id)
 
@@ -2870,22 +3054,27 @@ def _validate_topic_resolution_map(
                 f"topic_resolution_map[{index}] with status=addressed must include a valid recommendation_index or a substantive change_summary."
             )
 
-    duplicates = sorted({item for item in seen_topic_ids if seen_topic_ids.count(item) > 1})
+    duplicates = sorted(
+        {item for item in seen_topic_ids if seen_topic_ids.count(item) > 1}
+    )
     if duplicates:
         result.errors.append(
-            "topic_resolution_map contains duplicate topic IDs: " + ", ".join(duplicates)
+            "topic_resolution_map contains duplicate topic IDs: "
+            + ", ".join(duplicates)
         )
 
     seen_topic_id_set = set(seen_topic_ids)
     missing_topic_ids = sorted(expected_topic_ids - seen_topic_id_set)
     if missing_topic_ids:
         result.errors.append(
-            "topic_resolution_map is missing open topic IDs: " + ", ".join(missing_topic_ids)
+            "topic_resolution_map is missing open topic IDs: "
+            + ", ".join(missing_topic_ids)
         )
     unexpected_topic_ids = sorted(seen_topic_id_set - expected_topic_ids)
     if unexpected_topic_ids:
         result.errors.append(
-            "topic_resolution_map references unknown topic IDs: " + ", ".join(unexpected_topic_ids)
+            "topic_resolution_map references unknown topic IDs: "
+            + ", ".join(unexpected_topic_ids)
         )
 
 

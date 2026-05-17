@@ -1090,11 +1090,26 @@ def test_trust_attestation_review_prompt_consumes_frozen_bounded_handoff():
         contract=contract,
     )
 
-    assert "You are the TRUST_ATTESTATION_REVIEW stage in an analysis-review harness." in prompt
-    assert "Consume the supplied `bounded_attestation_input` handoff exactly as provided" in prompt
-    assert "Return dense `recommendation_reviews` coverage across every bounded recommendation index from 1..N with no gaps." in prompt
-    assert "For each recommendation verdict, directly re-check the bounded workspace evidence and record that re-check in `verified_evidence_refs` plus `checked_files`." in prompt
-    assert "Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path." in prompt
+    assert (
+        "You are the TRUST_ATTESTATION_REVIEW stage in an analysis-review harness."
+        in prompt
+    )
+    assert (
+        "Consume the supplied `bounded_attestation_input` handoff exactly as provided"
+        in prompt
+    )
+    assert (
+        "Return dense `recommendation_reviews` coverage across every bounded recommendation index from 1..N with no gaps."
+        in prompt
+    )
+    assert (
+        "For each recommendation verdict, directly re-check the bounded workspace evidence and record that re-check in `verified_evidence_refs` plus `checked_files`."
+        in prompt
+    )
+    assert (
+        "Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path."
+        in prompt
+    )
     assert "bounded_attestation_input:" in prompt
     assert '"trust_execution_mode": "attestation_over_bounded"' in prompt
     assert "Align release-watch issue handling" in prompt

@@ -46,9 +46,7 @@ def test_summary_read_adapter_v1_reads_b1_boundary_fields(tmp_path):
             "revisions_completed": 2,
             "analysis_review_contract": {"mode": "bounded"},
             "focus_decision": _focus_decision(),
-            "topic_ledger": [
-                {"topic_id": "TOPIC-1", "resolution_status": "open"}
-            ],
+            "topic_ledger": [{"topic_id": "TOPIC-1", "resolution_status": "open"}],
         },
     }
 
@@ -166,9 +164,7 @@ def test_state_from_summary_reads_historical_contract_fields_after_freeze(tmp_pa
         "run_details": {
             "analysis_review_contract": {"mode": "bounded"},
             "focus_decision": _focus_decision(),
-            "topic_ledger": [
-                {"topic_id": "TOPIC-1", "resolution_status": "open"}
-            ],
+            "topic_ledger": [{"topic_id": "TOPIC-1", "resolution_status": "open"}],
         },
     }
 
@@ -221,9 +217,7 @@ def test_summary_projection_v1_graph_owned_native_state_wins_over_seeded_summary
                 "bounded_review_summary": {"status": "stale"},
                 "bounded_attestation_input": {"status": "stale"},
                 "final_answer": {"status": "stale"},
-                "topic_ledger": [
-                    {"topic_id": "TOPIC-1", "resolution_status": "stale"}
-                ],
+                "topic_ledger": [{"topic_id": "TOPIC-1", "resolution_status": "stale"}],
                 "focus_decision": {"selected_focus_id": "stale-focus"},
                 "run_details": {
                     "stale": True,
@@ -358,7 +352,9 @@ class _FakeRunner:
         payload = {
             "verdict": "accept",
             "issues": [],
-            "recommendation_reviews": [{"recommendation_index": 1, "verdict": "accept"}],
+            "recommendation_reviews": [
+                {"recommendation_index": 1, "verdict": "accept"}
+            ],
             "grounding_score": 0.9,
             "actionability_score": 0.9,
             "scope_compliance_score": 0.9,
@@ -377,11 +373,15 @@ class _FakeRunner:
         )
         return _FakeRun(payload)
 
-    def _ingest_review_payload(self, review_payload, *, round_index, role_name, reviser_output):
+    def _ingest_review_payload(
+        self, review_payload, *, round_index, role_name, reviser_output
+    ):
         del review_payload, round_index, role_name, reviser_output
         return None
 
-    def _analysis_needs_revision(self, review_payload: dict[str, object], revisions_completed: int) -> bool:
+    def _analysis_needs_revision(
+        self, review_payload: dict[str, object], revisions_completed: int
+    ) -> bool:
         del review_payload, revisions_completed
         return False
 
@@ -440,7 +440,9 @@ class _FakeRunner:
     def _serialized_topic_ledger(self) -> list[dict[str, object]]:
         return []
 
-    def _recommendation_reviews(self, review_payload: dict[str, object]) -> list[dict[str, object]]:
+    def _recommendation_reviews(
+        self, review_payload: dict[str, object]
+    ) -> list[dict[str, object]]:
         return list(review_payload.get("recommendation_reviews") or [])
 
     def _accepted_recommendation_reviews(
@@ -457,7 +459,9 @@ def test_analysis_review_v1_graph_owned_success_carries_native_state(monkeypatch
     monkeypatch.setattr(
         "anvil.harness.subgraphs._bridge.summary_read_adapter_v1",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("graph-owned path must not rehydrate via summary_read_adapter_v1")
+            AssertionError(
+                "graph-owned path must not rehydrate via summary_read_adapter_v1"
+            )
         ),
     )
 
@@ -476,7 +480,10 @@ def test_analysis_review_v1_graph_owned_success_carries_native_state(monkeypatch
     assert result["summary_payload"] == {}
     assert "bridge_boundary_version" not in result["summary_payload"]
     assert result["analysis_review_contract"] == {"mode": "bounded"}
-    assert result["analysis_review_runtime"]["transition_reason"] == "stop_policy_satisfied"
+    assert (
+        result["analysis_review_runtime"]["transition_reason"]
+        == "stop_policy_satisfied"
+    )
     assert result["drafts"][0]["draft_id"] == "draft-proposer"
     assert result["drafts"][0]["review_state"] == "evaluated"
     assert result["drafts"][0]["issue_counts"]["accepted_recommendations"] == 1

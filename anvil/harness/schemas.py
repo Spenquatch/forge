@@ -801,7 +801,14 @@ def falsifier_schema() -> dict[str, Any]:
             "issues": {"type": "array", "items": ISSUE_SCHEMA},
             "missing_validations": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["verdict", "summary", "workspace_write_intent", "issues", "missing_validations", "confidence"],
+        "required": [
+            "verdict",
+            "summary",
+            "workspace_write_intent",
+            "issues",
+            "missing_validations",
+            "confidence",
+        ],
         "additionalProperties": False,
     }
 
@@ -891,7 +898,10 @@ def analysis_review_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "verdict": {"type": "string", "enum": ["accept", "accept_partial", "revise", "reject"]},
+            "verdict": {
+                "type": "string",
+                "enum": ["accept", "accept_partial", "revise", "reject"],
+            },
             **COMMON_PROPS,
             "files_reviewed": {"type": "array", "items": {"type": "string"}},
             "issues": {"type": "array", "items": ANALYSIS_ISSUE_SCHEMA},

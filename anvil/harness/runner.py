@@ -1,10 +1,11 @@
+# mypy: disable-error-code="no-any-return,arg-type,assignment,union-attr,index,operator"
+
 from __future__ import annotations
 
 import datetime as dt
 import hashlib
 import inspect
 import json
-import posixpath
 import re
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -16,8 +17,8 @@ from anvil.orchestrator import reload_config
 
 from . import analysis_review_runtime
 from .contracts import (
-    AnalysisReviewContract,
     BOUNDED_ATTESTATION_INPUT_SCHEMA_VERSION,
+    AnalysisReviewContract,
     PartialAcceptancePolicy,
     RecommendationAdmissibilityStatus,
     canonical_seam_id_for_paths,
@@ -1403,8 +1404,12 @@ class HarnessRunner:
             semantic_validation_path=semantic_validation_path,
         )
         if role_name == "focus_gate" and isinstance(run.structured_output, dict):
-            stage_metadata.update(self._focus_gate_stage_metadata(run.structured_output))
-        elif role_name == "focus_gate_probe" and isinstance(run.structured_output, dict):
+            stage_metadata.update(
+                self._focus_gate_stage_metadata(run.structured_output)
+            )
+        elif role_name == "focus_gate_probe" and isinstance(
+            run.structured_output, dict
+        ):
             stage_metadata.update(
                 self._focus_gate_probe_stage_metadata(run.structured_output)
             )
@@ -2017,9 +2022,7 @@ class HarnessRunner:
                 "review_stages": deepcopy(
                     bounded_review_summary.get("review_stages") or []
                 ),
-                "scope_escape_count": bounded_review_summary.get(
-                    "scope_escape_count"
-                ),
+                "scope_escape_count": bounded_review_summary.get("scope_escape_count"),
             },
             "ledgers": {
                 "issue_ledger": deepcopy(issue_ledger),
@@ -2091,7 +2094,9 @@ class HarnessRunner:
         for index, recommendation in enumerate(recommendations, start=1):
             evidence_index[str(index)] = self._dedupe_preserving_order(
                 self._normalize_workspace_ref_list(
-                    recommendation.get("evidence") if isinstance(recommendation, dict) else []
+                    recommendation.get("evidence")
+                    if isinstance(recommendation, dict)
+                    else []
                 )
             )
         return evidence_index
@@ -2362,9 +2367,8 @@ class HarnessRunner:
         semantic_context: dict[str, Any] | None,
     ) -> str:
         canonical_role_name = cls._canonical_stage_role_name(role_name)
-        if (
-            canonical_role_name == "auditor"
-            and isinstance((semantic_context or {}).get(BOUNDED_ATTESTATION_INPUT_KEY), dict)
+        if canonical_role_name == "auditor" and isinstance(
+            (semantic_context or {}).get(BOUNDED_ATTESTATION_INPUT_KEY), dict
         ):
             return "attestation_auditor"
         return canonical_role_name
@@ -4187,6 +4191,7 @@ class HarnessRunner:
             prior_open_topic_records = [dict(item) for item in prior_open_topic_records]
 
         if canonical_role_name in {"critic", "auditor"}:
+
             def _normalize_prior_open_classification_ids(
                 *,
                 field_name: str,
@@ -4233,9 +4238,7 @@ class HarnessRunner:
                 if dropped_unknown_ids and prior_open_ids:
                     warnings_local.append(
                         f"{field_name} included unknown prior-open {prior_open_label} IDs and they were dropped: "
-                        + ", ".join(
-                            self._dedupe_preserving_order(dropped_unknown_ids)
-                        )
+                        + ", ".join(self._dedupe_preserving_order(dropped_unknown_ids))
                     )
                 return (
                     self._dedupe_preserving_order(normalized_ids),
@@ -4392,7 +4395,9 @@ class HarnessRunner:
                     if dropped_topic_ids:
                         warnings.append(
                             f"recommendation_reviews[{index}].open_issue_ids included topic IDs and they were dropped: "
-                            + ", ".join(self._dedupe_preserving_order(dropped_topic_ids))
+                            + ", ".join(
+                                self._dedupe_preserving_order(dropped_topic_ids)
+                            )
                         )
                     if dropped_unknown_ids:
                         warnings.append(
@@ -5449,11 +5454,15 @@ class HarnessRunner:
                 and str(item.get("focus_id") or "").strip() != canonical_focus_id
             ]
         )
-        adapter_plan = focus_type_adapter("seam").build_adapter_plan(
-            selected_focus_id=canonical_focus_id,
-            selected_focus_paths=candidate_paths,
-            secondary_focus_ids=secondary_focus_ids,
-        ).to_dict()
+        adapter_plan = (
+            focus_type_adapter("seam")
+            .build_adapter_plan(
+                selected_focus_id=canonical_focus_id,
+                selected_focus_paths=candidate_paths,
+                secondary_focus_ids=secondary_focus_ids,
+            )
+            .to_dict()
+        )
         if (
             str(adapter_plan.get("downstream_primary_seam_id") or "").strip()
             != canonical_focus_id

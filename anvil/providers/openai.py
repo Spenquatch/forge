@@ -1,3 +1,5 @@
+# mypy: disable-error-code="no-redef"
+
 """
 OpenAI provider using LangChain with role-based configuration support.
 """

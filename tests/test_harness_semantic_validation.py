@@ -465,9 +465,7 @@ def _attestation_review_payload() -> dict:
                 "verdict": "accept",
                 "open_issue_ids": [],
                 "summary": "Recommendation 1 is still directly supported.",
-                "checked_files": [
-                    ".github/workflows/codex-cli-release-watch.yml"
-                ],
+                "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
                 "verified_evidence_refs": [
                     ".github/workflows/codex-cli-release-watch.yml"
                 ],
@@ -2702,9 +2700,9 @@ def test_trust_attestation_review_semantic_validation_accepts_dense_bounded_cove
     contract.trust_review.execution_mode = "attestation_over_bounded"
     payload = _attestation_review_payload()
     bounded_attestation_input = _bounded_attestation_input_payload()
-    bounded_attestation_input["contract"]["trust_execution_mode"] = (
-        "attestation_over_bounded"
-    )
+    bounded_attestation_input["contract"][
+        "trust_execution_mode"
+    ] = "attestation_over_bounded"
 
     result = validate_analysis_review_payload(
         payload,
@@ -2746,9 +2744,9 @@ def test_trust_attestation_review_semantic_validation_requires_dense_bounded_ind
     payload = _attestation_review_payload()
     payload["recommendation_reviews"] = [payload["recommendation_reviews"][0]]
     bounded_attestation_input = _bounded_attestation_input_payload()
-    bounded_attestation_input["contract"]["trust_execution_mode"] = (
-        "attestation_over_bounded"
-    )
+    bounded_attestation_input["contract"][
+        "trust_execution_mode"
+    ] = "attestation_over_bounded"
 
     result = validate_analysis_review_payload(
         payload,
@@ -2775,8 +2773,7 @@ def test_trust_attestation_review_semantic_validation_requires_dense_bounded_ind
 
     assert result.ok is False
     assert (
-        "recommendation_reviews is missing recommendation indices: 2"
-        in result.errors
+        "recommendation_reviews is missing recommendation indices: 2" in result.errors
     )
 
 
@@ -2795,9 +2792,9 @@ def test_trust_attestation_review_semantic_validation_requires_direct_bounded_ev
         ".github/workflows/nightly.yml"
     ]
     bounded_attestation_input = _bounded_attestation_input_payload()
-    bounded_attestation_input["contract"]["trust_execution_mode"] = (
-        "attestation_over_bounded"
-    )
+    bounded_attestation_input["contract"][
+        "trust_execution_mode"
+    ] = "attestation_over_bounded"
 
     result = validate_analysis_review_payload(
         payload,
@@ -2854,7 +2851,9 @@ def test_bounded_attestation_input_semantic_validation_rejects_missing_required_
         "bounded_attestation_input is missing required field: schema_version"
         in result.errors
     )
-    assert "bounded_attestation_input is missing required field: contract" in result.errors
+    assert (
+        "bounded_attestation_input is missing required field: contract" in result.errors
+    )
 
 
 def test_bounded_attestation_input_semantic_validation_rejects_wrong_schema_version():

@@ -153,9 +153,7 @@ def test_harness_standalone_cli_returns_nonzero_for_harness_error(monkeypatch) -
     assert exit_code == 1
 
 
-def test_harness_standalone_cli_prints_planning_surface(
-    monkeypatch, capsys
-) -> None:
+def test_harness_standalone_cli_prints_planning_surface(monkeypatch, capsys) -> None:
     _FakeExecutor.instances.clear()
     _FakeExecutor.summary_payload = {
         "terminal_status": "success",
@@ -293,8 +291,7 @@ def test_harness_standalone_cli_reports_yaml_parse_errors_without_traceback(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     task_path.write_text(
-        "id: broken\n"
-        "objective: [unterminated\n",
+        "id: broken\n" "objective: [unterminated\n",
         encoding="utf-8",
     )
     strategy_path.write_text(
@@ -487,9 +484,7 @@ def test_harness_standalone_cli_tolerates_execution_mode_for_non_analysis_review
     ]
 
 
-def test_harness_standalone_cli_prints_planning_success(
-    monkeypatch, capsys
-) -> None:
+def test_harness_standalone_cli_prints_planning_success(monkeypatch, capsys) -> None:
     _FakeExecutor.instances.clear()
     _FakeExecutor.execute_error = None
     _FakeExecutor.summary_payload = {

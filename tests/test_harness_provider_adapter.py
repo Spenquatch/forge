@@ -11,7 +11,9 @@ from anvil.providers.codex_cli import CodexCliProvider
 
 class _FakeApiProvider:
     model_name = "fake-api-model"
-    cfg = ProviderCfg(type="api", class_path="fake.Provider", model_name="fake-api-model")
+    cfg = ProviderCfg(
+        type="api", class_path="fake.Provider", model_name="fake-api-model"
+    )
     last_run_metadata = {"request_id": "req-1"}
     last_command = []
 
@@ -118,7 +120,9 @@ class _FakeCodexSchemaFailureResult:
                 '{"type":"turn.failed","error":{"message":"Invalid schema for response_format \\"codex_output_schema\\": Missing \\"verified_evidence_refs\\"."}}',
             ]
         )
-        self.stderr_text = "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
+        self.stderr_text = (
+            "WARN codex_core::plugins::manifest: ignoring interface.defaultPrompt"
+        )
         self.command = ["fake-codex"]
         self.structured_output = {
             "type": "thread.started",
@@ -193,8 +197,12 @@ def test_provider_aliases_and_non_cli_json_parsing(tmp_path, monkeypatch):
     assert resolve_provider_name("claude") == "claude_code"
     assert resolve_provider_name("openai") == "openai"
 
-    monkeypatch.setattr("anvil.harness.providers.get_provider_exact", lambda name: _FakeApiProvider())
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCfg())
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact", lambda name: _FakeApiProvider()
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: _FakeCfg()
+    )
 
     adapter = ForgeProviderAdapter("openai")
     request = StageRequest(
@@ -244,7 +252,9 @@ def test_provider_adapter_decodes_bytes_from_non_cli_provider(tmp_path, monkeypa
         "anvil.harness.providers.get_provider_exact",
         lambda name: _FakeBytesApiProvider(),
     )
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCfg())
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: _FakeCfg()
+    )
 
     adapter = ForgeProviderAdapter("openai")
     request = StageRequest(
@@ -291,17 +301,30 @@ def test_provider_adapter_decodes_bytes_from_non_cli_provider(tmp_path, monkeypa
         "known_risks": [],
         "confidence": 0.72,
     }
-    assert Path(result.stdout_path).read_text(encoding="utf-8").startswith('{"status":"done"')
+    assert (
+        Path(result.stdout_path)
+        .read_text(encoding="utf-8")
+        .startswith('{"status":"done"')
+    )
 
 
-def test_provider_adapter_classifies_provider_failures_before_schema_validation(tmp_path, monkeypatch):
-    monkeypatch.setattr("anvil.harness.providers.get_provider_exact", lambda name: _FakeCliFailureProvider())
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
+def test_provider_adapter_classifies_provider_failures_before_schema_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact",
+        lambda name: _FakeCliFailureProvider(),
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg()
+    )
 
     adapter = ForgeProviderAdapter("claude_code")
     request = StageRequest(
         role_name="critic",
-        role_config=RoleConfig(provider="claude_code", model="sonnet", access="read", effort="high"),
+        role_config=RoleConfig(
+            provider="claude_code", model="sonnet", access="read", effort="high"
+        ),
         prompt_text="Critique this draft.",
         schema={
             "type": "object",
@@ -319,7 +342,10 @@ def test_provider_adapter_classifies_provider_failures_before_schema_validation(
 
     assert result.ok is False
     assert result.failure_kind == "quota_exhausted"
-    assert result.failure_summary == "Provider quota exhausted: You've hit your limit · resets soon"
+    assert (
+        result.failure_summary
+        == "Provider quota exhausted: You've hit your limit · resets soon"
+    )
     assert result.schema_validation_errors == []
     assert "missing required field" not in (result.error or "")
     assert Path(result.stdout_path).exists()
@@ -335,12 +361,16 @@ def test_provider_adapter_prefers_codex_stdout_error_events_over_stderr_noise(
         "anvil.harness.providers.get_provider_exact",
         lambda name: _FakeCodexSchemaFailureProvider(),
     )
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg()
+    )
 
     adapter = ForgeProviderAdapter("codex_cli")
     request = StageRequest(
         role_name="proposer",
-        role_config=RoleConfig(provider="codex_cli", model="gpt-5.4-mini", access="read"),
+        role_config=RoleConfig(
+            provider="codex_cli", model="gpt-5.4-mini", access="read"
+        ),
         prompt_text="Return recommendations.",
         schema={
             "type": "object",
@@ -369,7 +399,9 @@ def test_provider_adapter_keeps_successful_cli_stderr_in_error_artifact_only(
         "anvil.harness.providers.get_provider_exact",
         lambda name: _FakeSuccessfulCliWarningProvider(),
     )
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg()
+    )
 
     adapter = ForgeProviderAdapter("claude_code")
     request = StageRequest(
@@ -404,7 +436,9 @@ def test_provider_adapter_decodes_bytes_from_cli_provider(tmp_path, monkeypatch)
         "anvil.harness.providers.get_provider_exact",
         lambda name: _FakeSuccessfulCliBytesProvider(),
     )
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg())
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: _FakeCliCfg()
+    )
 
     adapter = ForgeProviderAdapter("claude_code")
     request = StageRequest(
@@ -452,8 +486,12 @@ def test_provider_adapter_inherits_cli_role_defaults_for_mapped_analysis_review_
     )
     provider = ClaudeCodeProvider(provider_cfg)
 
-    monkeypatch.setattr("anvil.harness.providers.get_provider_exact", lambda name: provider)
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: provider_cfg)
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact", lambda name: provider
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: provider_cfg
+    )
 
     adapter = ForgeProviderAdapter("claude_code")
     request = StageRequest(
@@ -510,9 +548,15 @@ def test_provider_adapter_retries_codex_models_yaml_model_and_reports_fallback_m
     )
     provider = CodexCliProvider(provider_cfg)
 
-    monkeypatch.setattr("anvil.harness.providers.get_provider_exact", lambda name: provider)
-    monkeypatch.setattr("anvil.harness.providers.get_provider_config", lambda name: provider_cfg)
-    monkeypatch.setattr("anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4")
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_exact", lambda name: provider
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config", lambda name: provider_cfg
+    )
+    monkeypatch.setattr(
+        "anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4"
+    )
 
     adapter = ForgeProviderAdapter("codex_cli")
     request = StageRequest(

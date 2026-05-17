@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Parent LangGraph builder for the harness surface."""
 
-from typing import Any, MutableMapping, Optional
+from typing import Any, MutableMapping, Optional, cast
 
 from anvil.langgraph_compat import END, MemorySaver, StateGraph
 
@@ -18,22 +18,26 @@ from .subgraphs.planning_v1 import planning_v1_subgraph
 from .subgraphs.single_pass import single_pass_subgraph
 
 
-async def _wrap_state_node(fn, state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+async def _wrap_state_node(
+    fn, state: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     result = fn(state)
     if hasattr(result, "__await__"):
-        return await result
-    return result
+        return cast(MutableMapping[str, Any], await result)
+    return cast(MutableMapping[str, Any], result)
 
 
 def build_harness_langgraph(*, checkpointer: Optional[Any] = None):
-    graph = StateGraph(dict)  # type: ignore[type-var]
+    graph: Any = StateGraph(dict)  # type: ignore[type-var]
 
     def _runtime_target(state: MutableMapping[str, Any]) -> str:
         if str(state.get("config_verdict") or "pass") == "invalid_config":
             return "write_artifacts"
         strategy_graph_spec = state.get("strategy_graph_spec")
         if isinstance(strategy_graph_spec, dict):
-            runtime_target = str(strategy_graph_spec.get("runtime_target") or "").strip()
+            runtime_target = str(
+                strategy_graph_spec.get("runtime_target") or ""
+            ).strip()
             if runtime_target:
                 return runtime_target
         strategy_spec = state.get("strategy_spec")
@@ -46,9 +50,7 @@ def build_harness_langgraph(*, checkpointer: Optional[Any] = None):
     def _post_runtime_action(state: MutableMapping[str, Any]) -> str:
         strategy_graph_spec = state.get("strategy_graph_spec")
         if isinstance(strategy_graph_spec, dict):
-            action = str(
-                strategy_graph_spec.get("post_runtime_action") or ""
-            ).strip()
+            action = str(strategy_graph_spec.get("post_runtime_action") or "").strip()
             if action:
                 return action
         return "select_best_draft"

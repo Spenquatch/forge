@@ -139,6 +139,7 @@ def test_harness_run_cli_reports_runtime_dependency_errors(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "❌ HARNESS RUN FAILED: PyYAML is required" in captured.out
 
+
 def test_harness_run_cli_dispatch_partial_answer(monkeypatch, capsys):
     _FakeExecutor.instances.clear()
     _FakeExecutor.summary_payload = {

@@ -1896,7 +1896,9 @@ def test_apply_final_artifacts_graph_owned_uses_frozen_selection_ids(tmp_path):
                 },
                 "metadata": {
                     "stage_index": 2,
-                    "payload": _recommendation_payload("Frozen graph-owned recommendation"),
+                    "payload": _recommendation_payload(
+                        "Frozen graph-owned recommendation"
+                    ),
                 },
             },
         ],
@@ -3111,9 +3113,7 @@ def test_render_report_renders_selected_focus_decision_with_applied_focus_refine
     run_details = _top_level_section(report, "## Run Details")
 
     assert "- Focus refinement: `auto-refined and continued`" in section
-    assert (
-        "- Refinement trigger reason: `umbrella_selected_checked_files`" in section
-    )
+    assert "- Refinement trigger reason: `umbrella_selected_checked_files`" in section
     assert "- Refinement source focus ID: `release-automation-umbrella`" in section
     assert (
         "- Refinement candidate shortlist: `release-watch-slice`, `rollback-runbook-slice`"
@@ -3385,9 +3385,7 @@ def test_summary_projection_v1_projects_b1_boundary_fields(tmp_path):
             "strategy_graph_spec_id": "analysis-review-spec",
             "strategy_graph_subset": "bounded_strategy_graph_v1",
             "focus_decision": _selected_focus_decision(),
-            "topic_ledger": [
-                {"topic_id": "TOPIC-1", "resolution_status": "open"}
-            ],
+            "topic_ledger": [{"topic_id": "TOPIC-1", "resolution_status": "open"}],
             "warnings": [],
             "policy_checks": [],
             "stage_history": [],
@@ -3404,7 +3402,9 @@ def test_summary_projection_v1_projects_b1_boundary_fields(tmp_path):
     assert summary["strategy_graph_spec"] == {"runtime_target": "analysis_review_v1"}
     assert summary["strategy_graph_spec_id"] == "analysis-review-spec"
     assert summary["strategy_graph_subset"] == "bounded_strategy_graph_v1"
-    assert summary["focus_decision"]["selected_focus_id"] == "release-trigger-automation"
+    assert (
+        summary["focus_decision"]["selected_focus_id"] == "release-trigger-automation"
+    )
     assert summary["run_details"]["focus_decision"]["selected_focus_id"] == (
         "release-trigger-automation"
     )
@@ -4666,8 +4666,7 @@ def test_apply_final_artifacts_bounded_partial_emits_partial_answer_without_part
         in partial_markdown
     )
     assert (
-        "- Withheld recommendation indices for `FINAL_ANSWER.*`: `3`"
-        in report_markdown
+        "- Withheld recommendation indices for `FINAL_ANSWER.*`: `3`" in report_markdown
     )
     assert (
         "Recommendation indices included in `PARTIAL_ANSWER.*`" not in report_markdown

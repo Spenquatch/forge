@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from ..runner import HarnessRunner
 from ..state import (
     LEGACY_BRIDGE_BOUNDARY_VERSION,
@@ -48,11 +50,12 @@ class LegacyBridgeBoundary:
         new_state = summary_read_adapter_v1(
             summary, fallback_thread_id=str(state.get("thread_id") or "")
         )
+        new_state_payload = cast(dict[str, Any], new_state)
         for key, value in preserved_state.items():
             if value is not None:
-                new_state[key] = value
-        new_state["bridge_boundary_version"] = LEGACY_BRIDGE_BOUNDARY_VERSION
-        new_state["summary_payload"] = summary
+                new_state_payload[key] = value
+        new_state_payload["bridge_boundary_version"] = LEGACY_BRIDGE_BOUNDARY_VERSION
+        new_state_payload["summary_payload"] = summary
         return new_state
 
 

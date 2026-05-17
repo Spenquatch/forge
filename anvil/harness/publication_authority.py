@@ -29,7 +29,9 @@ def contains_publication_authority_claim(text: Any) -> bool:
     value = str(text or "").strip()
     if not value:
         return False
-    return any(pattern.search(value) for pattern in _BANNED_PUBLICATION_AUTHORITY_PATTERNS)
+    return any(
+        pattern.search(value) for pattern in _BANNED_PUBLICATION_AUTHORITY_PATTERNS
+    )
 
 
 def sanitize_summary_text(text: Any, *, surface: str) -> str:
@@ -41,7 +43,9 @@ def sanitize_summary_text(text: Any, *, surface: str) -> str:
     try:
         return _SUMMARY_REPLACEMENTS[surface]
     except KeyError as exc:
-        raise ValueError(f"Unsupported publication-authority summary surface: {surface!r}") from exc
+        raise ValueError(
+            f"Unsupported publication-authority summary surface: {surface!r}"
+        ) from exc
 
 
 def partial_acceptance_summary_suffix(
@@ -146,7 +150,10 @@ def _withheld_recommendation_indices(
     *,
     fallback_indices: list[int],
 ) -> list[int]:
-    if not isinstance(recommendation_admissibility, dict) or not recommendation_admissibility:
+    if (
+        not isinstance(recommendation_admissibility, dict)
+        or not recommendation_admissibility
+    ):
         return sorted(set(fallback_indices))
 
     withheld_indices = [
@@ -154,9 +161,6 @@ def _withheld_recommendation_indices(
             recommendation_admissibility.get("partial_only_recommendation_indices")
             or []
         ),
-        *(
-            recommendation_admissibility.get("excluded_recommendation_indices")
-            or []
-        ),
+        *(recommendation_admissibility.get("excluded_recommendation_indices") or []),
     ]
     return _normalized_recommendation_indices(withheld_indices)

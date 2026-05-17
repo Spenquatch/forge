@@ -48,9 +48,7 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
         },
         "planning_terminal_status": terminal_status,
         "planning_stop_reason": (
-            ""
-            if terminal_status == "success"
-            else f"{terminal_status}_stop_reason"
+            "" if terminal_status == "success" else f"{terminal_status}_stop_reason"
         ),
         "clarification_requests": (
             []
@@ -133,9 +131,15 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     assert plan_payload["terminal_status"] == "success"
     markdown = plan_md_path.read_text(encoding="utf-8")
     assert markdown.index("## Problem Statement") < markdown.index("## Rubric Results")
-    assert markdown.index("## Rubric Results") < markdown.index("## Architectural Seams")
-    assert markdown.index("## Architectural Seams") < markdown.index("## Parallel Workstreams/Worktrees")
-    assert markdown.index("## Parallel Workstreams/Worktrees") < markdown.index("## Executable Slices")
+    assert markdown.index("## Rubric Results") < markdown.index(
+        "## Architectural Seams"
+    )
+    assert markdown.index("## Architectural Seams") < markdown.index(
+        "## Parallel Workstreams/Worktrees"
+    )
+    assert markdown.index("## Parallel Workstreams/Worktrees") < markdown.index(
+        "## Executable Slices"
+    )
 
 
 def test_publish_state_artifacts_v1_returns_terminal_payload_for_clarification(

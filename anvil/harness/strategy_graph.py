@@ -271,24 +271,28 @@ def _build_pfr_spec(strategy_spec: Mapping[str, Any]) -> StrategyGraphSpec:
             ),
         ),
         linear_edges=(
-            LinearEdgeSpec("proposer", "falsifier"),
-            LinearEdgeSpec("patcher", "falsifier"),
-        )
-        if rerun_falsifier
-        else (LinearEdgeSpec("proposer", "falsifier"),),
+            (
+                LinearEdgeSpec("proposer", "falsifier"),
+                LinearEdgeSpec("patcher", "falsifier"),
+            )
+            if rerun_falsifier
+            else (LinearEdgeSpec("proposer", "falsifier"),)
+        ),
         loops=(
-            LoopSpec(
-                loop_id="pfr_repair_loop",
-                kind="single_back_edge",
-                from_stage_id="patcher",
-                to_stage_id="falsifier",
-                min_iterations=0,
-                max_iterations=max_repair_loops,
-                continue_when="falsifier_or_validator_requests_patch",
-            ),
-        )
-        if rerun_falsifier and max_repair_loops > 0
-        else (),
+            (
+                LoopSpec(
+                    loop_id="pfr_repair_loop",
+                    kind="single_back_edge",
+                    from_stage_id="patcher",
+                    to_stage_id="falsifier",
+                    min_iterations=0,
+                    max_iterations=max_repair_loops,
+                    continue_when="falsifier_or_validator_requests_patch",
+                ),
+            )
+            if rerun_falsifier and max_repair_loops > 0
+            else ()
+        ),
         conditional_branches=(
             ConditionalBranchSpec(
                 branch_id="falsifier_verdict",
@@ -340,9 +344,7 @@ def _build_analysis_review_spec(
         1 if bool(review_loops.get("always_run_first_revision")) else 0,
     )
     runtime_target = "analysis_review_v1"
-    execution_mode = str(
-        trust_review.get("execution_mode") or "legacy_full_review"
-    )
+    execution_mode = str(trust_review.get("execution_mode") or "legacy_full_review")
     spec_id_parts = [strategy_kind]
     spec_id_parts.append(
         f"focus_gate_{default_path}" if focus_gate_enabled else "focus_gate_off"

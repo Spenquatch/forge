@@ -5,7 +5,7 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 VALID_TASK_KINDS = {"patch", "analysis_review", "planning"}
 ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
@@ -40,6 +40,20 @@ VALID_VALIDATOR_RUN_WHEN = {
     "mode_allow",
     "mode_require",
 }
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
 VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
 VALID_TRUST_REVIEW_EXECUTION_MODES = {
@@ -181,9 +195,7 @@ def canonical_workspace_ref_list(
 def canonical_seam_path_list(
     values: Any, *, workspace_root: str | Path | None = None
 ) -> list[str]:
-    return sorted(
-        canonical_workspace_ref_list(values, workspace_root=workspace_root)
-    )
+    return sorted(canonical_workspace_ref_list(values, workspace_root=workspace_root))
 
 
 @dataclass
@@ -272,9 +284,9 @@ class StrategyFocusGateConfig:
 
 @dataclass
 class StrategyTrustReviewConfig:
-    execution_mode: Literal[
-        "legacy_full_review", "attestation_over_bounded"
-    ] = "legacy_full_review"
+    execution_mode: Literal["legacy_full_review", "attestation_over_bounded"] = (
+        "legacy_full_review"
+    )
 
     @classmethod
     def from_dict(
@@ -289,16 +301,21 @@ class StrategyTrustReviewConfig:
             allowed_keys={"execution_mode"},
             field_name="trust_review",
         )
-        execution_mode = str(
-            data.get("execution_mode", "legacy_full_review")
-        ).strip().lower()
+        execution_mode = (
+            str(data.get("execution_mode", "legacy_full_review")).strip().lower()
+        )
         if execution_mode not in VALID_TRUST_REVIEW_EXECUTION_MODES:
             raise ValueError(
                 "trust_review.execution_mode must be one of: "
                 + ", ".join(sorted(VALID_TRUST_REVIEW_EXECUTION_MODES))
                 + "."
             )
-        return cls(execution_mode=execution_mode)
+        return cls(
+            execution_mode=cast(
+                Literal["legacy_full_review", "attestation_over_bounded"],
+                execution_mode,
+            )
+        )
 
 
 @dataclass
@@ -382,7 +399,7 @@ class WorkspaceWritePolicy:
                 "workspace_write_policy.mode must be one of: forbid, allow, require."
             )
         max_touched_raw = data.get("max_touched_files")
-        max_touched_files = None if max_touched_raw is None else int(max_touched_raw)
+        max_touched_files = _coerce_optional_int(max_touched_raw)
         if max_touched_files is not None and max_touched_files < 0:
             raise ValueError(
                 "workspace_write_policy.max_touched_files must be >= 0 or null."
@@ -558,14 +575,8 @@ class RoleConfig:
             ),
             access=str(data.get("access", "read")),
             timeout_sec=int(data.get("timeout_sec", 1800)),
-            max_turns=(
-                None if data.get("max_turns") is None else int(data.get("max_turns"))
-            ),
-            max_budget_usd=(
-                None
-                if data.get("max_budget_usd") is None
-                else float(data.get("max_budget_usd"))
-            ),
+            max_turns=(_coerce_optional_int(data.get("max_turns"))),
+            max_budget_usd=(_coerce_optional_float(data.get("max_budget_usd"))),
             extra_args=[str(x) for x in data.get("extra_args", [])],
             env={str(k): str(v) for k, v in dict(data.get("env", {})).items()},
             disable_bare=bool(data.get("disable_bare", False)),
@@ -673,22 +684,22 @@ class ReviewLoopPolicy:
             max_open_medium_issues=(
                 defaults.max_open_medium_issues
                 if stop_when.get("max_open_medium_issues") is None
-                else int(stop_when.get("max_open_medium_issues"))
+                else _coerce_optional_int(stop_when.get("max_open_medium_issues"))
             ),
             min_grounding_score=(
                 defaults.min_grounding_score
                 if stop_when.get("min_grounding_score") is None
-                else float(stop_when.get("min_grounding_score"))
+                else _coerce_optional_float(stop_when.get("min_grounding_score"))
             ),
             min_actionability_score=(
                 defaults.min_actionability_score
                 if stop_when.get("min_actionability_score") is None
-                else float(stop_when.get("min_actionability_score"))
+                else _coerce_optional_float(stop_when.get("min_actionability_score"))
             ),
             min_scope_compliance_score=(
                 defaults.min_scope_compliance_score
                 if stop_when.get("min_scope_compliance_score") is None
-                else float(stop_when.get("min_scope_compliance_score"))
+                else _coerce_optional_float(stop_when.get("min_scope_compliance_score"))
             ),
         )
         if policy.min_loops < 0 or policy.max_loops < 0:
@@ -767,7 +778,10 @@ class StrategyConfig:
             )
         if runtime_target is None:
             runtime_target = inferred_runtime_target
-        elif inferred_runtime_target is not None and runtime_target != inferred_runtime_target:
+        elif (
+            inferred_runtime_target is not None
+            and runtime_target != inferred_runtime_target
+        ):
             raise ValueError(
                 f"runtime_target {runtime_target!r} is incompatible with strategy kind {kind!r}."
             )

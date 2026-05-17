@@ -58,10 +58,13 @@ def partial_accept_topic_eligibility(
     global_blocking_topic_ids: set[str] = set()
 
     for item in topic_ledger:
-        if str(item.get("resolution_status") or "").strip() not in _UNRESOLVED_LEDGER_STATUSES:
+        if (
+            str(item.get("resolution_status") or "").strip()
+            not in _UNRESOLVED_LEDGER_STATUSES
+        ):
             continue
         topic_id = str(item.get("topic_id") or "").strip()
-        recommendation_index = item.get("recommendation_index")
+        recommendation_index: Any = item.get("recommendation_index")
         if recommendation_index in (None, ""):
             if topic_id:
                 global_blocking_topic_ids.add(topic_id)
@@ -77,7 +80,9 @@ def partial_accept_topic_eligibility(
 
     return {
         "eligible_recommendation_indices": sorted(
-            index for index in accepted_index_set if index not in blocked_recommendation_indices
+            index
+            for index in accepted_index_set
+            if index not in blocked_recommendation_indices
         ),
         "blocked_recommendation_indices": sorted(blocked_recommendation_indices),
         "global_blocking_topic_ids": sorted(global_blocking_topic_ids),

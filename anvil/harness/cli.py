@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import Any
+from typing import Any, Mapping, cast
 
 from .executor import HarnessLangGraphExecutor
 from .runner import HarnessError
@@ -29,7 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Forge Harness CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="Run a task with a configured mini-harness strategy")
+    run = sub.add_parser(
+        "run", help="Run a task with a configured mini-harness strategy"
+    )
     run.add_argument("--task", required=True, help="Path to task YAML/JSON")
     run.add_argument("--strategy", required=True, help="Path to strategy YAML/JSON")
     run.add_argument("--workspace", required=True, help="Target workspace directory")
@@ -125,10 +127,11 @@ def _is_planning_summary(summary: dict[str, Any]) -> bool:
     return False
 
 
-def summary_from_state_v1(state: dict[str, Any]) -> dict[str, Any]:
+def summary_from_state_v1(state: Mapping[str, Any]) -> dict[str, Any]:
     summary_payload = state.get("summary_payload")
     if isinstance(summary_payload, dict):
         return summary_payload
+    artifact_map = cast(dict[str, dict[str, Any]], state.get("artifact_index") or {})
     summary = {
         "verdict": state.get("run_verdict"),
         "verdicts": {
@@ -140,20 +143,23 @@ def summary_from_state_v1(state: dict[str, Any]) -> dict[str, Any]:
         },
         "artifacts": {
             key: value.get("path")
-                for key, value in dict(state.get("artifact_index") or {}).items()
-                if isinstance(value, dict) and value.get("path")
+            for key, value in artifact_map.items()
+            if isinstance(value, dict) and value.get("path")
         },
     }
     planning_terminal_status = str(state.get("planning_terminal_status") or "").strip()
     if planning_terminal_status in _PLANNING_TERMINAL_STATUSES:
+        verdicts = cast(dict[str, Any], summary["verdicts"])
         summary["terminal_status"] = planning_terminal_status
         summary["stop_reason"] = str(
             state.get("planning_stop_reason") or state.get("stop_reason") or ""
         ).strip()
-        summary["clarification_requests"] = list(state.get("clarification_requests") or [])
+        summary["clarification_requests"] = list(
+            state.get("clarification_requests") or []
+        )
         summary["verdict"] = planning_terminal_status
-        summary["verdicts"]["run_verdict"] = planning_terminal_status
-        summary["verdicts"]["content_verdict"] = planning_terminal_status
+        verdicts["run_verdict"] = planning_terminal_status
+        verdicts["content_verdict"] = planning_terminal_status
     return summary
 
 
@@ -169,7 +175,7 @@ async def _run_with_executor(args) -> dict[str, Any]:
         auto_fit_strategy=(args.auto_fit_strategy == "true"),
         analysis_review_execution_mode=args.analysis_review_execution_mode,
     )
-    return summary_from_state_v1(state)
+    return summary_from_state_v1(cast(Mapping[str, Any], state))
 
 
 def _summary_exit_code(summary: dict[str, Any]) -> int:
@@ -187,7 +193,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         try:
             summary = asyncio.run(_run_with_executor(args))
-        except (HarnessError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
+        except (
+            HarnessError,
+            RuntimeError,
+            ValueError,
+            KeyError,
+            FileNotFoundError,
+        ) as exc:
             print(f"error={exc}", file=sys.stderr)
             return 2
 

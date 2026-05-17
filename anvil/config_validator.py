@@ -22,9 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-CLASS_PATH_PATTERN = re.compile(
-    r"^([a-zA-Z_][a-zA-Z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*$"
-)
+CLASS_PATH_PATTERN = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class ValidationLevel(Enum):
@@ -346,9 +344,7 @@ class ConfigurationValidator:
             if not key_env:
                 self._append_missing(auth_items, seen, "key_env not configured")
             elif not os.getenv(key_env):
-                self._append_missing(
-                    auth_items, seen, f"API key env {key_env} not set"
-                )
+                self._append_missing(auth_items, seen, f"API key env {key_env} not set")
 
         if provider_type == "cli":
             binary_name = self._resolve_cli_binary_name(name, config)
@@ -757,7 +753,13 @@ class ConfigurationValidator:
                     suggestion=f"Set {param_name} to true or false.",
                 )
 
-        elif param_name in {"allowed_tools", "tools", "permission_mode", "approval_mode", "model"}:
+        elif param_name in {
+            "allowed_tools",
+            "tools",
+            "permission_mode",
+            "approval_mode",
+            "model",
+        }:
             if not isinstance(param_value, str):
                 return ValidationResult(
                     valid=False,

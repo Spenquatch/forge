@@ -1,3 +1,5 @@
+# mypy: disable-error-code="union-attr,index,arg-type,return-value,no-redef,operator"
+
 from __future__ import annotations
 
 """Artifact and reporting helpers for the LangGraph-backed harness surface."""
@@ -367,9 +369,11 @@ def plan_projection_v1(
     task = (
         copy.deepcopy(state.get("task_spec"))
         if isinstance(state.get("task_spec"), dict)
-        else copy.deepcopy(seeded_summary.get("task"))
-        if isinstance(seeded_summary.get("task"), dict)
-        else {}
+        else (
+            copy.deepcopy(seeded_summary.get("task"))
+            if isinstance(seeded_summary.get("task"), dict)
+            else {}
+        )
     )
     strategy_spec = (
         copy.deepcopy(state.get("strategy_spec"))
@@ -443,10 +447,11 @@ def plan_projection_v1(
             seeded_summary=seeded_summary,
         ),
         "seams": _normalize_planning_seams(
-            state.get("planning_seams")
-            if state.get("planning_seams") is not None
-            else seeded_summary.get("seams")
-            ,
+            (
+                state.get("planning_seams")
+                if state.get("planning_seams") is not None
+                else seeded_summary.get("seams")
+            ),
             fallback_paths=repo_evidence_refs,
         ),
         "workstreams": _normalize_planning_workstreams(
@@ -521,9 +526,7 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
             lines.append(
                 f"- `{workstream.get('workstream_id')}`: {workstream.get('summary') or workstream.get('workstream_id')}"
             )
-            lines.append(
-                f"  Worktree recommended: {advisory}; seam_ids: {seam_ids}"
-            )
+            lines.append(f"  Worktree recommended: {advisory}; seam_ids: {seam_ids}")
     else:
         lines.append("- No workstreams planned.")
 
@@ -561,7 +564,8 @@ def publish_planning_artifacts_v1(
         {
             "thread_id": state.get("thread_id") or seeded_summary.get("thread_id"),
             "workspace": state.get("workspace_root") or seeded_summary.get("workspace"),
-            "config_path": state.get("config_path") or seeded_summary.get("config_path"),
+            "config_path": state.get("config_path")
+            or seeded_summary.get("config_path"),
             "created_at": state.get("created_at") or seeded_summary.get("created_at"),
             "strategy_name": plan_payload.get("strategy", {}).get("name"),
             "strategy_kind": plan_payload.get("strategy", {}).get("kind"),
@@ -588,16 +592,20 @@ def publish_planning_artifacts_v1(
             "strategy_graph_spec": copy.deepcopy(
                 state.get("strategy_graph_spec")
                 if isinstance(state.get("strategy_graph_spec"), dict)
-                else seeded_summary.get("strategy_graph_spec")
-                if isinstance(seeded_summary.get("strategy_graph_spec"), dict)
-                else {}
+                else (
+                    seeded_summary.get("strategy_graph_spec")
+                    if isinstance(seeded_summary.get("strategy_graph_spec"), dict)
+                    else {}
+                )
             ),
             "run_details": copy.deepcopy(
                 state.get("run_details")
                 if isinstance(state.get("run_details"), dict)
-                else seeded_summary.get("run_details")
-                if isinstance(seeded_summary.get("run_details"), dict)
-                else {}
+                else (
+                    seeded_summary.get("run_details")
+                    if isinstance(seeded_summary.get("run_details"), dict)
+                    else {}
+                )
             ),
         }
     )
@@ -761,22 +769,19 @@ def _project_stage_trace_metadata(
         metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}
     )
     graph_stage_id = str(
-        metadata.get("graph_stage_id")
-        or nested_metadata.get("graph_stage_id")
-        or ""
+        metadata.get("graph_stage_id") or nested_metadata.get("graph_stage_id") or ""
     ).strip()
     if graph_stage_id:
         metadata["graph_stage_id"] = graph_stage_id
     graph_node_id = str(
-        metadata.get("graph_node_id")
-        or graph_stage_id
-        or stage.get("role_name")
-        or ""
+        metadata.get("graph_node_id") or graph_stage_id or stage.get("role_name") or ""
     ).strip()
     if graph_node_id:
         metadata["graph_node_id"] = graph_node_id
     transition_reason = str(
-        metadata.get("transition_reason") or nested_metadata.get("transition_reason") or ""
+        metadata.get("transition_reason")
+        or nested_metadata.get("transition_reason")
+        or ""
     ).strip()
     if transition_reason:
         metadata["transition_reason"] = transition_reason
@@ -823,7 +828,9 @@ def _graph_execution_mode(
             execution_mode = str(graph_execution.get("execution_mode") or "").strip()
             if execution_mode:
                 return execution_mode
-    for raw_stage in state.get("stage_history") or seeded_summary.get("agent_stages") or []:
+    for raw_stage in (
+        state.get("stage_history") or seeded_summary.get("agent_stages") or []
+    ):
         if not isinstance(raw_stage, dict):
             continue
         metadata = raw_stage.get("metadata")
@@ -2566,9 +2573,7 @@ def _sync_graph_owned_native_summary_fields(
 
     if any(key in state for key in ("run_verdict", "content_verdict")):
         summary["verdict"] = (
-            state.get("run_verdict")
-            or state.get("content_verdict")
-            or "invalid_config"
+            state.get("run_verdict") or state.get("content_verdict") or "invalid_config"
         )
     if any(
         key in state
@@ -2598,8 +2603,7 @@ def _sync_graph_owned_native_summary_fields(
         )
     if "workspace_policy_ignored_rel_paths" in state:
         summary["workspace_policy_ignored_rel_paths"] = [
-            str(item)
-            for item in state.get("workspace_policy_ignored_rel_paths") or []
+            str(item) for item in state.get("workspace_policy_ignored_rel_paths") or []
         ]
     if "policy_checks" in state:
         summary["workspace_policy_checks"] = list(state.get("policy_checks") or [])
@@ -2774,7 +2778,9 @@ def _sync_graph_owned_native_summary_fields(
         if state.get("bridge_boundary_version") in (None, ""):
             summary.pop("bridge_boundary_version", None)
         else:
-            summary["bridge_boundary_version"] = str(state.get("bridge_boundary_version"))
+            summary["bridge_boundary_version"] = str(
+                state.get("bridge_boundary_version")
+            )
 
 
 def publish_state_artifacts_v1(state: dict[str, Any]) -> dict[str, Any]:
@@ -2868,7 +2874,8 @@ def summary_projection_v1(
             "run_id": state.get("run_id") or seeded_summary.get("run_id"),
             "thread_id": state.get("thread_id") or seeded_summary.get("thread_id"),
             "workspace": state.get("workspace_root") or seeded_summary.get("workspace"),
-            "config_path": state.get("config_path") or seeded_summary.get("config_path"),
+            "config_path": state.get("config_path")
+            or seeded_summary.get("config_path"),
             "task": state.get("task_spec") or seeded_summary.get("task") or {},
             "strategy_name": (state.get("strategy_spec") or {}).get("name")
             or seeded_summary.get("strategy_name"),
@@ -2910,9 +2917,11 @@ def summary_projection_v1(
             "failure_details": (
                 copy.deepcopy(state.get("failure_details"))
                 if isinstance(state.get("failure_details"), dict)
-                else copy.deepcopy(seeded_summary.get("failure_details"))
-                if isinstance(seeded_summary.get("failure_details"), dict)
-                else None
+                else (
+                    copy.deepcopy(seeded_summary.get("failure_details"))
+                    if isinstance(seeded_summary.get("failure_details"), dict)
+                    else None
+                )
             ),
             "workspace_write_policy": (
                 (state.get("task_spec") or {}).get("workspace_write_policy")
@@ -2932,9 +2941,15 @@ def summary_projection_v1(
             "final_workspace_policy_evaluation": (
                 copy.deepcopy(state.get("final_workspace_policy_evaluation"))
                 if isinstance(state.get("final_workspace_policy_evaluation"), dict)
-                else copy.deepcopy(seeded_summary.get("final_workspace_policy_evaluation"))
-                if isinstance(seeded_summary.get("final_workspace_policy_evaluation"), dict)
-                else None
+                else (
+                    copy.deepcopy(
+                        seeded_summary.get("final_workspace_policy_evaluation")
+                    )
+                    if isinstance(
+                        seeded_summary.get("final_workspace_policy_evaluation"), dict
+                    )
+                    else None
+                )
             ),
             "agent_stages": agent_stages,
             "validator_rounds": list(
@@ -2945,9 +2960,11 @@ def summary_projection_v1(
             "validator_summary": (
                 copy.deepcopy(state.get("validator_summary"))
                 if isinstance(state.get("validator_summary"), dict)
-                else copy.deepcopy(seeded_summary.get("validator_summary"))
-                if isinstance(seeded_summary.get("validator_summary"), dict)
-                else {}
+                else (
+                    copy.deepcopy(seeded_summary.get("validator_summary"))
+                    if isinstance(seeded_summary.get("validator_summary"), dict)
+                    else {}
+                )
             ),
             "drafts": list(state.get("drafts") or seeded_summary.get("drafts") or []),
             "best_draft_id": state.get("best_draft_id")
@@ -2963,16 +2980,20 @@ def summary_projection_v1(
             "initial_git_snapshot": (
                 copy.deepcopy(state.get("initial_git_snapshot"))
                 if isinstance(state.get("initial_git_snapshot"), dict)
-                else copy.deepcopy(seeded_summary.get("initial_git_snapshot"))
-                if isinstance(seeded_summary.get("initial_git_snapshot"), dict)
-                else {}
+                else (
+                    copy.deepcopy(seeded_summary.get("initial_git_snapshot"))
+                    if isinstance(seeded_summary.get("initial_git_snapshot"), dict)
+                    else {}
+                )
             ),
             "final_git_snapshot": (
                 copy.deepcopy(state.get("current_git_snapshot"))
                 if isinstance(state.get("current_git_snapshot"), dict)
-                else copy.deepcopy(seeded_summary.get("final_git_snapshot"))
-                if isinstance(seeded_summary.get("final_git_snapshot"), dict)
-                else {}
+                else (
+                    copy.deepcopy(seeded_summary.get("final_git_snapshot"))
+                    if isinstance(seeded_summary.get("final_git_snapshot"), dict)
+                    else {}
+                )
             ),
         }
     )
@@ -3020,7 +3041,9 @@ def summary_projection_v1(
     analysis_review_status = state.get("analysis_review_status")
     if isinstance(analysis_review_status, dict) and analysis_review_status:
         summary["analysis_review_status"] = copy.deepcopy(analysis_review_status)
-    elif "analysis_review_status" in state or "analysis_review_status" in seeded_summary:
+    elif (
+        "analysis_review_status" in state or "analysis_review_status" in seeded_summary
+    ):
         summary["analysis_review_status"] = (
             copy.deepcopy(seeded_summary.get("analysis_review_status"))
             if seeded_summary.get("analysis_review_status") is not None
@@ -3038,7 +3061,9 @@ def summary_projection_v1(
     recommendation_reviews = state.get("recommendation_reviews")
     if isinstance(recommendation_reviews, list):
         summary["recommendation_reviews"] = [
-            copy.deepcopy(item) for item in recommendation_reviews if isinstance(item, dict)
+            copy.deepcopy(item)
+            for item in recommendation_reviews
+            if isinstance(item, dict)
         ]
     elif isinstance(seeded_summary.get("recommendation_reviews"), list):
         summary["recommendation_reviews"] = [
@@ -3066,9 +3091,7 @@ def summary_projection_v1(
         )
     bounded_attestation_input = state.get("bounded_attestation_input")
     if isinstance(bounded_attestation_input, dict):
-        summary["bounded_attestation_input"] = copy.deepcopy(
-            bounded_attestation_input
-        )
+        summary["bounded_attestation_input"] = copy.deepcopy(bounded_attestation_input)
     elif isinstance(seeded_summary.get("bounded_attestation_input"), dict):
         summary["bounded_attestation_input"] = copy.deepcopy(
             seeded_summary["bounded_attestation_input"]

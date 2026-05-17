@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 import tomllib
+from pathlib import Path
 from typing import Any, Dict, List
 
-from anvil.cli_agents import BaseCliAgent, CliRunResult, CodexCliAgent, render_messages_as_transcript
+from anvil.cli_agents import (
+    BaseCliAgent,
+    CliRunResult,
+    CodexCliAgent,
+    render_messages_as_transcript,
+)
 from anvil.config_loader import ProviderCfg
 
 from .cli_provider import CliProviderBase
@@ -48,7 +53,11 @@ class CodexCliProvider(CliProviderBase):
         initial_source = (
             "strategy"
             if explicit_model
-            else ("models_yaml" if initial_model else ("codex_config" if configured_codex_model else "codex_cli"))
+            else (
+                "models_yaml"
+                if initial_model
+                else ("codex_config" if configured_codex_model else "codex_cli")
+            )
         )
 
         attempts: list[dict[str, Any]] = []
@@ -113,7 +122,12 @@ class CodexCliProvider(CliProviderBase):
         )
 
         if not result.ok:
-            detail = result.error or result.stderr_text or result.stdout_text or "CLI agent failed"
+            detail = (
+                result.error
+                or result.stderr_text
+                or result.stdout_text
+                or "CLI agent failed"
+            )
             raise RuntimeError(detail)
 
         return result.text
