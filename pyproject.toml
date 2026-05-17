@@ -87,7 +87,7 @@ extend-exclude = "(^|/)(archived|models/hf)/"
 [tool.isort]
 profile = "black"
 line_length = 88
-skip_glob = ["archived/*", "models/hf/*"]
+skip_glob = ["archived/*", "models/hf/*", ".worktrees/*", ".worktrees/**/*"]
 
 [tool.mypy]
 python_version = "3.11"
