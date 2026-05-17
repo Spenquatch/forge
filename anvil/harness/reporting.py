@@ -227,7 +227,11 @@ def _normalize_rubric_results(
     return []
 
 
-def _normalize_planning_seams(raw_items: Any) -> list[dict[str, Any]]:
+def _normalize_planning_seams(
+    raw_items: Any,
+    *,
+    fallback_paths: list[str] | None = None,
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for item in _iter_planning_records(raw_items, id_field="seam_id"):
         seam_id = _first_present_string(item, "seam_id", "id")
@@ -240,6 +244,8 @@ def _normalize_planning_seams(raw_items: Any) -> list[dict[str, Any]]:
             or item.get("repo_evidence_refs")
             or item.get("evidence_refs")
         )
+        if not paths and fallback_paths:
+            paths = list(fallback_paths)
         normalized.append(
             {
                 "seam_id": seam_id,
@@ -407,6 +413,11 @@ def plan_projection_v1(
         if state.get("clarification_requests") is not None
         else seeded_summary.get("clarification_requests")
     )
+    repo_evidence_refs = _normalized_string_list(
+        state.get("repo_evidence_refs")
+        if state.get("repo_evidence_refs") is not None
+        else seeded_summary.get("repo_evidence_refs")
+    )
     if terminal_status == "clarification_needed" and not stop_reason:
         stop_reason = "Planning requires clarification before execution can proceed."
     if terminal_status == "failed" and not stop_reason:
@@ -426,11 +437,7 @@ def plan_projection_v1(
             seeded_summary.get("problem_statement") or task.get("objective")
         ),
         "clarification_requests": clarification_requests,
-        "repo_evidence_refs": _normalized_string_list(
-            state.get("repo_evidence_refs")
-            if state.get("repo_evidence_refs") is not None
-            else seeded_summary.get("repo_evidence_refs")
-        ),
+        "repo_evidence_refs": repo_evidence_refs,
         "rubric_results": _normalize_rubric_results(
             raw_phase_results,
             seeded_summary=seeded_summary,
@@ -439,6 +446,8 @@ def plan_projection_v1(
             state.get("planning_seams")
             if state.get("planning_seams") is not None
             else seeded_summary.get("seams")
+            ,
+            fallback_paths=repo_evidence_refs,
         ),
         "workstreams": _normalize_planning_workstreams(
             state.get("planning_workstreams")
