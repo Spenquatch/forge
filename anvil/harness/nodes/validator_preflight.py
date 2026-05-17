@@ -134,8 +134,8 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
             reason = str(item.get("reason") or f"Validator {item.get('name')} is not applicable")
             errors.append(reason)
 
-    state["task_spec"] = task_spec.to_dict()
-    state["strategy_spec"] = strategy_spec.to_dict()
+    state["task_spec"] = {**dict(state.get("task_spec") or {}), **task_spec.to_dict()}
+    state["strategy_spec"] = {**strategy_spec_dict, **strategy_spec.to_dict()}
     state["strategy_kind"] = strategy_kind  # type: ignore[assignment]
     state["warnings"] = warnings
     state["errors"] = errors

@@ -34,19 +34,21 @@ def prepare_run_node(state: dict[str, Any]) -> HarnessState:
     )
 
     try:
-        task_spec = TaskSpec.from_dict(load_structured_file(task_path))
+        raw_task_spec = load_structured_file(task_path)
+        task_spec = TaskSpec.from_dict(raw_task_spec)
     except FileNotFoundError as exc:
         raise ValueError(f"Task spec file not found: {task_path}") from exc
 
     try:
-        strategy_spec = StrategyConfig.from_dict(load_structured_file(strategy_path))
+        raw_strategy_spec = load_structured_file(strategy_path)
+        strategy_spec = StrategyConfig.from_dict(raw_strategy_spec)
     except FileNotFoundError as exc:
         raise ValueError(f"Strategy spec file not found: {strategy_path}") from exc
     run_id = create_run_id(task_spec.id)
     base["run_id"] = run_id
     base["run_dir"] = str(Path(out_root) / run_id)
-    base["task_spec"] = task_spec.to_dict()
-    base["strategy_spec"] = strategy_spec.to_dict()
+    base["task_spec"] = {**dict(raw_task_spec), **task_spec.to_dict()}
+    base["strategy_spec"] = {**dict(raw_strategy_spec), **strategy_spec.to_dict()}
     base["task_kind"] = task_spec.task_kind  # type: ignore[assignment]
     base["strategy_kind"] = strategy_spec.kind  # type: ignore[assignment]
     return base

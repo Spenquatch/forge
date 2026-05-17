@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 from pathlib import Path
 
-import pytest
-
-from anvil.harness.builder import build_harness_langgraph
 from anvil.harness.contracts import build_analysis_review_contract
+from anvil.harness.executor import HarnessLangGraphExecutor
 from anvil.harness.files import load_structured_file
 from anvil.harness.nodes.prepare_run import prepare_run_node
 from anvil.harness.nodes.validator_preflight import validator_preflight_node
@@ -57,47 +54,18 @@ def _run_planning_example_fixture(
     tmp_path: Path,
     run_label: str,
 ) -> dict[str, object]:
-    raw_strategy = load_structured_file(_planning_strategy_path())
-    original_prepare_run_node = prepare_run_node
-    original_validator_preflight_node = validator_preflight_node
-
-    def _with_phase_inputs(state: dict[str, object]) -> dict[str, object]:
-        strategy_spec = dict(state.get("strategy_spec") or {})
-        phase_inputs = raw_strategy.get("phase_inputs")
-        if isinstance(phase_inputs, dict):
-            strategy_spec["phase_inputs"] = copy.deepcopy(phase_inputs)
-        state["strategy_spec"] = strategy_spec
-        return state
-
-    def _prepare(payload: dict[str, object]) -> dict[str, object]:
-        prepared = original_prepare_run_node(payload)
-        return _with_phase_inputs(prepared)
-
-    def _validator(payload: dict[str, object]) -> dict[str, object]:
-        validated = original_validator_preflight_node(payload)
-        return _with_phase_inputs(validated)
-
     out_root = tmp_path / run_label
     out_root.mkdir(parents=True, exist_ok=True)
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr("anvil.harness.builder.prepare_run_node", _prepare)
-        monkeypatch.setattr(
-            "anvil.harness.builder.validator_preflight_node",
-            _validator,
+    executor = HarnessLangGraphExecutor(checkpoint="memory")
+    return asyncio.run(
+        executor.execute(
+            task_path=str(task_path),
+            strategy_path=str(_planning_strategy_path()),
+            workspace=str(_repo_root()),
+            out_root=str(out_root),
+            thread_id=f"thread-{run_label}",
         )
-        graph = build_harness_langgraph()
-        return asyncio.run(
-            graph.ainvoke(
-                {
-                    "task_path": str(task_path),
-                    "strategy_path": str(_planning_strategy_path()),
-                    "workspace_root": str(_repo_root()),
-                    "out_root": str(out_root),
-                    "thread_id": f"thread-{run_label}",
-                },
-                {"configurable": {"thread_id": f"thread-{run_label}"}},
-            )
-        )
+    )
 
 
 def _plan_payload(summary: dict[str, object]) -> dict[str, object]:
