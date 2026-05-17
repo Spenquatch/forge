@@ -35,6 +35,25 @@ poetry run python -m anvil.cli harness-run \
 Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
 That canonical `analysis_review_trust_*` entrypoint is attestation-first in M3A. Use `analysis_review_trust_legacy_*` only for explicit `legacy_full_review` compatibility checks.
 
+Deterministic planning examples use the canonical strategy `examples/harness/strategies/deterministic_feature_planning_v1.yaml` with these bounded task fixtures:
+
+- `examples/harness/tasks/deterministic_feature_planning_success.yaml`
+- `examples/harness/tasks/deterministic_feature_planning_clarification.yaml`
+- `examples/harness/tasks/deterministic_feature_planning_failed.yaml`
+
+Run the successful planning fixture with:
+
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --workspace /path/to/repo \
+  --out-root .forge-harness-runs \
+  --json
+```
+
+Successful planning runs emit `PLAN.md` and `plan.json`. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and emit the terminal payload without plan artifacts. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
+
 These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 
 Repo-local fixture wiring coverage lives under `tests/fixtures/harness/m2_focus_gate_fixture_wiring/` and remains seam-regression-only wiring coverage.
