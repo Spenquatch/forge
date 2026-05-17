@@ -154,13 +154,14 @@ class HarnessState(TypedDict, total=False):
     thread_id: str
     task_spec: dict[str, Any]
     strategy_spec: dict[str, Any]
-    task_kind: Literal["patch", "analysis_review"]
+    task_kind: Literal["patch", "analysis_review", "planning"]
     strategy_kind: Literal[
         "single_pass",
         "pfr_v1",
         "analysis_review_bounded_v1",
         "analysis_review_trust_v1",
         "analysis_review_v1",
+        "deterministic_feature_planning_v1",
     ]
     workspace_root: str
     out_root: str
@@ -217,6 +218,19 @@ class HarnessState(TypedDict, total=False):
     strategy_graph_spec: dict[str, Any]
     strategy_graph_spec_id: str | None
     strategy_graph_subset: str | None
+    validator_preflight: list[dict[str, Any]]
+    planning_terminal_status: Literal["success", "clarification_needed", "failed"] | None
+    planning_stop_reason: str | None
+    clarification_requests: list[dict[str, Any]]
+    repo_evidence_refs: list[str]
+    planning_seams: list[dict[str, Any]]
+    planning_workstreams: list[dict[str, Any]]
+    planning_slices: list[dict[str, Any]]
+    planning_phase_results: list[dict[str, Any]]
+    planning_policy_versions: dict[str, Any]
+    search_pass_count: int
+    inspected_file_count: int
+    discovery_budget_escalated: bool
     focus_decision: dict[str, Any]
     topic_ledger: list[dict[str, Any]]
     summary_boundary_version: str
@@ -298,6 +312,19 @@ def initialize_harness_state(
         strategy_graph_spec={},
         strategy_graph_spec_id=None,
         strategy_graph_subset=None,
+        validator_preflight=[],
+        planning_terminal_status=None,
+        planning_stop_reason=None,
+        clarification_requests=[],
+        repo_evidence_refs=[],
+        planning_seams=[],
+        planning_workstreams=[],
+        planning_slices=[],
+        planning_phase_results=[],
+        planning_policy_versions={},
+        search_pass_count=0,
+        inspected_file_count=0,
+        discovery_budget_escalated=False,
         focus_decision={},
         topic_ledger=[],
         summary_boundary_version=SUMMARY_BOUNDARY_VERSION,
@@ -484,6 +511,27 @@ def _summary_list_of_dicts(summary: dict[str, Any], key: str) -> list[dict[str, 
     return []
 
 
+def _summary_string_list(summary: dict[str, Any], key: str) -> list[str]:
+    value = summary.get(key)
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        nested_value = run_details.get(key)
+        if isinstance(nested_value, list):
+            return [str(item) for item in nested_value if item not in (None, "")]
+    return []
+
+
+def _summary_scalar(summary: dict[str, Any], key: str) -> Any:
+    if key in summary:
+        return summary.get(key)
+    run_details = summary.get("run_details")
+    if isinstance(run_details, dict):
+        return run_details.get(key)
+    return None
+
+
 def summary_read_adapter_v1(
     summary: dict[str, Any], *, fallback_thread_id: str | None = None
 ) -> HarnessState:
@@ -634,6 +682,28 @@ def summary_read_adapter_v1(
             None
             if summary.get("strategy_graph_subset") in (None, "")
             else str(summary.get("strategy_graph_subset"))
+        ),
+        planning_terminal_status=(
+            None
+            if _summary_scalar(summary, "planning_terminal_status") in (None, "")
+            else str(_summary_scalar(summary, "planning_terminal_status"))
+        ),
+        planning_stop_reason=(
+            None
+            if _summary_scalar(summary, "planning_stop_reason") in (None, "")
+            else str(_summary_scalar(summary, "planning_stop_reason"))
+        ),
+        clarification_requests=_summary_list_of_dicts(summary, "clarification_requests"),
+        repo_evidence_refs=_summary_string_list(summary, "repo_evidence_refs"),
+        planning_seams=_summary_list_of_dicts(summary, "planning_seams"),
+        planning_workstreams=_summary_list_of_dicts(summary, "planning_workstreams"),
+        planning_slices=_summary_list_of_dicts(summary, "planning_slices"),
+        planning_phase_results=_summary_list_of_dicts(summary, "planning_phase_results"),
+        planning_policy_versions=_summary_dict(summary, "planning_policy_versions"),
+        search_pass_count=int(_summary_scalar(summary, "search_pass_count") or 0),
+        inspected_file_count=int(_summary_scalar(summary, "inspected_file_count") or 0),
+        discovery_budget_escalated=bool(
+            _summary_scalar(summary, "discovery_budget_escalated") or False
         ),
         focus_decision=_summary_dict(summary, "focus_decision"),
         topic_ledger=_summary_list_of_dicts(summary, "topic_ledger"),

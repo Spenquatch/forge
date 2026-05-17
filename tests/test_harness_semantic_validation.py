@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from anvil.harness.contracts import (
     build_analysis_review_contract,
     canonical_artifact_focus_id,
@@ -20,7 +22,9 @@ from anvil.harness.semantic_validation import (
     validate_stage_output,
 )
 from anvil.harness.types import (
+    DETERMINISTIC_FEATURE_PLANNING_KIND,
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
+    PLANNING_RUNTIME_TARGET,
     StrategyConfig,
     TaskSpec,
     canonical_workspace_ref_list,
@@ -88,6 +92,40 @@ def _strategy(
     if trust_execution_mode is not None:
         payload["trust_review"] = {"execution_mode": trust_execution_mode}
     return StrategyConfig.from_dict(payload)
+
+
+def _planning_strategy() -> StrategyConfig:
+    return StrategyConfig.from_dict(
+        {
+            "name": "deterministic-feature-planning",
+            "kind": DETERMINISTIC_FEATURE_PLANNING_KIND,
+            "runtime_target": PLANNING_RUNTIME_TARGET,
+            "roles": {
+                "planner": {
+                    "provider": "codex_cli",
+                    "effort": "high",
+                    "access": "read",
+                }
+            },
+            "phases": [
+                {"id": "design_doc", "stage_type": "rubric_design_doc"},
+                {
+                    "id": "seam_decomposition",
+                    "stage_type": "architecture_seam_decomposition",
+                },
+                {
+                    "id": "parallel_planning",
+                    "stage_type": "parallel_workstream_planning",
+                },
+                {"id": "slice_emission", "stage_type": "executable_slice_emission"},
+            ],
+            "artifact_policy": "planning_package_v1",
+            "determinism_policy": "stable_structure_v1",
+            "discovery_policy": "bounded_repo_scan_v1",
+            "rubric_policy": "design_doc_gate_v1",
+            "stop_policy": "clarification_or_stop_v1",
+        }
+    )
 
 
 def _fixture() -> dict:
@@ -450,6 +488,45 @@ def _attestation_review_payload() -> dict:
         "scope_escapes": [],
         "warnings": [],
     }
+
+
+def test_planning_task_spec_rejects_workspace_writes():
+    with pytest.raises(
+        ValueError,
+        match="planning tasks must set workspace_write_policy.mode to forbid",
+    ):
+        TaskSpec.from_dict(
+            {
+                "id": "plan-release-watch-parity",
+                "task_kind": "planning",
+                "objective": "Plan release-watch parity work.",
+                "workspace_write_policy": {"mode": "allow"},
+            }
+        )
+
+
+def test_planning_strategy_config_accepts_canonical_declaration():
+    strategy = _planning_strategy()
+
+    assert strategy.kind == DETERMINISTIC_FEATURE_PLANNING_KIND
+    assert strategy.runtime_target == PLANNING_RUNTIME_TARGET
+    assert [phase.to_dict() for phase in strategy.phases] == [
+        {"id": "design_doc", "stage_type": "rubric_design_doc"},
+        {
+            "id": "seam_decomposition",
+            "stage_type": "architecture_seam_decomposition",
+        },
+        {
+            "id": "parallel_planning",
+            "stage_type": "parallel_workstream_planning",
+        },
+        {"id": "slice_emission", "stage_type": "executable_slice_emission"},
+    ]
+    assert strategy.artifact_policy == "planning_package_v1"
+    assert strategy.determinism_policy == "stable_structure_v1"
+    assert strategy.discovery_policy == "bounded_repo_scan_v1"
+    assert strategy.rubric_policy == "design_doc_gate_v1"
+    assert strategy.stop_policy == "clarification_or_stop_v1"
 
 
 def test_focus_gate_output_schema_exposes_v10_focus_decision_surface():
