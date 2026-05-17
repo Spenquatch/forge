@@ -36,7 +36,9 @@ def _count_issue_severities(payload: dict[str, Any]) -> dict[str, int]:
         if not isinstance(issue, dict):
             continue
         severity = str(issue.get("severity", "")).strip().lower()
-        blocking_class = str(issue.get("blocking_class", "presentation")).strip().lower()
+        blocking_class = (
+            str(issue.get("blocking_class", "presentation")).strip().lower()
+        )
         if severity in counts:
             counts[severity] += 1
         if severity in {"medium", "high", "critical"}:
@@ -50,7 +52,8 @@ def _required_validator_failure_count(results: list[dict[str, Any]]) -> int:
     return sum(
         1
         for item in results
-        if item.get("required") and str(item.get("status", "")).lower() in {"failed", "error"}
+        if item.get("required")
+        and str(item.get("status", "")).lower() in {"failed", "error"}
     )
 
 
@@ -73,7 +76,8 @@ def _accepted_recommendation_count(payload: dict[str, Any]) -> int:
         1
         for item in reviews
         if isinstance(item, dict)
-        and str(item.get("verdict", "")).strip().lower() in {"accept", "accept_with_caveat"}
+        and str(item.get("verdict", "")).strip().lower()
+        in {"accept", "accept_with_caveat"}
     )
 
 
@@ -88,7 +92,9 @@ def _remaining_topic_counts(payload: dict[str, Any]) -> tuple[int, int, int]:
     new_topic_count = len(payload.get("topics", []) or [])
     if not new_topic_count:
         new_topic_count = len(payload.get("missing_topics", []) or [])
-    carried_forward_topic_count = len(payload.get("carried_forward_topic_ids", []) or [])
+    carried_forward_topic_count = len(
+        payload.get("carried_forward_topic_ids", []) or []
+    )
     return (
         new_topic_count,
         carried_forward_topic_count,
@@ -96,7 +102,9 @@ def _remaining_topic_counts(payload: dict[str, Any]) -> tuple[int, int, int]:
     )
 
 
-def _review_provenance_penalty(payload: dict[str, Any], stage: dict[str, Any]) -> tuple[int, int]:
+def _review_provenance_penalty(
+    payload: dict[str, Any], stage: dict[str, Any]
+) -> tuple[int, int]:
     provenance = stage.get("semantic_validation_payload_provenance")
     if not isinstance(provenance, dict):
         metadata = stage.get("metadata")
@@ -110,10 +118,18 @@ def _review_provenance_penalty(payload: dict[str, Any], stage: dict[str, Any]) -
     closure_satisfied = bool(provenance.get("closure_provenance_satisfied"))
     uncovered_global_issue_ids = provenance.get("uncovered_global_issue_ids") or []
     uncovered_global_topic_ids = provenance.get("uncovered_global_topic_ids") or []
-    uncovered_global_count = len(uncovered_global_issue_ids) + len(uncovered_global_topic_ids)
-    uncovered_recommendation_indices = provenance.get("uncovered_recommendation_indices") or []
+    uncovered_global_count = len(uncovered_global_issue_ids) + len(
+        uncovered_global_topic_ids
+    )
+    uncovered_recommendation_indices = (
+        provenance.get("uncovered_recommendation_indices") or []
+    )
     uncovered_recommendation_count = len(uncovered_recommendation_indices)
-    if closure_satisfied and uncovered_global_count == 0 and uncovered_recommendation_count == 0:
+    if (
+        closure_satisfied
+        and uncovered_global_count == 0
+        and uncovered_recommendation_count == 0
+    ):
         return (0, 0)
     return (1, uncovered_global_count + uncovered_recommendation_count)
 
@@ -219,7 +235,9 @@ def drafts_from_stage_history_v1(
             round_index = _candidate_round_index(role_name)
             validator_results = validator_rounds_by_index.get(round_index, [])
             issue_counts = {
-                "required_validator_failures": _required_validator_failure_count(validator_results),
+                "required_validator_failures": _required_validator_failure_count(
+                    validator_results
+                ),
             }
             draft = {
                 "draft_id": f"draft-{slugify(role_name)}",
@@ -229,7 +247,9 @@ def drafts_from_stage_history_v1(
                 "round_index": round_index,
                 "text_path": _stage_text_path(stage),
                 "json_path": _stage_json_path(stage, "json_path", "output_path"),
-                "raw_json_path": _stage_json_path(stage, "raw_json_path", "raw_output_path"),
+                "raw_json_path": _stage_json_path(
+                    stage, "raw_json_path", "raw_output_path"
+                ),
                 "normalized_json_path": _stage_json_path(
                     stage,
                     "normalized_json_path",
@@ -285,8 +305,8 @@ def drafts_from_stage_history_v1(
                 payload,
                 stage,
             )
-            new_topic_count, carried_forward_topic_count, open_topic_count = _remaining_topic_counts(
-                payload
+            new_topic_count, carried_forward_topic_count, open_topic_count = (
+                _remaining_topic_counts(payload)
             )
             issue_counts["topics"] = max(
                 int(issue_counts.get("topics", 0)),
@@ -327,11 +347,11 @@ def drafts_from_stage_history_v1(
                 "scope_compliance_score",
                 "confidence",
             ):
-                value = payload.get(field_name)
-                if value is None:
+                score_value: Any = payload.get(field_name)
+                if score_value is None:
                     continue
                 try:
-                    scores[field_name] = float(value)
+                    scores[field_name] = float(score_value)
                 except (TypeError, ValueError):
                     continue
             review_status = _draft_review_status(payload)
@@ -347,8 +367,12 @@ def drafts_from_stage_history_v1(
         elif normalized_content_verdict == "accepted_partial":
             drafts[-1]["review_status"] = "accepted_partial"
             drafts[-1]["review_state"] = "evaluated"
-        elif normalized_content_verdict in {"rejected", "best_effort_exhausted"} and not any(
-            draft.get("review_status") in {"accepted", "accepted_partial"} for draft in drafts
+        elif normalized_content_verdict in {
+            "rejected",
+            "best_effort_exhausted",
+        } and not any(
+            draft.get("review_status") in {"accepted", "accepted_partial"}
+            for draft in drafts
         ):
             drafts[-1]["review_status"] = "rejected"
             drafts[-1]["review_state"] = "evaluated"
@@ -398,7 +422,9 @@ def select_best_draft(drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
         accepted_recommendations = int(issue_counts.get("accepted_recommendations", 0))
         blocking_medium_plus = int(issue_counts.get("blocking_medium_or_higher", 0))
         medium_plus = int(issue_counts.get("medium_or_higher", 0))
-        open_topics = int(issue_counts.get("open_topics", issue_counts.get("topics", 0)))
+        open_topics = int(
+            issue_counts.get("open_topics", issue_counts.get("topics", 0))
+        )
         provenance_incomplete = int(issue_counts.get("provenance_incomplete", 0))
         uncovered_closure_count = int(issue_counts.get("uncovered_closure_count", 0))
         grounding = float(scores.get("grounding_score", -1.0))

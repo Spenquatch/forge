@@ -4,9 +4,18 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from .files import tail_text, write_text
 from .types import StrategyConfig, TaskSpec, ValidationRun, ValidatorConfig
+
+
+def _coerce_subprocess_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _pattern_matches_any(cwd: Path, pattern: str) -> bool:
@@ -59,7 +68,10 @@ def _applicability_for_validator(
             missing_paths,
             missing_binaries,
         )
-    if run_when == "mode_allow" and task.workspace_write_policy.mode not in {"allow", "require"}:
+    if run_when == "mode_allow" and task.workspace_write_policy.mode not in {
+        "allow",
+        "require",
+    }:
         return (
             "skipped",
             f"Validator runs only when workspace_write_policy.mode allows writes; current mode is {task.workspace_write_policy.mode}.",
@@ -74,7 +86,11 @@ def _applicability_for_validator(
             missing_binaries,
         )
 
-    missing_paths = [pattern for pattern in validator.requires_paths if not _pattern_matches_any(cwd, pattern)]
+    missing_paths = [
+        pattern
+        for pattern in validator.requires_paths
+        if not _pattern_matches_any(cwd, pattern)
+    ]
     if missing_paths:
         status = _status_from_missing_policy(validator.on_missing_surface)
         return (
@@ -84,7 +100,9 @@ def _applicability_for_validator(
             missing_binaries,
         )
 
-    missing_binaries = [binary for binary in validator.required_binaries if shutil.which(binary) is None]
+    missing_binaries = [
+        binary for binary in validator.required_binaries if shutil.which(binary) is None
+    ]
     if missing_binaries:
         status = _status_from_missing_policy(validator.on_missing_binary)
         return (
@@ -168,8 +186,8 @@ def run_validators(
             exit_code = proc.returncode
             status = "passed" if exit_code == 0 else "failed"
         except subprocess.TimeoutExpired as exc:
-            stdout_text = exc.stdout or ""
-            stderr_text = exc.stderr or ""
+            stdout_text = _coerce_subprocess_text(exc.stdout)
+            stderr_text = _coerce_subprocess_text(exc.stderr)
             exit_code = 124
             error = f"Validator timed out after {validator.timeout_sec} seconds."
             status = "error"
@@ -205,7 +223,6 @@ def run_validators(
             )
         )
     return results
-
 
 
 def preflight_validators(

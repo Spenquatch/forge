@@ -51,7 +51,9 @@ class ClaudeCodeCliAgent(BaseCliAgent):
             "danger": "Bash,Read,Edit",
         }.get(access, "Read")
         tools = str(options.pop("tools", default_tools))
-        allowed_tools = str(options.pop("allowed_tools", tools)) if tools != "default" else None
+        allowed_tools = (
+            str(options.pop("allowed_tools", tools)) if tools != "default" else None
+        )
         if tools:
             cmd.extend(["--tools", tools])
             safe_cmd.extend(["--tools", tools])
@@ -91,7 +93,9 @@ class ClaudeCodeCliAgent(BaseCliAgent):
             cmd.extend(["--add-dir", add_dir])
             safe_cmd.extend(["--add-dir", add_dir])
 
-        extra_args = self.cfg.default_args + normalize_str_list(options.pop("extra_args", None))
+        extra_args = self.cfg.default_args + normalize_str_list(
+            options.pop("extra_args", None)
+        )
         cmd.extend(extra_args)
         safe_cmd.extend(extra_args)
 
@@ -137,13 +141,30 @@ class ClaudeCodeCliAgent(BaseCliAgent):
                     text = candidate
 
         if exit_code != 0:
-            tail = stderr_text.strip() or stdout_text.strip() or "Claude Code exited with an error"
+            tail = (
+                stderr_text.strip()
+                or stdout_text.strip()
+                or "Claude Code exited with an error"
+            )
             error = tail[-2000:]
 
         ok = exit_code == 0 and bool(text or structured_output is not None)
         metadata: dict[str, Any] = {"family": self.family}
         if payload is not None:
-            metadata.update({k: v for k, v in payload.items() if k not in {"result", "structured_output", "message", "messages", "content"}})
+            metadata.update(
+                {
+                    k: v
+                    for k, v in payload.items()
+                    if k
+                    not in {
+                        "result",
+                        "structured_output",
+                        "message",
+                        "messages",
+                        "content",
+                    }
+                }
+            )
 
         return CliRunResult(
             ok=ok,
@@ -173,7 +194,9 @@ def _extract_payload_text(payload: Mapping[str, Any]) -> str:
             return text
 
     messages = payload.get("messages")
-    if isinstance(messages, Sequence) and not isinstance(messages, (str, bytes, bytearray)):
+    if isinstance(messages, Sequence) and not isinstance(
+        messages, (str, bytes, bytearray)
+    ):
         for item in reversed(messages):
             if isinstance(item, Mapping):
                 text = _extract_text_from_message(item)

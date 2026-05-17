@@ -18,6 +18,14 @@ from anvil.usage import TokenUsage
 logger = logging.getLogger(__name__)
 
 
+def _coerce_subprocess_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 @dataclass(frozen=True)
 class CliInvocationPlan:
     """A concrete command invocation for a CLI agent."""
@@ -59,8 +67,10 @@ class BaseCliAgent(ABC):
 
     def resolve_binary(self) -> str:
         binary_name = (
-            os.getenv(self.binary_env_var, "") if self.binary_env_var else ""
-        ) or self.cfg.binary or self.default_binary
+            (os.getenv(self.binary_env_var, "") if self.binary_env_var else "")
+            or self.cfg.binary
+            or self.default_binary
+        )
         if not binary_name:
             raise FileNotFoundError(
                 f"No binary configured for {self.family}; set ProviderCfg.binary or {self.binary_env_var}."
@@ -120,8 +130,8 @@ class BaseCliAgent(ABC):
                 error = None
             except subprocess.TimeoutExpired as exc:
                 exit_code = 124
-                stdout_text = exc.stdout or ""
-                stderr_text = exc.stderr or ""
+                stdout_text = _coerce_subprocess_text(exc.stdout)
+                stderr_text = _coerce_subprocess_text(exc.stderr)
                 error = (
                     f"{self.family} command timed out after {timeout_sec} seconds"
                     if timeout_sec is not None

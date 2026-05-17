@@ -281,7 +281,9 @@ def execute_trust_attestation(
         role_name="auditor",
         reviser_output=None,
     )
-    runtime["current_review_payload"] = deepcopy(attestation_run.structured_output or {})
+    runtime["current_review_payload"] = deepcopy(
+        attestation_run.structured_output or {}
+    )
     runtime["review_loop_exercised"] = True
     runtime["transition_reason"] = "trust_attestation_completed"
     return {"attestation_run": attestation_run}

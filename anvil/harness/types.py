@@ -5,9 +5,9 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 
-VALID_TASK_KINDS = {"patch", "analysis_review"}
+VALID_TASK_KINDS = {"patch", "analysis_review", "planning"}
 ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
 ANALYSIS_REVIEW_TRUST_KIND = "analysis_review_trust_v1"
 ANALYSIS_REVIEW_LEGACY_KIND = "analysis_review_v1"
@@ -15,6 +15,22 @@ ANALYSIS_REVIEW_STRATEGY_KINDS = {
     ANALYSIS_REVIEW_BOUNDED_KIND,
     ANALYSIS_REVIEW_TRUST_KIND,
     ANALYSIS_REVIEW_LEGACY_KIND,
+}
+DETERMINISTIC_FEATURE_PLANNING_KIND = "deterministic_feature_planning_v1"
+PLANNING_RUNTIME_TARGET = "planning_v1"
+PLANNING_PHASE_STAGE_TYPES = (
+    "rubric_design_doc",
+    "architecture_seam_decomposition",
+    "parallel_workstream_planning",
+    "executable_slice_emission",
+)
+_RUNTIME_TARGET_BY_STRATEGY_KIND = {
+    "single_pass": "single_pass",
+    "pfr_v1": "pfr_v1",
+    ANALYSIS_REVIEW_BOUNDED_KIND: "analysis_review_v1",
+    ANALYSIS_REVIEW_TRUST_KIND: "analysis_review_v1",
+    ANALYSIS_REVIEW_LEGACY_KIND: "analysis_review_v1",
+    DETERMINISTIC_FEATURE_PLANNING_KIND: PLANNING_RUNTIME_TARGET,
 }
 VALID_VALIDATOR_RUN_WHEN = {
     "patch_only",
@@ -24,6 +40,20 @@ VALID_VALIDATOR_RUN_WHEN = {
     "mode_allow",
     "mode_require",
 }
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
 VALID_MISSING_HANDLING = {"fail", "skip", "not_applicable"}
 VALID_EVIDENCE_CAP_POLICIES = {"trim_to_cap", "strict"}
 VALID_TRUST_REVIEW_EXECUTION_MODES = {
@@ -45,6 +75,10 @@ _WORKSPACE_REF_LOCATION_SUFFIX_RE = re.compile(
 
 def is_analysis_review_strategy_kind(strategy_kind: str) -> bool:
     return strategy_kind in ANALYSIS_REVIEW_STRATEGY_KINDS
+
+
+def infer_runtime_target_for_strategy_kind(strategy_kind: str) -> str | None:
+    return _RUNTIME_TARGET_BY_STRATEGY_KIND.get(str(strategy_kind or "").strip())
 
 
 def _reject_unknown_keys(
@@ -161,9 +195,7 @@ def canonical_workspace_ref_list(
 def canonical_seam_path_list(
     values: Any, *, workspace_root: str | Path | None = None
 ) -> list[str]:
-    return sorted(
-        canonical_workspace_ref_list(values, workspace_root=workspace_root)
-    )
+    return sorted(canonical_workspace_ref_list(values, workspace_root=workspace_root))
 
 
 @dataclass
@@ -252,9 +284,9 @@ class StrategyFocusGateConfig:
 
 @dataclass
 class StrategyTrustReviewConfig:
-    execution_mode: Literal[
-        "legacy_full_review", "attestation_over_bounded"
-    ] = "legacy_full_review"
+    execution_mode: Literal["legacy_full_review", "attestation_over_bounded"] = (
+        "legacy_full_review"
+    )
 
     @classmethod
     def from_dict(
@@ -269,16 +301,51 @@ class StrategyTrustReviewConfig:
             allowed_keys={"execution_mode"},
             field_name="trust_review",
         )
-        execution_mode = str(
-            data.get("execution_mode", "legacy_full_review")
-        ).strip().lower()
+        execution_mode = (
+            str(data.get("execution_mode", "legacy_full_review")).strip().lower()
+        )
         if execution_mode not in VALID_TRUST_REVIEW_EXECUTION_MODES:
             raise ValueError(
                 "trust_review.execution_mode must be one of: "
                 + ", ".join(sorted(VALID_TRUST_REVIEW_EXECUTION_MODES))
                 + "."
             )
-        return cls(execution_mode=execution_mode)
+        return cls(
+            execution_mode=cast(
+                Literal["legacy_full_review", "attestation_over_bounded"],
+                execution_mode,
+            )
+        )
+
+
+@dataclass
+class PlanningPhaseConfig:
+    id: str
+    stage_type: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, index: int) -> "PlanningPhaseConfig":
+        if not isinstance(data, dict):
+            raise ValueError(f"phases[{index}] must be a mapping.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"id", "stage_type"},
+            field_name=f"phases[{index}]",
+        )
+        phase_id = str(data.get("id") or "").strip()
+        if not phase_id:
+            raise ValueError(f"phases[{index}].id must be a non-empty string.")
+        stage_type = str(data.get("stage_type") or "").strip()
+        if stage_type not in PLANNING_PHASE_STAGE_TYPES:
+            raise ValueError(
+                f"phases[{index}].stage_type must be one of: "
+                + ", ".join(PLANNING_PHASE_STAGE_TYPES)
+                + "."
+            )
+        return cls(id=phase_id, stage_type=stage_type)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -332,7 +399,7 @@ class WorkspaceWritePolicy:
                 "workspace_write_policy.mode must be one of: forbid, allow, require."
             )
         max_touched_raw = data.get("max_touched_files")
-        max_touched_files = None if max_touched_raw is None else int(max_touched_raw)
+        max_touched_files = _coerce_optional_int(max_touched_raw)
         if max_touched_files is not None and max_touched_files < 0:
             raise ValueError(
                 "workspace_write_policy.max_touched_files must be >= 0 or null."
@@ -457,6 +524,10 @@ class TaskSpec:
             raise ValueError(
                 "task_kind must be one of: " + ", ".join(sorted(VALID_TASK_KINDS))
             )
+        if task_kind_raw == "planning" and policy.mode != "forbid":
+            raise ValueError(
+                "planning tasks must set workspace_write_policy.mode to forbid."
+            )
         return cls(
             id=str(data.get("id") or data.get("name") or "task"),
             objective=str(data["objective"]),
@@ -504,14 +575,8 @@ class RoleConfig:
             ),
             access=str(data.get("access", "read")),
             timeout_sec=int(data.get("timeout_sec", 1800)),
-            max_turns=(
-                None if data.get("max_turns") is None else int(data.get("max_turns"))
-            ),
-            max_budget_usd=(
-                None
-                if data.get("max_budget_usd") is None
-                else float(data.get("max_budget_usd"))
-            ),
+            max_turns=(_coerce_optional_int(data.get("max_turns"))),
+            max_budget_usd=(_coerce_optional_float(data.get("max_budget_usd"))),
             extra_args=[str(x) for x in data.get("extra_args", [])],
             env={str(k): str(v) for k, v in dict(data.get("env", {})).items()},
             disable_bare=bool(data.get("disable_bare", False)),
@@ -619,22 +684,22 @@ class ReviewLoopPolicy:
             max_open_medium_issues=(
                 defaults.max_open_medium_issues
                 if stop_when.get("max_open_medium_issues") is None
-                else int(stop_when.get("max_open_medium_issues"))
+                else _coerce_optional_int(stop_when.get("max_open_medium_issues"))
             ),
             min_grounding_score=(
                 defaults.min_grounding_score
                 if stop_when.get("min_grounding_score") is None
-                else float(stop_when.get("min_grounding_score"))
+                else _coerce_optional_float(stop_when.get("min_grounding_score"))
             ),
             min_actionability_score=(
                 defaults.min_actionability_score
                 if stop_when.get("min_actionability_score") is None
-                else float(stop_when.get("min_actionability_score"))
+                else _coerce_optional_float(stop_when.get("min_actionability_score"))
             ),
             min_scope_compliance_score=(
                 defaults.min_scope_compliance_score
                 if stop_when.get("min_scope_compliance_score") is None
-                else float(stop_when.get("min_scope_compliance_score"))
+                else _coerce_optional_float(stop_when.get("min_scope_compliance_score"))
             ),
         )
         if policy.min_loops < 0 or policy.max_loops < 0:
@@ -681,6 +746,13 @@ class StrategyConfig:
     name: str
     kind: str
     roles: dict[str, RoleConfig]
+    runtime_target: str | None = None
+    phases: list[PlanningPhaseConfig] = field(default_factory=list)
+    artifact_policy: str | None = None
+    determinism_policy: str | None = None
+    discovery_policy: str | None = None
+    rubric_policy: str | None = None
+    stop_policy: str | None = None
     validators: list[ValidatorConfig] = field(default_factory=list)
     max_repair_loops: int = 1
     rerun_falsifier_after_patch: bool = True
@@ -693,10 +765,97 @@ class StrategyConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyConfig":
         kind = str(data.get("kind") or "pfr_v1")
+        runtime_target_value = data.get("runtime_target")
+        runtime_target = (
+            None
+            if runtime_target_value in (None, "")
+            else str(runtime_target_value).strip()
+        )
+        inferred_runtime_target = infer_runtime_target_for_strategy_kind(kind)
+        if kind == DETERMINISTIC_FEATURE_PLANNING_KIND and runtime_target is None:
+            raise ValueError(
+                "planning strategies must declare runtime_target 'planning_v1'."
+            )
+        if runtime_target is None:
+            runtime_target = inferred_runtime_target
+        elif (
+            inferred_runtime_target is not None
+            and runtime_target != inferred_runtime_target
+        ):
+            raise ValueError(
+                f"runtime_target {runtime_target!r} is incompatible with strategy kind {kind!r}."
+            )
         roles = {
             str(name): RoleConfig.from_dict(cfg)
             for name, cfg in dict(data.get("roles", {})).items()
         }
+        raw_phases = data.get("phases", [])
+        if raw_phases is None:
+            raw_phases = []
+        if not isinstance(raw_phases, list):
+            raise ValueError("phases must be a list.")
+        phases = [
+            PlanningPhaseConfig.from_dict(item, index=index)
+            for index, item in enumerate(raw_phases)
+        ]
+        planning_policy_refs = {
+            field_name: (
+                None
+                if data.get(field_name) in (None, "")
+                else str(data.get(field_name)).strip()
+            )
+            for field_name in (
+                "artifact_policy",
+                "determinism_policy",
+                "discovery_policy",
+                "rubric_policy",
+                "stop_policy",
+            )
+        }
+        has_planning_only_keys = bool(phases) or any(
+            value is not None for value in planning_policy_refs.values()
+        )
+        if runtime_target == PLANNING_RUNTIME_TARGET:
+            if kind != DETERMINISTIC_FEATURE_PLANNING_KIND:
+                raise ValueError(
+                    "runtime_target 'planning_v1' requires kind "
+                    "'deterministic_feature_planning_v1'."
+                )
+            missing_policy_refs = [
+                field_name
+                for field_name, value in planning_policy_refs.items()
+                if value is None
+            ]
+            if missing_policy_refs:
+                raise ValueError(
+                    "planning strategies must declare: "
+                    + ", ".join(["phases", *missing_policy_refs])
+                    + "."
+                    if not phases
+                    else "planning strategies must declare: "
+                    + ", ".join(missing_policy_refs)
+                    + "."
+                )
+            if not phases:
+                raise ValueError("planning strategies must declare phases[].")
+            declared_stage_types = tuple(phase.stage_type for phase in phases)
+            if len(set(phase.id for phase in phases)) != len(phases):
+                raise ValueError("planning phases must use unique ids.")
+            if declared_stage_types != PLANNING_PHASE_STAGE_TYPES:
+                raise ValueError(
+                    "planning phases must appear in canonical order: "
+                    + ", ".join(PLANNING_PHASE_STAGE_TYPES)
+                    + "."
+                )
+        else:
+            if kind == DETERMINISTIC_FEATURE_PLANNING_KIND:
+                raise ValueError(
+                    "kind 'deterministic_feature_planning_v1' requires runtime_target 'planning_v1'."
+                )
+            if has_planning_only_keys:
+                raise ValueError(
+                    "phases and planning policy refs are only supported when runtime_target is 'planning_v1'."
+                )
         validators = [
             ValidatorConfig.from_dict(v, default_run_when="patch_only")
             for v in data.get("validators", [])
@@ -705,6 +864,13 @@ class StrategyConfig:
             name=str(data.get("name") or data.get("id") or "strategy"),
             kind=kind,
             roles=roles,
+            runtime_target=runtime_target,
+            phases=phases,
+            artifact_policy=planning_policy_refs["artifact_policy"],
+            determinism_policy=planning_policy_refs["determinism_policy"],
+            discovery_policy=planning_policy_refs["discovery_policy"],
+            rubric_policy=planning_policy_refs["rubric_policy"],
+            stop_policy=planning_policy_refs["stop_policy"],
             validators=validators,
             max_repair_loops=int(data.get("max_repair_loops", 1)),
             rerun_falsifier_after_patch=bool(
@@ -724,6 +890,13 @@ class StrategyConfig:
             "name": self.name,
             "kind": self.kind,
             "roles": {name: cfg.to_dict() for name, cfg in self.roles.items()},
+            "runtime_target": self.runtime_target,
+            "phases": [phase.to_dict() for phase in self.phases],
+            "artifact_policy": self.artifact_policy,
+            "determinism_policy": self.determinism_policy,
+            "discovery_policy": self.discovery_policy,
+            "rubric_policy": self.rubric_policy,
+            "stop_policy": self.stop_policy,
             "validators": [v.to_dict() for v in self.validators],
             "max_repair_loops": self.max_repair_loops,
             "rerun_falsifier_after_patch": self.rerun_falsifier_after_patch,

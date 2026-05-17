@@ -143,9 +143,7 @@ def test_generate_topic_closure_replays_produces_expected_artifacts(tmp_path):
         "scoped"
     )
     assert (
-        resolved_provenance["closure_proof_by_id"]["TOPIC-001"][
-            "classification_status"
-        ]
+        resolved_provenance["closure_proof_by_id"]["TOPIC-001"]["classification_status"]
         == "resolved"
     )
     assert resolved_status["resolved_topic_ids"] == ["TOPIC-001"]
@@ -169,5 +167,11 @@ def test_generate_topic_closure_replays_produces_expected_artifacts(tmp_path):
         resolved_report_text,
         "- Withheld recommendation indices for `FINAL_ANSWER.*`: `2`",
     )
-    assert "Recommendation indices included in `PARTIAL_ANSWER.*`" not in resolved_report_text
-    assert "Recommendation indices excluded from `PARTIAL_ANSWER.*`" not in resolved_report_text
+    assert (
+        "Recommendation indices included in `PARTIAL_ANSWER.*`"
+        not in resolved_report_text
+    )
+    assert (
+        "Recommendation indices excluded from `PARTIAL_ANSWER.*`"
+        not in resolved_report_text
+    )

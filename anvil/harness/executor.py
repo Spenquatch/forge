@@ -21,7 +21,9 @@ class HarnessLangGraphExecutor:
         checkpoint: str = "memory",
         db_path: str = "forge_harness_checkpoints.db",
         auto_fit_strategy: bool = True,
-        analysis_review_execution_mode: Literal["legacy_bridge", "graph_owned"] = "legacy_bridge",
+        analysis_review_execution_mode: Literal[
+            "legacy_bridge", "graph_owned"
+        ] = "legacy_bridge",
     ) -> None:
         self.max_attempts = max_attempts
         self.checkpoint = checkpoint
@@ -66,7 +68,11 @@ class HarnessLangGraphExecutor:
             "out_root": out_root,
             "config_path": config_path,
             "thread_id": thread_id or str(uuid.uuid4()),
-            "auto_fit_strategy": self.auto_fit_strategy if auto_fit_strategy is None else auto_fit_strategy,
+            "auto_fit_strategy": (
+                self.auto_fit_strategy
+                if auto_fit_strategy is None
+                else auto_fit_strategy
+            ),
             "analysis_review_execution_mode": (
                 self.analysis_review_execution_mode
                 if analysis_review_execution_mode is None
@@ -111,7 +117,11 @@ class HarnessLangGraphExecutor:
             "out_root": out_root,
             "config_path": config_path,
             "thread_id": thread_id or str(uuid.uuid4()),
-            "auto_fit_strategy": self.auto_fit_strategy if auto_fit_strategy is None else auto_fit_strategy,
+            "auto_fit_strategy": (
+                self.auto_fit_strategy
+                if auto_fit_strategy is None
+                else auto_fit_strategy
+            ),
             "analysis_review_execution_mode": (
                 self.analysis_review_execution_mode
                 if analysis_review_execution_mode is None

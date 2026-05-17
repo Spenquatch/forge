@@ -190,12 +190,14 @@ def _assert_summary_json_mirrors_bounded_attestation_input(
     summary: dict[str, object],
 ) -> None:
     summary_json = _load_run_summary_json(runner)
-    assert summary_json[BOUNDED_ATTESTATION_INPUT_KEY] == summary[
-        BOUNDED_ATTESTATION_INPUT_KEY
-    ]
-    assert summary_json["run_details"][BOUNDED_ATTESTATION_INPUT_KEY] == summary[
-        BOUNDED_ATTESTATION_INPUT_KEY
-    ]
+    assert (
+        summary_json[BOUNDED_ATTESTATION_INPUT_KEY]
+        == summary[BOUNDED_ATTESTATION_INPUT_KEY]
+    )
+    assert (
+        summary_json["run_details"][BOUNDED_ATTESTATION_INPUT_KEY]
+        == summary[BOUNDED_ATTESTATION_INPUT_KEY]
+    )
 
 
 def _canonical_seam_context(summary: dict[str, object]) -> dict[str, object]:
@@ -3115,14 +3117,18 @@ class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
         return payload
 
 
-class _TrustAttestationHistoricalIssueReplayHarnessAdapter(_TrustInferenceHarnessAdapter):
+class _TrustAttestationHistoricalIssueReplayHarnessAdapter(
+    _TrustInferenceHarnessAdapter
+):
     _ISSUE_ID = "AR-001"
 
     def _payload_for_role(self, role_name: str):
         if role_name == "critic":
             payload = super()._payload_for_role(role_name)
             payload["verdict"] = "revise"
-            payload["summary"] = "Recommendation 2 still overclaims the bounded evidence."
+            payload["summary"] = (
+                "Recommendation 2 still overclaims the bounded evidence."
+            )
             payload["issues"] = [
                 {
                     "issue_id": self._ISSUE_ID,
@@ -3167,14 +3173,18 @@ class _TrustAttestationHistoricalIssueReplayHarnessAdapter(_TrustInferenceHarnes
         return super().run(request)
 
 
-class _TrustAttestationHistoricalTopicReplayHarnessAdapter(_TrustInferenceHarnessAdapter):
+class _TrustAttestationHistoricalTopicReplayHarnessAdapter(
+    _TrustInferenceHarnessAdapter
+):
     _TOPIC_ID = "TOPIC-001"
 
     def _payload_for_role(self, role_name: str):
         if role_name == "critic":
             payload = super()._payload_for_role(role_name)
             payload["verdict"] = "revise"
-            payload["summary"] = "Recommendation 2 still needs a concrete bounded fallback classification."
+            payload["summary"] = (
+                "Recommendation 2 still needs a concrete bounded fallback classification."
+            )
             payload["topics"] = [
                 {
                     "topic_id": self._TOPIC_ID,
@@ -4388,7 +4398,10 @@ def test_analysis_review_runner_focus_gate_refinement_tries_second_candidate_aft
     original_refine = HarnessRunner._refine_selected_focus_from_probe_candidate
 
     def _fail_first_candidate(self, *, focus_decision, focus_probe, candidate):
-        if str(candidate.get("canonical_focus_id") or "").strip() == adapter.narrowed_primary_id:
+        if (
+            str(candidate.get("canonical_focus_id") or "").strip()
+            == adapter.narrowed_primary_id
+        ):
             return None, "downstream_bridge_drift"
         return original_refine(
             self,
@@ -4416,8 +4429,13 @@ def test_analysis_review_runner_focus_gate_refinement_tries_second_candidate_aft
     focus_refinement = summary["run_details"]["focus_refinement"]
 
     assert summary["verdict"] == "accepted"
-    assert summary["focus_decision"]["selected_focus_id"] == adapter.narrowed_secondary_id
-    assert summary["focus_decision"]["selected_focus_paths"] == adapter.narrowed_secondary_paths
+    assert (
+        summary["focus_decision"]["selected_focus_id"] == adapter.narrowed_secondary_id
+    )
+    assert (
+        summary["focus_decision"]["selected_focus_paths"]
+        == adapter.narrowed_secondary_paths
+    )
     assert focus_refinement["status"] == "applied"
     assert focus_refinement["attempted_candidate_ids"] == [
         adapter.narrowed_primary_id,
@@ -5557,9 +5575,7 @@ def test_analysis_review_runner_creates_final_answer_and_enforces_read_only(
     assert "## Analysis Review Status" in report_text
     assert "- Execution mode: `bounded`" in report_text
     assert "- Provenance status: `not_required`" in report_text
-    assert (
-        "- Withheld recommendation indices for `FINAL_ANSWER.*`: none" in report_text
-    )
+    assert "- Withheld recommendation indices for `FINAL_ANSWER.*`: none" in report_text
     assert "- Review surfaces declared: `2` / `2` recommendations" in report_text
     assert '"rendered_in_report_section": true' in report_text
     assert '"bounded_review_summary": {' in report_text
@@ -6660,7 +6676,8 @@ def test_analysis_review_runner_coerces_scalar_review_refs_to_single_item_lists(
 
     assert warnings == []
     assert all(
-        item["verified_evidence_refs"] == [".github/workflows/codex-cli-release-watch.yml"]
+        item["verified_evidence_refs"]
+        == [".github/workflows/codex-cli-release-watch.yml"]
         for item in normalized["recommendation_reviews"]
     )
 
@@ -6696,9 +6713,12 @@ def test_analysis_review_runner_normalizes_null_review_refs_before_schema_revali
     assert critic_stage["ok"] is True
     assert critic_stage.get("failure_kind") is None
     assert critic_stage.get("schema_validation_errors") in (None, [])
-    assert critic_stage["structured_output"]["recommendation_reviews"][1][
-        "verified_evidence_refs"
-    ] == []
+    assert (
+        critic_stage["structured_output"]["recommendation_reviews"][1][
+            "verified_evidence_refs"
+        ]
+        == []
+    )
 
     semantic_payload = load_structured_file(
         Path(critic_stage["semantic_validation_path"])
@@ -6757,7 +6777,9 @@ def test_analysis_review_runner_drops_issue_classification_ids_without_prior_ope
         "carried_forward_issue_ids",
         "waived_issue_ids",
     ):
-        payload[candidate_field_name] = [issue_id] if candidate_field_name == field_name else []
+        payload[candidate_field_name] = (
+            [issue_id] if candidate_field_name == field_name else []
+        )
 
     normalized, payload_provenance, warnings = (
         runner._normalize_analysis_review_payload(
@@ -6817,7 +6839,9 @@ def test_analysis_review_runner_drops_topic_classification_ids_without_prior_ope
         "carried_forward_topic_ids",
         "waived_topic_ids",
     ):
-        payload[candidate_field_name] = [topic_id] if candidate_field_name == field_name else []
+        payload[candidate_field_name] = (
+            [topic_id] if candidate_field_name == field_name else []
+        )
 
     normalized, payload_provenance, warnings = (
         runner._normalize_analysis_review_payload(
@@ -7660,9 +7684,7 @@ def test_analysis_review_runner_trust_review_marks_global_issue_closure_as_uncov
         role_name="critic",
         payload_provenance_mode="payload_hash_and_refs",
         contract=runner._analysis_contract(),
-        prior_open_issue_records=[
-            {"issue_id": "AR-001", "recommendation_index": None}
-        ],
+        prior_open_issue_records=[{"issue_id": "AR-001", "recommendation_index": None}],
         prior_open_topic_records=[],
     )
 
@@ -7770,9 +7792,7 @@ def test_analysis_review_runner_trust_review_marks_scoped_global_issue_closure_a
         role_name="critic",
         payload_provenance_mode="payload_hash_and_refs",
         contract=runner._analysis_contract(),
-        prior_open_issue_records=[
-            {"issue_id": "AR-001", "recommendation_index": None}
-        ],
+        prior_open_issue_records=[{"issue_id": "AR-001", "recommendation_index": None}],
         prior_open_topic_records=[],
     )
 
@@ -9012,10 +9032,14 @@ def test_analysis_review_runtime_bag_is_initialized_and_projected_from_summary(
         "transition_reason",
         "review_loop_exercised",
     } <= set(runtime)
-    assert runtime["current_analysis_payload"] == summary["run_details"]["final_analysis"]
+    assert (
+        runtime["current_analysis_payload"] == summary["run_details"]["final_analysis"]
+    )
     assert runtime["current_review_payload"] == summary["run_details"]["final_review"]
     assert runtime["latest_validator_round"] == []
-    assert runtime["revisions_completed"] == summary["run_details"]["revisions_completed"]
+    assert (
+        runtime["revisions_completed"] == summary["run_details"]["revisions_completed"]
+    )
     assert runtime["max_loops"] >= runtime["revisions_completed"]
     assert runtime["focus_refinement"] is None
     assert runtime["transition_reason"] == "stop_policy_satisfied"
@@ -9319,18 +9343,22 @@ def test_bounded_attestation_input_persists_and_mirrors_summary_json(
 
     payload = summary[BOUNDED_ATTESTATION_INPUT_KEY]
     assert payload == summary["run_details"][BOUNDED_ATTESTATION_INPUT_KEY]
-    assert payload["review_surface"]["recommendation_count"] == summary[
-        "bounded_review_summary"
-    ]["recommendation_count"]
-    assert payload["review_surface"]["recommendations_with_review_surface"] == summary[
-        "bounded_review_summary"
-    ]["recommendations_with_review_surface"]
-    assert payload["review_surface"]["review_stages"] == summary[
-        "bounded_review_summary"
-    ]["review_stages"]
-    assert payload["review_surface"]["scope_escape_count"] == summary[
-        "bounded_review_summary"
-    ]["scope_escape_count"]
+    assert (
+        payload["review_surface"]["recommendation_count"]
+        == summary["bounded_review_summary"]["recommendation_count"]
+    )
+    assert (
+        payload["review_surface"]["recommendations_with_review_surface"]
+        == summary["bounded_review_summary"]["recommendations_with_review_surface"]
+    )
+    assert (
+        payload["review_surface"]["review_stages"]
+        == summary["bounded_review_summary"]["review_stages"]
+    )
+    assert (
+        payload["review_surface"]["scope_escape_count"]
+        == summary["bounded_review_summary"]["scope_escape_count"]
+    )
     assert payload["bounded_analysis"] == {
         "summary": summary["run_details"]["final_analysis"]["summary"],
         "recommendations": summary["run_details"]["final_analysis"]["recommendations"],
@@ -9369,9 +9397,10 @@ def test_analysis_review_runner_attestation_mode_reuses_bounded_final_analysis_a
     payload = summary[BOUNDED_ATTESTATION_INPUT_KEY]
     assert payload == summary["run_details"][BOUNDED_ATTESTATION_INPUT_KEY]
     assert payload["contract"]["trust_execution_mode"] == "attestation_over_bounded"
-    assert summary["run_details"]["bounded_review_summary"] == summary[
-        "bounded_review_summary"
-    ]
+    assert (
+        summary["run_details"]["bounded_review_summary"]
+        == summary["bounded_review_summary"]
+    )
 
     final_analysis = summary["run_details"]["final_analysis"]
     assert payload["bounded_analysis"] == {
@@ -9390,8 +9419,12 @@ def test_analysis_review_runner_attestation_mode_reuses_bounded_final_analysis_a
     ]
     assert review_stages[0]["role_name"] == "critic"
     assert review_stages[-1]["role_name"] == "auditor"
-    assert review_stages[-1]["structured_output"] == summary["run_details"]["final_review"]
-    assert review_stages[-1]["semantic_validation_payload_provenance"]["status"] == "bound"
+    assert (
+        review_stages[-1]["structured_output"] == summary["run_details"]["final_review"]
+    )
+    assert (
+        review_stages[-1]["semantic_validation_payload_provenance"]["status"] == "bound"
+    )
     assert summary["analysis_review_status"]["provenance"]["status"] == "bound"
     assert summary["analysis_review_status"]["mode"] == "trust"
     _assert_summary_json_mirrors_bounded_attestation_input(runner, summary)
@@ -9464,7 +9497,13 @@ def test_analysis_review_runner_attestation_mode_drops_replayed_historical_topic
 
 
 @pytest.mark.parametrize(
-    ("adapter_cls", "focus_type", "default_path", "focus_gate_answer", "expect_handoff"),
+    (
+        "adapter_cls",
+        "focus_type",
+        "default_path",
+        "focus_gate_answer",
+        "expect_handoff",
+    ),
     [
         (
             _TrustFocusGateHarnessAdapter,
@@ -9659,9 +9698,10 @@ def test_bounded_attestation_input_hash_is_deterministic_for_identical_input(
     assert payload_a is not None
     assert payload_b is not None
     assert payload_a == payload_b
-    assert payload_a["source"]["bounded_payload_sha256"] == payload_b["source"][
-        "bounded_payload_sha256"
-    ]
+    assert (
+        payload_a["source"]["bounded_payload_sha256"]
+        == payload_b["source"]["bounded_payload_sha256"]
+    )
 
 
 def test_bounded_attestation_input_uses_latest_finalized_bounded_analysis_stage_when_final_analysis_missing(
@@ -9722,9 +9762,10 @@ def test_bounded_attestation_input_uses_latest_finalized_bounded_analysis_stage_
 
     assert payload is not None
     assert payload["bounded_analysis"]["summary"] == reviser_payload["summary"]
-    assert payload["bounded_analysis"]["recommendations"] == reviser_payload[
-        "recommendations"
-    ]
+    assert (
+        payload["bounded_analysis"]["recommendations"]
+        == reviser_payload["recommendations"]
+    )
     assert payload["source"]["analysis_stage_role_name"] == "reviser_round_1"
     assert payload["source"]["analysis_stage_index"] == 3
 

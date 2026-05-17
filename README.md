@@ -2,7 +2,7 @@
 
 Forge is a modular AI agent system with two active repo surfaces:
 
-- an analysis-review harness for structured task, strategy, and workspace-gated runs
+- a harness for structured analysis-review and deterministic planning runs
 - a leadership/orchestration foundation built on LangGraph for configurable multi-role execution
 
 The harness builds on the same repo and thesis as the orchestration stack; it does not replace it.
@@ -36,6 +36,19 @@ poetry run python -m anvil.cli harness-run \
   --workspace /path/to/repo \
   --out-root .forge-harness-runs
 ```
+
+Run the deterministic planning harness:
+
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --workspace /path/to/repo \
+  --out-root .forge-harness-runs \
+  --json
+```
+
+Successful planning runs publish `PLAN.md` and `plan.json`. Planning exits `0` only for `success`; `clarification_needed` and `failed` return exit code `1`.
 
 Most provider-backed runs require API keys in `.env`, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 

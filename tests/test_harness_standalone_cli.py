@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-import anvil.harness.cli as harness_cli_module
 import pytest
+
+import anvil.harness.cli as harness_cli_module
 
 
 class _FakeExecutor:
@@ -151,6 +153,91 @@ def test_harness_standalone_cli_returns_nonzero_for_harness_error(monkeypatch) -
     assert exit_code == 1
 
 
+def test_harness_standalone_cli_prints_planning_surface(monkeypatch, capsys) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.summary_payload = {
+        "terminal_status": "success",
+        "stop_reason": "",
+        "verdict": "success",
+        "verdicts": {
+            "run_verdict": "success",
+            "content_verdict": "success",
+            "validator_verdict": "not_applicable",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "strategy": {"runtime_target": "planning_v1"},
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "plan_md": "/tmp/run/PLAN.md",
+            "plan_json": "/tmp/run/plan.json",
+        },
+    }
+    _FakeExecutor.execute_error = None
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "terminal_status=success" in captured.out
+    assert "plan=/tmp/run/PLAN.md" in captured.out
+
+
+def test_harness_standalone_cli_returns_nonzero_for_planning_failed(
+    monkeypatch,
+) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.summary_payload = {
+        "terminal_status": "failed",
+        "stop_reason": "rubric_failed",
+        "verdict": "failed",
+        "verdicts": {
+            "run_verdict": "failed",
+            "content_verdict": "failed",
+            "validator_verdict": "not_applicable",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "strategy": {"runtime_target": "planning_v1"},
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+        },
+    }
+    _FakeExecutor.execute_error = None
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    assert exit_code == 1
+
+
 def test_harness_standalone_cli_reports_missing_workspace_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
@@ -204,8 +291,7 @@ def test_harness_standalone_cli_reports_yaml_parse_errors_without_traceback(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     task_path.write_text(
-        "id: broken\n"
-        "objective: [unterminated\n",
+        "id: broken\n" "objective: [unterminated\n",
         encoding="utf-8",
     )
     strategy_path.write_text(
@@ -395,4 +481,96 @@ def test_harness_standalone_cli_tolerates_execution_mode_for_non_analysis_review
             "auto_fit_strategy": True,
             "analysis_review_execution_mode": execution_mode,
         }
+    ]
+
+
+def test_harness_standalone_cli_prints_planning_success(monkeypatch, capsys) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = None
+    _FakeExecutor.summary_payload = {
+        "terminal_status": "success",
+        "stop_reason": "",
+        "verdict": "success",
+        "verdicts": {
+            "run_verdict": "success",
+            "content_verdict": "success",
+            "validator_verdict": "pass",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+            "plan_md": "/tmp/run/PLAN.md",
+            "plan_json": "/tmp/run/plan.json",
+        },
+    }
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "terminal_status=success" in captured.out
+    assert "plan=/tmp/run/PLAN.md" in captured.out
+    assert "plan_json=/tmp/run/plan.json" in captured.out
+
+
+def test_harness_standalone_cli_json_returns_planning_payload(
+    monkeypatch, capsys
+) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = None
+    _FakeExecutor.summary_payload = {
+        "terminal_status": "clarification_needed",
+        "stop_reason": "Need repository scope clarification.",
+        "clarification_requests": ["Which submodule owns the compiler wedge?"],
+        "verdict": "clarification_needed",
+        "verdicts": {
+            "run_verdict": "clarification_needed",
+            "content_verdict": "clarification_needed",
+            "validator_verdict": "pass",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "artifacts": {
+            "run_dir": "/tmp/run",
+            "report_md": "/tmp/run/REPORT.md",
+            "summary_json": "/tmp/run/summary.json",
+        },
+    }
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 1
+    assert payload["terminal_status"] == "clarification_needed"
+    assert payload["clarification_requests"] == [
+        "Which submodule owns the compiler wedge?"
     ]

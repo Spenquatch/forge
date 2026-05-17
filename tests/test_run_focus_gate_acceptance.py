@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "run_focus_gate_acceptance.py"
 
@@ -363,7 +362,9 @@ def _create_blocked_run_dir(
             "agent_stages": [
                 {
                     "role_name": "focus_gate_probe",
-                    "stdout_path": str(run_dir / "artifacts/01_focus_gate_probe/stdout.txt"),
+                    "stdout_path": str(
+                        run_dir / "artifacts/01_focus_gate_probe/stdout.txt"
+                    ),
                 },
                 {
                     "role_name": "focus_gate",
@@ -453,11 +454,14 @@ def test_default_config_path_points_to_canonical_closeout_manifest() -> None:
         REPO_ROOT / ".gstack/m4-request-gate/orch/focus_gate_acceptance.yaml"
     )
     assert SCRIPT.CANONICAL_TEMPLATE_PATH == (
-        REPO_ROOT / "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
+        REPO_ROOT
+        / "examples/harness/live_acceptance/focus_gate_acceptance.template.yaml"
     )
 
 
-def test_live_acceptance_templates_cover_refined_and_exhausted_seam_deliberate_cases() -> None:
+def test_live_acceptance_templates_cover_refined_and_exhausted_seam_deliberate_cases() -> (
+    None
+):
     canonical_template = SCRIPT.load_structured_file(SCRIPT.CANONICAL_TEMPLATE_PATH)
     local_template = SCRIPT.load_structured_file(
         REPO_ROOT
@@ -523,7 +527,9 @@ def test_load_manifest_config_accepts_shard_manifest() -> None:
     ]
 
 
-def test_load_manifest_config_supports_legacy_workspace_manifest(tmp_path: Path) -> None:
+def test_load_manifest_config_supports_legacy_workspace_manifest(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     manifest_path = tmp_path / "m2_focus_gate_local.yaml"
@@ -625,7 +631,9 @@ validators: []
         )
 
 
-def test_preflight_returns_provider_and_git_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preflight_returns_provider_and_git_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     manifest = SCRIPT.load_manifest_config(SCRIPT.CANONICAL_TEMPLATE_PATH)
     monkeypatch.setattr(
         SCRIPT.shutil,
@@ -730,7 +738,9 @@ def test_run_acceptance_case_blocked_nonzero_exit_is_allowed(
         tmp_path,
         focus_type="artifact",
         decision_state="clarification_requested",
-        warnings=["Prior focus_gate_answer went stale: candidate set changed after repo probe."],
+        warnings=[
+            "Prior focus_gate_answer went stale: candidate set changed after repo probe."
+        ],
     )
     workspace = tmp_path / "workspace"
     scenario = SCRIPT.AcceptanceScenario(
@@ -775,7 +785,9 @@ def test_run_acceptance_case_selected_artifact_passes(
     scenario = SCRIPT.AcceptanceScenario(
         name="artifact-bounded",
         task=None,
-        strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(strict=False),
+        strategy=(REPO_ROOT / SCRIPT.EXAMPLE_STRATEGIES["bounded"]).resolve(
+            strict=False
+        ),
         expected_gate_path="adjudicate",
         expected_focus_type="artifact",
         expected_decision_state="selected",

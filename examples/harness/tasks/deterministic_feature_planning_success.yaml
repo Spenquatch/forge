@@ -1,0 +1,29 @@
+id: deterministic_feature_planning_success
+task_kind: planning
+objective: >
+  Produce a deterministic execution plan for the C1 planning compiler wedge
+  using the shared planning runtime.
+workspace_write_policy:
+  mode: forbid
+  allowed_paths: []
+  denied_paths: []
+  allow_untracked: false
+  allow_renames: false
+  allow_deletions: false
+  max_touched_files: 0
+  require_clean_start: false
+acceptance:
+  - Emit a successful planning terminal payload.
+  - Produce deterministic seam, workstream, and slice identifiers.
+  - Publish PLAN.md and plan.json for the successful run.
+constraints:
+  - Keep the planning package bounded to the C1 deterministic planning wedge.
+  - Do not modify repository files.
+context: |
+  Use the repository state in the target workspace as the planning context.
+  This fixture exercises the shared planning runtime and artifact publication path.
+files_hint:
+  - PLAN.md
+  - anvil/harness/*
+notes: |
+  This fixture should complete successfully and publish deterministic planning artifacts.

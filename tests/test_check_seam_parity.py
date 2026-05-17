@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_seam_parity.py"
 CHECK_NAMES = (
@@ -34,19 +33,25 @@ def _summary_payload(
         "analysis_review_status": {
             "primary_seam": {
                 "seam_id": primary_seam_id,
-                "paths": primary_paths
-                if primary_paths is not None
-                else ["anvil/harness/runner.py", "anvil/harness/report.py"],
+                "paths": (
+                    primary_paths
+                    if primary_paths is not None
+                    else ["anvil/harness/runner.py", "anvil/harness/report.py"]
+                ),
             },
-            "secondary_seams_considered": secondary_seams
-            if secondary_seams is not None
-            else [{"seam_id": "seam-report"}, {"seam_id": "seam-reporting"}],
-            "recommendation_seam_bindings": recommendation_bindings
-            if recommendation_bindings is not None
-            else [
-                {"recommendation_index": 1, "seam_id": "seam-primary"},
-                {"recommendation_index": 2, "seam_id": "seam-reporting"},
-            ],
+            "secondary_seams_considered": (
+                secondary_seams
+                if secondary_seams is not None
+                else [{"seam_id": "seam-report"}, {"seam_id": "seam-reporting"}]
+            ),
+            "recommendation_seam_bindings": (
+                recommendation_bindings
+                if recommendation_bindings is not None
+                else [
+                    {"recommendation_index": 1, "seam_id": "seam-primary"},
+                    {"recommendation_index": 2, "seam_id": "seam-reporting"},
+                ]
+            ),
         },
         "publishability": {"status": publishability},
         "recommendation_admissibility": {"status": recommendation_admissibility},
@@ -294,15 +299,15 @@ def test_checker_reports_missing_canonical_state_when_analysis_status_absent(
     [
         (
             "primary_seam_id",
-            lambda summary: summary["analysis_review_status"]["primary_seam"].__setitem__(
-                "seam_id", "seam-drifted"
-            ),
+            lambda summary: summary["analysis_review_status"][
+                "primary_seam"
+            ].__setitem__("seam_id", "seam-drifted"),
         ),
         (
             "primary_seam_paths",
-            lambda summary: summary["analysis_review_status"]["primary_seam"].__setitem__(
-                "paths", ["anvil/harness/cli.py"]
-            ),
+            lambda summary: summary["analysis_review_status"][
+                "primary_seam"
+            ].__setitem__("paths", ["anvil/harness/cli.py"]),
         ),
         (
             "secondary_seam_ids",

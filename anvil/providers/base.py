@@ -1,3 +1,5 @@
+# mypy: disable-error-code="no-redef"
+
 """
 Base model provider using LangChain interfaces.
 """
@@ -9,8 +11,14 @@ from typing import Any, Dict, List, Optional, Union, cast
 try:  # pragma: no cover - exercised when langchain is installed
     from langchain_core.embeddings import Embeddings
     from langchain_core.language_models import BaseChatModel
-    from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+    from langchain_core.messages import (
+        AIMessage,
+        BaseMessage,
+        HumanMessage,
+        SystemMessage,
+    )
 except ImportError:  # pragma: no cover - lightweight fallback for CLI/local tests
+
     class BaseChatModel:  # type: ignore[override]
         pass
 
@@ -30,6 +38,7 @@ except ImportError:  # pragma: no cover - lightweight fallback for CLI/local tes
 
     class AIMessage(BaseMessage):
         pass
+
 
 from anvil.config_loader import ProviderCfg
 

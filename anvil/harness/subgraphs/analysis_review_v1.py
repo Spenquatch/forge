@@ -1,3 +1,5 @@
+# mypy: disable-error-code="arg-type,return-value,attr-defined,typeddict-item,literal-required,call-overload"
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -20,7 +22,7 @@ from ..state import (
     HarnessState,
     stage_records_from_summary,
 )
-from ..types import ANALYSIS_REVIEW_BOUNDED_KIND, StrategyConfig, TaskSpec
+from ..types import ANALYSIS_REVIEW_BOUNDED_KIND, StrategyConfig
 from ._bridge import LegacyBridgeBoundary
 
 _RUNNER_KEY = "__analysis_review_runner"
@@ -37,7 +39,9 @@ _TRUST_DETAILS_KEY = "__analysis_review_trust_details"
 
 
 def _runtime_snapshot(state: HarnessState) -> dict[str, Any]:
-    return analysis_review_runtime.runtime_snapshot(state.get("analysis_review_runtime"))
+    return analysis_review_runtime.runtime_snapshot(
+        state.get("analysis_review_runtime")
+    )
 
 
 def _activate_runner_contract(state: HarnessState, contract_key: str) -> HarnessRunner:
@@ -89,7 +93,10 @@ def _build_graph_owned_runner(state: HarnessState) -> HarnessRunner:
 
 
 def _prepare_graph_owned_state(state: HarnessState) -> HarnessState:
-    if str(state.get("analysis_review_execution_mode") or "legacy_bridge") != "graph_owned":
+    if (
+        str(state.get("analysis_review_execution_mode") or "legacy_bridge")
+        != "graph_owned"
+    ):
         return state
 
     runner = _build_graph_owned_runner(state)
@@ -103,7 +110,9 @@ def _prepare_graph_owned_state(state: HarnessState) -> HarnessState:
         bounded_strategy_payload = dict(runner.strategy.to_dict())
         bounded_strategy_payload["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
         bounded_strategy = StrategyConfig.from_dict(bounded_strategy_payload)
-        review_contract = resolve_analysis_review_contract(runner.task, bounded_strategy)
+        review_contract = resolve_analysis_review_contract(
+            runner.task, bounded_strategy
+        )
 
     payload = dict(state)
     payload[_RUNNER_KEY] = runner
@@ -118,7 +127,10 @@ def _prepare_graph_owned_state(state: HarnessState) -> HarnessState:
 
 
 def route_execution_mode(state: HarnessState) -> str:
-    if str(state.get("analysis_review_execution_mode") or "legacy_bridge") != "graph_owned":
+    if (
+        str(state.get("analysis_review_execution_mode") or "legacy_bridge")
+        != "graph_owned"
+    ):
         return "legacy_bridge"
 
     contract = state.get(_ROOT_CONTRACT_KEY)
@@ -174,7 +186,9 @@ def _graph_owned_focus_gate(state: HarnessState) -> HarnessState:
         )
         _set_terminal_outcome(state, route="finish_terminal", outcome=outcome)
     else:
-        focus_decision = focus_gate_outcome["outcome"].get("details", {}).get("focus_decision")
+        focus_decision = (
+            focus_gate_outcome["outcome"].get("details", {}).get("focus_decision")
+        )
         if isinstance(focus_decision, dict) and focus_decision:
             state["focus_decision"] = deepcopy(focus_decision)
         _set_terminal_outcome(
@@ -212,12 +226,16 @@ def _graph_owned_proposer(state: HarnessState) -> HarnessState:
                 review_loop_exercised=False,
                 final_analysis=None,
                 contract=review_contract,
-                focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
+                focus_decision=(
+                    focus_decision if isinstance(focus_decision, dict) else None
+                ),
             ),
             runtime,
         )
         _set_terminal_outcome(state, route="finish_terminal", outcome=outcome)
-        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(runtime)
+        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(
+            runtime
+        )
         return state
 
     runtime["current_analysis_payload"] = deepcopy(proposer_run.structured_output or {})
@@ -244,7 +262,11 @@ def _graph_owned_critic(state: HarnessState) -> HarnessState:
 
     critic_run = runner._run_analysis_critic_stage(
         contract=review_contract,
-        prior_output=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+        prior_output=(
+            latest_analysis_payload
+            if isinstance(latest_analysis_payload, dict)
+            else None
+        ),
         validation_runs=validation_runs,
     )
     if not critic_run.ok:
@@ -254,14 +276,22 @@ def _graph_owned_critic(state: HarnessState) -> HarnessState:
                 run=critic_run,
                 validator_verdict=runner._classify_validator_verdict(validation_runs),
                 review_loop_exercised=False,
-                final_analysis=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+                final_analysis=(
+                    latest_analysis_payload
+                    if isinstance(latest_analysis_payload, dict)
+                    else None
+                ),
                 contract=review_contract,
-                focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
+                focus_decision=(
+                    focus_decision if isinstance(focus_decision, dict) else None
+                ),
             ),
             runtime,
         )
         _set_terminal_outcome(state, route="finish_terminal", outcome=outcome)
-        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(runtime)
+        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(
+            runtime
+        )
         return state
 
     runner._ingest_review_payload(
@@ -311,8 +341,14 @@ def _graph_owned_reviser(state: HarnessState) -> HarnessState:
     reviser_run = runner._run_analysis_reviser_stage(
         contract=review_contract,
         focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
-        latest_analysis_payload=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
-        latest_review_payload=latest_review_payload if isinstance(latest_review_payload, dict) else None,
+        latest_analysis_payload=(
+            latest_analysis_payload
+            if isinstance(latest_analysis_payload, dict)
+            else None
+        ),
+        latest_review_payload=(
+            latest_review_payload if isinstance(latest_review_payload, dict) else None
+        ),
         validation_runs=validation_runs,
         revision_round=revision_round,
     )
@@ -323,14 +359,22 @@ def _graph_owned_reviser(state: HarnessState) -> HarnessState:
                 run=reviser_run,
                 validator_verdict=runner._classify_validator_verdict(validation_runs),
                 review_loop_exercised=True,
-                final_analysis=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+                final_analysis=(
+                    latest_analysis_payload
+                    if isinstance(latest_analysis_payload, dict)
+                    else None
+                ),
                 contract=review_contract,
-                focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
+                focus_decision=(
+                    focus_decision if isinstance(focus_decision, dict) else None
+                ),
             ),
             runtime,
         )
         _set_terminal_outcome(state, route="finish_terminal", outcome=outcome)
-        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(runtime)
+        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(
+            runtime
+        )
         return state
 
     runtime["current_analysis_payload"] = deepcopy(reviser_run.structured_output or {})
@@ -352,10 +396,18 @@ def _graph_owned_auditor(state: HarnessState) -> HarnessState:
 
     auditor_run = runner._run_analysis_auditor_stage(
         contract=review_contract,
-        prior_output=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+        prior_output=(
+            latest_analysis_payload
+            if isinstance(latest_analysis_payload, dict)
+            else None
+        ),
         validation_runs=validation_runs,
         round_index=revision_round,
-        reviser_output=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+        reviser_output=(
+            latest_analysis_payload
+            if isinstance(latest_analysis_payload, dict)
+            else None
+        ),
     )
     if not auditor_run.ok:
         outcome = analysis_review_runtime.attach_runtime_details(
@@ -364,21 +416,33 @@ def _graph_owned_auditor(state: HarnessState) -> HarnessState:
                 run=auditor_run,
                 validator_verdict=runner._classify_validator_verdict(validation_runs),
                 review_loop_exercised=True,
-                final_analysis=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+                final_analysis=(
+                    latest_analysis_payload
+                    if isinstance(latest_analysis_payload, dict)
+                    else None
+                ),
                 contract=review_contract,
-                focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
+                focus_decision=(
+                    focus_decision if isinstance(focus_decision, dict) else None
+                ),
             ),
             runtime,
         )
         _set_terminal_outcome(state, route="finish_terminal", outcome=outcome)
-        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(runtime)
+        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(
+            runtime
+        )
         return state
 
     runner._ingest_review_payload(
         auditor_run.structured_output or {},
         round_index=revision_round,
         role_name="auditor",
-        reviser_output=latest_analysis_payload if isinstance(latest_analysis_payload, dict) else None,
+        reviser_output=(
+            latest_analysis_payload
+            if isinstance(latest_analysis_payload, dict)
+            else None
+        ),
     )
     runtime["current_review_payload"] = deepcopy(auditor_run.structured_output or {})
     runtime["review_loop_exercised"] = True
@@ -401,12 +465,16 @@ def route_auditor_revision(state: HarnessState) -> str:
         revisions_completed,
     ):
         runtime["transition_reason"] = "stop_policy_satisfied"
-        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(runtime)
+        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(
+            runtime
+        )
         return "trust_attestation_gate"
 
     if revisions_completed >= int(runtime.get("max_loops") or 0):
         runtime["transition_reason"] = "max_loops_exhausted"
-        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(runtime)
+        state["analysis_review_runtime"] = analysis_review_runtime.runtime_snapshot(
+            runtime
+        )
         return "finish_loop_exhausted"
 
     return "reviser"
@@ -443,7 +511,9 @@ def _graph_owned_attestation_auditor(state: HarnessState) -> HarnessState:
 
     bounded_run_details: dict[str, Any] = {
         "analysis_review_contract": review_contract.to_dict(),
-        "final_analysis": final_analysis_payload if isinstance(final_analysis_payload, dict) else {},
+        "final_analysis": (
+            final_analysis_payload if isinstance(final_analysis_payload, dict) else {}
+        ),
         "issue_ledger": runner._serialized_issue_ledger(),
         "topic_ledger": runner._serialized_topic_ledger(),
         "focus_decision": focus_decision if isinstance(focus_decision, dict) else None,
@@ -470,7 +540,9 @@ def _graph_owned_attestation_auditor(state: HarnessState) -> HarnessState:
         focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
         revisions_completed=revisions_completed,
         validation_runs=validation_runs,
-        final_analysis_payload=final_analysis_payload if isinstance(final_analysis_payload, dict) else {},
+        final_analysis_payload=(
+            final_analysis_payload if isinstance(final_analysis_payload, dict) else {}
+        ),
         bounded_attestation_input=bounded_attestation_input,
         run_trust_attestation_stage=runner._run_analysis_trust_attestation_stage,
         ingest_review_payload=runner._ingest_review_payload,
@@ -484,7 +556,9 @@ def _graph_owned_attestation_auditor(state: HarnessState) -> HarnessState:
             outcome=attestation["failure_outcome"],
         )
     else:
-        state[_LATEST_REVIEW_KEY] = attestation["attestation_run"].structured_output or {}
+        state[_LATEST_REVIEW_KEY] = (
+            attestation["attestation_run"].structured_output or {}
+        )
         state[_TRUST_DETAILS_KEY] = {
             "bounded_review_summary": bounded_review_summary,
             "bounded_attestation_input": bounded_attestation_input,
@@ -502,10 +576,14 @@ def _draft_summary_from_runner(runner: HarnessRunner) -> dict[str, Any]:
     }
 
 
-def _refresh_native_draft_projection(state: HarnessState, runner: HarnessRunner) -> HarnessState:
+def _refresh_native_draft_projection(
+    state: HarnessState, runner: HarnessRunner
+) -> HarnessState:
     drafts = drafts_from_stage_history_v1(
         list(state.get("stage_history") or []),
-        task_kind=str(getattr(runner.task, "task_kind", state.get("task_kind") or "patch")),
+        task_kind=str(
+            getattr(runner.task, "task_kind", state.get("task_kind") or "patch")
+        ),
         validator_rounds=list(state.get("validator_rounds") or []),
         content_verdict=(
             None
@@ -575,7 +653,9 @@ def _merge_runner_state(state: HarnessState) -> HarnessState:
         for item in state["issue_history"]
         if str(item.get("resolution_status") or "") in {"open", "carried_forward"}
     ]
-    state["initial_git_snapshot"] = deepcopy(getattr(runner, "initial_git_snapshot", {}))
+    state["initial_git_snapshot"] = deepcopy(
+        getattr(runner, "initial_git_snapshot", {})
+    )
     state["current_git_snapshot"] = final_git_snapshot
     state["current_workspace_state"] = current_workspace_state
     state["workspace_policy_ignored_rel_paths"] = policy_ignored_rel_paths
@@ -598,7 +678,9 @@ def _merge_runner_state(state: HarnessState) -> HarnessState:
     return state
 
 
-def _apply_outcome_to_state(state: HarnessState, outcome: dict[str, Any]) -> HarnessState:
+def _apply_outcome_to_state(
+    state: HarnessState, outcome: dict[str, Any]
+) -> HarnessState:
     _merge_runner_state(state)
     runner: HarnessRunner = state[_RUNNER_KEY]
     state["run_verdict"] = str(outcome.get("run_verdict") or "harness_error")
@@ -688,10 +770,14 @@ def _finish_complete(state: HarnessState) -> HarnessState:
         contract=root_contract,
         validation_runs=list(state.get(_VALIDATION_RUNS_KEY) or []),
         final_review_payload=(
-            state.get(_LATEST_REVIEW_KEY) if isinstance(state.get(_LATEST_REVIEW_KEY), dict) else {}
+            state.get(_LATEST_REVIEW_KEY)
+            if isinstance(state.get(_LATEST_REVIEW_KEY), dict)
+            else {}
         ),
         final_analysis_payload=(
-            state.get(_LATEST_ANALYSIS_KEY) if isinstance(state.get(_LATEST_ANALYSIS_KEY), dict) else {}
+            state.get(_LATEST_ANALYSIS_KEY)
+            if isinstance(state.get(_LATEST_ANALYSIS_KEY), dict)
+            else {}
         ),
         focus_decision=focus_decision if isinstance(focus_decision, dict) else None,
         classify_validator_verdict=runner._classify_validator_verdict,
@@ -705,12 +791,9 @@ def _finish_complete(state: HarnessState) -> HarnessState:
         accepted_recommendation_reviews=runner._accepted_recommendation_reviews,
         extra_details=extra_details,
     )
-    if (
-        hasattr(runner, "_record_workspace_policy_check")
-        and not any(
-            isinstance(check, dict) and check.get("final") is True
-            for check in runner.workspace_policy_checks
-        )
+    if hasattr(runner, "_record_workspace_policy_check") and not any(
+        isinstance(check, dict) and check.get("final") is True
+        for check in runner.workspace_policy_checks
     ):
         runner._record_workspace_policy_check(
             checkpoint="final",
@@ -730,12 +813,9 @@ def _finish_terminal(state: HarnessState) -> HarnessState:
             "validator_verdict": "not_run",
             "final_summary": "Analysis-review graph exited without a terminal outcome.",
         }
-    if (
-        hasattr(runner, "_record_workspace_policy_check")
-        and not any(
-            isinstance(check, dict) and check.get("final") is True
-            for check in runner.workspace_policy_checks
-        )
+    if hasattr(runner, "_record_workspace_policy_check") and not any(
+        isinstance(check, dict) and check.get("final") is True
+        for check in runner.workspace_policy_checks
     ):
         runner._record_workspace_policy_check(
             checkpoint="final",

@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 

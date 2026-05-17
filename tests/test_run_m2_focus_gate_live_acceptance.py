@@ -5,7 +5,6 @@ import json
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "run_m2_focus_gate_live_acceptance.py"
 CANONICAL_SCRIPT_PATH = REPO_ROOT / "scripts" / "run_focus_gate_acceptance.py"
@@ -55,7 +54,9 @@ def test_m2_helper_exports_legacy_default_surface() -> None:
     assert SHIM.LEGACY_SCENARIO_DEFAULTS == CANONICAL.LEGACY_SCENARIO_DEFAULTS
 
 
-def test_m2_helper_load_manifest_config_keeps_legacy_strategy_shorthand(tmp_path: Path) -> None:
+def test_m2_helper_load_manifest_config_keeps_legacy_strategy_shorthand(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     manifest_path = tmp_path / "m2_focus_gate_local.yaml"
@@ -72,6 +73,13 @@ def test_m2_helper_load_manifest_config_keeps_legacy_strategy_shorthand(tmp_path
     manifest = SHIM.load_manifest_config(manifest_path)
 
     assert [scenario.name for scenario in manifest.scenarios] == ["bounded", "trust"]
-    assert all(scenario.expected_gate_path == "adjudicate" for scenario in manifest.scenarios)
-    assert all(scenario.expected_focus_type == "seam" for scenario in manifest.scenarios)
-    assert all(scenario.expected_decision_state == "selected" for scenario in manifest.scenarios)
+    assert all(
+        scenario.expected_gate_path == "adjudicate" for scenario in manifest.scenarios
+    )
+    assert all(
+        scenario.expected_focus_type == "seam" for scenario in manifest.scenarios
+    )
+    assert all(
+        scenario.expected_decision_state == "selected"
+        for scenario in manifest.scenarios
+    )

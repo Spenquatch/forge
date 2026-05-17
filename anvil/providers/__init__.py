@@ -155,7 +155,14 @@ class ProviderRegistry:
             return provider
 
         # Try fallback providers in order of preference
-        fallback_order = ["codex_cli", "claude_code", "openai", "anthropic", "phi3-mini", "tinyllama"]
+        fallback_order = [
+            "codex_cli",
+            "claude_code",
+            "openai",
+            "anthropic",
+            "phi3-mini",
+            "tinyllama",
+        ]
 
         for fallback_name in fallback_order:
             if fallback_name != name:  # Don't try the same provider again
@@ -179,9 +186,9 @@ class ProviderRegistry:
         Returns:
             True if provider is available
         """
-        from pathlib import Path
         import os
         import shutil
+        from pathlib import Path
 
         # Already initialized
         if name in self._providers:
@@ -387,7 +394,6 @@ def get_provider(name: str) -> Optional[Union[ModelProvider, LangChainProvider]]
     return _registry.get_or_fallback_provider(name)
 
 
-
 def get_provider_exact(name: str) -> Optional[Union[ModelProvider, LangChainProvider]]:
     """Get a provider by name without applying fallback selection."""
     return _registry.get_provider(name)
@@ -396,6 +402,7 @@ def get_provider_exact(name: str) -> Optional[Union[ModelProvider, LangChainProv
 def get_provider_config(name: str) -> Optional[ProviderCfg]:
     """Return the registered configuration for an exact provider name."""
     return _registry.configs.get(name)
+
 
 def register_provider(name: str, config: ProviderCfg) -> bool:
     """Register and initialize a provider."""

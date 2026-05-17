@@ -547,6 +547,184 @@ FOCUS_GATE_ADAPTER_PLAN_SCHEMA: dict[str, Any] = {
 }
 
 
+def planning_phase_result_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "phase_id": {"type": "string"},
+            "status": {"type": "string"},
+            "summary": {"type": "string"},
+        },
+        "required": ["phase_id", "status", "summary"],
+        "additionalProperties": True,
+    }
+
+
+def planning_seam_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "seam_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+        },
+        "required": ["seam_id", "summary", "paths"],
+        "additionalProperties": True,
+    }
+
+
+def planning_workstream_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "workstream_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "seam_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "worktree_recommended": {"type": "boolean"},
+        },
+        "required": [
+            "workstream_id",
+            "summary",
+            "seam_ids",
+            "worktree_recommended",
+        ],
+        "additionalProperties": True,
+    }
+
+
+def planning_slice_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "slice_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "workstream_id": {"type": "string"},
+            "seam_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "acceptance_criteria": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": [
+            "slice_id",
+            "summary",
+            "workstream_id",
+            "seam_ids",
+            "acceptance_criteria",
+        ],
+        "additionalProperties": True,
+    }
+
+
+def plan_json_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "string", "enum": ["plan_artifact_v1"]},
+            "run_id": {"type": "string"},
+            "task": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "task_kind": {"type": "string", "enum": ["planning"]},
+                    "objective": {"type": "string"},
+                },
+                "required": ["id", "task_kind", "objective"],
+                "additionalProperties": True,
+            },
+            "strategy": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "runtime_target": {"type": "string", "enum": ["planning_v1"]},
+                    "phases": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                },
+                "required": ["name", "kind", "runtime_target", "phases"],
+                "additionalProperties": True,
+            },
+            "terminal_status": {
+                "type": "string",
+                "enum": ["success", "clarification_needed", "failed"],
+            },
+            "stop_reason": {"type": "string"},
+            "problem_statement": {"type": "string"},
+            "clarification_requests": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "repo_evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "rubric_results": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "seams": {
+                "type": "array",
+                "items": planning_seam_schema(),
+            },
+            "workstreams": {
+                "type": "array",
+                "items": planning_workstream_schema(),
+            },
+            "slices": {
+                "type": "array",
+                "items": planning_slice_schema(),
+            },
+            "phase_results": {
+                "type": "array",
+                "items": planning_phase_result_schema(),
+            },
+            "policy_versions": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": True,
+            },
+            "search_pass_count": {"type": "integer", "minimum": 0},
+            "inspected_file_count": {"type": "integer", "minimum": 0},
+            "discovery_budget_escalated": {"type": "boolean"},
+        },
+        "required": [
+            "schema_version",
+            "run_id",
+            "task",
+            "strategy",
+            "terminal_status",
+            "stop_reason",
+            "problem_statement",
+            "clarification_requests",
+            "repo_evidence_refs",
+            "rubric_results",
+            "seams",
+            "workstreams",
+            "slices",
+            "phase_results",
+            "policy_versions",
+            "search_pass_count",
+            "inspected_file_count",
+            "discovery_budget_escalated",
+        ],
+        "additionalProperties": True,
+    }
+
+
 COMMON_PROPS: dict[str, Any] = {
     "summary": {"type": "string"},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -623,7 +801,14 @@ def falsifier_schema() -> dict[str, Any]:
             "issues": {"type": "array", "items": ISSUE_SCHEMA},
             "missing_validations": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["verdict", "summary", "workspace_write_intent", "issues", "missing_validations", "confidence"],
+        "required": [
+            "verdict",
+            "summary",
+            "workspace_write_intent",
+            "issues",
+            "missing_validations",
+            "confidence",
+        ],
         "additionalProperties": False,
     }
 
@@ -713,7 +898,10 @@ def analysis_review_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "verdict": {"type": "string", "enum": ["accept", "accept_partial", "revise", "reject"]},
+            "verdict": {
+                "type": "string",
+                "enum": ["accept", "accept_partial", "revise", "reject"],
+            },
             **COMMON_PROPS,
             "files_reviewed": {"type": "array", "items": {"type": "string"}},
             "issues": {"type": "array", "items": ANALYSIS_ISSUE_SCHEMA},

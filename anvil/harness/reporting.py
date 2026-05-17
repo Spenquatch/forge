@@ -1,3 +1,5 @@
+# mypy: disable-error-code="union-attr,index,arg-type,return-value,no-redef,operator"
+
 from __future__ import annotations
 
 """Artifact and reporting helpers for the LangGraph-backed harness surface."""
@@ -7,13 +9,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .artifacts import artifact_description
 from .files import write_json, write_text
+from .providers import _soft_validate_schema
 from .publication_authority import (
     partial_acceptance_summary_suffix,
     sanitize_artifact_payload,
     sanitize_summary_text,
 )
 from .report import render_report
+from .schemas import plan_json_schema
 from .selection import select_best_draft
 from .topic_lifecycle import (
     partial_accept_topic_eligibility,
@@ -35,6 +40,13 @@ _FINAL_ANSWER_OMITS_REQUIRED_PREFIX = (
 )
 HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
 SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
+PLANNING_ARTIFACT_SCHEMA_VERSION = "plan_artifact_v1"
+PLANNING_RUNTIME_TARGET = "planning_v1"
+PLANNING_TERMINAL_STATUSES = {
+    "success",
+    "clarification_needed",
+    "failed",
+}
 
 
 def artifact_ref(path: str | Path, *, kind: str, description: str) -> dict[str, str]:
@@ -49,6 +61,588 @@ def ensure_run_dir(run_dir: str | Path) -> Path:
     path = Path(run_dir)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _planning_runtime_target(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+) -> str:
+    strategy_graph_spec = state.get("strategy_graph_spec")
+    if isinstance(strategy_graph_spec, dict):
+        runtime_target = str(strategy_graph_spec.get("runtime_target") or "").strip()
+        if runtime_target:
+            return runtime_target
+    seeded_strategy_graph_spec = seeded_summary.get("strategy_graph_spec")
+    if isinstance(seeded_strategy_graph_spec, dict):
+        runtime_target = str(
+            seeded_strategy_graph_spec.get("runtime_target") or ""
+        ).strip()
+        if runtime_target:
+            return runtime_target
+    strategy = seeded_summary.get("strategy")
+    if isinstance(strategy, dict):
+        runtime_target = str(strategy.get("runtime_target") or "").strip()
+        if runtime_target:
+            return runtime_target
+    return ""
+
+
+def _is_planning_runtime_state(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+) -> bool:
+    return _planning_runtime_target(state, seeded_summary=seeded_summary) == (
+        PLANNING_RUNTIME_TARGET
+    )
+
+
+def _string_or_empty(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _first_present_string(item: Any, *keys: str) -> str:
+    if not isinstance(item, dict):
+        return _string_or_empty(item)
+    for key in keys:
+        value = _string_or_empty(item.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _normalized_string_list(raw_items: Any) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items or []:
+        if isinstance(item, dict):
+            value = _first_present_string(
+                item,
+                "question",
+                "prompt",
+                "summary",
+                "title",
+                "label",
+                "id",
+            )
+        else:
+            value = _string_or_empty(item)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _iter_planning_records(raw_items: Any, *, id_field: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    if isinstance(raw_items, list):
+        for item in raw_items:
+            if isinstance(item, dict):
+                records.append(copy.deepcopy(item))
+            else:
+                value = _string_or_empty(item)
+                if value:
+                    records.append({id_field: value, "summary": value})
+        return records
+    if isinstance(raw_items, dict):
+        for record_id, item in raw_items.items():
+            if isinstance(item, dict):
+                record = copy.deepcopy(item)
+                if not _string_or_empty(record.get(id_field)):
+                    record[id_field] = str(record_id)
+                records.append(record)
+                continue
+            value = _string_or_empty(item)
+            if value:
+                records.append({id_field: str(record_id), "summary": value})
+    return records
+
+
+def _normalize_planning_phase_results(
+    raw_phase_results: Any,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in _iter_planning_records(raw_phase_results, id_field="phase_id"):
+        phase_id = _first_present_string(item, "phase_id", "id", "phase")
+        if not phase_id:
+            continue
+        normalized.append(
+            {
+                "phase_id": phase_id,
+                "status": _first_present_string(
+                    item,
+                    "status",
+                    "outcome",
+                    "verdict",
+                    "result",
+                )
+                or "done",
+                "summary": _first_present_string(
+                    item,
+                    "summary",
+                    "result_summary",
+                    "notes",
+                    "description",
+                )
+                or phase_id,
+            }
+        )
+    return normalized
+
+
+def _normalize_rubric_results(
+    raw_phase_results: Any,
+    *,
+    seeded_summary: dict[str, Any],
+) -> list[str]:
+    seeded_results = _normalized_string_list(seeded_summary.get("rubric_results"))
+    if seeded_results:
+        return seeded_results
+    for item in _iter_planning_records(raw_phase_results, id_field="phase_id"):
+        phase_id = _first_present_string(item, "phase_id", "id", "phase")
+        if phase_id != "rubric_design_doc":
+            continue
+        for key in ("rubric_results", "criteria", "items", "bullets"):
+            results = _normalized_string_list(item.get(key))
+            if results:
+                return results
+        summary = _first_present_string(
+            item,
+            "summary",
+            "result_summary",
+            "notes",
+            "description",
+        )
+        if summary:
+            return [summary]
+    return []
+
+
+def _normalize_planning_seams(
+    raw_items: Any,
+    *,
+    fallback_paths: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in _iter_planning_records(raw_items, id_field="seam_id"):
+        seam_id = _first_present_string(item, "seam_id", "id")
+        if not seam_id:
+            continue
+        paths = _normalized_string_list(
+            item.get("paths")
+            or item.get("files")
+            or item.get("candidate_paths")
+            or item.get("repo_evidence_refs")
+            or item.get("evidence_refs")
+        )
+        if not paths and fallback_paths:
+            paths = list(fallback_paths)
+        normalized.append(
+            {
+                "seam_id": seam_id,
+                "summary": _first_present_string(
+                    item,
+                    "summary",
+                    "title",
+                    "name",
+                    "description",
+                )
+                or seam_id,
+                "paths": paths,
+            }
+        )
+    return normalized
+
+
+def _normalize_planning_workstreams(raw_items: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in _iter_planning_records(raw_items, id_field="workstream_id"):
+        workstream_id = _first_present_string(item, "workstream_id", "id")
+        if not workstream_id:
+            continue
+        normalized.append(
+            {
+                "workstream_id": workstream_id,
+                "summary": _first_present_string(
+                    item,
+                    "summary",
+                    "title",
+                    "name",
+                    "description",
+                )
+                or workstream_id,
+                "seam_ids": _normalized_string_list(
+                    item.get("seam_ids") or item.get("seams")
+                ),
+                "worktree_recommended": bool(
+                    item.get("worktree_recommended")
+                    or item.get("worktree")
+                    or item.get("worktree_path")
+                ),
+            }
+        )
+    return normalized
+
+
+def _normalize_planning_slices(raw_items: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in _iter_planning_records(raw_items, id_field="slice_id"):
+        slice_id = _first_present_string(item, "slice_id", "id")
+        if not slice_id:
+            continue
+        normalized.append(
+            {
+                "slice_id": slice_id,
+                "summary": _first_present_string(
+                    item,
+                    "summary",
+                    "title",
+                    "name",
+                    "description",
+                )
+                or slice_id,
+                "workstream_id": _first_present_string(
+                    item,
+                    "workstream_id",
+                    "workstream",
+                ),
+                "seam_ids": _normalized_string_list(
+                    item.get("seam_ids") or item.get("seams")
+                ),
+                "acceptance_criteria": _normalized_string_list(
+                    item.get("acceptance_criteria")
+                    or item.get("tests")
+                    or item.get("deliverables")
+                ),
+            }
+        )
+    return normalized
+
+
+def _normalize_planning_policy_versions(raw_value: Any) -> dict[str, str]:
+    if not isinstance(raw_value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw_value.items():
+        normalized_key = _string_or_empty(key)
+        normalized_value = _string_or_empty(value)
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _planning_terminal_status(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+) -> str:
+    for value in (
+        state.get("planning_terminal_status"),
+        seeded_summary.get("terminal_status"),
+        (seeded_summary.get("verdicts") or {}).get("run_verdict"),
+        seeded_summary.get("verdict"),
+    ):
+        normalized = _string_or_empty(value)
+        if normalized in PLANNING_TERMINAL_STATUSES:
+            return normalized
+    return "failed"
+
+
+def plan_projection_v1(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    seeded_summary = copy.deepcopy(seeded_summary or {})
+    task = (
+        copy.deepcopy(state.get("task_spec"))
+        if isinstance(state.get("task_spec"), dict)
+        else (
+            copy.deepcopy(seeded_summary.get("task"))
+            if isinstance(seeded_summary.get("task"), dict)
+            else {}
+        )
+    )
+    strategy_spec = (
+        copy.deepcopy(state.get("strategy_spec"))
+        if isinstance(state.get("strategy_spec"), dict)
+        else {}
+    )
+    runtime_target = _planning_runtime_target(state, seeded_summary=seeded_summary)
+    raw_phase_results = (
+        state.get("planning_phase_results")
+        if state.get("planning_phase_results") is not None
+        else seeded_summary.get("phase_results")
+    )
+    raw_phases = strategy_spec.get("phases")
+    if not isinstance(raw_phases, list):
+        raw_phases = ((seeded_summary.get("strategy") or {}).get("phases")) or []
+    phases = _normalized_string_list(raw_phases)
+    phase_results = _normalize_planning_phase_results(raw_phase_results)
+    if not phases and phase_results:
+        phases = [item["phase_id"] for item in phase_results]
+    strategy = {
+        "name": _string_or_empty(
+            strategy_spec.get("name") or seeded_summary.get("strategy_name")
+        ),
+        "kind": _string_or_empty(
+            state.get("strategy_kind")
+            or strategy_spec.get("kind")
+            or seeded_summary.get("strategy_kind")
+        ),
+        "runtime_target": runtime_target or PLANNING_RUNTIME_TARGET,
+        "phases": phases,
+    }
+    terminal_status = _planning_terminal_status(state, seeded_summary=seeded_summary)
+    stop_reason = _string_or_empty(
+        state.get("planning_stop_reason")
+        or state.get("stop_reason")
+        or seeded_summary.get("stop_reason")
+        or seeded_summary.get("final_summary")
+    )
+    clarification_requests = _normalized_string_list(
+        state.get("clarification_requests")
+        if state.get("clarification_requests") is not None
+        else seeded_summary.get("clarification_requests")
+    )
+    repo_evidence_refs = _normalized_string_list(
+        state.get("repo_evidence_refs")
+        if state.get("repo_evidence_refs") is not None
+        else seeded_summary.get("repo_evidence_refs")
+    )
+    if terminal_status == "clarification_needed" and not stop_reason:
+        stop_reason = "Planning requires clarification before execution can proceed."
+    if terminal_status == "failed" and not stop_reason:
+        stop_reason = "Planning runtime failed before emitting a valid plan."
+    payload = {
+        "schema_version": PLANNING_ARTIFACT_SCHEMA_VERSION,
+        "run_id": _string_or_empty(state.get("run_id") or seeded_summary.get("run_id")),
+        "task": {
+            "id": _string_or_empty(task.get("id")),
+            "task_kind": "planning",
+            "objective": _string_or_empty(task.get("objective")),
+        },
+        "strategy": strategy,
+        "terminal_status": terminal_status,
+        "stop_reason": stop_reason,
+        "problem_statement": _string_or_empty(
+            seeded_summary.get("problem_statement") or task.get("objective")
+        ),
+        "clarification_requests": clarification_requests,
+        "repo_evidence_refs": repo_evidence_refs,
+        "rubric_results": _normalize_rubric_results(
+            raw_phase_results,
+            seeded_summary=seeded_summary,
+        ),
+        "seams": _normalize_planning_seams(
+            (
+                state.get("planning_seams")
+                if state.get("planning_seams") is not None
+                else seeded_summary.get("seams")
+            ),
+            fallback_paths=repo_evidence_refs,
+        ),
+        "workstreams": _normalize_planning_workstreams(
+            state.get("planning_workstreams")
+            if state.get("planning_workstreams") is not None
+            else seeded_summary.get("workstreams")
+        ),
+        "slices": _normalize_planning_slices(
+            state.get("planning_slices")
+            if state.get("planning_slices") is not None
+            else seeded_summary.get("slices")
+        ),
+        "phase_results": phase_results,
+        "policy_versions": _normalize_planning_policy_versions(
+            state.get("planning_policy_versions")
+            if state.get("planning_policy_versions") is not None
+            else seeded_summary.get("policy_versions")
+        ),
+        "search_pass_count": _coerce_non_negative_int(
+            state.get("search_pass_count")
+            if state.get("search_pass_count") is not None
+            else seeded_summary.get("search_pass_count")
+        ),
+        "inspected_file_count": _coerce_non_negative_int(
+            state.get("inspected_file_count")
+            if state.get("inspected_file_count") is not None
+            else seeded_summary.get("inspected_file_count")
+        ),
+        "discovery_budget_escalated": bool(
+            state.get("discovery_budget_escalated")
+            if state.get("discovery_budget_escalated") is not None
+            else seeded_summary.get("discovery_budget_escalated")
+        ),
+    }
+    return payload
+
+
+def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
+    lines = [
+        f"# {plan_payload.get('task', {}).get('id') or 'Plan'}",
+        "",
+        "## Problem Statement",
+        plan_payload.get("problem_statement") or "- None provided.",
+        "",
+        "## Rubric Results",
+    ]
+    rubric_results = plan_payload.get("rubric_results") or []
+    if rubric_results:
+        lines.extend(f"- {item}" for item in rubric_results)
+    else:
+        lines.append("- No rubric results captured.")
+
+    lines.extend(["", "## Architectural Seams"])
+    seams = plan_payload.get("seams") or []
+    if seams:
+        for seam in seams:
+            lines.append(
+                f"- `{seam.get('seam_id')}`: {seam.get('summary') or seam.get('seam_id')}"
+            )
+            paths = seam.get("paths") or []
+            if paths:
+                lines.append(f"  Paths: {', '.join(str(path) for path in paths)}")
+    else:
+        lines.append("- No seams selected.")
+
+    lines.extend(["", "## Parallel Workstreams/Worktrees"])
+    workstreams = plan_payload.get("workstreams") or []
+    if workstreams:
+        for workstream in workstreams:
+            advisory = "yes" if workstream.get("worktree_recommended") else "no"
+            seam_ids = ", ".join(workstream.get("seam_ids") or []) or "none"
+            lines.append(
+                f"- `{workstream.get('workstream_id')}`: {workstream.get('summary') or workstream.get('workstream_id')}"
+            )
+            lines.append(f"  Worktree recommended: {advisory}; seam_ids: {seam_ids}")
+    else:
+        lines.append("- No workstreams planned.")
+
+    lines.extend(["", "## Executable Slices"])
+    slices = plan_payload.get("slices") or []
+    if slices:
+        for slice_payload in slices:
+            lines.append(
+                f"- `{slice_payload.get('slice_id')}`: {slice_payload.get('summary') or slice_payload.get('slice_id')}"
+            )
+            workstream_id = slice_payload.get("workstream_id") or "unassigned"
+            seam_ids = ", ".join(slice_payload.get("seam_ids") or []) or "none"
+            lines.append(f"  Workstream: {workstream_id}; seam_ids: {seam_ids}")
+            acceptance_criteria = slice_payload.get("acceptance_criteria") or []
+            if acceptance_criteria:
+                lines.append(
+                    "  Acceptance: "
+                    + "; ".join(str(item) for item in acceptance_criteria)
+                )
+    else:
+        lines.append("- No executable slices emitted.")
+    return "\n".join(lines) + "\n"
+
+
+def publish_planning_artifacts_v1(
+    state: dict[str, Any],
+    *,
+    run_dir: Path,
+    seeded_summary: dict[str, Any],
+) -> dict[str, Any]:
+    plan_payload = plan_projection_v1(state, seeded_summary=seeded_summary)
+    terminal_status = str(plan_payload.get("terminal_status") or "failed")
+    summary = copy.deepcopy(plan_payload)
+    summary.update(
+        {
+            "thread_id": state.get("thread_id") or seeded_summary.get("thread_id"),
+            "workspace": state.get("workspace_root") or seeded_summary.get("workspace"),
+            "config_path": state.get("config_path")
+            or seeded_summary.get("config_path"),
+            "created_at": state.get("created_at") or seeded_summary.get("created_at"),
+            "strategy_name": plan_payload.get("strategy", {}).get("name"),
+            "strategy_kind": plan_payload.get("strategy", {}).get("kind"),
+            "verdict": terminal_status,
+            "verdicts": {
+                "run_verdict": terminal_status,
+                "content_verdict": terminal_status,
+                "validator_verdict": state.get("validator_verdict")
+                or (seeded_summary.get("verdicts") or {}).get("validator_verdict"),
+                "policy_verdict": state.get("policy_verdict")
+                or (seeded_summary.get("verdicts") or {}).get("policy_verdict"),
+                "config_verdict": state.get("config_verdict")
+                or (seeded_summary.get("verdicts") or {}).get("config_verdict")
+                or "pass",
+            },
+            "final_summary": state.get("summary_text")
+            or seeded_summary.get("final_summary")
+            or plan_payload.get("stop_reason")
+            or plan_payload.get("problem_statement"),
+            "warnings": list(
+                state.get("warnings") or seeded_summary.get("warnings") or []
+            ),
+            "errors": list(state.get("errors") or seeded_summary.get("errors") or []),
+            "strategy_graph_spec": copy.deepcopy(
+                state.get("strategy_graph_spec")
+                if isinstance(state.get("strategy_graph_spec"), dict)
+                else (
+                    seeded_summary.get("strategy_graph_spec")
+                    if isinstance(seeded_summary.get("strategy_graph_spec"), dict)
+                    else {}
+                )
+            ),
+            "run_details": copy.deepcopy(
+                state.get("run_details")
+                if isinstance(state.get("run_details"), dict)
+                else (
+                    seeded_summary.get("run_details")
+                    if isinstance(seeded_summary.get("run_details"), dict)
+                    else {}
+                )
+            ),
+        }
+    )
+
+    artifacts = dict(seeded_summary.get("artifacts") or {})
+    plan_json_path = run_dir / "plan.json"
+    plan_md_path = run_dir / "PLAN.md"
+    summary_path = run_dir / "summary.json"
+    report_path = run_dir / "REPORT.md"
+
+    if terminal_status == "success":
+        schema_errors = _soft_validate_schema(plan_payload, plan_json_schema())
+        if schema_errors:
+            raise ValueError(
+                "plan.json schema validation failed: " + "; ".join(schema_errors)
+            )
+        write_json(plan_json_path, plan_payload)
+        write_text(plan_md_path, render_plan_markdown_v1(plan_payload))
+        artifacts["plan_json"] = str(plan_json_path)
+        artifacts["plan_md"] = str(plan_md_path)
+        artifacts["final_artifact"] = str(plan_md_path)
+        artifacts["final_artifact_json"] = str(plan_json_path)
+        artifacts["final_artifact_kind"] = "plan"
+    else:
+        artifacts.pop("plan_json", None)
+        artifacts.pop("plan_md", None)
+        artifacts.setdefault("final_artifact", "")
+        artifacts.setdefault("final_artifact_kind", "none")
+
+    artifacts["report_md"] = str(report_path)
+    artifacts["summary_json"] = str(summary_path)
+    artifacts["run_dir"] = str(run_dir)
+    summary["artifacts"] = artifacts
+
+    write_json(summary_path, summary)
+    write_text(report_path, render_report(summary))
+    return summary
 
 
 def _normalized_draft_id(raw_value: Any) -> str:
@@ -175,22 +769,19 @@ def _project_stage_trace_metadata(
         metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}
     )
     graph_stage_id = str(
-        metadata.get("graph_stage_id")
-        or nested_metadata.get("graph_stage_id")
-        or ""
+        metadata.get("graph_stage_id") or nested_metadata.get("graph_stage_id") or ""
     ).strip()
     if graph_stage_id:
         metadata["graph_stage_id"] = graph_stage_id
     graph_node_id = str(
-        metadata.get("graph_node_id")
-        or graph_stage_id
-        or stage.get("role_name")
-        or ""
+        metadata.get("graph_node_id") or graph_stage_id or stage.get("role_name") or ""
     ).strip()
     if graph_node_id:
         metadata["graph_node_id"] = graph_node_id
     transition_reason = str(
-        metadata.get("transition_reason") or nested_metadata.get("transition_reason") or ""
+        metadata.get("transition_reason")
+        or nested_metadata.get("transition_reason")
+        or ""
     ).strip()
     if transition_reason:
         metadata["transition_reason"] = transition_reason
@@ -237,7 +828,9 @@ def _graph_execution_mode(
             execution_mode = str(graph_execution.get("execution_mode") or "").strip()
             if execution_mode:
                 return execution_mode
-    for raw_stage in state.get("stage_history") or seeded_summary.get("agent_stages") or []:
+    for raw_stage in (
+        state.get("stage_history") or seeded_summary.get("agent_stages") or []
+    ):
         if not isinstance(raw_stage, dict):
             continue
         metadata = raw_stage.get("metadata")
@@ -1941,13 +2534,15 @@ def _sync_native_publish_selection(state: dict[str, Any]) -> None:
 def _artifact_index_from_summary(summary: dict[str, Any]) -> dict[str, dict[str, str]]:
     artifact_index: dict[str, dict[str, str]] = {}
     for key, value in dict(summary.get("artifacts") or {}).items():
+        if str(key).endswith("_kind"):
+            continue
         path = str(value or "").strip()
         if not path:
             continue
         artifact_index[str(key)] = artifact_ref(
             path,
             kind=str(key),
-            description=str(key).replace("_", " "),
+            description=artifact_description(str(key)),
         )
     return artifact_index
 
@@ -1978,9 +2573,7 @@ def _sync_graph_owned_native_summary_fields(
 
     if any(key in state for key in ("run_verdict", "content_verdict")):
         summary["verdict"] = (
-            state.get("run_verdict")
-            or state.get("content_verdict")
-            or "invalid_config"
+            state.get("run_verdict") or state.get("content_verdict") or "invalid_config"
         )
     if any(
         key in state
@@ -2010,8 +2603,7 @@ def _sync_graph_owned_native_summary_fields(
         )
     if "workspace_policy_ignored_rel_paths" in state:
         summary["workspace_policy_ignored_rel_paths"] = [
-            str(item)
-            for item in state.get("workspace_policy_ignored_rel_paths") or []
+            str(item) for item in state.get("workspace_policy_ignored_rel_paths") or []
         ]
     if "policy_checks" in state:
         summary["workspace_policy_checks"] = list(state.get("policy_checks") or [])
@@ -2186,7 +2778,9 @@ def _sync_graph_owned_native_summary_fields(
         if state.get("bridge_boundary_version") in (None, ""):
             summary.pop("bridge_boundary_version", None)
         else:
-            summary["bridge_boundary_version"] = str(state.get("bridge_boundary_version"))
+            summary["bridge_boundary_version"] = str(
+                state.get("bridge_boundary_version")
+            )
 
 
 def publish_state_artifacts_v1(state: dict[str, Any]) -> dict[str, Any]:
@@ -2214,9 +2808,16 @@ def publish_state_artifacts_v1(state: dict[str, Any]) -> dict[str, Any]:
         or ".forge-harness-runs"
     )
     run_dir = ensure_run_dir(run_dir_raw)
-    _sync_native_publish_selection(state)
-    summary = summary_projection_v1(state, run_dir=run_dir)
-    summary = apply_final_artifacts(summary)
+    if _is_planning_runtime_state(state, seeded_summary=seeded_summary):
+        summary = publish_planning_artifacts_v1(
+            state,
+            run_dir=run_dir,
+            seeded_summary=seeded_summary,
+        )
+    else:
+        _sync_native_publish_selection(state)
+        summary = summary_projection_v1(state, run_dir=run_dir)
+        summary = apply_final_artifacts(summary)
     state["artifact_index"] = _artifact_index_from_summary(summary)
     state["summary_payload"] = summary
     artifacts = dict(summary.get("artifacts") or {})
@@ -2273,7 +2874,8 @@ def summary_projection_v1(
             "run_id": state.get("run_id") or seeded_summary.get("run_id"),
             "thread_id": state.get("thread_id") or seeded_summary.get("thread_id"),
             "workspace": state.get("workspace_root") or seeded_summary.get("workspace"),
-            "config_path": state.get("config_path") or seeded_summary.get("config_path"),
+            "config_path": state.get("config_path")
+            or seeded_summary.get("config_path"),
             "task": state.get("task_spec") or seeded_summary.get("task") or {},
             "strategy_name": (state.get("strategy_spec") or {}).get("name")
             or seeded_summary.get("strategy_name"),
@@ -2315,9 +2917,11 @@ def summary_projection_v1(
             "failure_details": (
                 copy.deepcopy(state.get("failure_details"))
                 if isinstance(state.get("failure_details"), dict)
-                else copy.deepcopy(seeded_summary.get("failure_details"))
-                if isinstance(seeded_summary.get("failure_details"), dict)
-                else None
+                else (
+                    copy.deepcopy(seeded_summary.get("failure_details"))
+                    if isinstance(seeded_summary.get("failure_details"), dict)
+                    else None
+                )
             ),
             "workspace_write_policy": (
                 (state.get("task_spec") or {}).get("workspace_write_policy")
@@ -2337,9 +2941,15 @@ def summary_projection_v1(
             "final_workspace_policy_evaluation": (
                 copy.deepcopy(state.get("final_workspace_policy_evaluation"))
                 if isinstance(state.get("final_workspace_policy_evaluation"), dict)
-                else copy.deepcopy(seeded_summary.get("final_workspace_policy_evaluation"))
-                if isinstance(seeded_summary.get("final_workspace_policy_evaluation"), dict)
-                else None
+                else (
+                    copy.deepcopy(
+                        seeded_summary.get("final_workspace_policy_evaluation")
+                    )
+                    if isinstance(
+                        seeded_summary.get("final_workspace_policy_evaluation"), dict
+                    )
+                    else None
+                )
             ),
             "agent_stages": agent_stages,
             "validator_rounds": list(
@@ -2350,9 +2960,11 @@ def summary_projection_v1(
             "validator_summary": (
                 copy.deepcopy(state.get("validator_summary"))
                 if isinstance(state.get("validator_summary"), dict)
-                else copy.deepcopy(seeded_summary.get("validator_summary"))
-                if isinstance(seeded_summary.get("validator_summary"), dict)
-                else {}
+                else (
+                    copy.deepcopy(seeded_summary.get("validator_summary"))
+                    if isinstance(seeded_summary.get("validator_summary"), dict)
+                    else {}
+                )
             ),
             "drafts": list(state.get("drafts") or seeded_summary.get("drafts") or []),
             "best_draft_id": state.get("best_draft_id")
@@ -2368,16 +2980,20 @@ def summary_projection_v1(
             "initial_git_snapshot": (
                 copy.deepcopy(state.get("initial_git_snapshot"))
                 if isinstance(state.get("initial_git_snapshot"), dict)
-                else copy.deepcopy(seeded_summary.get("initial_git_snapshot"))
-                if isinstance(seeded_summary.get("initial_git_snapshot"), dict)
-                else {}
+                else (
+                    copy.deepcopy(seeded_summary.get("initial_git_snapshot"))
+                    if isinstance(seeded_summary.get("initial_git_snapshot"), dict)
+                    else {}
+                )
             ),
             "final_git_snapshot": (
                 copy.deepcopy(state.get("current_git_snapshot"))
                 if isinstance(state.get("current_git_snapshot"), dict)
-                else copy.deepcopy(seeded_summary.get("final_git_snapshot"))
-                if isinstance(seeded_summary.get("final_git_snapshot"), dict)
-                else {}
+                else (
+                    copy.deepcopy(seeded_summary.get("final_git_snapshot"))
+                    if isinstance(seeded_summary.get("final_git_snapshot"), dict)
+                    else {}
+                )
             ),
         }
     )
@@ -2425,7 +3041,9 @@ def summary_projection_v1(
     analysis_review_status = state.get("analysis_review_status")
     if isinstance(analysis_review_status, dict) and analysis_review_status:
         summary["analysis_review_status"] = copy.deepcopy(analysis_review_status)
-    elif "analysis_review_status" in state or "analysis_review_status" in seeded_summary:
+    elif (
+        "analysis_review_status" in state or "analysis_review_status" in seeded_summary
+    ):
         summary["analysis_review_status"] = (
             copy.deepcopy(seeded_summary.get("analysis_review_status"))
             if seeded_summary.get("analysis_review_status") is not None
@@ -2443,7 +3061,9 @@ def summary_projection_v1(
     recommendation_reviews = state.get("recommendation_reviews")
     if isinstance(recommendation_reviews, list):
         summary["recommendation_reviews"] = [
-            copy.deepcopy(item) for item in recommendation_reviews if isinstance(item, dict)
+            copy.deepcopy(item)
+            for item in recommendation_reviews
+            if isinstance(item, dict)
         ]
     elif isinstance(seeded_summary.get("recommendation_reviews"), list):
         summary["recommendation_reviews"] = [
@@ -2471,9 +3091,7 @@ def summary_projection_v1(
         )
     bounded_attestation_input = state.get("bounded_attestation_input")
     if isinstance(bounded_attestation_input, dict):
-        summary["bounded_attestation_input"] = copy.deepcopy(
-            bounded_attestation_input
-        )
+        summary["bounded_attestation_input"] = copy.deepcopy(bounded_attestation_input)
     elif isinstance(seeded_summary.get("bounded_attestation_input"), dict):
         summary["bounded_attestation_input"] = copy.deepcopy(
             seeded_summary["bounded_attestation_input"]

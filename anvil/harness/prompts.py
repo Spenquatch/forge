@@ -356,7 +356,11 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
         (
             "- adapter_plan.downstream_primary_seam_id: "
             + str(
-                ((focus_decision.get("adapter_plan") or {}).get("downstream_primary_seam_id"))
+                (
+                    (focus_decision.get("adapter_plan") or {}).get(
+                        "downstream_primary_seam_id"
+                    )
+                )
                 or "(missing bridge)"
             )
         ),
@@ -365,9 +369,12 @@ def _focus_gate_decision_block(focus_decision: dict[str, Any] | None) -> str:
             + ", ".join(
                 str(path).strip()
                 for path in (
-                    ((focus_decision.get("adapter_plan") or {}).get(
-                        "downstream_primary_seam_paths"
-                    ) or [])
+                    (
+                        (focus_decision.get("adapter_plan") or {}).get(
+                            "downstream_primary_seam_paths"
+                        )
+                        or []
+                    )
                 )
                 if str(path).strip()
             )

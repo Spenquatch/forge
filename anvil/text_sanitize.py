@@ -14,7 +14,9 @@ import re
 _THINK_BLOCK_RE = re.compile(r"(?is)<think>.*?</think>")
 _LEADING_THINK_OPEN_RE = re.compile(r"(?is)^\s*<think>\s*")
 _FINAL_MARKER_RE = re.compile(r"(?im)^\s*final\s*:\s*")
-_FINAL_PLACEHOLDER_RE = re.compile(r"(?is)^<\s*(your (answer|critique|improved solution)|next steps)\s*>$")
+_FINAL_PLACEHOLDER_RE = re.compile(
+    r"(?is)^<\s*(your (answer|critique|improved solution)|next steps)\s*>$"
+)
 
 
 def strip_think(text: str | None) -> str:

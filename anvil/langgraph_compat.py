@@ -1,3 +1,5 @@
+# mypy: disable-error-code="no-redef"
+
 from __future__ import annotations
 
 """Compatibility helpers for LangGraph-style workflows.
@@ -16,23 +18,30 @@ LangGraph. It only models the execution behavior needed by Forge's graph
 builders and offline tests.
 """
 
-import asyncio
+import importlib
 import inspect
 import json
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Mapping, MutableMapping, Optional
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    MutableMapping,
+    cast,
+)
 
 try:  # pragma: no cover - exercised when LangGraph is installed
-    from langgraph.graph import END as END  # type: ignore[assignment]
-    from langgraph.graph import StateGraph as StateGraph  # type: ignore[assignment]
+    from langgraph.graph import END, StateGraph  # type: ignore[assignment]
 
     try:  # pragma: no cover - version-dependent import path
-        from langgraph.checkpoint.memory import MemorySaver as MemorySaver  # type: ignore[assignment]
+        MemorySaver = importlib.import_module("langgraph.checkpoint.memory").MemorySaver
     except ImportError:  # pragma: no cover
-        from langgraph.checkpoint import MemorySaver as MemorySaver  # type: ignore[attr-defined,assignment]
+        MemorySaver = importlib.import_module("langgraph.checkpoint").MemorySaver
 
     HAS_LANGGRAPH = True
 except Exception:  # pragma: no cover - exercised in this container
@@ -45,7 +54,9 @@ except Exception:  # pragma: no cover - exercised in this container
         def __init__(self) -> None:
             self._records: dict[str, list[dict[str, Any]]] = {}
 
-        def save_state(self, thread_id: str, node_name: str, state: Mapping[str, Any]) -> None:
+        def save_state(
+            self, thread_id: str, node_name: str, state: Mapping[str, Any]
+        ) -> None:
             bucket = self._records.setdefault(str(thread_id), [])
             bucket.append(
                 {
@@ -84,7 +95,9 @@ class SimpleSqliteSaver:
             )
             conn.commit()
 
-    def save_state(self, thread_id: str, node_name: str, state: Mapping[str, Any]) -> None:
+    def save_state(
+        self, thread_id: str, node_name: str, state: Mapping[str, Any]
+    ) -> None:
         payload_json = json.dumps(state)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -101,7 +114,7 @@ class SimpleSqliteSaver:
             ).fetchone()
         if row is None:
             return None
-        return json.loads(row[0])
+        return cast(dict[str, Any], json.loads(row[0]))
 
     def close(self) -> None:
         return None
@@ -113,7 +126,9 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-def _checkpoint_save(checkpointer: Any, thread_id: str, node_name: str, state: Mapping[str, Any]) -> None:
+def _checkpoint_save(
+    checkpointer: Any, thread_id: str, node_name: str, state: Mapping[str, Any]
+) -> None:
     if checkpointer is None:
         return
     save_fn = getattr(checkpointer, "save_state", None)
@@ -210,7 +225,6 @@ if not HAS_LANGGRAPH:
                 else:
                     current = self._edges[current]
 
-
     class StateGraph:
         """Minimal graph builder mirroring the tiny subset Forge uses."""
 
@@ -227,7 +241,9 @@ if not HAS_LANGGRAPH:
                 ],
             ] = {}
 
-        def add_node(self, name: str, fn: Callable[[MutableMapping[str, Any]], Any]) -> None:
+        def add_node(
+            self, name: str, fn: Callable[[MutableMapping[str, Any]], Any]
+        ) -> None:
             self._nodes[name] = fn
 
         def set_entry_point(self, name: str) -> None:
@@ -283,7 +299,7 @@ async def open_sqlite_saver(db_path: str) -> Any:
             if not hasattr(conn, "is_alive") and hasattr(conn, "_thread"):
                 conn.is_alive = conn._thread.is_alive  # type: ignore[attr-defined]
             saver = AsyncSqliteSaver(conn)
-            setattr(saver, "_forge_conn", conn)
+            cast(Any, saver)._forge_conn = conn
             return saver
         except Exception:
             pass

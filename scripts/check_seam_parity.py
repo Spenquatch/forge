@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 CHECK_NAMES = (
     "primary_seam_id",
     "primary_seam_paths",
@@ -118,8 +117,7 @@ def _normalize_secondary_seam_ids(value: Any, *, errors: list[str]) -> list[str]
         trimmed = _trimmed_string(
             item.get("seam_id"),
             field_name=(
-                "analysis_review_status.secondary_seams_considered"
-                f"[{index}].seam_id"
+                "analysis_review_status.secondary_seams_considered" f"[{index}].seam_id"
             ),
             errors=errors,
         )
@@ -181,7 +179,9 @@ def _normalize_recommendation_seam_bindings(
     )
 
 
-def _extract_canonical_state(summary: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _extract_canonical_state(
+    summary: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
     state = {
         "primary_seam_id": None,
         "primary_seam_paths": None,
@@ -204,9 +204,7 @@ def _extract_canonical_state(summary: dict[str, Any]) -> tuple[dict[str, Any], l
     if not isinstance(primary_seam_id, str):
         errors.append("analysis_review_status.primary_seam.seam_id must be a string.")
     elif not primary_seam_id.strip():
-        errors.append(
-            "analysis_review_status.primary_seam.seam_id must not be empty."
-        )
+        errors.append("analysis_review_status.primary_seam.seam_id must not be empty.")
     else:
         state["primary_seam_id"] = primary_seam_id
 

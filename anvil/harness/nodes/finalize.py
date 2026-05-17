@@ -5,7 +5,11 @@ from ..state import HarnessState
 
 def finalize_node(state: HarnessState) -> HarnessState:
     if not state.get("run_verdict"):
-        state["run_verdict"] = state.get("content_verdict") or state.get("config_verdict") or "invalid_config"
+        state["run_verdict"] = (
+            state.get("content_verdict")
+            or state.get("config_verdict")
+            or "invalid_config"
+        )
     if not state.get("summary_text"):
         state["summary_text"] = "Harness run completed."
     if not state.get("policy_verdict"):

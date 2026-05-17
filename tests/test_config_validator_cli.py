@@ -27,7 +27,9 @@ def test_missing_optional_dependency_is_warning_not_error(
 
     def fake_import_module(name: str, package=None):
         if name == "anvil.providers.openai":
-            raise ImportError("No module named 'langchain_openai'", name="langchain_openai")
+            raise ImportError(
+                "No module named 'langchain_openai'", name="langchain_openai"
+            )
         return real_import_module(name, package)
 
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
@@ -145,7 +147,9 @@ def test_provider_readiness_optional_dependency_reports_missing_item(
 
     def fake_import_module(name: str, package=None):
         if name == "anvil.providers.openai":
-            raise ImportError("No module named 'langchain_openai'", name="langchain_openai")
+            raise ImportError(
+                "No module named 'langchain_openai'", name="langchain_openai"
+            )
         return real_import_module(name, package)
 
     monkeypatch.setattr(importlib, "import_module", fake_import_module)

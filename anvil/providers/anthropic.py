@@ -1,3 +1,5 @@
+# mypy: disable-error-code="no-redef"
+
 """
 Anthropic provider using LangChain with proper parameter handling and role-based configuration.
 """
@@ -38,7 +40,7 @@ except ImportError:  # pragma: no cover - lightweight fallback for tests
             self.messages = types.SimpleNamespace(create=_missing_api)
             self.embeddings = types.SimpleNamespace(create=_missing_api)
 
-    _anthropic_module.Anthropic = Anthropic
+    _anthropic_module.__dict__["Anthropic"] = Anthropic
     sys.modules.setdefault("anthropic", _anthropic_module)
 
 try:  # pragma: no cover - exercised when langchain-anthropic is installed

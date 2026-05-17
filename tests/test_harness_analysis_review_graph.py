@@ -13,7 +13,6 @@ import pytest
 
 from anvil.harness.executor import HarnessLangGraphExecutor
 
-
 _HELPER_MODULE_PATH = Path(__file__).with_name("test_harness_runner.py")
 _HELPER_SPEC = importlib.util.spec_from_file_location(
     "test_harness_runner_helpers",
@@ -357,14 +356,16 @@ def test_b2_parity_matrix_bounded_no_focus_gate_matches_legacy_bridge(
         graph_run,
         expected_role_names=["proposer", "critic", "reviser_round_1", "auditor"],
     )
-    assert legacy_run.summary["analysis_review_status"] == graph_run.summary[
-        "analysis_review_status"
-    ]
+    assert (
+        legacy_run.summary["analysis_review_status"]
+        == graph_run.summary["analysis_review_status"]
+    )
     assert legacy_run.summary["issue_ledger"] == graph_run.summary["issue_ledger"]
     assert legacy_run.summary["topic_ledger"] == graph_run.summary["topic_ledger"]
-    assert legacy_run.summary["recommendation_reviews"] == graph_run.summary[
-        "recommendation_reviews"
-    ]
+    assert (
+        legacy_run.summary["recommendation_reviews"]
+        == graph_run.summary["recommendation_reviews"]
+    )
     _assert_graph_owned_native_surface(
         graph_run,
         expect_final_answer=True,
@@ -372,7 +373,17 @@ def test_b2_parity_matrix_bounded_no_focus_gate_matches_legacy_bridge(
 
 
 @pytest.mark.parametrize(
-    ("scenario_name", "adapter_factory", "task_focus_gate", "strategy_focus_gate", "trust_execution_mode", "strategy_kind", "expected_role_names", "expected_graph_stage_ids", "expected_decision_state"),
+    (
+        "scenario_name",
+        "adapter_factory",
+        "task_focus_gate",
+        "strategy_focus_gate",
+        "trust_execution_mode",
+        "strategy_kind",
+        "expected_role_names",
+        "expected_graph_stage_ids",
+        "expected_decision_state",
+    ),
     [
         (
             "bounded-focus-selected",
@@ -414,7 +425,14 @@ def test_b2_parity_matrix_bounded_no_focus_gate_matches_legacy_bridge(
             _HELPERS._strategy_focus_gate_block(default_path="adjudicate"),
             "attestation_over_bounded",
             "analysis_review_trust_v1",
-            ["focus_gate", "proposer", "critic", "reviser_round_1", "auditor", "auditor"],
+            [
+                "focus_gate",
+                "proposer",
+                "critic",
+                "reviser_round_1",
+                "auditor",
+                "auditor",
+            ],
             [
                 "focus_gate",
                 "proposer",
@@ -485,22 +503,29 @@ def test_b2_parity_matrix_focus_gate_rows_match_legacy_bridge(
         expected_role_names=expected_role_names,
     )
     assert legacy_run.summary["focus_decision"] == graph_run.summary["focus_decision"]
-    assert legacy_run.summary["focus_decision"]["decision_state"] == expected_decision_state
-    assert graph_run.summary["focus_decision"]["decision_state"] == expected_decision_state
+    assert (
+        legacy_run.summary["focus_decision"]["decision_state"]
+        == expected_decision_state
+    )
+    assert (
+        graph_run.summary["focus_decision"]["decision_state"] == expected_decision_state
+    )
 
     if expected_decision_state in {"clarification_requested", "no_viable_focus"}:
         assert "proposer" not in _stage_roles(legacy_run.summary)
         assert "proposer" not in _stage_roles(graph_run.summary)
         assert legacy_run.summary["verdict"] == graph_run.summary["verdict"]
     else:
-        assert legacy_run.summary["analysis_review_status"] == graph_run.summary[
-            "analysis_review_status"
-        ]
+        assert (
+            legacy_run.summary["analysis_review_status"]
+            == graph_run.summary["analysis_review_status"]
+        )
         assert legacy_run.summary["issue_ledger"] == graph_run.summary["issue_ledger"]
         assert legacy_run.summary["topic_ledger"] == graph_run.summary["topic_ledger"]
-        assert legacy_run.summary["recommendation_reviews"] == graph_run.summary[
-            "recommendation_reviews"
-        ]
+        assert (
+            legacy_run.summary["recommendation_reviews"]
+            == graph_run.summary["recommendation_reviews"]
+        )
         assert _stage_graph_ids(graph_run.summary) == expected_graph_stage_ids
         _assert_graph_owned_native_surface(
             graph_run,
@@ -550,14 +575,16 @@ def test_b2_parity_matrix_trust_attestation_focus_off_matches_legacy_bridge(
             "auditor",
         ],
     )
-    assert legacy_run.summary["analysis_review_status"] == graph_run.summary[
-        "analysis_review_status"
-    ]
+    assert (
+        legacy_run.summary["analysis_review_status"]
+        == graph_run.summary["analysis_review_status"]
+    )
     assert legacy_run.summary["issue_ledger"] == graph_run.summary["issue_ledger"]
     assert legacy_run.summary["topic_ledger"] == graph_run.summary["topic_ledger"]
-    assert legacy_run.summary["recommendation_reviews"] == graph_run.summary[
-        "recommendation_reviews"
-    ]
+    assert (
+        legacy_run.summary["recommendation_reviews"]
+        == graph_run.summary["recommendation_reviews"]
+    )
     assert _stage_graph_ids(graph_run.summary) == [
         "proposer",
         "critic",
@@ -565,9 +592,10 @@ def test_b2_parity_matrix_trust_attestation_focus_off_matches_legacy_bridge(
         "auditor",
         "attestation_auditor",
     ]
-    assert legacy_run.summary[_HELPERS.BOUNDED_ATTESTATION_INPUT_KEY] == graph_run.summary[
-        _HELPERS.BOUNDED_ATTESTATION_INPUT_KEY
-    ]
+    assert (
+        legacy_run.summary[_HELPERS.BOUNDED_ATTESTATION_INPUT_KEY]
+        == graph_run.summary[_HELPERS.BOUNDED_ATTESTATION_INPUT_KEY]
+    )
     _assert_graph_owned_native_surface(
         graph_run,
         expect_bounded_review_summary=True,
@@ -614,14 +642,18 @@ def test_b2_parity_matrix_checkpoint_backends_share_user_visible_outputs(
     execution_mode: str,
 ) -> None:
     memory_run = _run_executor_case(
-        _scenario_tmp_path(tmp_path, checkpoint="memory", execution_mode=execution_mode),
+        _scenario_tmp_path(
+            tmp_path, checkpoint="memory", execution_mode=execution_mode
+        ),
         monkeypatch,
         provider_factory=lambda name: _HELPERS._AcceptingHarnessAdapter(),
         checkpoint="memory",
         execution_mode=execution_mode,
     )
     sqlite_run = _run_executor_case(
-        _scenario_tmp_path(tmp_path, checkpoint="sqlite", execution_mode=execution_mode),
+        _scenario_tmp_path(
+            tmp_path, checkpoint="sqlite", execution_mode=execution_mode
+        ),
         monkeypatch,
         provider_factory=lambda name: _HELPERS._AcceptingHarnessAdapter(),
         checkpoint="sqlite",

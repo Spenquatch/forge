@@ -189,7 +189,9 @@ def _run_case(case_name: str, out_root: Path) -> CaseResult:
     expectation = _CASE_EXPECTATIONS[case_name]
     actual_refinement_status = None
     if isinstance(focus_refinement, dict):
-        actual_refinement_status = str(focus_refinement.get("status") or "").strip() or None
+        actual_refinement_status = (
+            str(focus_refinement.get("status") or "").strip() or None
+        )
 
     if summary["verdict"] != expectation.run_verdict:
         raise RuntimeError(
@@ -216,7 +218,9 @@ def _run_case(case_name: str, out_root: Path) -> CaseResult:
         run_dir=runner.run_dir,
         report_path=runner.run_dir / "REPORT.md",
         summary_path=runner.run_dir / "summary.json",
-        focus_refinement=focus_refinement if isinstance(focus_refinement, dict) else None,
+        focus_refinement=(
+            focus_refinement if isinstance(focus_refinement, dict) else None
+        ),
     )
 
 

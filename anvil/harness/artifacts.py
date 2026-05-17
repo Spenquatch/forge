@@ -9,12 +9,19 @@ from uuid import uuid4
 
 from .files import slugify
 
+_ARTIFACT_DESCRIPTIONS: dict[str, str] = {
+    "plan_md": "planning markdown artifact",
+    "plan_json": "planning machine artifact",
+}
+
 
 def create_run_id(task_id: str) -> str:
     return f"{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%SZ')}-{slugify(task_id)}-{uuid4().hex[:8]}"
 
 
-def ensure_run_dirs(out_root: str | Path, task_id: str, run_id: str | None = None) -> dict[str, str]:
+def ensure_run_dirs(
+    out_root: str | Path, task_id: str, run_id: str | None = None
+) -> dict[str, str]:
     root = Path(out_root).resolve()
     run_identifier = run_id or create_run_id(task_id)
     run_dir = root / run_identifier
@@ -45,10 +52,26 @@ def register_artifact(
     }
 
 
+def artifact_description(key: str) -> str:
+    normalized_key = str(key).strip()
+    return _ARTIFACT_DESCRIPTIONS.get(
+        normalized_key,
+        normalized_key.replace("_", " "),
+    )
+
+
 def build_artifact_index(artifacts: dict[str, Any]) -> dict[str, dict[str, str]]:
     index: dict[str, dict[str, str]] = {}
     for key, value in artifacts.items():
+        if str(key).endswith("_kind"):
+            continue
         if not value:
             continue
-        register_artifact(index, str(key), str(value), kind=str(key), description=str(key).replace("_", " "))
+        register_artifact(
+            index,
+            str(key),
+            str(value),
+            kind=str(key),
+            description=artifact_description(str(key)),
+        )
     return index

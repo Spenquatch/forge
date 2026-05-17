@@ -9,12 +9,15 @@ import pytest
 from anvil.cli_agents.codex import _codex_compatible_schema
 from anvil.config_loader import ProviderCfg
 from anvil.harness.schemas import analysis_output_schema
-from anvil.providers import clear_registry, is_provider_available, register_provider_config
+from anvil.providers import (
+    clear_registry,
+    is_provider_available,
+    register_provider_config,
+)
 from anvil.providers.claude_code import ClaudeCodeProvider
 from anvil.providers.codex_cli import CodexCliProvider
 
-
-CODEx_SCRIPT = r'''#!/usr/bin/env python3
+CODEx_SCRIPT = r"""#!/usr/bin/env python3
 import json
 import pathlib
 import sys
@@ -29,9 +32,9 @@ if output_path is not None:
 print(json.dumps({"type": "thread.started", "thread_id": "codex-thread-1"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "Codex final answer"}}))
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 11, "output_tokens": 7}}))
-'''
+"""
 
-CLAUDE_SCRIPT = r'''#!/usr/bin/env python3
+CLAUDE_SCRIPT = r"""#!/usr/bin/env python3
 import json
 import sys
 
@@ -50,7 +53,7 @@ else:
         "session_id": "claude-session-1",
     }
 print(json.dumps(payload))
-'''
+"""
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -58,9 +61,11 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
-def _write_codex_retry_script(path: Path, log_path: Path, unsupported_model: str) -> None:
+def _write_codex_retry_script(
+    path: Path, log_path: Path, unsupported_model: str
+) -> None:
     path.write_text(
-        rf'''#!/usr/bin/env python3
+        rf"""#!/usr/bin/env python3
 import json
 import pathlib
 import sys
@@ -91,7 +96,7 @@ if output_path is not None:
 print(json.dumps({{"type": "thread.started", "thread_id": "codex-thread-1"}}))
 print(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": "Codex final answer"}}}}))
 print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 11, "output_tokens": 7}}}}))
-''',
+""",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -141,7 +146,9 @@ async def test_codex_cli_provider_text(fake_cli_bins: dict[str, str]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_cli_provider_structured_output(fake_cli_bins: dict[str, str]) -> None:
+async def test_codex_cli_provider_structured_output(
+    fake_cli_bins: dict[str, str],
+) -> None:
     provider = CodexCliProvider(
         ProviderCfg(
             type="cli",
@@ -182,16 +189,18 @@ def test_codex_output_schema_normalizes_optional_nested_fields() -> None:
         "affected_files",
         "grounding_mode",
     }
-    assert recommendation_schema["properties"]["verified_evidence_refs"]["anyOf"][1] == {
-        "type": "null"
-    }
+    assert recommendation_schema["properties"]["verified_evidence_refs"]["anyOf"][
+        1
+    ] == {"type": "null"}
     assert recommendation_schema["properties"]["grounding_mode"]["anyOf"][1] == {
         "type": "null"
     }
 
 
 @pytest.mark.asyncio
-async def test_codex_cli_provider_respects_explicit_model_override(fake_cli_bins: dict[str, str]) -> None:
+async def test_codex_cli_provider_respects_explicit_model_override(
+    fake_cli_bins: dict[str, str],
+) -> None:
     provider = CodexCliProvider(
         ProviderCfg(
             type="cli",
@@ -213,7 +222,9 @@ async def test_codex_cli_provider_respects_explicit_model_override(fake_cli_bins
     assert provider.reported_model_name("codex-mini-latest") == "codex-mini-latest"
 
 
-def test_codex_cli_provider_reports_configured_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_cli_provider_reports_configured_default_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("pathlib.Path.home", lambda: Path("/tmp/codex-home-test"))
 
     def _fake_read_text(self: Path, encoding: str = "utf-8") -> str:
@@ -243,7 +254,9 @@ async def test_codex_cli_provider_retries_unsupported_models_yaml_model_without_
     codex_path = tmp_path / "codex"
     _write_codex_retry_script(codex_path, log_path, unsupported_model="gpt-5-codex")
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
-    monkeypatch.setattr("anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4")
+    monkeypatch.setattr(
+        "anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4"
+    )
 
     provider = CodexCliProvider(
         ProviderCfg(
@@ -265,10 +278,17 @@ async def test_codex_cli_provider_retries_unsupported_models_yaml_model_without_
         },
     )
 
-    invocations = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    invocations = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     assert len(invocations) == 2
     assert "--model" in invocations[0]["args"]
-    assert invocations[0]["args"][invocations[0]["args"].index("--model") + 1] == "gpt-5-codex"
+    assert (
+        invocations[0]["args"][invocations[0]["args"].index("--model") + 1]
+        == "gpt-5-codex"
+    )
     assert "--model" not in invocations[1]["args"]
     assert json.loads(result) == {"status": "ok", "source": "codex"}
     assert provider.reported_model_name() == "gpt-5.4"
@@ -285,9 +305,13 @@ async def test_codex_cli_provider_does_not_fallback_when_strategy_model_is_expli
 ) -> None:
     log_path = tmp_path / "codex-runs.jsonl"
     codex_path = tmp_path / "codex"
-    _write_codex_retry_script(codex_path, log_path, unsupported_model="codex-mini-latest")
+    _write_codex_retry_script(
+        codex_path, log_path, unsupported_model="codex-mini-latest"
+    )
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
-    monkeypatch.setattr("anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4")
+    monkeypatch.setattr(
+        "anvil.providers.codex_cli._configured_codex_default_model", lambda: "gpt-5.4"
+    )
 
     provider = CodexCliProvider(
         ProviderCfg(
@@ -306,10 +330,17 @@ async def test_codex_cli_provider_does_not_fallback_when_strategy_model_is_expli
             model="codex-mini-latest",
         )
 
-    invocations = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    invocations = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     assert len(invocations) == 1
     assert "--model" in invocations[0]["args"]
-    assert invocations[0]["args"][invocations[0]["args"].index("--model") + 1] == "codex-mini-latest"
+    assert (
+        invocations[0]["args"][invocations[0]["args"].index("--model") + 1]
+        == "codex-mini-latest"
+    )
     assert provider.last_run_metadata["model_requested_explicit"] == "codex-mini-latest"
     assert provider.last_run_metadata["model_fallback_used"] is False
 
@@ -346,7 +377,7 @@ async def test_claude_code_provider_text(fake_cli_bins: dict[str, str]) -> None:
 
 @pytest.mark.asyncio
 async def test_claude_code_provider_merges_wildcard_role_defaults_with_explicit_overrides(
-    fake_cli_bins: dict[str, str]
+    fake_cli_bins: dict[str, str],
 ) -> None:
     provider = ClaudeCodeProvider(
         ProviderCfg(
@@ -382,7 +413,9 @@ async def test_claude_code_provider_merges_wildcard_role_defaults_with_explicit_
 
 
 @pytest.mark.asyncio
-async def test_claude_code_provider_structured_output(fake_cli_bins: dict[str, str]) -> None:
+async def test_claude_code_provider_structured_output(
+    fake_cli_bins: dict[str, str],
+) -> None:
     provider = ClaudeCodeProvider(
         ProviderCfg(
             type="cli",
@@ -406,7 +439,9 @@ async def test_claude_code_provider_structured_output(fake_cli_bins: dict[str, s
     assert provider.last_structured_output == {"status": "ok", "source": "claude"}
 
 
-def test_cli_providers_report_available_when_binary_exists(fake_cli_bins: dict[str, str]) -> None:
+def test_cli_providers_report_available_when_binary_exists(
+    fake_cli_bins: dict[str, str],
+) -> None:
     clear_registry()
     register_provider_config(
         "codex_cli",

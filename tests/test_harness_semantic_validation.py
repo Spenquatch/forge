@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from anvil.harness.contracts import (
     build_analysis_review_contract,
     canonical_artifact_focus_id,
@@ -20,7 +22,9 @@ from anvil.harness.semantic_validation import (
     validate_stage_output,
 )
 from anvil.harness.types import (
+    DETERMINISTIC_FEATURE_PLANNING_KIND,
     GENERIC_FOCUS_GATE_QUESTION_PROMPT,
+    PLANNING_RUNTIME_TARGET,
     StrategyConfig,
     TaskSpec,
     canonical_workspace_ref_list,
@@ -88,6 +92,40 @@ def _strategy(
     if trust_execution_mode is not None:
         payload["trust_review"] = {"execution_mode": trust_execution_mode}
     return StrategyConfig.from_dict(payload)
+
+
+def _planning_strategy() -> StrategyConfig:
+    return StrategyConfig.from_dict(
+        {
+            "name": "deterministic-feature-planning",
+            "kind": DETERMINISTIC_FEATURE_PLANNING_KIND,
+            "runtime_target": PLANNING_RUNTIME_TARGET,
+            "roles": {
+                "planner": {
+                    "provider": "codex_cli",
+                    "effort": "high",
+                    "access": "read",
+                }
+            },
+            "phases": [
+                {"id": "design_doc", "stage_type": "rubric_design_doc"},
+                {
+                    "id": "seam_decomposition",
+                    "stage_type": "architecture_seam_decomposition",
+                },
+                {
+                    "id": "parallel_planning",
+                    "stage_type": "parallel_workstream_planning",
+                },
+                {"id": "slice_emission", "stage_type": "executable_slice_emission"},
+            ],
+            "artifact_policy": "planning_package_v1",
+            "determinism_policy": "stable_structure_v1",
+            "discovery_policy": "bounded_repo_scan_v1",
+            "rubric_policy": "design_doc_gate_v1",
+            "stop_policy": "clarification_or_stop_v1",
+        }
+    )
 
 
 def _fixture() -> dict:
@@ -427,9 +465,7 @@ def _attestation_review_payload() -> dict:
                 "verdict": "accept",
                 "open_issue_ids": [],
                 "summary": "Recommendation 1 is still directly supported.",
-                "checked_files": [
-                    ".github/workflows/codex-cli-release-watch.yml"
-                ],
+                "checked_files": [".github/workflows/codex-cli-release-watch.yml"],
                 "verified_evidence_refs": [
                     ".github/workflows/codex-cli-release-watch.yml"
                 ],
@@ -450,6 +486,45 @@ def _attestation_review_payload() -> dict:
         "scope_escapes": [],
         "warnings": [],
     }
+
+
+def test_planning_task_spec_rejects_workspace_writes():
+    with pytest.raises(
+        ValueError,
+        match="planning tasks must set workspace_write_policy.mode to forbid",
+    ):
+        TaskSpec.from_dict(
+            {
+                "id": "plan-release-watch-parity",
+                "task_kind": "planning",
+                "objective": "Plan release-watch parity work.",
+                "workspace_write_policy": {"mode": "allow"},
+            }
+        )
+
+
+def test_planning_strategy_config_accepts_canonical_declaration():
+    strategy = _planning_strategy()
+
+    assert strategy.kind == DETERMINISTIC_FEATURE_PLANNING_KIND
+    assert strategy.runtime_target == PLANNING_RUNTIME_TARGET
+    assert [phase.to_dict() for phase in strategy.phases] == [
+        {"id": "design_doc", "stage_type": "rubric_design_doc"},
+        {
+            "id": "seam_decomposition",
+            "stage_type": "architecture_seam_decomposition",
+        },
+        {
+            "id": "parallel_planning",
+            "stage_type": "parallel_workstream_planning",
+        },
+        {"id": "slice_emission", "stage_type": "executable_slice_emission"},
+    ]
+    assert strategy.artifact_policy == "planning_package_v1"
+    assert strategy.determinism_policy == "stable_structure_v1"
+    assert strategy.discovery_policy == "bounded_repo_scan_v1"
+    assert strategy.rubric_policy == "design_doc_gate_v1"
+    assert strategy.stop_policy == "clarification_or_stop_v1"
 
 
 def test_focus_gate_output_schema_exposes_v10_focus_decision_surface():
@@ -2625,9 +2700,9 @@ def test_trust_attestation_review_semantic_validation_accepts_dense_bounded_cove
     contract.trust_review.execution_mode = "attestation_over_bounded"
     payload = _attestation_review_payload()
     bounded_attestation_input = _bounded_attestation_input_payload()
-    bounded_attestation_input["contract"]["trust_execution_mode"] = (
-        "attestation_over_bounded"
-    )
+    bounded_attestation_input["contract"][
+        "trust_execution_mode"
+    ] = "attestation_over_bounded"
 
     result = validate_analysis_review_payload(
         payload,
@@ -2669,9 +2744,9 @@ def test_trust_attestation_review_semantic_validation_requires_dense_bounded_ind
     payload = _attestation_review_payload()
     payload["recommendation_reviews"] = [payload["recommendation_reviews"][0]]
     bounded_attestation_input = _bounded_attestation_input_payload()
-    bounded_attestation_input["contract"]["trust_execution_mode"] = (
-        "attestation_over_bounded"
-    )
+    bounded_attestation_input["contract"][
+        "trust_execution_mode"
+    ] = "attestation_over_bounded"
 
     result = validate_analysis_review_payload(
         payload,
@@ -2698,8 +2773,7 @@ def test_trust_attestation_review_semantic_validation_requires_dense_bounded_ind
 
     assert result.ok is False
     assert (
-        "recommendation_reviews is missing recommendation indices: 2"
-        in result.errors
+        "recommendation_reviews is missing recommendation indices: 2" in result.errors
     )
 
 
@@ -2718,9 +2792,9 @@ def test_trust_attestation_review_semantic_validation_requires_direct_bounded_ev
         ".github/workflows/nightly.yml"
     ]
     bounded_attestation_input = _bounded_attestation_input_payload()
-    bounded_attestation_input["contract"]["trust_execution_mode"] = (
-        "attestation_over_bounded"
-    )
+    bounded_attestation_input["contract"][
+        "trust_execution_mode"
+    ] = "attestation_over_bounded"
 
     result = validate_analysis_review_payload(
         payload,
@@ -2777,7 +2851,9 @@ def test_bounded_attestation_input_semantic_validation_rejects_missing_required_
         "bounded_attestation_input is missing required field: schema_version"
         in result.errors
     )
-    assert "bounded_attestation_input is missing required field: contract" in result.errors
+    assert (
+        "bounded_attestation_input is missing required field: contract" in result.errors
+    )
 
 
 def test_bounded_attestation_input_semantic_validation_rejects_wrong_schema_version():

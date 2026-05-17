@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, cast
 
 from anvil.providers import get_provider_config, get_provider_exact
 
@@ -77,9 +77,7 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         provider = get_provider_exact(self.name)
         cfg = get_provider_config(self.name)
         if provider is None or cfg is None:
-            message = (
-                f"Provider '{self.requested_name}' resolved to '{self.name}', but it is not configured or could not be initialized."
-            )
+            message = f"Provider '{self.requested_name}' resolved to '{self.name}', but it is not configured or could not be initialized."
             write_text(stdout_path, "")
             write_text(stderr_path, message)
             return ProviderRun(
@@ -133,7 +131,9 @@ class ForgeProviderAdapter(BaseProviderAdapter):
             raw_text = _coerce_text(
                 _run_provider_call(provider, prompt_text, mapped_role, kwargs)
             )
-        except Exception as exc:  # pragma: no cover - exercised in integration scenarios
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - exercised in integration scenarios
             raw_text = _coerce_text(getattr(provider, "last_response_text", ""))
             cli_result = getattr(provider, "last_cli_result", None)
             if cli_result is not None:
@@ -161,7 +161,9 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         if provider_type == "cli":
             cli_result = getattr(provider, "last_cli_result", None)
             if cli_result is not None:
-                exit_code = int(getattr(cli_result, "exit_code", exit_code) or exit_code)
+                exit_code = int(
+                    getattr(cli_result, "exit_code", exit_code) or exit_code
+                )
                 cli_stdout_text = _coerce_text(getattr(cli_result, "stdout_text", ""))
                 if cli_stdout_text:
                     raw_text = cli_stdout_text
@@ -282,16 +284,24 @@ def get_provider(name: str) -> BaseProviderAdapter:
 def _run_provider_call(
     provider: Any, prompt_text: str, mapped_role: str, kwargs: dict[str, Any]
 ) -> str | bytes:
-    async def _invoke() -> str:
+    async def _invoke() -> str | bytes:
         if hasattr(provider, "generate"):
-            return await provider.generate(prompt_text, role=mapped_role, **kwargs)
-        if hasattr(provider, "chat"):
-            return await provider.chat(
-                [{"role": "user", "content": prompt_text}],
-                role=mapped_role,
-                **kwargs,
+            return cast(
+                str | bytes,
+                await provider.generate(prompt_text, role=mapped_role, **kwargs),
             )
-        raise RuntimeError(f"Provider {type(provider).__name__} does not expose generate/chat")
+        if hasattr(provider, "chat"):
+            return cast(
+                str | bytes,
+                await provider.chat(
+                    [{"role": "user", "content": prompt_text}],
+                    role=mapped_role,
+                    **kwargs,
+                ),
+            )
+        raise RuntimeError(
+            f"Provider {type(provider).__name__} does not expose generate/chat"
+        )
 
     try:
         asyncio.get_running_loop()
@@ -343,7 +353,9 @@ def _reported_model_name(provider: Any, explicit_model: str | None) -> str | Non
     return str(fallback) if fallback not in (None, "") else None
 
 
-def _render_prompt_for_provider(prompt_text: str, schema: dict[str, Any], *, provider_type: str) -> str:
+def _render_prompt_for_provider(
+    prompt_text: str, schema: dict[str, Any], *, provider_type: str
+) -> str:
     if provider_type == "cli":
         return prompt_text
     schema_text = json.dumps(schema, indent=2, sort_keys=False)
@@ -366,7 +378,9 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
-def _extract_structured_output(text: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+def _extract_structured_output(
+    text: str,
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     cleaned = text.strip()
     if not cleaned:
         return None, "Provider returned no text to parse."
@@ -432,7 +446,9 @@ def _extract_first_json_object(text: str) -> Optional[str]:
     return None
 
 
-def _soft_validate_schema(payload: Optional[dict[str, Any]], schema: Mapping[str, Any]) -> list[str]:
+def _soft_validate_schema(
+    payload: Optional[dict[str, Any]], schema: Mapping[str, Any]
+) -> list[str]:
     if payload is None:
         return ["Structured output is missing."]
     errors: list[str] = []
@@ -440,7 +456,9 @@ def _soft_validate_schema(payload: Optional[dict[str, Any]], schema: Mapping[str
     return errors
 
 
-def _validate_node(value: Any, schema: Mapping[str, Any], *, path: str, errors: list[str]) -> None:
+def _validate_node(
+    value: Any, schema: Mapping[str, Any], *, path: str, errors: list[str]
+) -> None:
     schema_type = schema.get("type")
     if schema_type == "object":
         if not isinstance(value, dict):
@@ -457,7 +475,12 @@ def _validate_node(value: Any, schema: Mapping[str, Any], *, path: str, errors: 
                 if field not in value:
                     continue
                 if isinstance(child_schema, Mapping):
-                    _validate_node(value[field], child_schema, path=f"{path}.{field}", errors=errors)
+                    _validate_node(
+                        value[field],
+                        child_schema,
+                        path=f"{path}.{field}",
+                        errors=errors,
+                    )
         enum = schema.get("enum")
         if isinstance(enum, list) and value not in enum:
             errors.append(f"{path}: value must be one of {enum}")
@@ -514,7 +537,9 @@ def _classify_provider_failure(
     raw_text: str,
     exit_code: int,
 ) -> tuple[str, str] | None:
-    message = _provider_failure_message(payload, error_text=error_text, raw_text=raw_text)
+    message = _provider_failure_message(
+        payload, error_text=error_text, raw_text=raw_text
+    )
     lowered = message.lower()
     looks_like_provider_envelope = _looks_like_provider_result_envelope(payload)
 
@@ -525,19 +550,46 @@ def _classify_provider_failure(
         return None
 
     kind = "provider_error"
-    if any(token in lowered for token in ("hit your limit", "quota", "rate limit", "too many requests", "429")):
+    if any(
+        token in lowered
+        for token in (
+            "hit your limit",
+            "quota",
+            "rate limit",
+            "too many requests",
+            "429",
+        )
+    ):
         kind = "quota_exhausted"
-    elif any(token in lowered for token in ("authentication", "unauthorized", "api key", "not logged in", "login")):
+    elif any(
+        token in lowered
+        for token in (
+            "authentication",
+            "unauthorized",
+            "api key",
+            "not logged in",
+            "login",
+        )
+    ):
         kind = "authentication_error"
-    elif any(token in lowered for token in ("permission denied", "forbidden", "permission")):
+    elif any(
+        token in lowered for token in ("permission denied", "forbidden", "permission")
+    ):
         kind = "permission_denied"
     elif any(
         token in lowered
-        for token in ("not configured", "could not be initialized", "unavailable", "not installed")
+        for token in (
+            "not configured",
+            "could not be initialized",
+            "unavailable",
+            "not installed",
+        )
     ):
         kind = "provider_unavailable"
 
-    summary = _format_provider_failure_summary(kind, message or f"Provider exited with code {exit_code}.")
+    summary = _format_provider_failure_summary(
+        kind, message or f"Provider exited with code {exit_code}."
+    )
     return kind, summary
 
 

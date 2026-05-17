@@ -9,6 +9,9 @@ from typing import Any
 from .types import (
     ANALYSIS_REVIEW_LEGACY_KIND,
     ANALYSIS_REVIEW_TRUST_KIND,
+    PLANNING_RUNTIME_TARGET,
+    StrategyConfig,
+    infer_runtime_target_for_strategy_kind,
     is_analysis_review_strategy_kind,
 )
 
@@ -109,15 +112,29 @@ class TerminalOutcomeSpec:
 
 
 @dataclass(frozen=True)
+class PlanningPhaseSpec:
+    phase_id: str
+    stage_type: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "id": self.phase_id,
+            "stage_type": self.stage_type,
+        }
+
+
+@dataclass(frozen=True)
 class StrategyGraphSpec:
     spec_id: str
     strategy_kind: str
     runtime_target: str
     stages: tuple[StageSpec, ...]
+    phases: tuple[PlanningPhaseSpec, ...] = ()
     linear_edges: tuple[LinearEdgeSpec, ...] = ()
     loops: tuple[LoopSpec, ...] = ()
     conditional_branches: tuple[ConditionalBranchSpec, ...] = ()
     terminal_outcomes: tuple[TerminalOutcomeSpec, ...] = ()
+    post_runtime_action: str = "select_best_draft"
     schema_version: str = STRATEGY_GRAPH_SCHEMA_VERSION
     subset: str = STRATEGY_GRAPH_SUBSET
 
@@ -129,6 +146,7 @@ class StrategyGraphSpec:
             "strategy_kind": self.strategy_kind,
             "runtime_target": self.runtime_target,
             "stages": [stage.to_dict() for stage in self.stages],
+            "phases": [phase.to_dict() for phase in self.phases],
             "linear_edges": [edge.to_dict() for edge in self.linear_edges],
             "loops": [loop.to_dict() for loop in self.loops],
             "conditional_branches": [
@@ -137,17 +155,21 @@ class StrategyGraphSpec:
             "terminal_outcomes": [
                 outcome.to_dict() for outcome in self.terminal_outcomes
             ],
+            "post_runtime_action": self.post_runtime_action,
         }
 
 
 def route_after_strategy_selection(state: Mapping[str, Any]) -> str:
     if str(state.get("config_verdict") or "pass") == "invalid_config":
         return "write_artifacts"
-    strategy_kind = str(state.get("strategy_kind") or "single_pass")
-    if strategy_kind in {"single_pass", "pfr_v1"}:
-        return strategy_kind
-    if is_analysis_review_strategy_kind(strategy_kind):
-        return "analysis_review_v1"
+    runtime_target = _runtime_target_from_state(state)
+    if runtime_target in {
+        "single_pass",
+        "pfr_v1",
+        "analysis_review_v1",
+        PLANNING_RUNTIME_TARGET,
+    }:
+        return runtime_target
     return "write_artifacts"
 
 
@@ -156,6 +178,13 @@ def build_strategy_graph_spec(
 ) -> StrategyGraphSpec:
     strategy_kind = _normalize_strategy_kind(strategy_kind)
     strategy_spec = strategy_spec or {}
+    runtime_target = str(
+        strategy_spec.get("runtime_target")
+        or infer_runtime_target_for_strategy_kind(strategy_kind)
+        or ""
+    ).strip()
+    if runtime_target == PLANNING_RUNTIME_TARGET:
+        return _build_planning_spec(strategy_kind, strategy_spec)
     if strategy_kind == "single_pass":
         return _build_single_pass_spec()
     if strategy_kind == "pfr_v1":
@@ -170,6 +199,23 @@ def _normalize_strategy_kind(strategy_kind: str) -> str:
     if normalized == ANALYSIS_REVIEW_LEGACY_KIND:
         return "analysis_review_bounded_v1"
     return normalized
+
+
+def _runtime_target_from_state(state: Mapping[str, Any]) -> str:
+    graph_spec = state.get("strategy_graph_spec")
+    if isinstance(graph_spec, Mapping):
+        runtime_target = str(graph_spec.get("runtime_target") or "").strip()
+        if runtime_target:
+            return runtime_target
+    strategy_spec = state.get("strategy_spec")
+    if isinstance(strategy_spec, Mapping):
+        runtime_target = str(strategy_spec.get("runtime_target") or "").strip()
+        if runtime_target:
+            return runtime_target
+    return str(
+        infer_runtime_target_for_strategy_kind(str(state.get("strategy_kind") or ""))
+        or ""
+    ).strip()
 
 
 def _build_single_pass_spec() -> StrategyGraphSpec:
@@ -225,24 +271,28 @@ def _build_pfr_spec(strategy_spec: Mapping[str, Any]) -> StrategyGraphSpec:
             ),
         ),
         linear_edges=(
-            LinearEdgeSpec("proposer", "falsifier"),
-            LinearEdgeSpec("patcher", "falsifier"),
-        )
-        if rerun_falsifier
-        else (LinearEdgeSpec("proposer", "falsifier"),),
+            (
+                LinearEdgeSpec("proposer", "falsifier"),
+                LinearEdgeSpec("patcher", "falsifier"),
+            )
+            if rerun_falsifier
+            else (LinearEdgeSpec("proposer", "falsifier"),)
+        ),
         loops=(
-            LoopSpec(
-                loop_id="pfr_repair_loop",
-                kind="single_back_edge",
-                from_stage_id="patcher",
-                to_stage_id="falsifier",
-                min_iterations=0,
-                max_iterations=max_repair_loops,
-                continue_when="falsifier_or_validator_requests_patch",
-            ),
-        )
-        if rerun_falsifier and max_repair_loops > 0
-        else (),
+            (
+                LoopSpec(
+                    loop_id="pfr_repair_loop",
+                    kind="single_back_edge",
+                    from_stage_id="patcher",
+                    to_stage_id="falsifier",
+                    min_iterations=0,
+                    max_iterations=max_repair_loops,
+                    continue_when="falsifier_or_validator_requests_patch",
+                ),
+            )
+            if rerun_falsifier and max_repair_loops > 0
+            else ()
+        ),
         conditional_branches=(
             ConditionalBranchSpec(
                 branch_id="falsifier_verdict",
@@ -294,9 +344,7 @@ def _build_analysis_review_spec(
         1 if bool(review_loops.get("always_run_first_revision")) else 0,
     )
     runtime_target = "analysis_review_v1"
-    execution_mode = str(
-        trust_review.get("execution_mode") or "legacy_full_review"
-    )
+    execution_mode = str(trust_review.get("execution_mode") or "legacy_full_review")
     spec_id_parts = [strategy_kind]
     spec_id_parts.append(
         f"focus_gate_{default_path}" if focus_gate_enabled else "focus_gate_off"
@@ -496,6 +544,51 @@ def _build_analysis_review_spec(
         ),
         conditional_branches=tuple(branches),
         terminal_outcomes=tuple(terminal_outcomes),
+    )
+
+
+def _build_planning_spec(
+    strategy_kind: str, strategy_spec: Mapping[str, Any]
+) -> StrategyGraphSpec:
+    parsed_strategy = StrategyConfig.from_dict(
+        {"kind": strategy_kind, **dict(strategy_spec)}
+    )
+    phases = tuple(
+        PlanningPhaseSpec(phase_id=phase.id, stage_type=phase.stage_type)
+        for phase in parsed_strategy.phases
+    )
+    return StrategyGraphSpec(
+        spec_id=f"{strategy_kind}.{PLANNING_RUNTIME_TARGET}",
+        strategy_kind=strategy_kind,
+        runtime_target=PLANNING_RUNTIME_TARGET,
+        stages=tuple(
+            StageSpec(
+                stage_id=phase.phase_id,
+                role_name="planner",
+                capabilities=(phase.stage_type,),
+            )
+            for phase in phases
+        ),
+        phases=phases,
+        linear_edges=tuple(
+            LinearEdgeSpec(phases[index].phase_id, phases[index + 1].phase_id)
+            for index in range(len(phases) - 1)
+        ),
+        terminal_outcomes=(
+            TerminalOutcomeSpec(
+                outcome_id="planning_success",
+                summary="Planning runtime emitted a deterministic planning package.",
+            ),
+            TerminalOutcomeSpec(
+                outcome_id="planning_clarification_needed",
+                summary="Planning runtime stopped with clarification requests.",
+            ),
+            TerminalOutcomeSpec(
+                outcome_id="planning_failed",
+                summary="Planning runtime stopped with a failure.",
+            ),
+        ),
+        post_runtime_action="write_artifacts",
     )
 
 

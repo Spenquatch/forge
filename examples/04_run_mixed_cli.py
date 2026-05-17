@@ -19,7 +19,9 @@ import sys
 def main() -> int:
     codex_bin = os.getenv("FORGE_CODEX_BIN", "codex")
     claude_bin = os.getenv("FORGE_CLAUDE_BIN", "claude")
-    missing = [binary for binary in (codex_bin, claude_bin) if shutil.which(binary) is None]
+    missing = [
+        binary for binary in (codex_bin, claude_bin) if shutil.which(binary) is None
+    ]
     if missing:
         print("Missing CLI binaries: " + ", ".join(missing))
         return 2
