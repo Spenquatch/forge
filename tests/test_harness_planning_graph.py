@@ -327,3 +327,38 @@ def test_planning_runtime_bypasses_select_best_draft(tmp_path: Path, monkeypatch
     result = _run_graph(state, monkeypatch)
 
     assert result["planning_terminal_status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("fixture_mode", "expected_terminal_status"),
+    [
+        ("clarification_needed", "clarification_needed"),
+        ("failed", "failed"),
+    ],
+)
+def test_planning_runtime_allows_task_fixture_modes_to_override_success_strategy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fixture_mode: str,
+    expected_terminal_status: str,
+) -> None:
+    state = _planning_graph_state(
+        tmp_path,
+        phase_inputs={
+            "design_doc": {"repo_evidence_refs": ["PLAN.md"]},
+            "seam_decomposition": {
+                "planning_seams": [{"title": "Seam A", "summary": "A"}],
+            },
+            "parallel_planning": {
+                "planning_workstreams": [{"title": "Workstream A", "summary": "A"}],
+            },
+            "slice_emission": {
+                "planning_slices": [{"title": "Slice A", "summary": "A"}],
+            },
+        },
+    )
+    state["task_spec"]["notes"] = f"planning_fixture_mode={fixture_mode}"
+
+    result = _run_graph(state, monkeypatch)
+
+    assert result["planning_terminal_status"] == expected_terminal_status

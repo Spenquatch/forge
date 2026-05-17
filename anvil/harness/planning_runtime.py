@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Shared planning runtime helpers for the bounded C1 planning family."""
 
+import re
 from collections.abc import Callable, Mapping, MutableMapping
 from copy import deepcopy
 from typing import Any
@@ -25,6 +26,10 @@ PLANNING_POLICY_FIELDS = (
     "discovery_policy",
     "rubric_policy",
     "stop_policy",
+)
+_TASK_TERMINAL_MODE_RE = re.compile(
+    r"planning_fixture_mode\s*[:=]\s*(clarification_needed|failed)",
+    re.IGNORECASE,
 )
 
 
@@ -190,6 +195,48 @@ def _phase_payload(
     if isinstance(payload, Mapping):
         return dict(payload)
     return {}
+
+
+def _task_terminal_mode(task_spec: Mapping[str, Any]) -> str:
+    for field_name in ("notes", "context", "prompt_addendum"):
+        value = str(task_spec.get(field_name) or "")
+        match = _TASK_TERMINAL_MODE_RE.search(value)
+        if match:
+            return str(match.group(1)).lower()
+    return ""
+
+
+def _task_terminal_override(
+    task_spec: Mapping[str, Any],
+    *,
+    phase_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    mode = _task_terminal_mode(task_spec)
+    if not mode:
+        return None
+    if mode == "clarification_needed":
+        clarification_requests = payload.get("clarification_requests")
+        if not isinstance(clarification_requests, list) or not clarification_requests:
+            clarification_requests = [
+                {
+                    "question": "Which seam or repository surface should the planning package prioritize first?",
+                    "rationale": "The task fixture explicitly requests clarification before continuing.",
+                }
+            ]
+        return {
+            **dict(payload),
+            "status": "clarification_needed",
+            "stop_reason": str(
+                payload.get("stop_reason") or f"{phase_id}_needs_clarification"
+            ),
+            "clarification_requests": clarification_requests,
+        }
+    return {
+        **dict(payload),
+        "status": "failed",
+        "stop_reason": str(payload.get("stop_reason") or f"{phase_id}_failed"),
+    }
 
 
 def _lookup_planning_policy_versions(strategy_spec: Mapping[str, Any]) -> dict[str, str]:
@@ -492,6 +539,7 @@ def _apply_terminal_status(
 
 def execute_planning_runtime(state: HarnessState) -> HarnessState:
     mutable_state = state
+    task_spec = dict(mutable_state.get("task_spec") or {})
     strategy_spec = dict(mutable_state.get("strategy_spec") or {})
     phases = list(strategy_spec.get("phases") or [])
     policy_versions = _lookup_planning_policy_versions(strategy_spec)
@@ -519,6 +567,13 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
             phase_id=str(phase_spec["id"]),
             stage_type=stage_type,
         )
+        payload = dict(payload)
+        if index == 1:
+            payload = _task_terminal_override(
+                task_spec,
+                phase_id=str(phase_spec["id"]),
+                payload=payload,
+            ) or payload
         outcome = handler(mutable_state, phase_spec, payload, policy_versions)
 
         mutable_state["repo_evidence_refs"] = _merge_repo_evidence_refs(
