@@ -45,6 +45,7 @@ from anvil.leadership_interface import (
     ExecutionContext,
     get_leadership_orchestrator,
 )
+
 try:
     from anvil.orchestration.graph import create_forge_graph
     from anvil.orchestration.langgraph_executor import LangGraphExecutor
@@ -55,6 +56,12 @@ except Exception:  # pragma: no cover - handled at command runtime
     ForgeState = None
     create_state = None
 
+from anvil.harness.cli import _print_summary, _summary_exit_code, summary_from_state_v1
+from anvil.harness.executor import HarnessLangGraphExecutor
+from anvil.harness.runner import HarnessError
+from anvil.harness.runner import HarnessRunner as _HarnessRunner
+
+HarnessRunner = _HarnessRunner
 from anvil.orchestrator import reload_config
 
 # Enhanced Phase 2 modules
@@ -62,9 +69,6 @@ from anvil.performance_monitor import MetricType, get_performance_monitor
 from anvil.persistence_manager import get_persistence_manager
 from anvil.providers import get_provider_exact
 from anvil.usage import TokenUsage, estimate_cost_usd
-from anvil.harness.cli import _summary_exit_code
-from anvil.harness.executor import HarnessLangGraphExecutor
-from anvil.harness.runner import HarnessError, HarnessRunner
 
 ROLE_NODES = ["execute", "critique", "refine", "review", "reflect"]
 _STREAM_PROGRESS_EVENTS = {"on_chain_start", "on_chain_end"}
@@ -1057,21 +1061,7 @@ async def harness_run_command(
             auto_fit_strategy=auto_fit_strategy,
             analysis_review_execution_mode=analysis_review_execution_mode,
         )
-        summary = state.get("summary_payload") or {
-            "verdict": state.get("run_verdict"),
-            "verdicts": {
-                "run_verdict": state.get("run_verdict"),
-                "content_verdict": state.get("content_verdict"),
-                "validator_verdict": state.get("validator_verdict"),
-                "policy_verdict": state.get("policy_verdict"),
-                "config_verdict": state.get("config_verdict"),
-            },
-            "artifacts": {
-                key: value.get("path")
-                for key, value in dict(state.get("artifact_index") or {}).items()
-                if isinstance(value, dict) and value.get("path")
-            },
-        }
+        summary = summary_from_state_v1(state)
     except (HarnessError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
         print(f"❌ HARNESS RUN FAILED: {exc}")
         return 2
@@ -1080,25 +1070,7 @@ async def harness_run_command(
         print(json.dumps(summary, indent=2, sort_keys=False))
         return _summary_exit_code(summary)
 
-    verdicts = summary.get("verdicts") or {}
-    artifacts = summary.get("artifacts") or {}
-    print(f"run_verdict={verdicts.get('run_verdict', summary.get('verdict'))}")
-    print(f"content_verdict={verdicts.get('content_verdict')}")
-    print(f"validator_verdict={verdicts.get('validator_verdict')}")
-    print(f"policy_verdict={verdicts.get('policy_verdict')}")
-    print(f"config_verdict={verdicts.get('config_verdict', 'pass')}")
-    print(f"run_dir={artifacts.get('run_dir')}")
-    print(f"report={artifacts.get('report_md')}")
-    print(f"summary={artifacts.get('summary_json')}")
-    final_artifact = artifacts.get('final_artifact')
-    if final_artifact:
-        print(f"final_artifact={final_artifact}")
-    final_answer_md = artifacts.get('final_answer_md')
-    if final_answer_md:
-        print(f"final_answer={final_answer_md}")
-    partial_answer_md = artifacts.get('partial_answer_md')
-    if partial_answer_md:
-        print(f"partial_answer={partial_answer_md}")
+    _print_summary(summary)
     return _summary_exit_code(summary)
 
 

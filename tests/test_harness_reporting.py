@@ -3076,7 +3076,7 @@ def test_render_report_distinguishes_artifact_focus_from_downstream_seam_bridge(
         [".github/workflows/codex-cli-release-watch.yml"]
     )
 
-    assert f"- Focus type: `artifact`" in section
+    assert "- Focus type: `artifact`" in section
     assert f"- Selected focus ID: `{selected_focus_id}`" in section
     assert "- Artifact singleton preserved: `yes` (`1` path)" in section
     assert f"- Downstream primary seam ID: `{downstream_seam_id}`" in section
