@@ -1,0 +1,89 @@
+name: deterministic-feature-planning-v1
+kind: deterministic_feature_planning_v1
+runtime_target: planning_v1
+roles:
+  planner:
+    provider: codex_cli
+    effort: high
+    access: read
+phases:
+  - id: design_doc
+    stage_type: rubric_design_doc
+  - id: seam_decomposition
+    stage_type: architecture_seam_decomposition
+  - id: parallel_planning
+    stage_type: parallel_workstream_planning
+  - id: slice_emission
+    stage_type: executable_slice_emission
+artifact_policy: planning_package_v1
+determinism_policy: stable_structure_v1
+discovery_policy: bounded_repo_scan_v1
+rubric_policy: design_doc_gate_v1
+stop_policy: clarification_or_stop_v1
+phase_inputs:
+  design_doc:
+    repo_evidence_refs:
+      - PLAN.md
+      - anvil/harness/strategy_graph.py
+    search_pass_count: 1
+    inspected_file_count: 2
+    summary: >
+      The planning objective is coherent, bounded to the C1 wedge, and can be
+      decomposed deterministically through the shared planning runtime.
+  seam_decomposition:
+    repo_evidence_refs:
+      - anvil/harness/builder.py
+      - anvil/harness/reporting.py
+    search_pass_count: 1
+    inspected_file_count: 3
+    planning_seams:
+      - id: seam-runtime-routing
+        title: Runtime Target Routing
+        summary: Route planning strategies through the shared harness graph runtime target.
+        repo_evidence_refs:
+          - anvil/harness/builder.py
+          - anvil/harness/strategy_graph.py
+      - id: seam-artifact-publication
+        title: Planning Artifact Publication
+        summary: Publish deterministic planning artifacts through the shared write seam.
+        repo_evidence_refs:
+          - anvil/harness/reporting.py
+          - anvil/harness/artifacts.py
+  parallel_planning:
+    search_pass_count: 1
+    inspected_file_count: 2
+    planning_workstreams:
+      - id: workstream-runtime-wiring
+        title: Runtime Wiring
+        summary: Mount planning_v1 and preserve generic post-runtime routing.
+        seam_ids:
+          - seam-runtime-routing
+        worktree_recommended: true
+      - id: workstream-artifact-surface
+        title: Artifact Surface
+        summary: Project the frozen planning payload into PLAN.md and plan.json.
+        seam_ids:
+          - seam-artifact-publication
+        worktree_recommended: true
+  slice_emission:
+    search_pass_count: 1
+    inspected_file_count: 2
+    planning_slices:
+      - id: slice-mount-planning-runtime
+        title: Mount planning_v1
+        summary: Add the planning runtime family and bypass draft selection for planning runs.
+        workstream_id: workstream-runtime-wiring
+        seam_ids:
+          - seam-runtime-routing
+        acceptance_criteria:
+          - planning_v1 is mounted in the shared graph builder
+          - planning routes directly to artifact writing
+      - id: slice-publish-planning-artifacts
+        title: Publish planning artifacts
+        summary: Emit deterministic PLAN.md and plan.json artifacts for successful runs.
+        workstream_id: workstream-artifact-surface
+        seam_ids:
+          - seam-artifact-publication
+        acceptance_criteria:
+          - artifact_index contains plan_md and plan_json
+          - CLI JSON returns the planning terminal payload

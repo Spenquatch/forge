@@ -1,0 +1,29 @@
+id: deterministic_feature_planning_failed
+task_kind: planning
+objective: >
+  Produce a deterministic execution plan for the C1 planning compiler wedge,
+  but stop with an explicit planning failure.
+workspace_write_policy:
+  mode: forbid
+  allowed_paths: []
+  denied_paths: []
+  allow_untracked: false
+  allow_renames: false
+  allow_deletions: false
+  max_touched_files: 0
+  require_clean_start: false
+acceptance:
+  - Emit the failed terminal status.
+  - Return an explicit planning_stop_reason.
+  - Do not publish plan artifacts.
+constraints:
+  - Keep the planning package bounded to the C1 deterministic planning wedge.
+  - Do not modify repository files.
+context: |
+  Use the repository state in the target workspace as the planning context.
+  This fixture exercises the honest failed stop path.
+files_hint:
+  - PLAN.md
+  - anvil/harness/*
+notes: |
+  planning_fixture_mode=failed
