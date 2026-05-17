@@ -233,6 +233,13 @@ def _normalize_planning_seams(raw_items: Any) -> list[dict[str, Any]]:
         seam_id = _first_present_string(item, "seam_id", "id")
         if not seam_id:
             continue
+        paths = _normalized_string_list(
+            item.get("paths")
+            or item.get("files")
+            or item.get("candidate_paths")
+            or item.get("repo_evidence_refs")
+            or item.get("evidence_refs")
+        )
         normalized.append(
             {
                 "seam_id": seam_id,
@@ -244,9 +251,7 @@ def _normalize_planning_seams(raw_items: Any) -> list[dict[str, Any]]:
                     "description",
                 )
                 or seam_id,
-                "paths": _normalized_string_list(
-                    item.get("paths") or item.get("files") or item.get("candidate_paths")
-                ),
+                "paths": paths,
             }
         )
     return normalized
