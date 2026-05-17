@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 from pathlib import Path
 
+import pytest
+
+from anvil.harness.builder import build_harness_langgraph
 from anvil.harness.contracts import build_analysis_review_contract
 from anvil.harness.files import load_structured_file
-from anvil.harness.strategy_graph import STRATEGY_GRAPH_SUBSET, build_strategy_graph_spec
+from anvil.harness.nodes.prepare_run import prepare_run_node
+from anvil.harness.nodes.validator_preflight import validator_preflight_node
+from anvil.harness.strategy_graph import (
+    STRATEGY_GRAPH_SUBSET,
+    build_strategy_graph_spec,
+)
 from anvil.harness.types import StrategyConfig, TaskSpec
 
 
@@ -27,6 +37,81 @@ def _resolved_execution_mode(strategy_path: Path) -> str:
 
 def _scenario_names(scenarios: list[dict[str, object]]) -> list[str]:
     return [str(scenario["name"]) for scenario in scenarios]
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _planning_strategy_path() -> Path:
+    return Path("examples/harness/strategies/deterministic_feature_planning_v1.yaml")
+
+
+def _planning_task_path(name: str) -> Path:
+    return Path(f"examples/harness/tasks/deterministic_feature_planning_{name}.yaml")
+
+
+def _run_planning_example_fixture(
+    task_path: Path,
+    *,
+    tmp_path: Path,
+    run_label: str,
+) -> dict[str, object]:
+    raw_strategy = load_structured_file(_planning_strategy_path())
+    original_prepare_run_node = prepare_run_node
+    original_validator_preflight_node = validator_preflight_node
+
+    def _with_phase_inputs(state: dict[str, object]) -> dict[str, object]:
+        strategy_spec = dict(state.get("strategy_spec") or {})
+        phase_inputs = raw_strategy.get("phase_inputs")
+        if isinstance(phase_inputs, dict):
+            strategy_spec["phase_inputs"] = copy.deepcopy(phase_inputs)
+        state["strategy_spec"] = strategy_spec
+        return state
+
+    def _prepare(payload: dict[str, object]) -> dict[str, object]:
+        prepared = original_prepare_run_node(payload)
+        return _with_phase_inputs(prepared)
+
+    def _validator(payload: dict[str, object]) -> dict[str, object]:
+        validated = original_validator_preflight_node(payload)
+        return _with_phase_inputs(validated)
+
+    out_root = tmp_path / run_label
+    out_root.mkdir(parents=True, exist_ok=True)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("anvil.harness.builder.prepare_run_node", _prepare)
+        monkeypatch.setattr(
+            "anvil.harness.builder.validator_preflight_node",
+            _validator,
+        )
+        graph = build_harness_langgraph()
+        return asyncio.run(
+            graph.ainvoke(
+                {
+                    "task_path": str(task_path),
+                    "strategy_path": str(_planning_strategy_path()),
+                    "workspace_root": str(_repo_root()),
+                    "out_root": str(out_root),
+                    "thread_id": f"thread-{run_label}",
+                },
+                {"configurable": {"thread_id": f"thread-{run_label}"}},
+            )
+        )
+
+
+def _plan_payload(summary: dict[str, object]) -> dict[str, object]:
+    artifacts = dict(summary["artifacts"])
+    return load_structured_file(Path(str(artifacts["plan_json"])))
+
+
+def _planning_ids(
+    plan_payload: dict[str, object],
+) -> tuple[list[str], list[str], list[str]]:
+    seams = [str(item["seam_id"]) for item in plan_payload["seams"]]
+    workstreams = [str(item["workstream_id"]) for item in plan_payload["workstreams"]]
+    slices = [str(item["slice_id"]) for item in plan_payload["slices"]]
+    return seams, workstreams, slices
 
 
 def test_focus_gate_adjudicate_examples_clone_base_analysis_review_strategies():
@@ -199,7 +284,9 @@ def test_focus_gate_live_acceptance_templates_still_target_canonical_trust_examp
         Path("examples/harness/live_acceptance/focus_gate_acceptance.template.yaml")
     )
     local_manifest = load_structured_file(
-        Path("examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml")
+        Path(
+            "examples/harness/live_acceptance/focus_gate_acceptance_local.template.yaml"
+        )
     )
     compatibility_manifest = load_structured_file(
         Path("examples/harness/live_acceptance/m2_focus_gate_local.template.yaml")
@@ -316,6 +403,17 @@ def test_example_strategies_resolve_to_expected_internal_graph_family_metadata()
             "analysis_review_v1",
             ["proposer", "critic", "reviser", "auditor", "attestation_auditor"],
         ),
+        (
+            "examples/harness/strategies/deterministic_feature_planning_v1.yaml",
+            "deterministic_feature_planning_v1",
+            "planning_v1",
+            [
+                "design_doc",
+                "seam_decomposition",
+                "parallel_planning",
+                "slice_emission",
+            ],
+        ),
     ]
 
     for path, expected_kind, expected_runtime_target, expected_stage_ids in cases:
@@ -326,3 +424,173 @@ def test_example_strategies_resolve_to_expected_internal_graph_family_metadata()
         assert spec["strategy_kind"] == expected_kind
         assert spec["runtime_target"] == expected_runtime_target
         assert [stage["stage_id"] for stage in spec["stages"]] == expected_stage_ids
+
+
+def test_planning_example_strategy_matches_frozen_surface_and_graph_metadata(
+    tmp_path: Path,
+):
+    raw_strategy = load_structured_file(_planning_strategy_path())
+    phase_inputs = raw_strategy.pop("phase_inputs")
+    parsed = StrategyConfig.from_dict(raw_strategy | {"phase_inputs": phase_inputs})
+    spec = build_strategy_graph_spec(raw_strategy["kind"], raw_strategy).to_dict()
+    prepared = prepare_run_node(
+        {
+            "task_path": str(_planning_task_path("success")),
+            "strategy_path": str(_planning_strategy_path()),
+            "workspace_root": str(_repo_root()),
+            "out_root": str(tmp_path),
+        }
+    )
+    validated = validator_preflight_node(
+        {
+            **prepared,
+            "warnings": [],
+            "errors": [],
+            "auto_fit_strategy": True,
+        }
+    )
+
+    assert list(phase_inputs) == [
+        "design_doc",
+        "seam_decomposition",
+        "parallel_planning",
+        "slice_emission",
+    ]
+    assert parsed.name == raw_strategy["name"]
+    assert parsed.kind == raw_strategy["kind"]
+    assert parsed.runtime_target == raw_strategy["runtime_target"]
+    assert list(parsed.roles) == ["planner"]
+    assert [phase.id for phase in parsed.phases] == [
+        "design_doc",
+        "seam_decomposition",
+        "parallel_planning",
+        "slice_emission",
+    ]
+    assert [phase.stage_type for phase in parsed.phases] == [
+        "rubric_design_doc",
+        "architecture_seam_decomposition",
+        "parallel_workstream_planning",
+        "executable_slice_emission",
+    ]
+    assert spec["subset"] == STRATEGY_GRAPH_SUBSET
+    assert spec["strategy_kind"] == "deterministic_feature_planning_v1"
+    assert spec["runtime_target"] == "planning_v1"
+    assert spec["post_runtime_action"] == "write_artifacts"
+    assert [stage["stage_id"] for stage in spec["stages"]] == [
+        "design_doc",
+        "seam_decomposition",
+        "parallel_planning",
+        "slice_emission",
+    ]
+    assert list(prepared["strategy_spec"]["phase_inputs"]) == [
+        "design_doc",
+        "seam_decomposition",
+        "parallel_planning",
+        "slice_emission",
+    ]
+    assert list(validated["strategy_spec"]["phase_inputs"]) == [
+        "design_doc",
+        "seam_decomposition",
+        "parallel_planning",
+        "slice_emission",
+    ]
+
+
+def test_planning_example_tasks_cover_success_clarification_and_failed_modes():
+    cases = [
+        (_planning_task_path("success"), ""),
+        (
+            _planning_task_path("clarification"),
+            "planning_fixture_mode=clarification_needed",
+        ),
+        (_planning_task_path("failed"), "planning_fixture_mode=failed"),
+    ]
+
+    for task_path, expected_fixture_mode in cases:
+        task_payload = load_structured_file(task_path)
+        task = TaskSpec.from_dict(task_payload)
+
+        assert task.task_kind == "planning"
+        assert task.workspace_write_policy.mode == "forbid"
+        assert task.files_hint
+        if expected_fixture_mode:
+            assert expected_fixture_mode in str(task_payload.get("notes") or "")
+        else:
+            assert "planning_fixture_mode=" not in str(task_payload.get("notes") or "")
+
+
+def test_planning_example_fixture_corpus_proves_all_terminal_outcomes(tmp_path: Path):
+    success_state = _run_planning_example_fixture(
+        _planning_task_path("success"),
+        tmp_path=tmp_path,
+        run_label="success",
+    )
+    clarification_state = _run_planning_example_fixture(
+        _planning_task_path("clarification"),
+        tmp_path=tmp_path,
+        run_label="clarification",
+    )
+    failed_state = _run_planning_example_fixture(
+        _planning_task_path("failed"),
+        tmp_path=tmp_path,
+        run_label="failed",
+    )
+
+    success_summary = dict(success_state["summary_payload"])
+    clarification_summary = dict(clarification_state["summary_payload"])
+    failed_summary = dict(failed_state["summary_payload"])
+    success_plan = _plan_payload(success_summary)
+
+    assert success_summary["terminal_status"] == "success"
+    assert Path(str(success_summary["artifacts"]["plan_md"])).exists()
+    assert Path(str(success_summary["artifacts"]["plan_json"])).exists()
+    assert success_plan["terminal_status"] == "success"
+    assert len(success_plan["seams"]) == 2
+    assert len(success_plan["workstreams"]) == 2
+    assert len(success_plan["slices"]) == 2
+
+    assert clarification_summary["terminal_status"] == "clarification_needed"
+    assert clarification_summary["clarification_requests"]
+    assert "plan_md" not in clarification_summary["artifacts"]
+    assert "plan_json" not in clarification_summary["artifacts"]
+
+    assert failed_summary["terminal_status"] == "failed"
+    assert failed_summary["stop_reason"] == "design_doc_failed"
+    assert "plan_md" not in failed_summary["artifacts"]
+    assert "plan_json" not in failed_summary["artifacts"]
+
+
+def test_planning_example_success_repeat_runs_preserve_stable_ids(
+    tmp_path: Path,
+):
+    observed_ids = []
+
+    for attempt in range(3):
+        state = _run_planning_example_fixture(
+            _planning_task_path("success"),
+            tmp_path=tmp_path,
+            run_label=f"success-repeat-{attempt}",
+        )
+        summary = dict(state["summary_payload"])
+        observed_ids.append(_planning_ids(_plan_payload(summary)))
+
+    assert (
+        observed_ids
+        == [
+            (
+                [
+                    "seam-runtime-routing",
+                    "seam-artifact-publication",
+                ],
+                [
+                    "workstream-runtime-wiring",
+                    "workstream-artifact-surface",
+                ],
+                [
+                    "slice-mount-planning-runtime",
+                    "slice-publish-planning-artifacts",
+                ],
+            )
+        ]
+        * 3
+    )
