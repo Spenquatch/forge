@@ -18,7 +18,7 @@ from .publication_authority import (
     sanitize_summary_text,
 )
 from .report import render_report
-from .schemas import plan_json_schema
+from .schemas import PLANNING_ARTIFACT_SCHEMA_VERSION, plan_json_schema
 from .selection import select_best_draft
 from .topic_lifecycle import (
     partial_accept_topic_eligibility,
@@ -41,7 +41,6 @@ _FINAL_ANSWER_OMITS_REQUIRED_PREFIX = (
 )
 HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
 SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
-PLANNING_ARTIFACT_SCHEMA_VERSION = "plan_artifact_v1"
 PLANNING_RUNTIME_TARGET = "planning_v1"
 PLANNING_RUN_MODES = (
     "fixture-backed",
@@ -373,6 +372,35 @@ def _normalize_planning_policy_versions(raw_value: Any) -> dict[str, str]:
     return normalized
 
 
+def _normalize_planning_terminal_coverage_status(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+    terminal_status: str,
+) -> str:
+    for value in (
+        state.get("planning_coverage_status"),
+        seeded_summary.get("coverage_status"),
+        seeded_summary.get("planning_coverage_status"),
+    ):
+        normalized = _string_or_empty(value)
+        if normalized in PLANNING_TERMINAL_STATUSES:
+            return normalized
+    return terminal_status
+
+
+def _normalize_planning_runtime_records(raw_value: Any, *, id_field: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for item in _iter_planning_records(raw_value, id_field=id_field):
+        record_id = _first_present_string(item, id_field, "id")
+        if not record_id:
+            continue
+        record = copy.deepcopy(item)
+        record[id_field] = record_id
+        records.append(record)
+    return records
+
+
 def _planning_terminal_status(
     state: dict[str, Any],
     *,
@@ -468,6 +496,11 @@ def plan_projection_v1(
     }
     terminal_status = _planning_terminal_status(state, seeded_summary=seeded_summary)
     run_mode = _planning_run_mode(state, seeded_summary=seeded_summary)
+    coverage_status = _normalize_planning_terminal_coverage_status(
+        state,
+        seeded_summary=seeded_summary,
+        terminal_status=terminal_status,
+    )
     stop_reason = _string_or_empty(
         state.get("planning_stop_reason")
         or state.get("stop_reason")
@@ -488,6 +521,42 @@ def plan_projection_v1(
         stop_reason = "Planning requires clarification before execution can proceed."
     if terminal_status == "failed" and not stop_reason:
         stop_reason = "Planning runtime failed before emitting a valid plan."
+    coverage_ledger = _normalize_planning_runtime_records(
+        (
+            state.get("planning_coverage_ledger")
+            if state.get("planning_coverage_ledger") is not None
+            else (
+                seeded_summary.get("coverage_ledger")
+                if seeded_summary.get("coverage_ledger") is not None
+                else seeded_summary.get("planning_coverage_ledger")
+            )
+        ),
+        id_field="coverage_id",
+    )
+    assumptions_register = _normalize_planning_runtime_records(
+        (
+            state.get("planning_assumptions_register")
+            if state.get("planning_assumptions_register") is not None
+            else (
+                seeded_summary.get("assumptions_register")
+                if seeded_summary.get("assumptions_register") is not None
+                else seeded_summary.get("planning_assumptions_register")
+            )
+        ),
+        id_field="assumption_id",
+    )
+    uncovered_delta = _normalize_planning_runtime_records(
+        (
+            state.get("planning_uncovered_delta")
+            if state.get("planning_uncovered_delta") is not None
+            else (
+                seeded_summary.get("uncovered_delta")
+                if seeded_summary.get("uncovered_delta") is not None
+                else seeded_summary.get("planning_uncovered_delta")
+            )
+        ),
+        id_field="delta_id",
+    )
     payload = {
         "schema_version": PLANNING_ARTIFACT_SCHEMA_VERSION,
         "run_id": _string_or_empty(state.get("run_id") or seeded_summary.get("run_id")),
@@ -548,6 +617,10 @@ def plan_projection_v1(
             if state.get("discovery_budget_escalated") is not None
             else seeded_summary.get("discovery_budget_escalated")
         ),
+        "coverage_status": coverage_status,
+        "coverage_ledger": coverage_ledger,
+        "assumptions_register": assumptions_register,
+        "uncovered_delta": uncovered_delta,
     }
     return payload
 
@@ -614,6 +687,54 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
                 )
     else:
         lines.append("- No executable slices emitted.")
+
+    lines.extend(["", "## Coverage Ledger"])
+    coverage_ledger = plan_payload.get("coverage_ledger") or []
+    if coverage_ledger:
+        for coverage_row in coverage_ledger:
+            lines.append(
+                f"- `{coverage_row.get('coverage_id')}`: `{coverage_row.get('status')}` {coverage_row.get('summary') or coverage_row.get('dimension')}"
+            )
+            lines.append(
+                "  Dimension: "
+                + str(coverage_row.get("dimension") or "unknown")
+                + "; phase_ids: "
+                + (", ".join(coverage_row.get("source_phase_ids") or []) or "none")
+            )
+    else:
+        lines.append("- No coverage rows emitted.")
+
+    lines.extend(["", "## Assumptions Register"])
+    assumptions_register = plan_payload.get("assumptions_register") or []
+    if assumptions_register:
+        for assumption_row in assumptions_register:
+            lines.append(
+                f"- `{assumption_row.get('assumption_id')}`: `{assumption_row.get('status')}` {assumption_row.get('statement') or ''}".rstrip()
+            )
+            lines.append(
+                "  Kind: "
+                + str(assumption_row.get("kind") or "unknown")
+                + "; source_phase_id: "
+                + str(assumption_row.get("source_phase_id") or "unknown")
+            )
+    else:
+        lines.append("- No active assumptions remain.")
+
+    lines.extend(["", "## Uncovered Delta"])
+    uncovered_delta = plan_payload.get("uncovered_delta") or []
+    if uncovered_delta:
+        for delta_row in uncovered_delta:
+            lines.append(
+                f"- `{delta_row.get('delta_id')}`: `{delta_row.get('gap_kind')}` {delta_row.get('required_input') or ''}".rstrip()
+            )
+            lines.append(
+                "  Coverage: "
+                + str(delta_row.get("coverage_id") or "unknown")
+                + "; next phase: "
+                + str(delta_row.get("recommended_next_phase") or "unknown")
+            )
+    else:
+        lines.append("- No uncovered delta remains.")
     return "\n".join(lines) + "\n"
 
 
@@ -646,6 +767,22 @@ def publish_planning_artifacts_v1(
             ),
             "planning_policy_versions": copy.deepcopy(
                 plan_payload.get("policy_versions") or {}
+            ),
+            "coverage_status": plan_payload.get("coverage_status"),
+            "coverage_ledger": copy.deepcopy(plan_payload.get("coverage_ledger") or []),
+            "assumptions_register": copy.deepcopy(
+                plan_payload.get("assumptions_register") or []
+            ),
+            "uncovered_delta": copy.deepcopy(plan_payload.get("uncovered_delta") or []),
+            "planning_coverage_status": plan_payload.get("coverage_status"),
+            "planning_coverage_ledger": copy.deepcopy(
+                plan_payload.get("coverage_ledger") or []
+            ),
+            "planning_assumptions_register": copy.deepcopy(
+                plan_payload.get("assumptions_register") or []
+            ),
+            "planning_uncovered_delta": copy.deepcopy(
+                plan_payload.get("uncovered_delta") or []
             ),
             "verdict": terminal_status,
             "verdicts": {
