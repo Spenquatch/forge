@@ -1,8 +1,9 @@
 id: deterministic_feature_planning_clarification
 task_kind: planning
 objective: >
-  Produce a deterministic execution plan for the C1 planning compiler wedge,
-  but stop when the planning package needs clarification.
+  Produce a deterministic execution plan for the C2 measurable coverage ledger
+  and assumptions register proof, but stop when the planning package needs
+  clarification.
 workspace_write_policy:
   mode: forbid
   allowed_paths: []
@@ -15,9 +16,9 @@ workspace_write_policy:
 acceptance:
   - Emit the clarification_needed terminal status.
   - Return at least one clarification request.
-  - Do not publish plan artifacts.
+  - Publish summary.json only with truthful partial coverage payloads.
 constraints:
-  - Keep the planning package bounded to the C1 deterministic planning wedge.
+  - Keep the planning package bounded to the C2 measurable coverage proof.
   - Do not modify repository files.
 context: |
   Use the repository state in the target workspace as the planning context.
@@ -27,5 +28,7 @@ files_hint:
   - anvil/harness/*
 notes: |
   planning_fixture_mode=clarification_needed
-  This is an explicit fixture-only clarification stop path for the bounded planning
-  surface; it does not imply a broader planning capability.
+  This is an explicit fixture-only clarification stop path for the bounded C2
+  planning surface; it publishes summary.json only with truthful partial
+  coverage_status, coverage_ledger, assumptions_register, and uncovered_delta
+  payloads.

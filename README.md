@@ -47,9 +47,18 @@ poetry run python -m anvil.cli harness-run \
   --json
 ```
 
+This harness command is distinct from the general orchestration entrypoint
+`poetry run python -m anvil` shown above.
+
 On `harness-run`, omitting `--workspace` uses the current working directory, so the planning command above is copy-pasteable from the repo root.
 
-The deterministic planning surface is intentionally bounded: it plans against one existing repo, scans only a limited evidence budget, and stops honestly with `clarification_needed` or `failed` when the ask is out of corpus or underspecified. Successful planning runs publish `PLAN.md` and `plan.json`. Planning exits `0` only for `success`; `clarification_needed` and `failed` return exit code `1`.
+The deterministic planning surface is intentionally bounded: it plans against
+one existing repo, scans only a limited evidence budget, and stops honestly
+with `clarification_needed` or `failed` when the ask is out of corpus or
+underspecified. Successful planning runs publish `PLAN.md` and `plan.json`
+with C2 coverage, assumptions, and uncovered-delta truth. Planning exits `0`
+only for `success`; `clarification_needed` and `failed` return exit code `1`
+and publish `summary.json` only with truthful coverage payloads.
 
 Harness strategies use provider family keys from `config/models.yaml` such as `codex_cli` and `claude_code`, not raw binary names in the YAML files. CLI-backed families still respect `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN` when you need to point at a local install.
 

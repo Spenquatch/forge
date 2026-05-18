@@ -55,7 +55,10 @@ poetry run python -m anvil.cli harness-run \
   --json
 ```
 
-On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json`. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and emit the terminal payload without plan artifacts. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
+This harness command is distinct from the general orchestration entrypoint
+`poetry run python -m anvil`.
+
+On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json` with C2 coverage, assumptions, and uncovered delta. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and publish `summary.json` only with truthful coverage payloads. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
 
 These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 
