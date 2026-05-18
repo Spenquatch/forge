@@ -258,3 +258,249 @@ def preflight_validators(
             }
         )
     return preflight
+
+
+_PLANNING_MARKDOWN_SECTION_HEADINGS = (
+    "## Problem Statement",
+    "## Rubric Results",
+    "## Architectural Seams",
+    "## Parallel Workstreams/Worktrees",
+    "## Executable Slices",
+)
+
+
+def _string_or_empty(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _workspace_root_path(workspace_root: str | Path | None) -> Path | None:
+    if workspace_root in (None, ""):
+        return None
+    root = Path(workspace_root)
+    if not root.exists() or not root.is_dir():
+        return None
+    return root.resolve()
+
+
+def _validate_workspace_relative_path(
+    path_value: Any,
+    *,
+    workspace_root: Path | None,
+    label: str,
+) -> list[str]:
+    path_text = _string_or_empty(path_value)
+    if not path_text:
+        return [f"{label} must be a non-empty workspace-relative path."]
+    if workspace_root is None:
+        return [f"{label} cannot be validated because workspace_root is missing."]
+    candidate = Path(path_text)
+    resolved = (
+        candidate.resolve(strict=False)
+        if candidate.is_absolute()
+        else (workspace_root / candidate).resolve(strict=False)
+    )
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError:
+        return [f"{label} must stay within workspace_root: {path_text}"]
+    if not resolved.exists():
+        return [f"{label} was not found in workspace_root: {path_text}"]
+    return []
+
+
+def _dict_records(raw_items: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_items, list):
+        return []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _string_list(raw_items: Any) -> list[str]:
+    if not isinstance(raw_items, list):
+        return []
+    values: list[str] = []
+    for item in raw_items:
+        text = _string_or_empty(item)
+        if text:
+            values.append(text)
+    return values
+
+
+def _find_section(markdown: str, heading: str) -> str:
+    if heading not in markdown:
+        return ""
+    section = markdown.split(heading, 1)[1]
+    for next_heading in _PLANNING_MARKDOWN_SECTION_HEADINGS:
+        if next_heading == heading:
+            continue
+        marker = f"\n{next_heading}"
+        if marker in section:
+            section = section.split(marker, 1)[0]
+            break
+    return section
+
+
+def _validate_markdown_item_order(
+    section_text: str,
+    *,
+    label: str,
+    expected_prefixes: list[str],
+) -> list[str]:
+    errors: list[str] = []
+    cursor = 0
+    for prefix in expected_prefixes:
+        index = section_text.find(prefix, cursor)
+        if index < 0:
+            errors.append(f"{label} is missing markdown entry for {prefix}")
+            continue
+        cursor = index + len(prefix)
+    return errors
+
+
+def validate_planning_success_artifacts(
+    plan_payload: dict[str, Any],
+    *,
+    workspace_root: str | Path | None,
+    markdown_text: str,
+) -> list[str]:
+    errors: list[str] = []
+    root = _workspace_root_path(workspace_root)
+    if root is None:
+        errors.append("Planning success publication requires a valid workspace_root.")
+
+    repo_evidence_refs = _string_list(plan_payload.get("repo_evidence_refs"))
+    for index, path_value in enumerate(repo_evidence_refs, start=1):
+        errors.extend(
+            _validate_workspace_relative_path(
+                path_value,
+                workspace_root=root,
+                label=f"repo_evidence_refs[{index}]",
+            )
+        )
+
+    seams = _dict_records(plan_payload.get("seams"))
+    declared_seam_ids: set[str] = set()
+    for index, seam in enumerate(seams, start=1):
+        seam_id = _string_or_empty(seam.get("seam_id"))
+        if not seam_id:
+            errors.append(f"seams[{index}] is missing seam_id.")
+        elif seam_id in declared_seam_ids:
+            errors.append(f"Duplicate seam_id in plan payload: {seam_id}")
+        else:
+            declared_seam_ids.add(seam_id)
+        seam_paths = _string_list(seam.get("paths"))
+        if not seam_paths:
+            errors.append(
+                f"seams[{index}] must include at least one workspace path for publication."
+            )
+        for path_index, path_value in enumerate(seam_paths, start=1):
+            errors.extend(
+                _validate_workspace_relative_path(
+                    path_value,
+                    workspace_root=root,
+                    label=f"seams[{index}].paths[{path_index}]",
+                )
+            )
+
+    workstreams = _dict_records(plan_payload.get("workstreams"))
+    declared_workstream_ids: set[str] = set()
+    for index, workstream in enumerate(workstreams, start=1):
+        workstream_id = _string_or_empty(workstream.get("workstream_id"))
+        if not workstream_id:
+            errors.append(f"workstreams[{index}] is missing workstream_id.")
+        elif workstream_id in declared_workstream_ids:
+            errors.append(f"Duplicate workstream_id in plan payload: {workstream_id}")
+        else:
+            declared_workstream_ids.add(workstream_id)
+        seam_ids = _string_list(workstream.get("seam_ids"))
+        if not seam_ids:
+            errors.append(
+                f"workstreams[{index}] must reference at least one declared seam_id."
+            )
+        for seam_id in seam_ids:
+            if seam_id not in declared_seam_ids:
+                errors.append(
+                    f"workstreams[{index}] references unknown seam_id: {seam_id}"
+                )
+
+    slices = _dict_records(plan_payload.get("slices"))
+    declared_slice_ids: set[str] = set()
+    for index, slice_payload in enumerate(slices, start=1):
+        slice_id = _string_or_empty(slice_payload.get("slice_id"))
+        if not slice_id:
+            errors.append(f"slices[{index}] is missing slice_id.")
+        elif slice_id in declared_slice_ids:
+            errors.append(f"Duplicate slice_id in plan payload: {slice_id}")
+        else:
+            declared_slice_ids.add(slice_id)
+        workstream_id = _string_or_empty(slice_payload.get("workstream_id"))
+        if not workstream_id:
+            errors.append(f"slices[{index}] is missing workstream_id.")
+        elif workstream_id not in declared_workstream_ids:
+            errors.append(
+                f"slices[{index}] references unknown workstream_id: {workstream_id}"
+            )
+        seam_ids = _string_list(slice_payload.get("seam_ids"))
+        if not seam_ids:
+            errors.append(f"slices[{index}] must reference at least one declared seam_id.")
+        for seam_id in seam_ids:
+            if seam_id not in declared_seam_ids:
+                errors.append(f"slices[{index}] references unknown seam_id: {seam_id}")
+        if not _string_list(slice_payload.get("acceptance_criteria")):
+            errors.append(
+                f"slices[{index}] must include at least one concrete acceptance criterion."
+            )
+
+    heading_positions: list[int] = []
+    for heading in _PLANNING_MARKDOWN_SECTION_HEADINGS:
+        index = markdown_text.find(heading)
+        if index < 0:
+            errors.append(f"PLAN.md is missing canonical section heading: {heading}")
+            continue
+        heading_positions.append(index)
+    if heading_positions and heading_positions != sorted(heading_positions):
+        errors.append("PLAN.md canonical section headings are out of order.")
+
+    terminal_status = _string_or_empty(plan_payload.get("terminal_status"))
+    if terminal_status and f"- Terminal status: `{terminal_status}`" not in markdown_text:
+        errors.append("PLAN.md terminal status does not match the canonical plan payload.")
+    run_mode = _string_or_empty(plan_payload.get("run_mode"))
+    if run_mode and f"- Run mode: `{run_mode}`" not in markdown_text:
+        errors.append("PLAN.md run mode does not match the canonical plan payload.")
+
+    section_expectations = (
+        (
+            "## Architectural Seams",
+            "PLAN.md architectural seams",
+            [f"- `{_string_or_empty(item.get('seam_id'))}`:" for item in seams],
+        ),
+        (
+            "## Parallel Workstreams/Worktrees",
+            "PLAN.md workstreams",
+            [
+                f"- `{_string_or_empty(item.get('workstream_id'))}`:"
+                for item in workstreams
+            ],
+        ),
+        (
+            "## Executable Slices",
+            "PLAN.md executable slices",
+            [f"- `{_string_or_empty(item.get('slice_id'))}`:" for item in slices],
+        ),
+    )
+    for heading, label, prefixes in section_expectations:
+        if not prefixes:
+            continue
+        section_text = _find_section(markdown_text, heading)
+        if not section_text:
+            continue
+        errors.extend(
+            _validate_markdown_item_order(
+                section_text,
+                label=label,
+                expected_prefixes=prefixes,
+            )
+        )
+
+    return errors

@@ -17,6 +17,7 @@ _CANONICAL_ADMISSIBILITY_REASONS = {
     "not_accepted",
     "topic_blocked",
 }
+_PLANNING_TERMINAL_STATUSES = {"success", "clarification_needed", "failed"}
 
 
 def _render_policy_list(items: list[str]) -> str:
@@ -83,6 +84,38 @@ def _analysis_review_status(summary: dict[str, Any]) -> dict[str, Any]:
     if isinstance(status, dict) and status:
         return status
     return {}
+
+
+def _planning_terminal_status(summary: dict[str, Any]) -> str:
+    for value in (
+        summary.get("planning_terminal_status"),
+        summary.get("terminal_status"),
+        summary.get("verdict"),
+        (summary.get("verdicts") or {}).get("run_verdict"),
+    ):
+        normalized = str(value or "").strip()
+        if normalized in _PLANNING_TERMINAL_STATUSES:
+            return normalized
+    return ""
+
+
+def _planning_run_mode(summary: dict[str, Any]) -> str:
+    for value in (
+        summary.get("planning_run_mode"),
+        summary.get("run_mode"),
+        ((summary.get("run_details") or {}).get("planning_run_mode")),
+    ):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _is_planning_summary(summary: dict[str, Any]) -> bool:
+    task = summary.get("task") or {}
+    if str(task.get("task_kind") or "").strip() == "planning":
+        return True
+    return bool(_planning_terminal_status(summary))
 
 
 def _execution_mode(summary: dict[str, Any]) -> str:
@@ -1071,6 +1104,46 @@ def _append_analysis_review_status_section(
     lines.append("")
 
 
+def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -> None:
+    if not _is_planning_summary(summary):
+        return
+
+    terminal_status = _planning_terminal_status(summary) or "unknown"
+    run_mode = _planning_run_mode(summary) or "unknown"
+    stop_reason = str(
+        summary.get("planning_stop_reason") or summary.get("stop_reason") or ""
+    ).strip()
+    clarification_requests = (
+        summary.get("clarification_requests")
+        if isinstance(summary.get("clarification_requests"), list)
+        else []
+    )
+    repo_evidence_refs = [
+        str(item).strip()
+        for item in (summary.get("repo_evidence_refs") or [])
+        if str(item).strip()
+    ]
+
+    lines.append("## Planning Status")
+    lines.append("")
+    lines.append(f"- Terminal status: `{terminal_status}`")
+    lines.append(f"- Run mode: `{run_mode}`")
+    if stop_reason:
+        lines.append(f"- Stop reason: {stop_reason}")
+    lines.append(f"- Search passes: `{summary.get('search_pass_count', 0)}`")
+    lines.append(f"- Inspected files: `{summary.get('inspected_file_count', 0)}`")
+    lines.append(
+        "- Discovery budget escalated: "
+        + f"`{summary.get('discovery_budget_escalated', False)}`"
+    )
+    lines.append(f"- Clarification requests: `{len(clarification_requests)}`")
+    lines.append(
+        "- Repo evidence refs: "
+        + (", ".join(f"`{item}`" for item in repo_evidence_refs) or "none")
+    )
+    lines.append("")
+
+
 def _append_review_provenance_section(
     lines: list[str], summary: dict[str, Any]
 ) -> None:
@@ -1300,6 +1373,13 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append(
         f"- Strategy: `{summary.get('strategy_name', 'strategy')}` ({summary.get('strategy_kind', 'kind')})"
     )
+    if _is_planning_summary(summary):
+        terminal_status = _planning_terminal_status(summary)
+        run_mode = _planning_run_mode(summary)
+        if terminal_status:
+            lines.append(f"- Terminal status: `{terminal_status}`")
+        if run_mode:
+            lines.append(f"- Planning run mode: `{run_mode}`")
     focus_decision = _focus_decision(summary)
     focus_decision_state = str(focus_decision.get("decision_state") or "").strip()
     if focus_decision_state:
@@ -1404,6 +1484,7 @@ def render_report(summary: dict[str, Any]) -> str:
         _append_review_scope_section(lines, summary)
     _append_focus_decision_section(lines, summary)
     _append_analysis_review_status_section(lines, summary)
+    _append_planning_status_section(lines, summary)
     _append_review_provenance_section(lines, summary)
 
     if run_details:

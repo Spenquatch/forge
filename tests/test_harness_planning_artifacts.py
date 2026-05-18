@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from anvil.harness.providers import _soft_validate_schema
 from anvil.harness.reporting import publish_state_artifacts_v1
 from anvil.harness.schemas import plan_json_schema
@@ -108,7 +110,15 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
         "warnings": [],
         "errors": [],
     }
-    Path(state["workspace_root"]).mkdir(parents=True, exist_ok=True)
+    workspace_root = Path(state["workspace_root"])
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    for rel_path in (
+        "anvil/harness/builder.py",
+        "anvil/harness/cli.py",
+    ):
+        file_path = workspace_root / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("# fixture\n", encoding="utf-8")
     return state
 
 
@@ -129,7 +139,12 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     plan_payload = json.loads(plan_json_path.read_text(encoding="utf-8"))
     assert _soft_validate_schema(plan_payload, plan_json_schema()) == []
     assert plan_payload["terminal_status"] == "success"
+    assert plan_payload["run_mode"] == "deterministic-live"
+    assert summary["planning_terminal_status"] == "success"
+    assert summary["planning_run_mode"] == "deterministic-live"
     markdown = plan_md_path.read_text(encoding="utf-8")
+    assert "- Terminal status: `success`" in markdown
+    assert "- Run mode: `deterministic-live`" in markdown
     assert markdown.index("## Problem Statement") < markdown.index("## Rubric Results")
     assert markdown.index("## Rubric Results") < markdown.index(
         "## Architectural Seams"
@@ -168,3 +183,13 @@ def test_publish_state_artifacts_v1_returns_failed_terminal_payload(tmp_path: Pa
     assert summary["stop_reason"] == "failed_stop_reason"
     assert "plan_md" not in summary["artifacts"]
     assert "plan_json" not in summary["artifacts"]
+
+
+def test_publish_state_artifacts_v1_blocks_success_when_integrity_refs_do_not_resolve(
+    tmp_path: Path,
+):
+    state = _planning_state(tmp_path, terminal_status="success")
+    state["repo_evidence_refs"] = ["missing/file.py"]
+
+    with pytest.raises(ValueError, match="integrity checks"):
+        publish_state_artifacts_v1(state)

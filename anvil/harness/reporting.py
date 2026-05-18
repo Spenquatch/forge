@@ -25,6 +25,7 @@ from .topic_lifecycle import (
     topic_ids_for_status_name,
     topic_status_field_name,
 )
+from .validation import validate_planning_success_artifacts
 
 _FULLY_ACCEPTED_RUN_VERDICTS = {"accepted", "accepted_with_warnings"}
 _PARTIAL_ACCEPTED_RUN_VERDICTS = {"accepted_partial"}
@@ -42,6 +43,11 @@ HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
 SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
 PLANNING_ARTIFACT_SCHEMA_VERSION = "plan_artifact_v1"
 PLANNING_RUNTIME_TARGET = "planning_v1"
+PLANNING_RUN_MODES = (
+    "fixture-backed",
+    "deterministic-live",
+    "provider-reviewed",
+)
 PLANNING_TERMINAL_STATUSES = {
     "success",
     "clarification_needed",
@@ -260,6 +266,14 @@ def _normalize_planning_seams(
                 )
                 or seam_id,
                 "paths": paths,
+                "repo_evidence_refs": _normalized_string_list(
+                    item.get("repo_evidence_refs") or item.get("evidence_refs")
+                ),
+                "dependency_reasoning": _normalized_string_list(
+                    item.get("dependency_reasoning")
+                ),
+                "ambiguity_flags": _normalized_string_list(item.get("ambiguity_flags")),
+                "source_phase_id": _first_present_string(item, "source_phase_id"),
             }
         )
     return normalized
@@ -290,6 +304,14 @@ def _normalize_planning_workstreams(raw_items: Any) -> list[dict[str, Any]]:
                     or item.get("worktree")
                     or item.get("worktree_path")
                 ),
+                "repo_evidence_refs": _normalized_string_list(
+                    item.get("repo_evidence_refs") or item.get("evidence_refs")
+                ),
+                "dependency_reasoning": _normalized_string_list(
+                    item.get("dependency_reasoning")
+                ),
+                "ambiguity_flags": _normalized_string_list(item.get("ambiguity_flags")),
+                "source_phase_id": _first_present_string(item, "source_phase_id"),
             }
         )
     return normalized
@@ -325,6 +347,14 @@ def _normalize_planning_slices(raw_items: Any) -> list[dict[str, Any]]:
                     or item.get("tests")
                     or item.get("deliverables")
                 ),
+                "repo_evidence_refs": _normalized_string_list(
+                    item.get("repo_evidence_refs") or item.get("evidence_refs")
+                ),
+                "dependency_reasoning": _normalized_string_list(
+                    item.get("dependency_reasoning")
+                ),
+                "ambiguity_flags": _normalized_string_list(item.get("ambiguity_flags")),
+                "source_phase_id": _first_present_string(item, "source_phase_id"),
             }
         )
     return normalized
@@ -358,6 +388,37 @@ def _planning_terminal_status(
         if normalized in PLANNING_TERMINAL_STATUSES:
             return normalized
     return "failed"
+
+
+def _planning_run_mode(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+) -> str:
+    seeded_run_details = (
+        seeded_summary.get("run_details")
+        if isinstance(seeded_summary.get("run_details"), dict)
+        else {}
+    )
+    state_run_details = (
+        state.get("run_details") if isinstance(state.get("run_details"), dict) else {}
+    )
+    strategy_spec = state.get("strategy_spec")
+    for value in (
+        state.get("planning_run_mode"),
+        state_run_details.get("planning_run_mode"),
+        seeded_summary.get("planning_run_mode"),
+        seeded_summary.get("run_mode"),
+        seeded_run_details.get("planning_run_mode"),
+    ):
+        normalized = _string_or_empty(value)
+        if normalized in PLANNING_RUN_MODES:
+            return normalized
+    if isinstance(strategy_spec, dict):
+        phase_inputs = strategy_spec.get("phase_inputs")
+        if isinstance(phase_inputs, dict) and phase_inputs:
+            return "fixture-backed"
+    return "deterministic-live"
 
 
 def plan_projection_v1(
@@ -406,6 +467,7 @@ def plan_projection_v1(
         "phases": phases,
     }
     terminal_status = _planning_terminal_status(state, seeded_summary=seeded_summary)
+    run_mode = _planning_run_mode(state, seeded_summary=seeded_summary)
     stop_reason = _string_or_empty(
         state.get("planning_stop_reason")
         or state.get("stop_reason")
@@ -436,6 +498,7 @@ def plan_projection_v1(
         },
         "strategy": strategy,
         "terminal_status": terminal_status,
+        "run_mode": run_mode,
         "stop_reason": stop_reason,
         "problem_statement": _string_or_empty(
             seeded_summary.get("problem_statement") or task.get("objective")
@@ -492,6 +555,9 @@ def plan_projection_v1(
 def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
     lines = [
         f"# {plan_payload.get('task', {}).get('id') or 'Plan'}",
+        "",
+        f"- Terminal status: `{plan_payload.get('terminal_status') or 'failed'}`",
+        f"- Run mode: `{plan_payload.get('run_mode') or 'deterministic-live'}`",
         "",
         "## Problem Statement",
         plan_payload.get("problem_statement") or "- None provided.",
@@ -569,6 +635,18 @@ def publish_planning_artifacts_v1(
             "created_at": state.get("created_at") or seeded_summary.get("created_at"),
             "strategy_name": plan_payload.get("strategy", {}).get("name"),
             "strategy_kind": plan_payload.get("strategy", {}).get("kind"),
+            "planning_terminal_status": terminal_status,
+            "planning_stop_reason": plan_payload.get("stop_reason"),
+            "planning_run_mode": plan_payload.get("run_mode"),
+            "planning_seams": copy.deepcopy(plan_payload.get("seams") or []),
+            "planning_workstreams": copy.deepcopy(plan_payload.get("workstreams") or []),
+            "planning_slices": copy.deepcopy(plan_payload.get("slices") or []),
+            "planning_phase_results": copy.deepcopy(
+                plan_payload.get("phase_results") or []
+            ),
+            "planning_policy_versions": copy.deepcopy(
+                plan_payload.get("policy_versions") or {}
+            ),
             "verdict": terminal_status,
             "verdicts": {
                 "run_verdict": terminal_status,
@@ -618,12 +696,23 @@ def publish_planning_artifacts_v1(
 
     if terminal_status == "success":
         schema_errors = _soft_validate_schema(plan_payload, plan_json_schema())
+        markdown = render_plan_markdown_v1(plan_payload)
+        integrity_errors = validate_planning_success_artifacts(
+            plan_payload,
+            workspace_root=state.get("workspace_root") or seeded_summary.get("workspace"),
+            markdown_text=markdown,
+        )
         if schema_errors:
             raise ValueError(
                 "plan.json schema validation failed: " + "; ".join(schema_errors)
             )
+        if integrity_errors:
+            raise ValueError(
+                "Planning artifact publication failed integrity checks: "
+                + "; ".join(integrity_errors)
+            )
         write_json(plan_json_path, plan_payload)
-        write_text(plan_md_path, render_plan_markdown_v1(plan_payload))
+        write_text(plan_md_path, markdown)
         artifacts["plan_json"] = str(plan_json_path)
         artifacts["plan_md"] = str(plan_md_path)
         artifacts["final_artifact"] = str(plan_md_path)
