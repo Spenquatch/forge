@@ -367,3 +367,33 @@ def test_publish_state_artifacts_v1_blocks_success_when_integrity_refs_do_not_re
 
     with pytest.raises(ValueError, match="integrity checks"):
         publish_state_artifacts_v1(state)
+
+
+def test_publish_state_artifacts_v1_blocks_success_on_coverage_cardinality_drift(
+    tmp_path: Path,
+):
+    state = _planning_state(tmp_path, terminal_status="success")
+    state["planning_coverage_ledger"] = list(state["planning_coverage_ledger"][:-1])
+
+    with pytest.raises(ValueError, match="integrity checks"):
+        publish_state_artifacts_v1(state)
+
+
+def test_publish_state_artifacts_v1_blocks_success_on_invalid_delta_target(
+    tmp_path: Path,
+):
+    state = _planning_state(tmp_path, terminal_status="success")
+    state["planning_uncovered_delta"] = [
+        {
+            "delta_id": "delta-01-problem_frame",
+            "coverage_id": "coverage-02-repo_surface",
+            "dimension": "repo_surface",
+            "gap_kind": "missing_evidence",
+            "required_input": "Extra repo evidence.",
+            "recommended_next_phase": "design_doc",
+            "blocking_assumption_ids": [],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="integrity checks"):
+        publish_state_artifacts_v1(state)

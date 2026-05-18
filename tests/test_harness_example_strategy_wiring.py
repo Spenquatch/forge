@@ -427,6 +427,7 @@ def test_planning_example_strategy_matches_frozen_surface_and_graph_metadata(
     assert parsed.name == raw_strategy["name"]
     assert parsed.kind == raw_strategy["kind"]
     assert parsed.runtime_target == raw_strategy["runtime_target"]
+    assert raw_strategy["coverage_policy"] == "measurable_coverage_v1"
     assert list(parsed.roles) == ["planner"]
     assert [phase.id for phase in parsed.phases] == [
         "design_doc",
@@ -538,17 +539,25 @@ def test_planning_example_fixture_corpus_proves_all_terminal_outcomes(tmp_path: 
     assert Path(str(success_summary["artifacts"]["plan_md"])).exists()
     assert Path(str(success_summary["artifacts"]["plan_json"])).exists()
     assert success_plan["terminal_status"] == "success"
+    assert success_plan["coverage_status"] == "success"
+    assert len(success_plan["coverage_ledger"]) == 7
     assert len(success_plan["seams"]) == 2
     assert len(success_plan["workstreams"]) == 2
     assert len(success_plan["slices"]) == 2
 
     assert clarification_summary["terminal_status"] == "clarification_needed"
+    assert clarification_summary["coverage_status"] == "clarification_needed"
+    assert len(clarification_summary["coverage_ledger"]) == 7
+    assert clarification_summary["assumptions_register"]
+    assert clarification_summary["uncovered_delta"]
     assert clarification_summary["clarification_requests"]
     assert "plan_md" not in clarification_summary["artifacts"]
     assert "plan_json" not in clarification_summary["artifacts"]
 
     assert failed_summary["terminal_status"] == "failed"
     assert failed_summary["stop_reason"] == "design_doc_failed"
+    assert failed_summary["coverage_status"] == "failed"
+    assert len(failed_summary["coverage_ledger"]) == 7
     assert "plan_md" not in failed_summary["artifacts"]
     assert "plan_json" not in failed_summary["artifacts"]
 

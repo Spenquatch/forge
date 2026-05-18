@@ -3665,6 +3665,14 @@ def test_render_report_includes_planning_terminal_alignment_section():
     assert "- Repo evidence refs: `anvil/harness/reporting.py`, `anvil/harness/report.py`" in planning_status
 
 
+def test_planning_publication_surface_does_not_spawn_helper_family_variants():
+    reporting_text = Path("anvil/harness/reporting.py").read_text(encoding="utf-8")
+
+    assert "def plan_projection_v2(" not in reporting_text
+    assert "def render_plan_markdown_v2(" not in reporting_text
+    assert "def publish_planning_artifacts_v2(" not in reporting_text
+
+
 def _canonical_seam_fields() -> dict[str, object]:
     return {
         "primary_seam": {
