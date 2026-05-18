@@ -3662,7 +3662,10 @@ def test_render_report_includes_planning_terminal_alignment_section():
     assert "- Planning run mode: `deterministic-live`" in overview
     assert "- Terminal status: `success`" in planning_status
     assert "- Run mode: `deterministic-live`" in planning_status
-    assert "- Repo evidence refs: `anvil/harness/reporting.py`, `anvil/harness/report.py`" in planning_status
+    assert (
+        "- Repo evidence refs: `anvil/harness/reporting.py`, `anvil/harness/report.py`"
+        in planning_status
+    )
 
 
 def test_planning_publication_surface_does_not_spawn_helper_family_variants():

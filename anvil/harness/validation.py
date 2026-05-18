@@ -281,7 +281,7 @@ def _string_or_empty(value: Any) -> str:
 def _workspace_root_path(workspace_root: str | Path | None) -> Path | None:
     if workspace_root in (None, ""):
         return None
-    root = Path(workspace_root)
+    root = Path(str(workspace_root))
     if not root.exists() or not root.is_dir():
         return None
     return root.resolve()
@@ -446,7 +446,9 @@ def validate_planning_success_artifacts(
             )
         seam_ids = _string_list(slice_payload.get("seam_ids"))
         if not seam_ids:
-            errors.append(f"slices[{index}] must reference at least one declared seam_id.")
+            errors.append(
+                f"slices[{index}] must reference at least one declared seam_id."
+            )
         for seam_id in seam_ids:
             if seam_id not in declared_seam_ids:
                 errors.append(f"slices[{index}] references unknown seam_id: {seam_id}")
@@ -470,8 +472,12 @@ def validate_planning_success_artifacts(
         "acceptance_shape",
         "risk_and_unknowns",
     ]
-    if [str(item.get("dimension") or "") for item in coverage_ledger] != expected_dimensions:
-        errors.append("coverage_ledger dimensions must appear exactly once in canonical order.")
+    if [
+        str(item.get("dimension") or "") for item in coverage_ledger
+    ] != expected_dimensions:
+        errors.append(
+            "coverage_ledger dimensions must appear exactly once in canonical order."
+        )
 
     declared_coverage_ids: set[str] = set()
     for index, coverage_row in enumerate(coverage_ledger, start=1):
@@ -524,9 +530,7 @@ def validate_planning_success_artifacts(
         if not assumption_id:
             errors.append(f"assumptions_register[{index}] is missing assumption_id.")
         elif assumption_id in declared_assumption_ids:
-            errors.append(
-                f"Duplicate assumption_id in plan payload: {assumption_id}"
-            )
+            errors.append(f"Duplicate assumption_id in plan payload: {assumption_id}")
         else:
             declared_assumption_ids.add(assumption_id)
         linked_coverage_ids = _string_list(assumption_row.get("linked_coverage_ids"))
@@ -549,7 +553,9 @@ def validate_planning_success_artifacts(
     for index, delta_row in enumerate(uncovered_delta, start=1):
         coverage_id = _string_or_empty(delta_row.get("coverage_id"))
         if coverage_id not in declared_coverage_ids:
-            errors.append(f"uncovered_delta[{index}] references unknown coverage_id: {coverage_id}")
+            errors.append(
+                f"uncovered_delta[{index}] references unknown coverage_id: {coverage_id}"
+            )
         elif coverage_status_by_id.get(coverage_id) not in {"partial", "uncovered"}:
             errors.append(
                 f"uncovered_delta[{index}] may only target partial or uncovered coverage rows."
@@ -578,8 +584,13 @@ def validate_planning_success_artifacts(
         errors.append("PLAN.md canonical section headings are out of order.")
 
     terminal_status = _string_or_empty(plan_payload.get("terminal_status"))
-    if terminal_status and f"- Terminal status: `{terminal_status}`" not in markdown_text:
-        errors.append("PLAN.md terminal status does not match the canonical plan payload.")
+    if (
+        terminal_status
+        and f"- Terminal status: `{terminal_status}`" not in markdown_text
+    ):
+        errors.append(
+            "PLAN.md terminal status does not match the canonical plan payload."
+        )
     run_mode = _string_or_empty(plan_payload.get("run_mode"))
     if run_mode and f"- Run mode: `{run_mode}`" not in markdown_text:
         errors.append("PLAN.md run mode does not match the canonical plan payload.")
@@ -622,7 +633,10 @@ def validate_planning_success_artifacts(
         (
             "## Uncovered Delta",
             "PLAN.md uncovered delta",
-            [f"- `{_string_or_empty(item.get('delta_id'))}`:" for item in uncovered_delta],
+            [
+                f"- `{_string_or_empty(item.get('delta_id'))}`:"
+                for item in uncovered_delta
+            ],
         ),
     )
     for heading, label, prefixes in section_expectations:

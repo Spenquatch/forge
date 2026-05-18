@@ -225,9 +225,7 @@ def test_planning_runtime_success_populates_frozen_state_fields(
         "coverage-06-acceptance_shape",
         "coverage-07-risk_and_unknowns",
     ]
-    assert all(
-        row["status"] == "covered" for row in result["planning_coverage_ledger"]
-    )
+    assert all(row["status"] == "covered" for row in result["planning_coverage_ledger"])
     assert result["planning_assumptions_register"] == []
     assert result["planning_uncovered_delta"] == []
     assert all(
@@ -286,7 +284,14 @@ def test_planning_runtime_stops_for_clarification_without_fake_downstream_record
     assert len(result["planning_assumptions_register"]) == 7
     assert len(result["planning_uncovered_delta"]) == 7
     assert all(
-        row["recommended_next_phase"] in {"design_doc", "seam_decomposition", "parallel_planning", "slice_emission", "clarify"}
+        row["recommended_next_phase"]
+        in {
+            "design_doc",
+            "seam_decomposition",
+            "parallel_planning",
+            "slice_emission",
+            "clarify",
+        }
         for row in result["planning_uncovered_delta"]
     )
     assert result["drafts"] == []

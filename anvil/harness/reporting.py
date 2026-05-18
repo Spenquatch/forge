@@ -389,7 +389,9 @@ def _normalize_planning_terminal_coverage_status(
     return terminal_status
 
 
-def _normalize_planning_runtime_records(raw_value: Any, *, id_field: str) -> list[dict[str, Any]]:
+def _normalize_planning_runtime_records(
+    raw_value: Any, *, id_field: str
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for item in _iter_planning_records(raw_value, id_field=id_field):
         record_id = _first_present_string(item, id_field, "id")
@@ -760,7 +762,9 @@ def publish_planning_artifacts_v1(
             "planning_stop_reason": plan_payload.get("stop_reason"),
             "planning_run_mode": plan_payload.get("run_mode"),
             "planning_seams": copy.deepcopy(plan_payload.get("seams") or []),
-            "planning_workstreams": copy.deepcopy(plan_payload.get("workstreams") or []),
+            "planning_workstreams": copy.deepcopy(
+                plan_payload.get("workstreams") or []
+            ),
             "planning_slices": copy.deepcopy(plan_payload.get("slices") or []),
             "planning_phase_results": copy.deepcopy(
                 plan_payload.get("phase_results") or []
@@ -836,7 +840,8 @@ def publish_planning_artifacts_v1(
         markdown = render_plan_markdown_v1(plan_payload)
         integrity_errors = validate_planning_success_artifacts(
             plan_payload,
-            workspace_root=state.get("workspace_root") or seeded_summary.get("workspace"),
+            workspace_root=state.get("workspace_root")
+            or seeded_summary.get("workspace"),
             markdown_text=markdown,
         )
         if schema_errors:

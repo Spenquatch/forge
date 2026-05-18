@@ -97,9 +97,7 @@ _CANONICAL_SEAM_SPECS: tuple[dict[str, Any], ...] = (
         "workstream": {
             "workstream_id": "workstream-runtime-wiring",
             "title": "Runtime Wiring",
-            "summary": (
-                "Mount planning_v1 and preserve generic post-runtime routing."
-            ),
+            "summary": ("Mount planning_v1 and preserve generic post-runtime routing."),
         },
         "slice": {
             "slice_id": "slice-mount-planning-runtime",
@@ -354,7 +352,8 @@ def _planning_phase_result(
             str(item.get("seam_id") or item.get("id") or "") for item in seams
         ],
         "planning_workstream_ids": [
-            str(item.get("workstream_id") or item.get("id") or "") for item in workstreams
+            str(item.get("workstream_id") or item.get("id") or "")
+            for item in workstreams
         ],
         "planning_slice_ids": [
             str(item.get("slice_id") or item.get("id") or "") for item in slices
@@ -643,7 +642,9 @@ def _planning_phase_id_map(
     phase_keys = tuple(fallback_phase_ids)
     return {
         phase_key: (
-            ordered_phase_ids[index] if index < len(ordered_phase_ids) else fallback_phase_ids[phase_key]
+            ordered_phase_ids[index]
+            if index < len(ordered_phase_ids)
+            else fallback_phase_ids[phase_key]
         )
         for index, phase_key in enumerate(phase_keys)
     }
@@ -842,7 +843,9 @@ def _derive_planning_coverage(
             *(
                 flag
                 for phase_result in phase_results
-                for flag in _normalize_string_list(phase_result.get("ambiguity_flags") or [])
+                for flag in _normalize_string_list(
+                    phase_result.get("ambiguity_flags") or []
+                )
             ),
             *(
                 flag
@@ -862,7 +865,11 @@ def _derive_planning_coverage(
     problem_frame_source_phase_ids = [phase_ids["design_doc"]]
     if acceptance_slice_ids:
         problem_frame_source_phase_ids.append(phase_ids["slice_emission"])
-    if objective_present and explicit_acceptance and (problem_frame_refs or acceptance_slice_ids):
+    if (
+        objective_present
+        and explicit_acceptance
+        and (problem_frame_refs or acceptance_slice_ids)
+    ):
         row_specs.append(
             {
                 "dimension": "problem_frame",
@@ -1136,7 +1143,11 @@ def _derive_planning_coverage(
     has_risk_grounding = bool(
         repo_evidence_refs or seam_ids or workstream_ids or slice_ids
     )
-    if terminal_status == "success" and not ambiguity_flags and not clarification_requests:
+    if (
+        terminal_status == "success"
+        and not ambiguity_flags
+        and not clarification_requests
+    ):
         row_specs.append(
             {
                 "dimension": "risk_and_unknowns",
@@ -1204,7 +1215,9 @@ def _derive_planning_coverage(
                 status=status,
                 terminal_status=terminal_status,
             )
-            assumption_id = _stable_id("assumption", len(assumptions_register) + 1, statement)
+            assumption_id = _stable_id(
+                "assumption", len(assumptions_register) + 1, statement
+            )
             assumption_ids.append(assumption_id)
             assumptions_register.append(
                 {
@@ -1214,7 +1227,11 @@ def _derive_planning_coverage(
                     "status": "active",
                     "linked_coverage_ids": [coverage_id],
                     "evidence_refs": list(evidence_refs),
-                    "source_phase_id": source_phase_ids[0] if source_phase_ids else phase_ids["design_doc"],
+                    "source_phase_id": (
+                        source_phase_ids[0]
+                        if source_phase_ids
+                        else phase_ids["design_doc"]
+                    ),
                 }
             )
 
@@ -1348,7 +1365,12 @@ def _score_path(path: str, *, query_tokens: list[str]) -> int:
         if token in normalized:
             score += 10
     filename = Path(path).name.lower()
-    if filename in {"builder.py", "reporting.py", "artifacts.py", "planning_runtime.py"}:
+    if filename in {
+        "builder.py",
+        "reporting.py",
+        "artifacts.py",
+        "planning_runtime.py",
+    }:
         score += 25
     if "planning" in normalized:
         score += 15
@@ -1392,7 +1414,9 @@ def _discovered_workspace_matches(
     workspace_root = _workspace_root(state)
     discovered: list[str] = []
     roots = sorted({str(Path(path).parent) for path in selected_paths if "/" in path})
-    if "anvil/harness" in roots or any(path.startswith("anvil/harness/") for path in selected_paths):
+    if "anvil/harness" in roots or any(
+        path.startswith("anvil/harness/") for path in selected_paths
+    ):
         if (workspace_root / "anvil/harness/subgraphs/planning_v1.py").is_file():
             discovered.append("anvil/harness/subgraphs/planning_v1.py")
     for seam_spec in _CANONICAL_SEAM_SPECS:
@@ -1418,7 +1442,9 @@ def _read_workspace_evidence(
         if not path.is_file():
             continue
         read_size = min(remaining_bytes, max(1, path.stat().st_size))
-        text = read_workspace_text(_workspace_root(state), relative_path, max_bytes=read_size)
+        text = read_workspace_text(
+            _workspace_root(state), relative_path, max_bytes=read_size
+        )
         evidence[relative_path] = text
         remaining_bytes -= len(text.encode("utf-8"))
     return evidence
@@ -1454,9 +1480,7 @@ def _seam_paths(
                 "summary": seam_spec["summary"],
                 "paths": seam_paths,
                 "repo_evidence_refs": seam_paths,
-                "dependency_reasoning": [
-                    f"Grounded in {', '.join(seam_paths)}."
-                ],
+                "dependency_reasoning": [f"Grounded in {', '.join(seam_paths)}."],
                 "ambiguity_flags": [],
             }
         )
@@ -1467,7 +1491,9 @@ def _workstreams_for_seams(seams: list[dict[str, Any]]) -> list[dict[str, Any]]:
     workstreams: list[dict[str, Any]] = []
     for seam_spec in _CANONICAL_SEAM_SPECS:
         seam_id = seam_spec["seam_id"]
-        if not any(str(seam.get("seam_id") or seam.get("id")) == seam_id for seam in seams):
+        if not any(
+            str(seam.get("seam_id") or seam.get("id")) == seam_id for seam in seams
+        ):
             continue
         workstream = dict(seam_spec["workstream"])
         workstream.update(
@@ -1489,7 +1515,8 @@ def _slices_for_workstreams(workstreams: list[dict[str, Any]]) -> list[dict[str,
         workstream_id = seam_spec["workstream"]["workstream_id"]
         seam_id = seam_spec["seam_id"]
         if not any(
-            str(workstream.get("workstream_id") or workstream.get("id")) == workstream_id
+            str(workstream.get("workstream_id") or workstream.get("id"))
+            == workstream_id
             for workstream in workstreams
         ):
             continue
@@ -1628,7 +1655,9 @@ def _derive_live_phase_payloads(
     if len(selected_paths) < PLANNING_MATCH_LIMIT:
         discovered_paths = [
             path
-            for path in _discovered_workspace_matches(state, selected_paths=selected_paths)
+            for path in _discovered_workspace_matches(
+                state, selected_paths=selected_paths
+            )
             if path not in selected_paths
         ]
         if discovered_paths:
@@ -1721,7 +1750,7 @@ def _derive_live_phase_payloads(
         + selected_paths
         + [path for seam in seams for path in seam.get("paths", [])]
     )
-    live_payloads = {
+    live_payloads: dict[str, dict[str, Any]] = {
         str(design_phase["id"]): {
             "summary": (
                 "The planning objective is coherent, bounded to the workspace, and "

@@ -59,8 +59,13 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
         assert CANONICAL_PLANNING_COMMAND in text
 
     assert "omitting `--workspace` uses the current working directory" in readme
-    assert "omitting `--workspace` uses the current working directory" in examples_readme
-    assert "omitting `--workspace` defaults to the current working directory" in contributing
+    assert (
+        "omitting `--workspace` uses the current working directory" in examples_readme
+    )
+    assert (
+        "omitting `--workspace` defaults to the current working directory"
+        in contributing
+    )
 
     assert "bounded deterministic existing-repo planning runs" in readme
     assert "one existing repo" in readme

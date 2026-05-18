@@ -110,7 +110,11 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
                 "seam_ids": [],
                 "workstream_ids": [],
                 "slice_ids": ["slice-routing"] if terminal_status == "success" else [],
-                "assumption_ids": [] if terminal_status == "success" else ["assumption-01-problem-frame"],
+                "assumption_ids": (
+                    []
+                    if terminal_status == "success"
+                    else ["assumption-01-problem-frame"]
+                ),
                 "source_phase_ids": ["design_doc"],
             },
             {
@@ -146,7 +150,11 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
                 "seam_ids": ["seam-builder"],
                 "workstream_ids": ["workstream-routing"],
                 "slice_ids": ["slice-routing"],
-                "assumption_ids": [] if terminal_status == "success" else ["assumption-02-dependency-shape"],
+                "assumption_ids": (
+                    []
+                    if terminal_status == "success"
+                    else ["assumption-02-dependency-shape"]
+                ),
                 "source_phase_ids": ["parallel_planning", "slice_emission"],
             },
             {
@@ -182,7 +190,11 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
                 "seam_ids": ["seam-builder"],
                 "workstream_ids": [],
                 "slice_ids": [],
-                "assumption_ids": [] if terminal_status == "success" else ["assumption-03-risk-and-unknowns"],
+                "assumption_ids": (
+                    []
+                    if terminal_status == "success"
+                    else ["assumption-03-risk-and-unknowns"]
+                ),
                 "source_phase_ids": ["design_doc"],
             },
         ],
@@ -307,8 +319,12 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
         "risk_and_unknowns",
     ]
     assert markdown.index("## Executable Slices") < markdown.index("## Coverage Ledger")
-    assert markdown.index("## Coverage Ledger") < markdown.index("## Assumptions Register")
-    assert markdown.index("## Assumptions Register") < markdown.index("## Uncovered Delta")
+    assert markdown.index("## Coverage Ledger") < markdown.index(
+        "## Assumptions Register"
+    )
+    assert markdown.index("## Assumptions Register") < markdown.index(
+        "## Uncovered Delta"
+    )
     assert summary["planning_terminal_status"] == "success"
     assert summary["planning_run_mode"] == "deterministic-live"
     assert "- Terminal status: `success`" in markdown
