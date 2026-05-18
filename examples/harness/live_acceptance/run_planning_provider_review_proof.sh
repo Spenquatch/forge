@@ -59,8 +59,8 @@ Return markdown with exactly these sections:
 5. Structural ID check
 PROMPT
 
-printf '%s\n' "$CODEX_BIN exec -C $REPO_ROOT --color never -o $OUTPUT_PATH - < $PROMPT_PATH" > "$META_PATH"
-"$CODEX_BIN" exec -C "$REPO_ROOT" --color never -o "$OUTPUT_PATH" - < "$PROMPT_PATH" | tee "$STDOUT_PATH"
+printf '%s\n' "$CODEX_BIN exec -C $REPO_ROOT --dangerously-bypass-approvals-and-sandbox --color never -o $OUTPUT_PATH - < $PROMPT_PATH" > "$META_PATH"
+"$CODEX_BIN" exec -C "$REPO_ROOT" --dangerously-bypass-approvals-and-sandbox --color never -o "$OUTPUT_PATH" - < "$PROMPT_PATH" | tee "$STDOUT_PATH"
 
 echo "provider_review=$OUTPUT_PATH"
 echo "stdout_log=$STDOUT_PATH"
