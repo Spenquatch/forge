@@ -19,6 +19,7 @@ phases:
   - id: slice_emission
     stage_type: executable_slice_emission
 artifact_policy: planning_package_v1
+coverage_policy: measurable_coverage_v1
 determinism_policy: stable_structure_v1
 discovery_policy: bounded_repo_scan_v1
 rubric_policy: design_doc_gate_v1

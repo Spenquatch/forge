@@ -629,11 +629,46 @@ def planning_slice_schema() -> dict[str, Any]:
     }
 
 
+PLANNING_ARTIFACT_SCHEMA_VERSION = "plan_artifact_v2"
+PLANNING_COVERAGE_DIMENSIONS = (
+    "problem_frame",
+    "repo_surface",
+    "seam_selection",
+    "dependency_shape",
+    "execution_partitioning",
+    "acceptance_shape",
+    "risk_and_unknowns",
+)
+PLANNING_COVERAGE_STATUSES = (
+    "covered",
+    "partial",
+    "uncovered",
+    "not_applicable",
+)
+PLANNING_ASSUMPTION_KINDS = (
+    "scope",
+    "dependency",
+    "acceptance",
+    "environment",
+    "risk",
+)
+PLANNING_ASSUMPTION_STATUSES = ("active", "validated", "rejected")
+PLANNING_DELTA_GAP_KINDS = (
+    "missing_evidence",
+    "missing_structure",
+    "assumption_blocked",
+    "ambiguous_scope",
+)
+
+
 def plan_json_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "schema_version": {"type": "string", "enum": ["plan_artifact_v1"]},
+            "schema_version": {
+                "type": "string",
+                "enum": ["plan_artifact_v1", PLANNING_ARTIFACT_SCHEMA_VERSION],
+            },
             "run_id": {"type": "string"},
             "task": {
                 "type": "object",

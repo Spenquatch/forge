@@ -26,6 +26,7 @@ PLANNING_PHASE_ORDER = (
 )
 PLANNING_POLICY_FIELDS = (
     "artifact_policy",
+    "coverage_policy",
     "determinism_policy",
     "discovery_policy",
     "rubric_policy",
@@ -592,6 +593,10 @@ def _seed_planning_state(
     state["planning_slices"] = []
     state["planning_phase_results"] = []
     state["planning_policy_versions"] = dict(policy_versions)
+    state["planning_coverage_status"] = None
+    state["planning_coverage_ledger"] = []
+    state["planning_assumptions_register"] = []
+    state["planning_uncovered_delta"] = []
     state["search_pass_count"] = 0
     state["inspected_file_count"] = 0
     state["discovery_budget_escalated"] = False

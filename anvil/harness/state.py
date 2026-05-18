@@ -234,6 +234,10 @@ class HarnessState(TypedDict, total=False):
     planning_slices: list[dict[str, Any]]
     planning_phase_results: list[dict[str, Any]]
     planning_policy_versions: dict[str, Any]
+    planning_coverage_status: str | None
+    planning_coverage_ledger: list[dict[str, Any]]
+    planning_assumptions_register: list[dict[str, Any]]
+    planning_uncovered_delta: list[dict[str, Any]]
     search_pass_count: int
     inspected_file_count: int
     discovery_budget_escalated: bool
@@ -330,6 +334,10 @@ def initialize_harness_state(
         planning_slices=[],
         planning_phase_results=[],
         planning_policy_versions={},
+        planning_coverage_status=None,
+        planning_coverage_ledger=[],
+        planning_assumptions_register=[],
+        planning_uncovered_delta=[],
         search_pass_count=0,
         inspected_file_count=0,
         discovery_budget_escalated=False,
@@ -797,6 +805,20 @@ def summary_read_adapter_v1(
             summary, "planning_phase_results"
         ),
         planning_policy_versions=_summary_dict(summary, "planning_policy_versions"),
+        planning_coverage_status=(
+            None
+            if _summary_scalar(summary, "planning_coverage_status") in (None, "")
+            else str(_summary_scalar(summary, "planning_coverage_status"))
+        ),
+        planning_coverage_ledger=_summary_list_of_dicts(
+            summary, "planning_coverage_ledger"
+        ),
+        planning_assumptions_register=_summary_list_of_dicts(
+            summary, "planning_assumptions_register"
+        ),
+        planning_uncovered_delta=_summary_list_of_dicts(
+            summary, "planning_uncovered_delta"
+        ),
         search_pass_count=int(_summary_scalar(summary, "search_pass_count") or 0),
         inspected_file_count=int(_summary_scalar(summary, "inspected_file_count") or 0),
         discovery_budget_escalated=bool(
