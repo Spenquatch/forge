@@ -96,8 +96,162 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
         ],
         "planning_policy_versions": {
             "artifact_policy": "planning_package_v1",
+            "coverage_policy": "measurable_coverage_v1",
             "determinism_policy": "stable_structure_v1",
         },
+        "planning_coverage_status": terminal_status,
+        "planning_coverage_ledger": [
+            {
+                "coverage_id": "coverage-01-problem_frame",
+                "dimension": "problem_frame",
+                "status": "covered" if terminal_status == "success" else "partial",
+                "summary": "Task objective and acceptance shape are explicit.",
+                "evidence_refs": ["anvil/harness/builder.py"],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": ["slice-routing"] if terminal_status == "success" else [],
+                "assumption_ids": [] if terminal_status == "success" else ["assumption-01-problem-frame"],
+                "source_phase_ids": ["design_doc"],
+            },
+            {
+                "coverage_id": "coverage-02-repo_surface",
+                "dimension": "repo_surface",
+                "status": "covered",
+                "summary": "Repo surface is grounded.",
+                "evidence_refs": ["anvil/harness/builder.py", "anvil/harness/cli.py"],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "assumption_ids": [],
+                "source_phase_ids": ["design_doc"],
+            },
+            {
+                "coverage_id": "coverage-03-seam_selection",
+                "dimension": "seam_selection",
+                "status": "covered",
+                "summary": "A seam was selected.",
+                "evidence_refs": ["anvil/harness/builder.py"],
+                "seam_ids": ["seam-builder"],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "assumption_ids": [],
+                "source_phase_ids": ["seam_decomposition"],
+            },
+            {
+                "coverage_id": "coverage-04-dependency_shape",
+                "dimension": "dependency_shape",
+                "status": "covered" if terminal_status == "success" else "partial",
+                "summary": "Dependency reasoning is attached to emitted planning structure.",
+                "evidence_refs": ["anvil/harness/cli.py"],
+                "seam_ids": ["seam-builder"],
+                "workstream_ids": ["workstream-routing"],
+                "slice_ids": ["slice-routing"],
+                "assumption_ids": [] if terminal_status == "success" else ["assumption-02-dependency-shape"],
+                "source_phase_ids": ["parallel_planning", "slice_emission"],
+            },
+            {
+                "coverage_id": "coverage-05-execution_partitioning",
+                "dimension": "execution_partitioning",
+                "status": "covered",
+                "summary": "Execution partitioning is explicit.",
+                "evidence_refs": [],
+                "seam_ids": ["seam-builder"],
+                "workstream_ids": ["workstream-routing"],
+                "slice_ids": [],
+                "assumption_ids": [],
+                "source_phase_ids": ["parallel_planning"],
+            },
+            {
+                "coverage_id": "coverage-06-acceptance_shape",
+                "dimension": "acceptance_shape",
+                "status": "covered",
+                "summary": "Acceptance criteria exist on emitted slices.",
+                "evidence_refs": ["planning_v1 is mounted"],
+                "seam_ids": [],
+                "workstream_ids": ["workstream-routing"],
+                "slice_ids": ["slice-routing"],
+                "assumption_ids": [],
+                "source_phase_ids": ["slice_emission"],
+            },
+            {
+                "coverage_id": "coverage-07-risk_and_unknowns",
+                "dimension": "risk_and_unknowns",
+                "status": "covered" if terminal_status == "success" else "partial",
+                "summary": "Risk posture is explicit for the bounded run.",
+                "evidence_refs": ["anvil/harness/builder.py"],
+                "seam_ids": ["seam-builder"],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "assumption_ids": [] if terminal_status == "success" else ["assumption-03-risk-and-unknowns"],
+                "source_phase_ids": ["design_doc"],
+            },
+        ],
+        "planning_assumptions_register": (
+            []
+            if terminal_status == "success"
+            else [
+                {
+                    "assumption_id": "assumption-01-problem-frame",
+                    "statement": "The problem frame will stabilize after clarification.",
+                    "kind": "acceptance",
+                    "status": "active",
+                    "linked_coverage_ids": ["coverage-01-problem_frame"],
+                    "evidence_refs": ["Which seam is in scope?"],
+                    "source_phase_id": "design_doc",
+                },
+                {
+                    "assumption_id": "assumption-02-dependency-shape",
+                    "statement": "Dependency edges remain provisional until publication completes.",
+                    "kind": "dependency",
+                    "status": "active",
+                    "linked_coverage_ids": ["coverage-04-dependency_shape"],
+                    "evidence_refs": ["anvil/harness/cli.py"],
+                    "source_phase_id": "parallel_planning",
+                },
+                {
+                    "assumption_id": "assumption-03-risk-and-unknowns",
+                    "statement": "Residual risks remain pending the blocked-run outcome.",
+                    "kind": "risk",
+                    "status": "active",
+                    "linked_coverage_ids": ["coverage-07-risk_and_unknowns"],
+                    "evidence_refs": ["Which seam is in scope?"],
+                    "source_phase_id": "design_doc",
+                },
+            ]
+        ),
+        "planning_uncovered_delta": (
+            []
+            if terminal_status == "success"
+            else [
+                {
+                    "delta_id": "delta-01-problem_frame",
+                    "coverage_id": "coverage-01-problem_frame",
+                    "dimension": "problem_frame",
+                    "gap_kind": "ambiguous_scope",
+                    "required_input": "Explicit acceptance criteria.",
+                    "recommended_next_phase": "clarify",
+                    "blocking_assumption_ids": ["assumption-01-problem-frame"],
+                },
+                {
+                    "delta_id": "delta-02-dependency_shape",
+                    "coverage_id": "coverage-04-dependency_shape",
+                    "dimension": "dependency_shape",
+                    "gap_kind": "assumption_blocked",
+                    "required_input": "Confirmed dependency reasoning.",
+                    "recommended_next_phase": "parallel_planning",
+                    "blocking_assumption_ids": ["assumption-02-dependency-shape"],
+                },
+                {
+                    "delta_id": "delta-03-risk_and_unknowns",
+                    "coverage_id": "coverage-07-risk_and_unknowns",
+                    "dimension": "risk_and_unknowns",
+                    "gap_kind": "assumption_blocked",
+                    "required_input": "Clarified residual risk posture.",
+                    "recommended_next_phase": "clarify",
+                    "blocking_assumption_ids": ["assumption-03-risk-and-unknowns"],
+                },
+            ]
+        ),
         "search_pass_count": 2,
         "inspected_file_count": 4,
         "discovery_budget_escalated": False,
@@ -137,12 +291,26 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     assert updated["artifact_index"]["plan_md"]["path"] == str(plan_md_path)
 
     plan_payload = json.loads(plan_json_path.read_text(encoding="utf-8"))
+    markdown = plan_md_path.read_text(encoding="utf-8")
     assert _soft_validate_schema(plan_payload, plan_json_schema()) == []
+    assert plan_payload["schema_version"] == "plan_artifact_v2"
     assert plan_payload["terminal_status"] == "success"
     assert plan_payload["run_mode"] == "deterministic-live"
+    assert plan_payload["coverage_status"] == "success"
+    assert [row["dimension"] for row in plan_payload["coverage_ledger"]] == [
+        "problem_frame",
+        "repo_surface",
+        "seam_selection",
+        "dependency_shape",
+        "execution_partitioning",
+        "acceptance_shape",
+        "risk_and_unknowns",
+    ]
+    assert markdown.index("## Executable Slices") < markdown.index("## Coverage Ledger")
+    assert markdown.index("## Coverage Ledger") < markdown.index("## Assumptions Register")
+    assert markdown.index("## Assumptions Register") < markdown.index("## Uncovered Delta")
     assert summary["planning_terminal_status"] == "success"
     assert summary["planning_run_mode"] == "deterministic-live"
-    markdown = plan_md_path.read_text(encoding="utf-8")
     assert "- Terminal status: `success`" in markdown
     assert "- Run mode: `deterministic-live`" in markdown
     assert markdown.index("## Problem Statement") < markdown.index("## Rubric Results")
@@ -167,6 +335,10 @@ def test_publish_state_artifacts_v1_returns_terminal_payload_for_clarification(
 
     assert summary["terminal_status"] == "clarification_needed"
     assert summary["clarification_requests"] == ["Which seam is in scope?"]
+    assert summary["coverage_status"] == "clarification_needed"
+    assert len(summary["coverage_ledger"]) == 7
+    assert summary["assumptions_register"]
+    assert summary["uncovered_delta"]
     assert "plan_md" not in summary["artifacts"]
     assert "plan_json" not in summary["artifacts"]
     assert "plan_md" not in updated["artifact_index"]
@@ -181,6 +353,8 @@ def test_publish_state_artifacts_v1_returns_failed_terminal_payload(tmp_path: Pa
 
     assert summary["terminal_status"] == "failed"
     assert summary["stop_reason"] == "failed_stop_reason"
+    assert summary["coverage_status"] == "failed"
+    assert len(summary["coverage_ledger"]) == 7
     assert "plan_md" not in summary["artifacts"]
     assert "plan_json" not in summary["artifacts"]
 

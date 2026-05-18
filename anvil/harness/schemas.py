@@ -659,6 +659,121 @@ PLANNING_DELTA_GAP_KINDS = (
     "assumption_blocked",
     "ambiguous_scope",
 )
+PLANNING_COVERAGE_TERMINAL_STATUSES = (
+    "success",
+    "clarification_needed",
+    "failed",
+)
+
+
+def planning_coverage_row_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "coverage_id": {"type": "string"},
+            "dimension": {"type": "string", "enum": list(PLANNING_COVERAGE_DIMENSIONS)},
+            "status": {"type": "string", "enum": list(PLANNING_COVERAGE_STATUSES)},
+            "summary": {"type": "string"},
+            "evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "seam_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "workstream_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "slice_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "assumption_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "source_phase_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+        },
+        "required": [
+            "coverage_id",
+            "dimension",
+            "status",
+            "summary",
+            "evidence_refs",
+            "seam_ids",
+            "workstream_ids",
+            "slice_ids",
+            "assumption_ids",
+            "source_phase_ids",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def planning_assumption_row_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "assumption_id": {"type": "string"},
+            "statement": {"type": "string"},
+            "kind": {"type": "string", "enum": list(PLANNING_ASSUMPTION_KINDS)},
+            "status": {"type": "string", "enum": list(PLANNING_ASSUMPTION_STATUSES)},
+            "linked_coverage_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+            "evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "source_phase_id": {"type": "string"},
+        },
+        "required": [
+            "assumption_id",
+            "statement",
+            "kind",
+            "status",
+            "linked_coverage_ids",
+            "evidence_refs",
+            "source_phase_id",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def planning_uncovered_delta_row_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "delta_id": {"type": "string"},
+            "coverage_id": {"type": "string"},
+            "dimension": {"type": "string", "enum": list(PLANNING_COVERAGE_DIMENSIONS)},
+            "gap_kind": {"type": "string", "enum": list(PLANNING_DELTA_GAP_KINDS)},
+            "required_input": {"type": "string"},
+            "recommended_next_phase": {"type": "string"},
+            "blocking_assumption_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": [
+            "delta_id",
+            "coverage_id",
+            "dimension",
+            "gap_kind",
+            "required_input",
+            "recommended_next_phase",
+            "blocking_assumption_ids",
+        ],
+        "additionalProperties": False,
+    }
 
 
 def plan_json_schema() -> dict[str, Any]:
@@ -667,7 +782,7 @@ def plan_json_schema() -> dict[str, Any]:
         "properties": {
             "schema_version": {
                 "type": "string",
-                "enum": ["plan_artifact_v1", PLANNING_ARTIFACT_SCHEMA_VERSION],
+                "enum": [PLANNING_ARTIFACT_SCHEMA_VERSION],
             },
             "run_id": {"type": "string"},
             "task": {
@@ -746,6 +861,22 @@ def plan_json_schema() -> dict[str, Any]:
             "search_pass_count": {"type": "integer", "minimum": 0},
             "inspected_file_count": {"type": "integer", "minimum": 0},
             "discovery_budget_escalated": {"type": "boolean"},
+            "coverage_status": {
+                "type": "string",
+                "enum": list(PLANNING_COVERAGE_TERMINAL_STATUSES),
+            },
+            "coverage_ledger": {
+                "type": "array",
+                "items": planning_coverage_row_schema(),
+            },
+            "assumptions_register": {
+                "type": "array",
+                "items": planning_assumption_row_schema(),
+            },
+            "uncovered_delta": {
+                "type": "array",
+                "items": planning_uncovered_delta_row_schema(),
+            },
         },
         "required": [
             "schema_version",
@@ -767,6 +898,10 @@ def plan_json_schema() -> dict[str, Any]:
             "search_pass_count",
             "inspected_file_count",
             "discovery_budget_escalated",
+            "coverage_status",
+            "coverage_ledger",
+            "assumptions_register",
+            "uncovered_delta",
         ],
         "additionalProperties": True,
     }

@@ -85,6 +85,7 @@ def _planning_state(tmp_path: Path) -> dict[str, Any]:
         "objective": "Plan a deterministic rollout for the planning runtime.",
         "task_kind": "planning",
         "workspace_write_policy": {"mode": "forbid"},
+        "acceptance": ["Emit seams, workstreams, and slices."],
         "files_hint": ["PLAN.md", "anvil/harness/*"],
     }
     state["task_kind"] = "planning"  # type: ignore[assignment]
@@ -105,6 +106,7 @@ def _planning_state(tmp_path: Path) -> dict[str, Any]:
             {"id": "slice_emission", "stage_type": "executable_slice_emission"},
         ],
         "artifact_policy": "planning_package_v1",
+        "coverage_policy": "measurable_coverage_v1",
         "determinism_policy": "stable_structure_v1",
         "discovery_policy": "bounded_repo_scan_v1",
         "rubric_policy": "design_doc_gate_v1",
@@ -207,11 +209,33 @@ def test_planning_runtime_success_populates_frozen_state_fields(
     ]
     assert result["planning_policy_versions"] == {
         "artifact_policy": "planning_package_v1",
+        "coverage_policy": "measurable_coverage_v1",
         "determinism_policy": "stable_structure_v1",
         "discovery_policy": "bounded_repo_scan_v1",
         "rubric_policy": "design_doc_gate_v1",
         "stop_policy": "clarification_or_stop_v1",
     }
+    assert result["planning_coverage_status"] == "success"
+    assert [item["coverage_id"] for item in result["planning_coverage_ledger"]] == [
+        "coverage-01-problem_frame",
+        "coverage-02-repo_surface",
+        "coverage-03-seam_selection",
+        "coverage-04-dependency_shape",
+        "coverage-05-execution_partitioning",
+        "coverage-06-acceptance_shape",
+        "coverage-07-risk_and_unknowns",
+    ]
+    assert all(
+        row["status"] == "covered" for row in result["planning_coverage_ledger"]
+    )
+    assert result["planning_assumptions_register"] == []
+    assert result["planning_uncovered_delta"] == []
+    assert all(
+        phase_id
+        in {"design_doc", "seam_decomposition", "parallel_planning", "slice_emission"}
+        for row in result["planning_coverage_ledger"]
+        for phase_id in row["source_phase_ids"]
+    )
     assert result["search_pass_count"] == 2
     assert result["inspected_file_count"] == 8
     assert result["discovery_budget_escalated"] is True
@@ -244,6 +268,27 @@ def test_planning_runtime_stops_for_clarification_without_fake_downstream_record
     assert result["planning_seams"] == []
     assert result["planning_workstreams"] == []
     assert result["planning_slices"] == []
+    assert result["planning_coverage_status"] == "clarification_needed"
+    assert len(result["planning_coverage_ledger"]) == 7
+    assert [
+        row["dimension"]
+        for row in result["planning_coverage_ledger"]
+        if row["status"] in {"partial", "uncovered"}
+    ] == [
+        "problem_frame",
+        "repo_surface",
+        "seam_selection",
+        "dependency_shape",
+        "execution_partitioning",
+        "acceptance_shape",
+        "risk_and_unknowns",
+    ]
+    assert len(result["planning_assumptions_register"]) == 7
+    assert len(result["planning_uncovered_delta"]) == 7
+    assert all(
+        row["recommended_next_phase"] in {"design_doc", "seam_decomposition", "parallel_planning", "slice_emission", "clarify"}
+        for row in result["planning_uncovered_delta"]
+    )
     assert result["drafts"] == []
     assert result.get("best_draft_id") is None
     assert result.get("selected_draft_id") is None
@@ -266,6 +311,14 @@ def test_planning_runtime_failed_sets_explicit_stop_reason(
     assert result["planning_seams"] == []
     assert result["planning_workstreams"] == []
     assert result["planning_slices"] == []
+    assert result["planning_coverage_status"] == "failed"
+    assert len(result["planning_coverage_ledger"]) == 7
+    assert all(
+        row["status"] in {"partial", "uncovered"}
+        for row in result["planning_coverage_ledger"]
+    )
+    assert len(result["planning_assumptions_register"]) == 7
+    assert len(result["planning_uncovered_delta"]) == 7
 
 
 def test_planning_runtime_bypasses_select_best_draft(
