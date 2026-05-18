@@ -24,6 +24,15 @@ PLANNING_PHASE_ORDER = (
     "parallel_workstream_planning",
     "executable_slice_emission",
 )
+PLANNING_COVERAGE_DIMENSIONS = (
+    "problem_frame",
+    "repo_surface",
+    "seam_selection",
+    "dependency_shape",
+    "execution_partitioning",
+    "acceptance_shape",
+    "risk_and_unknowns",
+)
 PLANNING_POLICY_FIELDS = (
     "artifact_policy",
     "coverage_policy",
@@ -618,6 +627,659 @@ def _append_phase_result(
     state["planning_phase_results"] = phase_results
 
 
+def _planning_phase_id_map(
+    phase_specs: list[dict[str, Any]],
+) -> dict[str, str]:
+    ordered_phase_ids = [
+        str(phase_spec.get("id") or f"phase_{index}")
+        for index, phase_spec in enumerate(phase_specs, start=1)
+    ]
+    fallback_phase_ids = {
+        "design_doc": "design_doc",
+        "seam_decomposition": "seam_decomposition",
+        "parallel_planning": "parallel_planning",
+        "slice_emission": "slice_emission",
+    }
+    phase_keys = tuple(fallback_phase_ids)
+    return {
+        phase_key: (
+            ordered_phase_ids[index] if index < len(ordered_phase_ids) else fallback_phase_ids[phase_key]
+        )
+        for index, phase_key in enumerate(phase_keys)
+    }
+
+
+def _planning_item_ids(
+    items: list[dict[str, Any]],
+    *,
+    primary_key: str,
+) -> list[str]:
+    ids: list[str] = []
+    for item in items:
+        item_id = str(item.get(primary_key) or item.get("id") or "").strip()
+        if item_id:
+            ids.append(item_id)
+    return _dedupe_strings(ids)
+
+
+def _planning_item_ref_list(
+    items: list[dict[str, Any]],
+    *,
+    field_name: str,
+) -> list[str]:
+    refs: list[str] = []
+    for item in items:
+        refs.extend(_normalize_string_list(item.get(field_name) or []))
+    return _dedupe_strings(refs)
+
+
+def _coverage_id(index: int, dimension: str) -> str:
+    return f"coverage-{index:02d}-{dimension}"
+
+
+def _delta_id(index: int, dimension: str) -> str:
+    return f"delta-{index:02d}-{dimension}"
+
+
+def _assumption_kind(dimension: str) -> str:
+    return {
+        "problem_frame": "acceptance",
+        "repo_surface": "environment",
+        "seam_selection": "scope",
+        "dependency_shape": "dependency",
+        "execution_partitioning": "dependency",
+        "acceptance_shape": "acceptance",
+        "risk_and_unknowns": "risk",
+    }.get(dimension, "scope")
+
+
+def _coverage_gap_kind(
+    *,
+    dimension: str,
+    status: str,
+    terminal_status: str,
+    has_assumptions: bool,
+    has_grounding: bool,
+) -> str:
+    if dimension == "risk_and_unknowns" and has_assumptions:
+        return "assumption_blocked"
+    if dimension in {"problem_frame", "repo_surface"}:
+        if terminal_status == "clarification_needed" or status == "partial":
+            return "ambiguous_scope"
+        return "missing_evidence"
+    if dimension in {"seam_selection", "dependency_shape", "execution_partitioning"}:
+        return "missing_structure" if has_grounding else "missing_evidence"
+    if dimension == "acceptance_shape":
+        return "missing_structure" if has_grounding else "missing_evidence"
+    if has_assumptions:
+        return "assumption_blocked"
+    return "missing_evidence"
+
+
+def _coverage_required_input(
+    *,
+    dimension: str,
+    status: str,
+    terminal_status: str,
+) -> str:
+    del status
+    if dimension == "problem_frame":
+        return "Explicit task-level acceptance criteria or success constraints."
+    if dimension == "repo_surface":
+        return "Concrete repository paths or seam hints that the planner can inspect."
+    if dimension == "seam_selection":
+        return "A declared architectural cut that can be decomposed into seams."
+    if dimension == "dependency_shape":
+        return "Dependency reasoning that explains how the selected seams interact."
+    if dimension == "execution_partitioning":
+        return "Parallel workstream boundaries grounded in the selected seams."
+    if dimension == "acceptance_shape":
+        return "Executable slices with explicit acceptance criteria."
+    if terminal_status == "clarification_needed":
+        return "Clarified risks, unknowns, or operator guidance for the blocked plan."
+    return "Validated risk evidence or operator guidance for the remaining unknowns."
+
+
+def _coverage_recommended_next_phase(
+    *,
+    dimension: str,
+    terminal_status: str,
+    phase_ids: Mapping[str, str],
+) -> str:
+    if dimension in {"problem_frame", "repo_surface", "risk_and_unknowns"}:
+        return "clarify" if terminal_status != "success" else phase_ids["design_doc"]
+    if dimension in {"seam_selection"}:
+        return phase_ids["seam_decomposition"]
+    if dimension in {"dependency_shape", "execution_partitioning"}:
+        return phase_ids["parallel_planning"]
+    return phase_ids["slice_emission"]
+
+
+def _dimension_assumption_statement(
+    *,
+    dimension: str,
+    status: str,
+    terminal_status: str,
+) -> str:
+    if dimension == "problem_frame":
+        if status == "partial":
+            return (
+                "Task-level acceptance criteria remain implicit and should be "
+                "confirmed explicitly."
+            )
+        return (
+            "The planning objective needs explicit success boundaries before the "
+            "problem frame can be trusted."
+        )
+    if dimension == "repo_surface":
+        return (
+            "A concrete repository surface must be identified before coverage can "
+            "be grounded."
+        )
+    if dimension == "seam_selection":
+        return (
+            "A credible architectural cut still needs to be confirmed before seam "
+            "selection is reliable."
+        )
+    if dimension == "dependency_shape":
+        return (
+            "Dependency edges between the selected seams remain assumed rather than "
+            "validated."
+        )
+    if dimension == "execution_partitioning":
+        return (
+            "Parallel workstream boundaries remain provisional until they are "
+            "confirmed against the seam cut."
+        )
+    if dimension == "acceptance_shape":
+        return (
+            "Executable acceptance criteria still need to be confirmed for the "
+            "planned delivery slices."
+        )
+    if terminal_status == "clarification_needed":
+        return (
+            "Residual risks and unknowns need operator clarification before the "
+            "plan can be considered complete."
+        )
+    return (
+        "Residual risks and unknowns remain unvalidated in the bounded planning "
+        "pass."
+    )
+
+
+def _derive_planning_coverage(
+    state: MutableMapping[str, Any],
+    *,
+    phase_specs: list[dict[str, Any]],
+) -> None:
+    phase_ids = _planning_phase_id_map(phase_specs)
+    task_spec = dict(state.get("task_spec") or {})
+    terminal_status = str(state.get("planning_terminal_status") or "").strip()
+    clarification_requests = _list_of_dicts(state.get("clarification_requests") or [])
+    repo_evidence_refs = _normalize_string_list(state.get("repo_evidence_refs") or [])
+    seams = _list_of_dicts(state.get("planning_seams") or [])
+    workstreams = _list_of_dicts(state.get("planning_workstreams") or [])
+    slices = _list_of_dicts(state.get("planning_slices") or [])
+    phase_results = _list_of_dicts(state.get("planning_phase_results") or [])
+
+    seam_ids = _planning_item_ids(seams, primary_key="seam_id")
+    workstream_ids = _planning_item_ids(workstreams, primary_key="workstream_id")
+    slice_ids = _planning_item_ids(slices, primary_key="slice_id")
+    acceptance_slice_ids = _dedupe_strings(
+        [
+            str(slice_record.get("slice_id") or slice_record.get("id") or "").strip()
+            for slice_record in slices
+            if _normalize_string_list(slice_record.get("acceptance_criteria") or [])
+        ]
+    )
+    seam_evidence_refs = _planning_item_ref_list(seams, field_name="repo_evidence_refs")
+    dependency_reasoning_present = any(
+        _normalize_string_list(item.get("dependency_reasoning") or [])
+        for item in [*workstreams, *slices]
+    )
+    ambiguity_flags = _dedupe_strings(
+        [
+            *(
+                flag
+                for phase_result in phase_results
+                for flag in _normalize_string_list(phase_result.get("ambiguity_flags") or [])
+            ),
+            *(
+                flag
+                for item in [*seams, *workstreams, *slices]
+                for flag in _normalize_string_list(item.get("ambiguity_flags") or [])
+            ),
+        ]
+    )
+    objective_present = bool(str(task_spec.get("objective") or "").strip())
+    explicit_acceptance = bool(
+        _normalize_string_list(task_spec.get("acceptance") or [])
+    )
+
+    row_specs: list[dict[str, Any]] = []
+
+    problem_frame_refs = repo_evidence_refs[:1]
+    problem_frame_source_phase_ids = [phase_ids["design_doc"]]
+    if acceptance_slice_ids:
+        problem_frame_source_phase_ids.append(phase_ids["slice_emission"])
+    if objective_present and explicit_acceptance and (problem_frame_refs or acceptance_slice_ids):
+        row_specs.append(
+            {
+                "dimension": "problem_frame",
+                "status": "covered",
+                "summary": (
+                    "The task objective is grounded and explicit acceptance "
+                    "criteria define the problem frame."
+                ),
+                "evidence_refs": problem_frame_refs,
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": acceptance_slice_ids,
+                "source_phase_ids": _dedupe_strings(problem_frame_source_phase_ids),
+            }
+        )
+    elif objective_present and (problem_frame_refs or acceptance_slice_ids):
+        row_specs.append(
+            {
+                "dimension": "problem_frame",
+                "status": "partial",
+                "summary": (
+                    "The objective is grounded, but task-level acceptance criteria "
+                    "are inferred rather than declared explicitly."
+                ),
+                "evidence_refs": problem_frame_refs,
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": acceptance_slice_ids,
+                "source_phase_ids": _dedupe_strings(problem_frame_source_phase_ids),
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "problem_frame",
+                "status": "uncovered",
+                "summary": (
+                    "The planner could not establish a grounded problem frame from "
+                    "the available task inputs."
+                ),
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["design_doc"]],
+            }
+        )
+
+    if repo_evidence_refs:
+        row_specs.append(
+            {
+                "dimension": "repo_surface",
+                "status": "covered",
+                "summary": (
+                    f"The planner grounded the plan in {len(repo_evidence_refs)} "
+                    "repository evidence reference(s)."
+                ),
+                "evidence_refs": repo_evidence_refs,
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["design_doc"]],
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "repo_surface",
+                "status": "uncovered",
+                "summary": (
+                    "No concrete repository evidence was established for the "
+                    "planning run."
+                ),
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["design_doc"]],
+            }
+        )
+
+    if seam_ids:
+        row_specs.append(
+            {
+                "dimension": "seam_selection",
+                "status": "covered",
+                "summary": (
+                    f"The runtime derived {len(seam_ids)} architectural seam(s) in "
+                    "canonical order."
+                ),
+                "evidence_refs": seam_evidence_refs,
+                "seam_ids": seam_ids,
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["seam_decomposition"]],
+            }
+        )
+    elif repo_evidence_refs:
+        row_specs.append(
+            {
+                "dimension": "seam_selection",
+                "status": "partial",
+                "summary": (
+                    "Repository evidence was inspected, but the plan did not land "
+                    "a credible seam cut."
+                ),
+                "evidence_refs": repo_evidence_refs[:2],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["seam_decomposition"]],
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "seam_selection",
+                "status": "uncovered",
+                "summary": "No architectural seam selection was established.",
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["seam_decomposition"]],
+            }
+        )
+
+    dependency_source_phase_ids = [phase_ids["parallel_planning"]]
+    if slice_ids:
+        dependency_source_phase_ids.append(phase_ids["slice_emission"])
+    if dependency_reasoning_present and (workstream_ids or slice_ids):
+        row_specs.append(
+            {
+                "dimension": "dependency_shape",
+                "status": "covered",
+                "summary": (
+                    "Dependency reasoning is attached to the planned workstreams "
+                    "or slices."
+                ),
+                "evidence_refs": [],
+                "seam_ids": seam_ids,
+                "workstream_ids": workstream_ids,
+                "slice_ids": slice_ids,
+                "source_phase_ids": _dedupe_strings(dependency_source_phase_ids),
+            }
+        )
+    elif seam_ids or workstream_ids or slice_ids:
+        row_specs.append(
+            {
+                "dimension": "dependency_shape",
+                "status": "partial",
+                "summary": (
+                    "The plan established structure, but dependency edges remain "
+                    "implicit."
+                ),
+                "evidence_refs": [],
+                "seam_ids": seam_ids,
+                "workstream_ids": workstream_ids,
+                "slice_ids": slice_ids,
+                "source_phase_ids": _dedupe_strings(
+                    [phase_ids["seam_decomposition"], *dependency_source_phase_ids]
+                ),
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "dependency_shape",
+                "status": "uncovered",
+                "summary": "No dependency shape was established for the plan.",
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["parallel_planning"]],
+            }
+        )
+
+    if workstream_ids:
+        row_specs.append(
+            {
+                "dimension": "execution_partitioning",
+                "status": "covered",
+                "summary": (
+                    f"The runtime partitioned execution into {len(workstream_ids)} "
+                    "parallel workstream(s)."
+                ),
+                "evidence_refs": [],
+                "seam_ids": seam_ids,
+                "workstream_ids": workstream_ids,
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["parallel_planning"]],
+            }
+        )
+    elif seam_ids:
+        row_specs.append(
+            {
+                "dimension": "execution_partitioning",
+                "status": "partial",
+                "summary": (
+                    "Architectural seams exist, but parallel workstream boundaries "
+                    "were not finalized."
+                ),
+                "evidence_refs": [],
+                "seam_ids": seam_ids,
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["parallel_planning"]],
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "execution_partitioning",
+                "status": "uncovered",
+                "summary": "No execution partitioning was established.",
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["parallel_planning"]],
+            }
+        )
+
+    if acceptance_slice_ids:
+        row_specs.append(
+            {
+                "dimension": "acceptance_shape",
+                "status": "covered",
+                "summary": (
+                    "Executable slice acceptance criteria were emitted for the "
+                    "planned work."
+                ),
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": workstream_ids,
+                "slice_ids": acceptance_slice_ids,
+                "source_phase_ids": [phase_ids["slice_emission"]],
+            }
+        )
+    elif slice_ids or workstream_ids:
+        row_specs.append(
+            {
+                "dimension": "acceptance_shape",
+                "status": "partial",
+                "summary": (
+                    "Delivery structure exists, but explicit slice-level acceptance "
+                    "criteria remain incomplete."
+                ),
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": workstream_ids,
+                "slice_ids": slice_ids,
+                "source_phase_ids": [phase_ids["slice_emission"]],
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "acceptance_shape",
+                "status": "uncovered",
+                "summary": "No executable acceptance shape was established.",
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["slice_emission"]],
+            }
+        )
+
+    has_risk_grounding = bool(
+        repo_evidence_refs or seam_ids or workstream_ids or slice_ids
+    )
+    if terminal_status == "success" and not ambiguity_flags and not clarification_requests:
+        row_specs.append(
+            {
+                "dimension": "risk_and_unknowns",
+                "status": "covered",
+                "summary": (
+                    "No unresolved ambiguity flags were raised inside the bounded "
+                    "planning pass."
+                ),
+                "evidence_refs": repo_evidence_refs[:1],
+                "seam_ids": seam_ids[:1],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["design_doc"]],
+            }
+        )
+    elif has_risk_grounding:
+        row_specs.append(
+            {
+                "dimension": "risk_and_unknowns",
+                "status": "partial",
+                "summary": (
+                    "Residual ambiguity or blocked follow-up remains in the plan's "
+                    "risk surface."
+                ),
+                "evidence_refs": repo_evidence_refs[:1],
+                "seam_ids": seam_ids[:1],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["design_doc"]],
+            }
+        )
+    else:
+        row_specs.append(
+            {
+                "dimension": "risk_and_unknowns",
+                "status": "uncovered",
+                "summary": "The runtime could not ground a credible risk surface.",
+                "evidence_refs": [],
+                "seam_ids": [],
+                "workstream_ids": [],
+                "slice_ids": [],
+                "source_phase_ids": [phase_ids["design_doc"]],
+            }
+        )
+
+    if [row["dimension"] for row in row_specs] != list(PLANNING_COVERAGE_DIMENSIONS):
+        raise AssertionError("planning coverage rows must follow canonical order")
+
+    coverage_rows: list[dict[str, Any]] = []
+    assumptions_register: list[dict[str, Any]] = []
+    for index, row_spec in enumerate(row_specs, start=1):
+        dimension = str(row_spec["dimension"])
+        status = str(row_spec["status"])
+        evidence_refs = _dedupe_strings(list(row_spec.get("evidence_refs") or []))
+        row_seam_ids = _dedupe_strings(list(row_spec.get("seam_ids") or []))
+        row_workstream_ids = _dedupe_strings(list(row_spec.get("workstream_ids") or []))
+        row_slice_ids = _dedupe_strings(list(row_spec.get("slice_ids") or []))
+        source_phase_ids = _dedupe_strings(list(row_spec.get("source_phase_ids") or []))
+        coverage_id = _coverage_id(index, dimension)
+        assumption_ids: list[str] = []
+
+        if status in {"partial", "uncovered"}:
+            statement = _dimension_assumption_statement(
+                dimension=dimension,
+                status=status,
+                terminal_status=terminal_status,
+            )
+            assumption_id = _stable_id("assumption", len(assumptions_register) + 1, statement)
+            assumption_ids.append(assumption_id)
+            assumptions_register.append(
+                {
+                    "assumption_id": assumption_id,
+                    "statement": statement,
+                    "kind": _assumption_kind(dimension),
+                    "status": "active",
+                    "linked_coverage_ids": [coverage_id],
+                    "evidence_refs": list(evidence_refs),
+                    "source_phase_id": source_phase_ids[0] if source_phase_ids else phase_ids["design_doc"],
+                }
+            )
+
+        coverage_rows.append(
+            {
+                "coverage_id": coverage_id,
+                "dimension": dimension,
+                "status": status,
+                "summary": str(row_spec["summary"]),
+                "evidence_refs": evidence_refs,
+                "seam_ids": row_seam_ids,
+                "workstream_ids": row_workstream_ids,
+                "slice_ids": row_slice_ids,
+                "assumption_ids": assumption_ids,
+                "source_phase_ids": source_phase_ids,
+            }
+        )
+
+    uncovered_delta: list[dict[str, Any]] = []
+    for index, coverage_row in enumerate(coverage_rows, start=1):
+        status = str(coverage_row.get("status") or "")
+        if status not in {"partial", "uncovered"}:
+            continue
+        dimension = str(coverage_row["dimension"])
+        has_grounding = bool(
+            coverage_row.get("evidence_refs")
+            or coverage_row.get("seam_ids")
+            or coverage_row.get("workstream_ids")
+            or coverage_row.get("slice_ids")
+        )
+        blocking_assumption_ids = _normalize_string_list(
+            coverage_row.get("assumption_ids") or []
+        )
+        uncovered_delta.append(
+            {
+                "delta_id": _delta_id(index, dimension),
+                "coverage_id": str(coverage_row["coverage_id"]),
+                "dimension": dimension,
+                "gap_kind": _coverage_gap_kind(
+                    dimension=dimension,
+                    status=status,
+                    terminal_status=terminal_status,
+                    has_assumptions=bool(blocking_assumption_ids),
+                    has_grounding=has_grounding,
+                ),
+                "required_input": _coverage_required_input(
+                    dimension=dimension,
+                    status=status,
+                    terminal_status=terminal_status,
+                ),
+                "recommended_next_phase": _coverage_recommended_next_phase(
+                    dimension=dimension,
+                    terminal_status=terminal_status,
+                    phase_ids=phase_ids,
+                ),
+                "blocking_assumption_ids": blocking_assumption_ids,
+            }
+        )
+
+    state["planning_coverage_status"] = terminal_status or None
+    state["planning_coverage_ledger"] = coverage_rows
+    state["planning_assumptions_register"] = assumptions_register
+    state["planning_uncovered_delta"] = uncovered_delta
+
+
 def _apply_terminal_status(
     state: MutableMapping[str, Any],
     *,
@@ -630,6 +1292,7 @@ def _apply_terminal_status(
         "failed": "Planning failed before a credible plan could be produced.",
     }
     state["planning_terminal_status"] = terminal_status
+    state["planning_coverage_status"] = terminal_status
     state["planning_stop_reason"] = stop_reason
     state["stop_reason"] = stop_reason
     state["run_verdict"] = terminal_status
@@ -1140,6 +1803,7 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
                 terminal_status="failed",
                 stop_reason=f"unsupported_planning_phase:{stage_type}",
             )
+            _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
             return state
 
         if fixture_mode:
@@ -1202,8 +1866,10 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
                     outcome.get("stop_reason") or f"{phase_spec['id']}_{status}"
                 ),
             )
+            _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
             return state
 
     mutable_state["clarification_requests"] = []
     _apply_terminal_status(mutable_state, terminal_status="success", stop_reason=None)
+    _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
     return state

@@ -99,9 +99,35 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
         "planning_workstreams": [{"workstream_id": "stream-a"}],
         "planning_slices": [{"slice_id": "slice-1"}],
         "planning_phase_results": [{"phase_id": "design_doc", "status": "complete"}],
+        "planning_coverage_status": "clarification_needed",
+        "planning_coverage_ledger": [
+            {
+                "coverage_id": "coverage-01-problem_frame",
+                "dimension": "problem_frame",
+                "status": "partial",
+                "source_phase_ids": ["design_doc"],
+            }
+        ],
+        "planning_assumptions_register": [
+            {
+                "assumption_id": "assumption-01-problem-frame",
+                "linked_coverage_ids": ["coverage-01-problem_frame"],
+                "source_phase_id": "design_doc",
+            }
+        ],
+        "planning_uncovered_delta": [
+            {
+                "delta_id": "delta-01-problem_frame",
+                "coverage_id": "coverage-01-problem_frame",
+                "recommended_next_phase": "clarify",
+            }
+        ],
         "artifacts": {"run_dir": str(tmp_path / "run")},
         "run_details": {
-            "planning_policy_versions": {"artifact_policy": "planning_package_v1"},
+            "planning_policy_versions": {
+                "artifact_policy": "planning_package_v1",
+                "coverage_policy": "measurable_coverage_v1",
+            },
             "search_pass_count": 2,
             "inspected_file_count": 7,
             "discovery_budget_escalated": True,
@@ -124,8 +150,32 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
         {"phase_id": "design_doc", "status": "complete"}
     ]
     assert state["planning_policy_versions"] == {
-        "artifact_policy": "planning_package_v1"
+        "artifact_policy": "planning_package_v1",
+        "coverage_policy": "measurable_coverage_v1",
     }
+    assert state["planning_coverage_status"] == "clarification_needed"
+    assert state["planning_coverage_ledger"] == [
+        {
+            "coverage_id": "coverage-01-problem_frame",
+            "dimension": "problem_frame",
+            "status": "partial",
+            "source_phase_ids": ["design_doc"],
+        }
+    ]
+    assert state["planning_assumptions_register"] == [
+        {
+            "assumption_id": "assumption-01-problem-frame",
+            "linked_coverage_ids": ["coverage-01-problem_frame"],
+            "source_phase_id": "design_doc",
+        }
+    ]
+    assert state["planning_uncovered_delta"] == [
+        {
+            "delta_id": "delta-01-problem_frame",
+            "coverage_id": "coverage-01-problem_frame",
+            "recommended_next_phase": "clarify",
+        }
+    ]
     assert state["search_pass_count"] == 2
     assert state["inspected_file_count"] == 7
     assert state["discovery_budget_escalated"] is True
