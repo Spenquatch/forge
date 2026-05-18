@@ -1,3 +1,6 @@
+# Canonical bounded planning strategy for one existing repo.
+# `phase_inputs` below remain fixture-only scaffolding for stop-path regression coverage;
+# the canonical success path must derive structure from live workspace evidence.
 name: deterministic-feature-planning-v1
 kind: deterministic_feature_planning_v1
 runtime_target: planning_v1

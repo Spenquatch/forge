@@ -35,24 +35,27 @@ poetry run python -m anvil.cli harness-run \
 Trust-oriented analysis runs can use `examples/harness/strategies/analysis_review_trust_codex_claude_focus_gate_adjudicate.yaml`.
 That canonical `analysis_review_trust_*` entrypoint is attestation-first in M3A. Use `analysis_review_trust_legacy_*` only for explicit `legacy_full_review` compatibility checks.
 
+Harness strategy YAML uses provider family keys from `config/models.yaml`, such as `codex_cli` and `claude_code`. CLI-backed families still honor `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN` if you need to override the installed binary location.
+
 Deterministic planning examples use the canonical strategy `examples/harness/strategies/deterministic_feature_planning_v1.yaml` with these bounded task fixtures:
 
 - `examples/harness/tasks/deterministic_feature_planning_success.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_clarification.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_failed.yaml`
 
-Run the successful planning fixture with:
+These planning fixtures are intentionally narrow: they plan one existing repo from bounded workspace evidence, and the clarification/failed fixtures are explicit stop-path fixtures rather than a broader planning capability.
+
+Run the successful planning fixture from the repo root with:
 
 ```bash
 poetry run python -m anvil.cli harness-run \
   --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
   --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
-  --workspace /path/to/repo \
   --out-root .forge-harness-runs \
   --json
 ```
 
-Successful planning runs emit `PLAN.md` and `plan.json`. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and emit the terminal payload without plan artifacts. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
+On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json`. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and emit the terminal payload without plan artifacts. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
 
 These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 

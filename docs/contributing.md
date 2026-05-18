@@ -45,6 +45,20 @@ poetry run python -m anvil.cli harness-run \
   --out-root .forge-harness-runs
 ```
 
+Canonical repo-root planning harness command:
+
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --out-root .forge-harness-runs \
+  --json
+```
+
+On `harness-run`, omitting `--workspace` defaults to the current working directory. The planning surface is intentionally bounded to one existing repo and will stop with `clarification_needed` or `failed` instead of implying a generic greenfield planner.
+
+Harness strategy YAML uses provider family keys from `config/models.yaml`, including `codex_cli` and `claude_code`. When those families back a run through a local CLI, Forge still respects `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN`; API-backed providers still require credentials such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+
 For more runnable task and strategy examples, see [examples/README.md](../examples/README.md).
 
 ## Tests

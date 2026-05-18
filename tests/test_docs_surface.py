@@ -2,9 +2,16 @@ from pathlib import Path
 
 ROOT = Path(".")
 README = ROOT / "README.md"
+EXAMPLES_README = ROOT / "examples" / "README.md"
 DOCS_ROADMAP = ROOT / "docs" / "roadmap.md"
 CONTRIBUTING = ROOT / "docs" / "contributing.md"
 PM_README = ROOT / "docs" / "project_management" / "README.md"
+
+CANONICAL_PLANNING_COMMAND = """poetry run python -m anvil.cli harness-run \\
+  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \\
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \\
+  --out-root .forge-harness-runs \\
+  --json"""
 
 BANNED_DOC_LINKS = [
     "docs/installation.md",
@@ -41,6 +48,35 @@ def test_docs_roadmap_is_canonical():
 def test_contributor_and_project_management_indexes_exist():
     assert CONTRIBUTING.is_file()
     assert PM_README.is_file()
+
+
+def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
+    readme = README.read_text(encoding="utf-8")
+    examples_readme = EXAMPLES_README.read_text(encoding="utf-8")
+    contributing = CONTRIBUTING.read_text(encoding="utf-8")
+
+    for text in (readme, examples_readme, contributing):
+        assert CANONICAL_PLANNING_COMMAND in text
+
+    assert "omitting `--workspace` uses the current working directory" in readme
+    assert "omitting `--workspace` uses the current working directory" in examples_readme
+    assert "omitting `--workspace` defaults to the current working directory" in contributing
+
+    assert "bounded deterministic existing-repo planning runs" in readme
+    assert "one existing repo" in readme
+    assert "clarification_needed" in readme
+    assert "failed" in readme
+
+    assert "codex_cli" in readme
+    assert "claude_code" in readme
+    assert "FORGE_CODEX_BIN" in readme
+    assert "FORGE_CLAUDE_BIN" in readme
+
+    assert "explicit stop-path fixtures" in examples_readme
+    assert "codex_cli" in examples_readme
+    assert "claude_code" in examples_readme
+    assert "FORGE_CODEX_BIN" in examples_readme
+    assert "FORGE_CLAUDE_BIN" in examples_readme
 
 
 def test_history_and_future_files_live_under_project_management():
