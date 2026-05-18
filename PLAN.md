@@ -1,315 +1,405 @@
-# PLAN: C1b Planning Quality and Live-Surface Credibility Proof
+# PLAN: C2 Measurable Coverage Ledger and Assumptions Register
 
-Status: ready for implementation on `feat/planning-strategy`  
-Target branch: `feat/planning-strategy`  
-Milestone: `C1`  
-Sub-milestone: `C1b`  
-Prepared from repo state on: `2026-05-17`
+Status: ready for implementation on `codex/c1b-planning-quality-proof`  
+Milestone: `C2`  
+Prepared from repo state on: `2026-05-18`
 
-Unified from:
-- `/Users/spensermcconnell/.gstack/projects/Spenquatch-forge/spensermcconnell-main-c1b-planning-quality-proof-design-20260517-165308.md`
-- `/Users/spensermcconnell/.gstack/projects/Spenquatch-forge/spensermcconnell-main-c1b-test-plan-20260517-165308.md`
+Source of truth:
+- `/home/azureuser/.gstack/projects/Spenquatch-forge/azureuser-codex-c1b-planning-quality-proof-design-20260518-165310.md`
+- current repository code in `anvil/harness/`, `examples/harness/`, `tests/`, and `README.md`
 
-Supersedes:
-- the prior root `PLAN.md` for the C1a deterministic planning compiler wedge
-- the split C1b design/test-plan drafts
+Source note:
+- The branch name is still `codex/c1b-planning-quality-proof`, but recent commits show the `C1b` slices already landed: live runtime (`7b24c2d`), integrity publication (`9fe5b04`), operator surface (`f17c68e`), and provider proof command (`a0bc27f`).
+- This file supersedes the earlier root `C1b` plan. It is the authoritative `C2` implementation plan for this branch.
 
 ## Executive Summary
 
-`C1a` proved the compiler wedge. The repo can route `planning_v1`, emit
-`PLAN.md`, and emit `plan.json`.
+`C1a` proved that Forge can compile one deterministic planning strategy.
+`C1b` proved that the strategy can inspect a live repo, emit `PLAN.md` and
+`plan.json`, and stop honestly when the ask is ambiguous or out of corpus.
 
-That is not the same as proving the planner is real.
+`C2` is the next proof. It does not widen planner breadth. It makes the current
+planning artifact answer the skeptical question mechanically:
 
-Today `anvil/harness/planning_runtime.py` still turns declared `phase_inputs`
-into a planning-shaped artifact. The graph shape is honest. The planning quality
-is not yet earned.
+"What did this plan cover, what did it not cover, and which parts are still assumptions?"
 
-`C1b` is the milestone that closes that gap. It makes the canonical planning
-path derive structure from bounded live repo evidence, preserves deterministic
-IDs and artifact structure, keeps shared harness families safe, repairs the
-operator-facing docs/examples, and adds one explicit provider-backed review
-proof that can challenge the plan without owning the structural output.
+This milestone adds one runtime-owned truth surface, published consistently in
+both machine and human artifacts:
 
-This is intentionally a bounded proof milestone. It does not widen the planning
-corpus, add a second planning engine, or turn Forge into a generic freeform
-planner.
+- `coverage_ledger`
+- `assumptions_register`
+- `uncovered_delta`
 
-## 1. Objective, Problem, and Success Bar
+The implementation rule is strict:
+
+- runtime owns the facts
+- reporting serializes them
+- validation gates them
+- markdown renders them
+
+No strategy-name branching. No post-hoc auditor inventing truth after the run.
+No second planning pipeline.
+
+## 1. Objective and Success Bar
 
 ### 1.1 Objective
 
-Ship one bounded, deterministic, workspace-grounded planning path that:
+Ship measurable coverage for the existing
+`deterministic_feature_planning_v1` path by extending the shared planning
+contract, runtime state, projection, validation, and render layers so one
+planning run can publish:
 
-- accepts existing-repo feature, refactor, and automation asks within the
-  current planning corpus
-- derives seams, workstreams, and slices from live workspace evidence on the
-  success path
-- publishes `PLAN.md` and `plan.json` with stable structure and stable IDs
-- fails honestly with `clarification_needed` or `failed` when the ask is out of
-  corpus or under-specified
-- preserves existing non-planning harness behavior, especially
-  `analysis_review_v1`
-- provides one explicit provider-backed challenge path without giving the
-  provider ownership of the canonical structural plan
+- `plan.json` with explicit coverage, assumptions, and uncovered-delta records
+- `PLAN.md` with a readable coverage summary that matches the JSON exactly
+- `summary.json` with honest partial coverage on `clarification_needed` and
+  `failed` runs
 
 ### 1.2 Problem Statement
 
-Right now the planning surface is too close to demoware.
+The current planning artifact can tell you the plan.
+It still cannot tell you the shape of its uncertainty.
 
-The risk is not "the graph does not compile." The graph already compiles.
+Today the repo already publishes:
 
-The real risk is worse:
+- `terminal_status`
+- `run_mode`
+- `repo_evidence_refs`
+- `seams`
+- `workstreams`
+- `slices`
+- `phase_results`
 
-- the documented planning path still feels canned
-- the emitted plan can be schema-valid but operationally hollow
-- the example and docs surface can drift from what the runtime really supports
-- planning changes can leak into shared harness seams and quietly regress
-  `analysis_review`
+That is enough to describe structure.
+It is not enough to prove completeness.
 
-If that ships, users will trust the feature less than they would trust an
-honest "not ready yet."
+The missing product claim is not "more metadata."
+It is "the artifact can say, deterministically and honestly, which planning
+dimensions are covered, which are partial, which are uncovered, which claims
+are assumptions, and what exact delta should drive the next refine pass."
 
-### 1.3 Done Means
+### 1.3 Success Bar
 
-`C1b` is done only when all of the following are true:
+`C2` is complete only when all of the following are true:
 
-- the canonical success path synthesizes structural output from bounded live
-  repo evidence, not success-path `phase_inputs`
-- `phase_inputs` remain allowed only for fixture-mode regression paths and are
-  labeled as such
-- in-corpus, clarification-needed, and failed behavior is explicit and tested
-- every emitted `repo_evidence_ref.path`, seam reference, workstream reference,
-  and slice reference passes referential-integrity validation
-- the canonical hello-world command is copy-pasteable from repo root and honest
-  about what mode ran
-- `analysis_review_*` strategies still route to `analysis_review_v1`, preserve
-  example wiring, and preserve one offline smoke path
-- one provider-backed planning review proof exists with a named home and clear
-  ownership
-- the merged test plan below is strong enough to block fake completeness
+- successful planning runs emit `plan_artifact_v2`
+- every required coverage dimension has exactly one ledger row
+- coverage rows use declared strategy `phase_id` values, not `stage_type`, for
+  all cross-record references
+- assumption rows resolve from every linked `assumption_id`
+- delta rows exist only for `partial` or `uncovered` coverage rows
+- `PLAN.md` renders coverage, assumptions, and uncovered-delta sections in a
+  fixed canonical order
+- `summary.json` carries truthful partial coverage on
+  `clarification_needed` and `failed`
+- the runtime gains no `if strategy == ...` branches to make this work
 
 ## 2. Step 0: Scope Challenge
 
-### 2.1 What Already Exists
+### 2.1 What already exists
 
-| Sub-problem | Existing code | C1b decision |
+| Sub-problem | Existing code | C2 decision |
 |---|---|---|
-| Planning runtime family and routing already exist | `anvil/harness/builder.py`, `anvil/harness/strategy_graph.py`, `anvil/harness/subgraphs/planning_v1.py` | Reuse the family and graph topology. Deepen behavior, do not redesign routing. |
-| Planning artifact publication already exists | `anvil/harness/reporting.py`, `anvil/harness/report.py`, `tests/test_harness_planning_artifacts.py` | Keep the artifact contract. Strengthen how records are produced and validated. |
-| Planning config contracts already exist | `anvil/harness/types.py`, `anvil/harness/schemas.py`, `examples/harness/strategies/deterministic_feature_planning_v1.yaml` | Keep one config surface. Remove success-path dependence on canned `phase_inputs`. |
-| Graph-owned planning state already exists | `anvil/harness/state.py`, `tests/test_harness_state_boundaries.py` | Reuse the state surface. Extend it only where provenance or integrity needs to be explicit. |
-| Example and graph wiring coverage already exists | `tests/test_harness_example_strategy_wiring.py`, `tests/test_harness_strategy_graph.py`, `tests/test_harness_planning_graph.py` | Extend the current regression perimeter instead of creating a second one. |
-| Provider-family keys already exist | `config/models.yaml`, `anvil/harness/providers.py`, `anvil/providers/__init__.py` | Do not invent fake alias work. Fix clarity and tests around family-key versus concrete-provider naming. |
-| CLI and docs entrypoints already exist | `anvil/cli.py`, `anvil/harness/cli.py`, `README.md`, `examples/README.md`, `docs/contributing.md` | Keep these as the canonical operator surface and make them truthful. |
+| Runtime-owned planning state | `anvil/harness/state.py`, `anvil/harness/planning_runtime.py` | extend the existing `planning_*` surface, do not add a second planning store |
+| Success artifact projection | `anvil/harness/reporting.py`, especially `plan_projection_v1()` and `publish_planning_artifacts_v1()` | extend the current projection path in place, do not create a coverage-only publisher |
+| Success artifact schema | `anvil/harness/schemas.py`, `plan_json_schema()` | bump the planning artifact schema to v2 and require coverage fields there |
+| Success artifact integrity gating | `anvil/harness/validation.py`, `validate_planning_success_artifacts()` | extend existing planning integrity checks with coverage invariants |
+| Markdown rendering | `anvil/harness/reporting.py`, `render_plan_markdown_v1()` | extend the current planning markdown renderer in place, do not create a parallel renderer family |
+| Example strategy and task corpus | `examples/harness/strategies/deterministic_feature_planning_v1.yaml`, `examples/harness/tasks/deterministic_feature_planning_*.yaml` | keep one canonical strategy, add one explicit `coverage_policy` version surface |
+| Planning regression wall | `tests/test_harness_planning_graph.py`, `tests/test_harness_planning_artifacts.py`, `tests/test_harness_example_strategy_wiring.py`, `tests/test_harness_reporting.py`, `tests/test_harness_state_boundaries.py`, `tests/test_harness_strategy_graph.py` | reuse and widen the current planning tests rather than inventing a new harness |
+| Ledger-style precedent | `analysis_review` provenance and topic-ledger surfaces in `anvil/harness/report.py`, `anvil/harness/reporting.py`, `anvil/harness/state.py` | reuse the pattern of stable IDs, projection discipline, and truth gating without coupling planning to analysis-review contracts |
 
-### 2.2 Minimum Complete Scope
+### 2.2 Minimum complete scope
 
-Skipping any item below turns `C1b` into polish instead of proof:
+Skipping any item below turns `C2` into another pretty spec instead of a proof:
 
-1. Replace success-path `phase_inputs` replay with bounded live evidence
-   synthesis in `anvil/harness/planning_runtime.py`.
-2. Freeze explicit corpus-membership, evidence-sufficiency, and deterministic
-   evidence-budget rules.
-3. Add referential-integrity validation for evidence refs, seams, workstreams,
-   and slices.
-4. Preserve deterministic IDs and canonical section ordering across repeat runs.
-5. Tighten the operator surface so docs, examples, and CLI semantics match
-   reality.
-6. Add a shared-family non-regression gate for `analysis_review_v1`.
-7. Add one provider-backed review proof that annotates or challenges the
-   deterministic plan without owning structural output.
-8. Keep the design doc and test plan merged into this root `PLAN.md`.
+1. Extend the planning state and artifact contract with coverage, assumptions,
+   and uncovered-delta fields.
+2. Derive those fields inside `anvil/harness/planning_runtime.py` from the
+   existing deterministic planning pass.
+3. Render the new fields in `PLAN.md` and serialize them in `plan.json`.
+4. Enforce schema and referential-integrity rules at publication time.
+5. Preserve truthful partial publication in `summary.json` for blocked runs.
+6. Update the canonical example strategy and tests so repeat runs prove stable
+   ordering and stable IDs.
 
-### 2.3 Complexity Verdict
+### 2.3 Complexity verdict
 
-This milestone is cross-cutting, but it is still the minimum honest diff.
+This work is cross-cutting. That is real.
 
-It touches shared seams:
+It still fits the "engineered enough" bar because it stays inside existing
+modules:
 
-- planning runtime behavior
-- graph/runtime contracts
-- reporting and validation
-- CLI surface
-- docs/examples
-- regression coverage
+- no second planning engine
+- no post-hoc coverage auditor service
+- no second artifact pipeline
+- no planner-family framework project
+- no runnable refine adapter yet
 
-What would be overbuilt:
+The smell to avoid is not file count.
+It is split authorship.
 
-- a second planning family beyond `deterministic_feature_planning_v1`
-- public workflow composition
-- broad provider-platform redesign
-- automatic agent or worktree dispatch
-- per-phase model optimization
-- repo-wide unrelated refactors
+### 2.4 Search/build verdict
 
-### 2.4 Search/Build Verdict
+No new platform needs to be invented.
 
-This is mostly a Layer 1 reuse milestone with one Layer 3 constraint.
+Reuse what already exists:
 
-Layer 1 reuse:
+- `HarnessState` for durable graph state
+- `PLANNING_POLICY_FIELDS` for strategy policy version lookup
+- `plan_projection_v1()` for planning payload assembly
+- `render_plan_markdown_v1()` for human-readable artifact rendering
+- `validate_planning_success_artifacts()` for success-only integrity gating
+- the existing planning example corpus and reporting tests for regression proof
 
-- keep `TaskSpec.from_dict(...)` and `StrategyConfig.from_dict(...)` as the only
-  config loaders
-- keep `build_strategy_graph_spec(...)` as the runtime metadata authority
-- keep `build_harness_langgraph(...)` as the shared graph builder
-- keep `publish_state_artifacts_v1(...)` as the top-level write seam
-- keep the current artifact family: `PLAN.md` plus `plan.json`
+This is a contract extension, not a platform rewrite.
 
-Layer 3 constraint:
+### 2.5 Scope reduction opportunities rejected
 
-- the planner must derive structure from bounded live workspace evidence on the
-  canonical success path
+The following shortcuts are tempting and wrong for this milestone:
 
-That is the whole game for `C1b`.
+- "Just add optional fields to `plan_artifact_v1` and call it done"
+  Rejected because the contract meaning changes materially.
+- "Create `plan_projection_v2()` and `render_plan_markdown_v2()` beside the
+  current helpers"
+  Rejected because that doubles the planning publication surface for one
+  strategy and adds unnecessary drift risk.
+- "Compute coverage in `reporting.py` from seams/workstreams/slices"
+  Rejected because it would make projection own truth.
+- "Emit uncovered delta only on success"
+  Rejected because blocked runs are exactly where honest gap signaling matters.
+- "Let assumptions hang off seams/workstreams/slices immediately"
+  Rejected because that widens the blast radius for little product value in C2.
 
-### 2.5 Locked Decisions
+### 2.6 TODO cross-reference
+
+`docs/project_management/future/TODOS.md` has no deferred item that blocks C2.
+This milestone may create follow-on TODOs around multi-strategy coverage or a
+real refine adapter, but those stay out of this branch.
+
+### 2.7 NOT in scope
+
+- widening planning beyond `deterministic_feature_planning_v1`
+- a general planning-family coverage framework with per-strategy dimension
+  inference
+- a runnable refine-loop adapter or automatic re-planning workflow
+- provider-backed review of coverage outputs
+- per-object assumption refs on seams, workstreams, or slices
+- new packaging or distribution channels beyond the existing CLI artifact path
+- unrelated repo-wide cleanup
+
+## 3. Locked C2 Decisions
+
+These decisions are now frozen for implementation. Nothing later in this file
+reopens them.
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| Canonical planning path | deterministic-live, workspace-grounded | Trust comes from repeatable evidence, not prose flair. |
-| Provider role in C1b | review/challenge layer only | Provider output may annotate or challenge, but may not silently rewrite canonical seams, workstreams, or slices. |
-| `phase_inputs` semantics | fixture-only, never silent success fallback | Otherwise `C1b` can fake quality with preauthored payloads. |
-| Corpus boundary | existing-repo bounded planning only | Keep scope honest and testable. |
-| Workspace writes during planning | default read-only | Planning is inspection plus artifact emission, not repo mutation. |
-| Provider naming story | keep `codex_cli` and `claude_code` family keys valid | The repo already supports them. The problem is clarity and verification, not missing aliases. |
-| CLI ergonomics | allow the canonical hello-world from repo root without tribal setup | TTHW must be real, not aspirational. |
-| Shared-family safety | `analysis_review_v1` is the explicit canary | Planning changes touch shared seams. Regressions must be blocked. |
+| Artifact schema version | bump emitter to `plan_artifact_v2` | this is a material contract expansion, not a quiet additive tweak |
+| Coverage owner | `anvil/harness/planning_runtime.py` | runtime owns truth, renderers do not invent or grade it |
+| State field names | `planning_coverage_status`, `planning_coverage_ledger`, `planning_assumptions_register`, `planning_uncovered_delta` | consistent with existing `planning_*` naming |
+| Success artifact field names | `coverage_status`, `coverage_ledger`, `assumptions_register`, `uncovered_delta` | artifact stays product-shaped, not state-shaped |
+| Coverage vocabulary | fixed shared dimension set in runtime policy | explicit over clever, deterministic over inferred |
+| Assumption linkage in C2 | assumptions link from coverage rows only, not directly from seams/workstreams/slices | minimal diff, avoids exploding the contract across every object |
+| Non-success publication | `summary.json` always carries coverage payloads; `plan.json` and `PLAN.md` remain success-only | preserves the current success-artifact contract while keeping blocked runs honest |
+| Refine loop scope | emit `uncovered_delta` only; do not ship a runnable refine adapter in C2 | prove the handoff contract before widening behavior |
+| Helper strategy | upgrade existing planning helpers in place | minimal diff, no duplicated publication stack |
+| Function naming | keep `plan_projection_v1()`, `render_plan_markdown_v1()`, and `publish_planning_artifacts_v1()` as the only planning publication helpers for now | the artifact version changes, not the helper family count |
 
-### 2.6 TODO Cross-Reference
+## 4. Frozen C2 Coverage Contract
 
-`docs/project_management/future/TODOS.md` does not contain a blocker that must
-be folded into `C1b`.
+### 4.1 Shared coverage vocabulary
 
-If `C1b` surfaces worthwhile follow-on work, capture it after the planner is
-credible. Do not widen the milestone preemptively.
+The canonical C2 coverage unit is `coverage_dimension`.
 
-### 2.7 NOT in Scope
+The fixed dimension set for this milestone is:
 
-- widening the planning corpus beyond the current bounded classes
-- arbitrary greenfield or multi-repo planning
-- broad provider registry cleanup outside the harness and documented example
-  surfaces
-- multi-provider or per-phase model experimentation
-- automatic agent or worktree orchestration
-- public workflow DSLs
-- repo-wide unrelated lint, format, or type cleanup
+- `problem_frame`
+- `repo_surface`
+- `seam_selection`
+- `dependency_shape`
+- `execution_partitioning`
+- `acceptance_shape`
+- `risk_and_unknowns`
 
-## 3. Frozen Planning Contract
+This dimension set is runtime-owned and versioned by policy.
+It is not inferred from provider prose and not authored ad hoc per run.
 
-### 3.1 Supported request shape
+### 4.2 Phase identifier rule
 
-A request is in corpus when all of the following hold:
+Every cross-record reference uses declared strategy `phase_id` values, not
+`stage_type`.
 
-- `task_kind == planning`
-- the ask targets one existing repo
-- bounded evidence resolution yields between 1 and 25 concrete workspace paths
-- those paths collapse into at most 3 plausible seam groups
-- the first implementation cut can be defined from repo evidence without hidden
-  external context
+For the current canonical strategy those are:
 
-### 3.2 Terminal states
+- `design_doc`
+- `seam_decomposition`
+- `parallel_planning`
+- `slice_emission`
 
-Canonical terminal states:
+### 4.3 Coverage ledger shape
 
-- `success`
-- `clarification_needed`
-- `failed`
+Each `coverage_ledger` row must contain:
 
-Return `clarification_needed` when the request appears in corpus but the runtime
-cannot choose a primary cut credibly after one bounded scan.
+- `coverage_id`
+- `dimension`
+- `status`
+- `summary`
+- `evidence_refs`
+- `seam_ids`
+- `workstream_ids`
+- `slice_ids`
+- `assumption_ids`
+- `source_phase_ids`
 
-Concrete triggers:
+Allowed `status` values:
 
-- `files_hint` resolves to 0 workspace paths
-- more than one primary seam candidate remains within a close score band
-- a required dependency path is mentioned but not found
-- acceptance criteria cannot be grounded in inspected files
+- `covered`
+- `partial`
+- `uncovered`
+- `not_applicable`
 
-Return `failed` when the ask is outside the bounded planning corpus.
+Invariants:
 
-Concrete triggers:
+- exactly one row per required dimension
+- deterministic ordering follows the dimension-set order above
+- `coverage_id` format is `coverage-{index:02d}-{dimension}`
+- `covered` and `partial` rows must include at least one `evidence_ref` or one
+  structural ref
+- `not_applicable` requires explicit rationale in `summary`
+- `source_phase_ids` must be non-empty and resolve to declared strategy phases
 
-- explicit greenfield or "build a new app/system" asks
-- multi-repo or multi-team migration asks
-- hidden external-system dependency is required before any trustworthy seam can
-  be chosen
-- bounded evidence resolution exceeds 25 candidate files or more than 3 seam
-  clusters even after narrowing
+### 4.4 Assumptions register shape
 
-### 3.3 Deterministic evidence budget
+Each `assumptions_register` row must contain:
 
-Freeze one first-pass budget:
+- `assumption_id`
+- `statement`
+- `kind`
+- `status`
+- `linked_coverage_ids`
+- `evidence_refs`
+- `source_phase_id`
 
-- inspect up to 25 matched workspace paths
-- read up to 12 files
-- read up to 150 KB of file content total
-- allow one narrowing pass beyond direct `files_hint` matches
+Allowed `kind` values:
 
-If the runtime cannot produce a credible primary seam inside that budget, it
-must clarify or fail. It may not silently widen into an unbounded repo crawl.
+- `scope`
+- `dependency`
+- `acceptance`
+- `environment`
+- `risk`
 
-### 3.4 Referential-integrity rules
+Allowed `status` values:
 
-Planning outputs must validate all of the following before a success artifact is
-published:
+- `active`
+- `validated`
+- `rejected`
 
-- every `repo_evidence_ref.path` exists inside the workspace snapshot
-- every seam path exists inside the workspace snapshot
-- every workstream `seam_id` resolves to a declared seam
-- every slice `workstream_id` resolves to a declared workstream
-- every slice `seam_id` resolves to a declared seam
-- every slice has at least one concrete acceptance criterion
+Invariants:
 
-### 3.5 Structural invariants
+- `assumption_id` format is `assumption-{index:02d}-{slug}`
+- every `linked_coverage_id` must resolve to a declared coverage row
+- rejected assumptions must not remain linked to rows whose summary still
+  claims full confidence without being updated
+- ordering is stable by first introduction order
 
-The canonical artifact contract stays small and explicit.
+### 4.5 Uncovered delta shape
 
-Canonical human artifact sections:
+Each `uncovered_delta` row must contain:
 
-1. problem statement
-2. rubric results
-3. architectural seams
-4. parallel workstreams or worktrees
-5. executable slices
+- `delta_id`
+- `coverage_id`
+- `dimension`
+- `gap_kind`
+- `required_input`
+- `recommended_next_phase`
+- `blocking_assumption_ids`
 
-Canonical structural invariants:
+Allowed `gap_kind` values:
 
-- stable seam, workstream, and slice IDs across repeat runs on the same input
-- deterministic section order
-- explicit provenance for why each seam, workstream, and slice exists
-- provider-backed annotations may not mutate canonical structural IDs
+- `missing_evidence`
+- `missing_structure`
+- `assumption_blocked`
+- `ambiguous_scope`
 
-## 4. Architecture Review
+Invariants:
 
-### 4.1 Current behavior gap
+- only `partial` or `uncovered` coverage rows may emit delta entries
+- every delta row must resolve to one coverage row
+- ordering follows coverage-ledger order
+- `recommended_next_phase` must be one declared `phase_id` or `clarify`
+- every `blocking_assumption_id` must resolve to an assumptions-register row
 
-The current planning surface already routes correctly, but it still centers on
-declared phase payload replay:
+### 4.6 State vs artifact ownership
 
-```text
-task yaml + strategy yaml
-        │
-        ▼
-select strategy / route planning_v1
-        │
-        ▼
-planning_runtime
-        │
-        ├── reads declared phase_inputs
-        ├── normalizes payloads
-        └── republishes seams/workstreams/slices
-        │
-        ▼
-reporting.publish_state_artifacts_v1
-        │
-        ├── PLAN.md
-        └── plan.json
-```
+State fields added in `anvil/harness/state.py`:
 
-That proves shape. It does not prove planning quality.
+- `planning_coverage_status`
+- `planning_coverage_ledger`
+- `planning_assumptions_register`
+- `planning_uncovered_delta`
 
-### 4.2 Target architecture
+Artifact fields added in `plan.json` and `summary.json`:
+
+- `coverage_status`
+- `coverage_ledger`
+- `assumptions_register`
+- `uncovered_delta`
+
+Ownership model:
+
+- runtime owns coverage facts
+- projection owns serialization
+- validation owns gating
+- report rendering owns presentation
+
+That is the whole cut.
+
+### 4.7 Non-success behavior
+
+Success:
+
+- emit `PLAN.md`
+- emit `plan.json`
+- require all four coverage fields in the artifact payload
+
+Clarification needed:
+
+- do not emit `PLAN.md`
+- do not emit `plan.json`
+- `summary.json` must carry `coverage_status: clarification_needed`
+- `coverage_ledger`, `assumptions_register`, and `uncovered_delta` must still
+  be present as arrays, even if empty or partial
+
+Failed:
+
+- do not emit `PLAN.md`
+- do not emit `plan.json`
+- `summary.json` must carry `coverage_status: failed`
+- no row may claim `covered` unless its evidence and linked structure were
+  established before failure
+
+## 5. Architecture Review
+
+### 5.1 Current behavior gap
+
+The repo already knows how to plan structure.
+It does not yet know how to publish the shape of uncertainty.
+
+Today the runtime can emit:
+
+- deterministic seams
+- deterministic workstreams
+- deterministic slices
+- deterministic terminal status
+
+Today it cannot emit:
+
+- one row per planning dimension explaining what is covered
+- one assumptions registry explaining what the plan still depends on
+- one uncovered-delta contract explaining what the next refine pass should ask
+  for
+
+### 5.2 Target architecture
 
 ```text
 task yaml (task_kind=planning)
@@ -318,304 +408,363 @@ strategy yaml (runtime_target=planning_v1)
         ▼
 validator_preflight
         │
-        ├── corpus fit checks
-        ├── policy checks
-        └── strategy/runtime compatibility checks
+        └── planning contract sanity only
         │
         ▼
 planning_v1 subgraph
         │
         ▼
-planning_runtime
+execute_planning_runtime()
         │
-        ├── bounded workspace evidence discovery
-        ├── rubric derivation
-        ├── seam derivation
-        ├── workstream derivation
-        ├── slice derivation
-        ├── referential-integrity validation
-        └── clarification/failure decision
-        │
-        ▼
-optional provider-backed challenge layer
-        │
-        └── annotations only, no structural ownership
+        ├── derive problem statement, seams, workstreams, slices
+        ├── derive coverage rows for the fixed dimension set
+        ├── derive assumptions register from unresolved claims
+        ├── derive uncovered delta from partial/uncovered dimensions
+        ├── attach source_phase_ids using declared phase_id values
+        └── stamp planning_coverage_status truthfully
         │
         ▼
-reporting.publish_state_artifacts_v1
+plan_projection_v1()
         │
-        ├── PLAN.md
-        └── plan.json
+        ├── success: plan.json + PLAN.md + summary.json
+        └── blocked: summary.json only
+        │
+        ▼
+validate_planning_success_artifacts()
+        │
+        ├── schema_version
+        ├── referential integrity
+        ├── coverage invariants
+        └── PLAN.md / plan.json parity
+        │
+        ▼
+render_plan_markdown_v1()
 ```
 
-### 4.3 Module ownership map
+### 5.3 Exact ownership map
 
-| Concern | Canonical owner | Required outcome |
-|---|---|---|
-| Task and strategy parsing | `anvil/harness/types.py` | One typed config surface. No second parser stack. |
-| Runtime-family metadata | `anvil/harness/strategy_graph.py` | `planning_v1` metadata stays explicit and shared-family safe. |
-| Shared graph construction | `anvil/harness/builder.py` | No topology rewrite, only behavior deepening. |
-| Planning phase execution | `anvil/harness/planning_runtime.py` | Live evidence derivation, deterministic IDs, honest stops. |
-| Planning runtime entrypoint | `anvil/harness/subgraphs/planning_v1.py` | Thin wrapper only. |
-| Graph-owned planning state | `anvil/harness/state.py` | Provenance and integrity fields are first-class. |
-| Artifact projection and publication | `anvil/harness/reporting.py` | One publication seam for `PLAN.md` and `plan.json`. |
-| Machine validation | `anvil/harness/schemas.py`, `anvil/harness/validation.py` | Schema plus referential-integrity checks stay enforceable. |
-| Operator CLI surface | `anvil/cli.py`, `anvil/harness/cli.py` | Canonical command, clear terminal semantics, usable rescue messages. |
+| Concern | Canonical owner | Exact touch points | Required outcome |
+|---|---|---|---|
+| Runtime-owned planning truth | `anvil/harness/planning_runtime.py` | `PLANNING_POLICY_FIELDS`, `_seed_planning_state()`, `execute_planning_runtime()` | derive coverage, assumptions, and delta from the same deterministic planning pass |
+| Durable graph state | `anvil/harness/state.py` | `HarnessState`, `initialize_harness_state()`, summary rehydration block | first-class `planning_*` coverage fields that survive projection and reload |
+| Strategy policy surface | `examples/harness/strategies/deterministic_feature_planning_v1.yaml` | top-level policy keys | add explicit `coverage_policy` version and keep phase IDs canonical |
+| Artifact projection | `anvil/harness/reporting.py` | `PLANNING_ARTIFACT_SCHEMA_VERSION`, `plan_projection_v1()`, `publish_planning_artifacts_v1()` | emit v2 payloads and preserve success-only artifact publication |
+| Markdown rendering | `anvil/harness/reporting.py`, `anvil/harness/validation.py` | `render_plan_markdown_v1()`, `_PLANNING_MARKDOWN_SECTION_HEADINGS` | render coverage sections in canonical order |
+| Machine contract | `anvil/harness/schemas.py` | `plan_json_schema()` and new nested record schemas | define `plan_artifact_v2` and the new nested record schemas |
+| Success-artifact integrity | `anvil/harness/validation.py` | `validate_planning_success_artifacts()` | enforce coverage invariants, cross-record resolution, and markdown parity |
+| Example corpus and docs | `examples/harness/tasks/`, `README.md`, `examples/README.md` | fixture descriptions and example prose | keep the visible planning surface honest about the richer artifact |
 
-### 4.4 Production failure scenarios by seam
+### 5.4 Production failure scenarios by seam
 
 | Seam | Realistic failure | Planned guard |
 |---|---|---|
-| `validator_preflight` | a greenfield ask slips through as planning and yields fake structure | explicit in-corpus/out-of-corpus checks plus failure tests |
-| `planning_runtime` evidence discovery | `files_hint` resolves to nothing but runtime keeps going | bounded evidence gate plus `clarification_needed` tests |
-| seam derivation | two primary seams tie and the runtime picks one nondeterministically | deterministic tie handling plus clarification path |
-| workstream derivation | circular or fake-independent workstreams are emitted | dependency validation plus workstream tests |
-| artifact publication | `PLAN.md` and `plan.json` disagree on IDs or order | shared artifact projection tests |
-| provider-backed review layer | provider annotations rewrite structural IDs | freeze structural ownership boundary in code and tests |
+| runtime coverage derivation | runtime emits two rows for the same dimension or skips one entirely | schema + semantic invariant tests |
+| assumptions register | a rejected assumption still props up a `covered` row | referential and status-consistency validation |
+| uncovered delta derivation | a `covered` row still emits a delta | delta-to-coverage invariant checks |
+| non-success projection | blocked runs imply fake completeness by omitting coverage status | summary payload contract tests |
+| markdown rendering | `PLAN.md` coverage sections drift from `plan.json` ordering | markdown parity validation plus artifact tests |
+| schema evolution | new fields silently ship under `plan_artifact_v1` | explicit schema-version bump to `plan_artifact_v2` |
 
-### 4.5 Architecture verdict
-
-The graph shape is already good enough. The architecture change is behavioral,
-not topological.
+### 5.5 Architecture verdict
 
 Do not add:
 
 - a second planning runtime
-- a separate planning-only CLI
-- a second reporting path
-- a second parser or schema layer
+- a generic coverage framework layer before one proof exists
+- coverage computation inside `reporting.py`
+- provider-owned or reviewer-owned planning completeness grading
+- a new `*_v2` helper family for projection/render/publication
 
-All of those spend complexity without increasing trust.
+This milestone wins by extending the existing planning runtime honestly and by
+keeping one planning publication path.
 
-## 5. Implementation Plan
+## 6. Implementation Plan
 
-### Slice 1: Contract Freeze
+Read this section as the authoritative execution order for `C2`.
+Later sections explain why these steps exist and how they are validated. They do
+not redefine the sequence.
 
-Goal: freeze the planning contract before changing behavior.
+### 6.1 Primary files to touch
 
-Primary modules:
+| File | Why it changes |
+|---|---|
+| `anvil/harness/state.py` | add durable coverage fields and summary rehydration |
+| `anvil/harness/planning_runtime.py` | derive coverage, assumptions, delta, and coverage status |
+| `anvil/harness/schemas.py` | define the v2 artifact contract and nested schemas |
+| `anvil/harness/reporting.py` | project, publish, and render the new payload |
+| `anvil/harness/validation.py` | gate success publication on coverage integrity and markdown parity |
+| `examples/harness/strategies/deterministic_feature_planning_v1.yaml` | add `coverage_policy` and keep phase IDs authoritative |
+| `examples/harness/tasks/deterministic_feature_planning_*.yaml` | keep success/clarification/failed fixture expectations honest |
+| `README.md` | document the richer planning artifact |
+| `examples/README.md` | document success-only artifacts vs summary-only blocked runs |
+| `tests/test_harness_planning_graph.py` | runtime and stop-path planning assertions |
+| `tests/test_harness_planning_artifacts.py` | artifact publication and integrity assertions |
+| `tests/test_harness_example_strategy_wiring.py` | strategy policy and repeat-run determinism assertions |
+| `tests/test_harness_strategy_graph.py` | graph/spec stability assertions if strategy metadata changes |
+| `tests/test_harness_state_boundaries.py` | state serialization and summary rehydration assertions |
+| `tests/test_harness_reporting.py` | summary/report publication parity assertions |
 
-- `anvil/harness/types.py`
+### 6.2 Execution contract
+
+| Slice | Why it exists | Cannot start until | Produces |
+|---|---|---|---|
+| A. Contract and state freeze | lock the new truth surface before code fans out | — | field names, schema-version choice, coverage vocabulary, ownership rules |
+| B. Runtime coverage derivation | make coverage facts runtime-owned and deterministic | A | coverage rows, assumptions, delta, coverage status in state |
+| C. Projection, rendering, and validation | make the artifact publishable and trustworthy | A, B | `plan_artifact_v2`, canonical markdown sections, integrity checks |
+| D. Example surface and docs | keep the public planning surface honest | A | explicit policy version, updated example expectations, visible artifact semantics |
+| E. Quality gates and regressions | prove the whole thing and block drift | B, C, D | regression wall for success and blocked paths |
+
+Rules:
+
+- Slice A locks the nouns.
+- Slice B owns the facts.
+- Slice C owns serialization and gating, never truth invention.
+- Slice D is visible product surface, not cleanup.
+- Slice E is the merge wall. Not follow-up hardening.
+
+### 6.3 Slice A: Contract and state freeze
+
+Goal: freeze the new truth surface before behavior spreads across modules.
+
+Primary files:
+
 - `anvil/harness/state.py`
-- `anvil/harness/strategy_graph.py`
-- `anvil/harness/nodes/validator_preflight.py`
-- `anvil/cli.py`
+- `anvil/harness/schemas.py`
+- `anvil/harness/planning_runtime.py`
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
 
-Required work:
+Concrete changes:
 
-- codify in-corpus, clarification-needed, and failed rules
-- codify the deterministic evidence budget
-- mark `phase_inputs` as fixture-only for the canonical success path
-- add or tighten state fields needed for provenance and integrity
-- freeze exit semantics and operator-visible terminal wording
+- add `planning_coverage_status`, `planning_coverage_ledger`,
+  `planning_assumptions_register`, and `planning_uncovered_delta` to
+  `HarnessState`
+- initialize those fields in `initialize_harness_state()`
+- restore those fields from summary payloads in the summary rehydration block in
+  `anvil/harness/state.py`
+- extend `PLANNING_POLICY_FIELDS` with `coverage_policy`
+- define the fixed coverage dimension set and allowed enum values in one shared
+  runtime-owned location
+- add `coverage_policy: measurable_coverage_v1` to
+  `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+- lock the artifact schema version to `plan_artifact_v2`
 
-Acceptance checks:
+Produces:
 
-- out-of-corpus asks fail before fake downstream output
-- later slices do not need to guess policy
-- the runtime contract can report whether a run was fixture-backed,
-  deterministic-live, or provider-reviewed
+- one canonical vocabulary
+- one state shape
+- one strategy policy version surface
 
-### Slice 2: Live Evidence Planning Runtime
+Done when:
 
-Goal: make `planning_runtime` derive structure from workspace evidence.
+- downstream code can reference the new fields by one name only
+- the strategy example exposes `coverage_policy: measurable_coverage_v1`
+- no later slice needs to invent field names, status enums, or schema versioning
 
-Primary modules:
+### 6.4 Slice B: Runtime coverage derivation
+
+Goal: derive coverage, assumptions, and uncovered delta inside the existing
+deterministic planning runtime.
+
+Primary files:
 
 - `anvil/harness/planning_runtime.py`
-- `anvil/harness/subgraphs/planning_v1.py`
-- `anvil/harness/files.py`
 - `anvil/harness/state.py`
 
-Required work:
+Concrete changes:
 
-- implement bounded workspace evidence discovery
-- derive rubric findings from inspected files instead of preauthored payloads
-- derive seams from path clusters and coupling hints
-- derive workstreams from seams plus dependency boundaries
-- derive executable slices with concrete acceptance checks
-- validate referential integrity before success publication
-- stop with `clarification_needed` or `failed` when the runtime cannot make an
-  honest cut
+- extend `_seed_planning_state()` to initialize the new coverage fields every run
+- add one runtime-owned coverage derivation pass after seams, workstreams, and
+  slices are known and before terminal success publication is finalized
+- derive one `coverage_ledger` row per fixed dimension using:
+  - task objective and acceptance for `problem_frame`
+  - `repo_evidence_refs` for `repo_surface`
+  - seams for `seam_selection`
+  - dependency reasoning on workstreams/slices for `dependency_shape`
+  - workstreams for `execution_partitioning`
+  - slice acceptance criteria for `acceptance_shape`
+  - ambiguity flags, clarification signals, or missing evidence for
+    `risk_and_unknowns`
+- derive `assumptions_register` from claims that remain active but unvalidated
+  after the planning pass
+- derive `uncovered_delta` only from `partial` and `uncovered` rows
+- stamp `planning_coverage_status` as:
+  - `success` when terminal status is `success`
+  - `clarification_needed` when terminal status is `clarification_needed`
+  - `failed` when terminal status is `failed`
+- ensure all cross-record refs use declared strategy `phase_id` values:
+  `design_doc`, `seam_decomposition`, `parallel_planning`, `slice_emission`
 
-Acceptance checks:
+Produces:
 
-- success-path seams, workstreams, and slices are not copied from success-path
-  `phase_inputs`
-- repeat-run IDs remain stable
-- blocked runs do not leave fake downstream records in state
-- emitted structure carries enough provenance to justify the cut
+- runtime-owned coverage truth in state
+- stable IDs and stable ordering for all three new record types
+- honest partial payloads for blocked runs
 
-### Slice 3: Reporting and Integrity Projection
+Done when:
 
-Goal: ensure the published artifacts are canonical, aligned, and trustworthy.
+- repeat runs on the same workspace emit the same coverage IDs and order
+- blocked runs can still carry partial coverage without pretending to be complete
+- no logic in projection or validation needs to infer missing runtime facts
 
-Primary modules:
+### 6.5 Slice C: Projection, rendering, and validation
+
+Goal: make the new contract publishable, readable, and impossible to fake.
+
+Primary files:
 
 - `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
+- `anvil/harness/validation.py`
 - `anvil/harness/schemas.py`
-- `tests/test_harness_planning_artifacts.py`
 
-Required work:
+Concrete changes:
 
-- project the deterministic-live planning payload into both `PLAN.md` and
-  `plan.json`
-- ensure both artifacts share the same IDs, ordering, and terminal semantics
-- validate evidence refs, seam refs, workstream refs, and slice refs at publish
-  time
-- make structural mismatches impossible to publish as success
+- keep `plan_projection_v1()` as the single planning payload assembler, but
+  extend it to emit the v2 shape
+- keep `render_plan_markdown_v1()` as the single planning markdown renderer, but
+  extend it to render the full C2 section set
+- keep `publish_planning_artifacts_v1()` as the single planning publisher, but
+  make it publish `plan_artifact_v2`
+- extend `plan_json_schema()` with:
+  - `schema_version = plan_artifact_v2`
+  - `coverage_status`
+  - `coverage_ledger`
+  - `assumptions_register`
+  - `uncovered_delta`
+- add nested schemas for coverage rows, assumption rows, and delta rows
+- update `_PLANNING_MARKDOWN_SECTION_HEADINGS` to require this canonical order:
+  1. `## Problem Statement`
+  2. `## Rubric Results`
+  3. `## Architectural Seams`
+  4. `## Parallel Workstreams/Worktrees`
+  5. `## Executable Slices`
+  6. `## Coverage Ledger`
+  7. `## Assumptions Register`
+  8. `## Uncovered Delta`
+- emit `coverage_status`, `coverage_ledger`, `assumptions_register`, and
+  `uncovered_delta` in `plan.json`
+- emit the same four surfaces in `summary.json`
+- extend `validate_planning_success_artifacts()` with:
+  - coverage-row cardinality and ordering checks
+  - coverage-to-assumption resolution
+  - delta-to-coverage resolution
+  - non-empty evidence or structural refs for `covered` and `partial` rows
+  - markdown parity for coverage, assumptions, and delta sections
 
-Acceptance checks:
+Produces:
 
-- `PLAN.md` and `plan.json` cannot disagree silently
-- invalid references fail before success artifacts are written
-- summary payload and artifact payload stay aligned
+- one canonical v2 plan artifact
+- one canonical markdown order
+- one publication gate that blocks dishonest artifacts
 
-### Slice 4: Operator Surface, CLI, and Example Credibility
+Done when:
 
-Goal: make the documented planning path runnable and honest.
+- `plan.json` and `PLAN.md` cannot disagree silently about coverage surfaces
+- success publication fails on any missing or inconsistent coverage record
+- blocked runs preserve summary truth without writing success artifacts
 
-Primary modules:
+### 6.6 Slice D: Example surface and docs
 
-- `anvil/cli.py`
-- `anvil/harness/cli.py`
+Goal: keep the visible planning surface honest now that the artifact is richer.
+
+Primary files:
+
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+- `examples/harness/tasks/deterministic_feature_planning_*.yaml`
 - `README.md`
 - `examples/README.md`
-- `docs/contributing.md`
-- `examples/harness/strategies/`
-- `examples/harness/tasks/`
 
-Required work:
+Concrete changes:
 
-- default `--workspace` to the current working directory when omitted on the
-  canonical harness path
-- tighten rescue messaging for missing CLI binaries and missing auth
-- document the provider-family story clearly
-- make the canonical hello-world command copy-pasteable from repo root
-- ensure example task and strategy files describe the real bounded planning
-  surface
+- add `coverage_policy` to the canonical planning strategy example
+- update planning example prose to say the artifact now includes coverage,
+  assumptions, and uncovered delta
+- keep success, clarification, and failed fixture tasks honest about what gets
+  published on each path
+- state plainly that successful planning runs publish `PLAN.md` and `plan.json`,
+  while blocked runs publish `summary.json` only with explicit coverage truth
 
-Acceptance checks:
+Produces:
 
-- the literal canonical hello-world command from docs works from repo root
-- documented failure modes tell the operator what to do next
-- examples no longer imply broader capability than the runtime actually supports
+- one visible canonical strategy surface for C2
+- one honest explanation of success-only artifacts vs summary-only blocked runs
 
-### Slice 5: Quality Gates and Shared-Family Non-Regression
+Done when:
 
-Goal: block fake completeness and protect shared harness behavior.
+- the example strategy and docs do not undersell or overclaim the C2 artifact
+- fixture tasks still describe live-vs-fixture behavior truthfully
 
-Primary modules:
+### 6.7 Slice E: Quality gates and regressions
 
-- `tests/test_harness_planning_graph.py`
-- `tests/test_harness_planning_artifacts.py`
-- `tests/test_harness_example_strategy_wiring.py`
-- `tests/test_harness_strategy_graph.py`
-- `tests/test_harness_cli_command.py`
-- `tests/test_harness_standalone_cli.py`
-- `tests/test_harness_provider_adapter.py`
-- `tests/test_docs_surface.py`
+Goal: prove the coverage truth surface is real and stays stable.
 
-Required work:
-
-- add coverage proving the success path is live-derived
-- add referential-integrity coverage
-- add docs smoke coverage for the canonical command
-- keep `analysis_review_*` routing, example, and smoke behavior green
-- freeze deterministic repeat-run coverage
-
-Acceptance checks:
-
-- fake planning success via canned replay is impossible without test failures
-- the canonical docs or examples command is executable in fixture smoke
-- shared-family regressions are caught before merge
-
-### Slice 6: Provider-Backed Review Proof
-
-Goal: add one narrow live credibility proof after deterministic-live behavior is
-frozen.
-
-Primary surface:
-
-- one named acceptance config or command surface
-- one proof-artifact capture location under a documented owner path
-- one explicit manual or nightly workflow home
-
-Required work:
-
-- pick one canonical fixture inside the bounded planning corpus
-- run one provider-backed planning review or challenge pass
-- capture the artifact set and operating instructions
-- document where this proof lives and who owns it
-
-Acceptance checks:
-
-- the provider-backed review can run end-to-end when its prerequisites are
-  present
-- provider output cannot mutate canonical structural IDs
-- the proof has a named home instead of rotting as a one-off demo
-
-## 6. Code Quality and Contract Hygiene
-
-This milestone should leave the harness more explicit, not more abstract.
-
-### 6.1 Keep the diff minimal
-
-- no second parser stack
-- no planning-only graph builder
-- no parallel reporting path
-- no provider alias churn that does not improve operator clarity
-- no new service layer unless two existing modules would otherwise duplicate the
-  same logic
-
-### 6.2 Bias toward explicit over clever
-
-Preferred implementation style:
-
-- explicit terminal-state branching over polymorphic "magic" dispatch
-- explicit provenance fields over inferred hidden state
-- explicit integrity checks over best-effort repair
-- explicit fixture-mode labels over silent fallback behavior
-
-### 6.3 DRY boundaries
-
-Reuse these seams aggressively:
-
-- `TaskSpec.from_dict(...)`
-- `StrategyConfig.from_dict(...)`
-- `build_strategy_graph_spec(...)`
-- `build_harness_langgraph(...)`
-- `publish_state_artifacts_v1(...)`
-
-Do not reuse by copy-pasting planning-specific logic into tests, docs, or the
-CLI surface. If the same terminal-state or provenance formatting logic appears
-in more than one production module, extract it once.
-
-### 6.4 Diagram maintenance
-
-If touched files already contain nearby ASCII diagrams or structural comments,
-update them in the same change. Stale diagrams are worse than no diagrams.
-
-## 7. Test Review
-
-Framework: `pytest`
-
-Coverage target: every new branch introduced by `C1b` gets a deterministic test.
-100% of new branches is the goal.
-
-Primary regression perimeter to extend:
+Primary files:
 
 - `tests/test_harness_planning_graph.py`
 - `tests/test_harness_planning_artifacts.py`
 - `tests/test_harness_example_strategy_wiring.py`
 - `tests/test_harness_strategy_graph.py`
-- `tests/test_harness_cli_command.py`
-- `tests/test_harness_standalone_cli.py`
-- `tests/test_harness_provider_adapter.py`
-- `tests/test_docs_surface.py`
+- `tests/test_harness_state_boundaries.py`
+- `tests/test_harness_reporting.py`
 
-### 7.1 Codepath coverage diagram
+Concrete changes:
+
+- add runtime tests for stable coverage IDs and ordered dimension rows
+- add artifact tests for `plan_artifact_v2`
+- add blocked-run tests for honest partial coverage in `summary.json`
+- add validation tests for broken assumption refs and invalid delta rows
+- add state-boundary tests for new `planning_*` coverage field round-tripping
+- update example-strategy tests to assert the new `coverage_policy`
+- update reporting tests to prove summary payload and report output stay aligned
+
+Produces:
+
+- a regression wall for deterministic coverage
+- explicit failure tests for dishonest publication
+
+Done when:
+
+- the coverage truth surface is as hard to fake as seams/workstreams/slices are today
+- schema, runtime, state, and markdown drift all fail fast in tests
+
+## 7. Code Quality and Contract Hygiene
+
+### 7.1 Engineering rules
+
+- Keep the diff minimal. No second artifact pipeline. No second runtime.
+- Bias toward explicit over clever. Fixed dimensions beat inferred magic.
+- Reuse existing planning normalization and publication seams.
+- Reuse the repo's ledger-style lessons from `analysis_review` without sharing
+  contract objects across planning and review.
+- Keep all new record IDs stable and deterministic.
+- Do not create sibling helpers just to put `v2` in a function name.
+
+### 7.2 Truth ownership boundaries
+
+| Concern | Owner | Rule |
+|---|---|---|
+| structural planning facts | `planning_runtime.py` | seams, workstreams, and slices remain runtime-owned |
+| coverage truth | `planning_runtime.py` | one row per dimension, one assumptions register, one uncovered delta |
+| state durability | `state.py` | the new `planning_*` fields must survive initialization and summary reload |
+| artifact serialization | `reporting.py` | publish exactly what runtime produced |
+| markdown presentation | `reporting.py` + `validation.py` | render canonical headings and preserve parity |
+| integrity gating | `validation.py` | reject inconsistent success artifacts before publication |
+
+### 7.3 Anti-patterns explicitly rejected
+
+- computing coverage in `reporting.py` from already-rendered data
+- leaving schema version at `plan_artifact_v1`
+- attaching assumptions to every structural object in C2
+- letting blocked runs omit coverage payloads entirely
+- using `stage_type` instead of declared `phase_id` in cross-record refs
+- creating `plan_projection_v2()` beside `plan_projection_v1()` for one branch
+
+## 8. Test Review
+
+Framework: `pytest`  
+Coverage target: every new C2 branch gets deterministic test coverage.  
+Ship rule: `C2` is not done if tests only prove schema validity.
+
+### 8.1 Codepath coverage diagram
 
 ```text
 CODE PATH COVERAGE
@@ -623,296 +772,248 @@ CODE PATH COVERAGE
 [+] anvil/harness/planning_runtime.py
     │
     ├── execute_planning_runtime()
-    │   ├── [EXISTING] phase-order execution and terminal recording
-    │   ├── [GAP]      live evidence discovery instead of success-path phase replay
-    │   ├── [GAP]      evidence-budget enforcement
-    │   ├── [GAP]      in-corpus vs clarification-needed vs failed branching
-    │   ├── [GAP]      deterministic tie handling for seam selection
-    │   └── [GAP]      referential-integrity validation before success publication
+    │   ├── [EXISTING] success / clarification_needed / failed terminal routing
+    │   ├── [EXISTING] deterministic seams / workstreams / slices
+    │   ├── [GAP]      planning_coverage_status population
+    │   ├── [GAP]      coverage row derivation for all 7 dimensions
+    │   ├── [GAP]      assumptions register derivation
+    │   ├── [GAP]      uncovered delta derivation
+    │   └── [GAP]      stable IDs and stable ordering for coverage records
     │
-    ├── phase payload handling
-    │   ├── [EXISTING] fixture-mode phase_inputs normalization
-    │   └── [GAP]      explicit fixture-only guard on canonical success path
-    │
-    └── structural output assembly
-        ├── [EXISTING] normalized seams/workstreams/slices payload shape
-        └── [GAP]      live-derived provenance and stable-ID assertions
+    └── blocked-run path
+        ├── [EXISTING] empty downstream structural records on clarification
+        └── [GAP]      truthful partial coverage payload on clarification / failure
 
-[+] anvil/harness/reporting.py / report.py
+[+] anvil/harness/state.py
     │
-    ├── publish_state_artifacts_v1()
-    │   ├── [EXISTING] writes planning artifacts on success
-    │   ├── [GAP]      blocks mismatched refs or ordering
-    │   └── [GAP]      enforces PLAN.md / plan.json parity
+    ├── initialize_harness_state()
+    │   └── [GAP]      initialize new planning coverage fields
     │
-    └── terminal payload projection
-        ├── [EXISTING] clarification/failed payload publication
-        └── [GAP]      mode/provenance visibility in published summary
+    └── summary rehydration
+        └── [GAP]      round-trip new planning coverage fields from summary payload
 
-[+] anvil/cli.py
+[+] anvil/harness/reporting.py
     │
-    ├── harness-run parsing
-    │   ├── [EXISTING] explicit --workspace support
-    │   ├── [GAP]      default workspace=current working directory
-    │   └── [EXISTING] planning exit code 0 only for success
+    ├── plan_projection_v1()
+    │   ├── [EXISTING] structural planning projection pattern
+    │   ├── [GAP]      coverage fields in plan payload
+    │   └── [GAP]      summary payload parity for blocked runs
     │
-    └── operator rescue surface
-        ├── [EXISTING] runtime dependency failures
-        └── [GAP]      missing-provider-binary and auth guidance with fix steps
+    ├── render_plan_markdown_v1()
+    │   ├── [EXISTING] planning markdown section rendering
+    │   ├── [GAP]      coverage ledger section
+    │   ├── [GAP]      assumptions register section
+    │   └── [GAP]      uncovered delta section
+    │
+    └── publish_planning_artifacts_v1()
+        ├── [EXISTING] success-only PLAN.md / plan.json publication
+        ├── [GAP]      schema_version = plan_artifact_v2
+        └── [GAP]      validation failures for inconsistent coverage surfaces
 
-[+] anvil/harness/strategy_graph.py / builder.py
+[+] anvil/harness/validation.py
     │
-    ├── planning_v1 routing
-    │   ├── [EXISTING] planning runtime target selection
-    │   └── [GAP]      tighter contract assertions around planning-only semantics
+    └── validate_planning_success_artifacts()
+        ├── [EXISTING] seam / workstream / slice integrity
+        ├── [GAP]      coverage cardinality and ordering checks
+        ├── [GAP]      assumption-link integrity
+        ├── [GAP]      uncovered-delta integrity
+        └── [GAP]      markdown parity for new sections
+
+[+] examples/harness/strategies/deterministic_feature_planning_v1.yaml
     │
-    └── analysis_review_v1 routing
-        └── [EXISTING] shared-family route coverage, must stay green
+    ├── [EXISTING] canonical planning phase order and policies
+    └── [GAP]      explicit coverage policy version
 
 USER / OPERATOR FLOW COVERAGE
 ===========================
-[+] Fixture-backed hello-world planning run
-    │
-    ├── [EXISTING] success fixture emits PLAN.md and plan.json
-    ├── [GAP]      docs command works verbatim from repo root
-    └── [GAP]      output states whether run was fixture-backed or deterministic-live
+[+] Successful planning run
+    ├── [EXISTING] emits PLAN.md and plan.json
+    ├── [GAP]      emitted artifact shows covered vs partial vs uncovered dimensions
+    └── [GAP]      emitted artifact shows assumptions and next refine delta
 
-[+] Ambiguous planning ask
-    │
-    ├── [EXISTING] clarification fixture terminal payload
-    └── [GAP]      clarification request names the missing discriminator clearly
+[+] Clarification-needed run
+    ├── [EXISTING] emits summary only
+    └── [GAP]      summary exposes partial coverage truth without pretending success
 
-[+] Out-of-corpus planning ask
-    │
-    ├── [EXISTING] failed fixture terminal payload
-    └── [GAP]      failed response explains why the ask is unsupported
-
-[+] Provider-backed review proof
-    │
-    ├── [GAP] [→MANUAL/NIGHTLY] end-to-end review run on canonical plan shape
-    └── [GAP] [→MANUAL/NIGHTLY] annotations cannot rewrite structural IDs
-
-────────────────────────────────────────────────────────────
-COVERAGE TARGET AFTER C1b:
-  All new planning-runtime branches covered
-  All terminal paths covered
-  All structural-ref integrity checks covered
-  Docs smoke covered for the canonical command
-  Shared-family non-regression covered
-────────────────────────────────────────────────────────────
+[+] Failed run
+    ├── [EXISTING] emits summary only
+    └── [GAP]      summary prevents fake `covered` rows after early failure
 ```
 
-### 7.2 Required test additions
+### 8.2 Required test additions
 
-1. Runtime synthesis tests
-   - prove a supported planning task can emit seams, workstreams, and slices
-     without success-path `phase_inputs`
-   - prove deterministic IDs and section ordering remain stable
-   - prove canonical success rejects silent canned fallback
+1. Runtime coverage tests in `tests/test_harness_planning_graph.py`:
+   prove every fixed coverage dimension gets exactly one row in deterministic order.
+2. State round-trip tests in `tests/test_harness_state_boundaries.py`:
+   prove new `planning_*` coverage fields survive initialization and summary reload.
+3. Assumptions tests in `tests/test_harness_planning_artifacts.py`:
+   prove linked assumption IDs resolve and rejected assumptions force summary updates.
+4. Uncovered-delta tests in `tests/test_harness_planning_artifacts.py`:
+   prove only `partial` or `uncovered` rows generate delta entries.
+5. Blocked-run summary tests in `tests/test_harness_planning_artifacts.py` and
+   `tests/test_harness_reporting.py`:
+   prove `summary.json` carries truthful coverage payloads for
+   `clarification_needed` and `failed`.
+6. Artifact schema tests in `tests/test_harness_planning_artifacts.py`:
+   prove the emitter writes `plan_artifact_v2`.
+7. Markdown parity tests in `tests/test_harness_planning_artifacts.py`:
+   prove `PLAN.md` coverage sections match `plan.json` ordering and IDs.
+8. Example surface tests in `tests/test_harness_example_strategy_wiring.py`:
+   prove the canonical strategy exposes the C2 coverage policy and still keeps
+   stop-path fixtures honest.
+9. Shared-surface regression tests in `tests/test_harness_reporting.py`:
+   prove report rendering and summary publication still behave for planning
+   after the new coverage fields land.
 
-2. Clarification and failure tests
-   - in-corpus but under-specified asks return `clarification_needed`
-   - out-of-corpus asks return `failed`
-   - both produce actionable terminal metadata
-
-3. Referential-integrity tests
-   - every evidence ref exists in the workspace snapshot
-   - every workstream references declared seam IDs only
-   - every slice references declared seam and workstream IDs only
-   - every slice carries at least one concrete acceptance criterion
-
-4. Artifact-parity tests
-   - `PLAN.md` and `plan.json` agree on IDs, order, and terminal semantics
-   - invalid references or mismatched ordering fail before success artifacts are
-     written
-
-5. Docs and example smoke tests
-   - the literal canonical hello-world command from docs runs green in fixture
-     smoke
-   - the run produces `PLAN.md` and `plan.json`
-
-6. Shared-family non-regression tests
-   - canonical `analysis_review_*` strategies still route to
-     `analysis_review_v1`
-   - canonical `analysis_review_*` example files still build expected graph
-     metadata
-   - one offline bounded `analysis_review` smoke path still publishes the
-     expected surface
-
-7. Provider-backed challenge proof
-   - one canonical provider-backed review run is executable end-to-end
-   - provider output cannot mutate canonical seam, workstream, or slice IDs
-
-### 7.3 Suggested commands
+### 8.3 Suggested commands
 
 ```bash
 poetry run pytest -q tests/test_harness_planning_graph.py
 poetry run pytest -q tests/test_harness_planning_artifacts.py
 poetry run pytest -q tests/test_harness_example_strategy_wiring.py
 poetry run pytest -q tests/test_harness_strategy_graph.py
-poetry run pytest -q tests/test_harness_provider_adapter.py
-poetry run pytest -q tests/test_harness_cli_command.py
-poetry run pytest -q tests/test_harness_standalone_cli.py
-poetry run pytest -q tests/test_docs_surface.py
+poetry run pytest -q tests/test_harness_state_boundaries.py
+poetry run pytest -q tests/test_harness_reporting.py
 ```
 
-If the provider-backed proof becomes scriptable, add one dedicated command and
-freeze it in docs plus a manual or nightly gate.
+### 8.4 Human acceptance checks
 
-### 7.4 Human acceptance checks
+- Skeptical-reader rubric:
+  the artifact answers "what is missing?" without needing conversation context.
+- Builder rubric:
+  the uncovered delta is specific enough to drive the next deterministic refine pass.
+- Honesty rubric:
+  blocked runs do not look complete just because they rendered tidy JSON.
 
-- Solo-builder rubric:
-  - can start implementation from emitted slices without inventing missing seams
-  - clarification prompts are concrete and answerable
-  - plan provenance is visible enough to trust the cut
+## 9. Performance and Reliability Review
 
-- Small-team rubric:
-  - at least one workstream can start independently
-  - cross-workstream dependencies are explicit
-  - slices are assignable without rewriting the plan
-
-## 8. Performance and Reliability Review
-
-This is not a throughput milestone, but there are still real performance and
-operational footguns to avoid.
-
-### 8.1 Performance risks
+### 9.1 Performance risks
 
 | Risk | Why it matters | Required mitigation |
 |---|---|---|
-| unbounded repo scan | planning latency explodes and determinism degrades | enforce the fixed evidence budget |
-| repeated reads of the same files | runtime gets slower while appearing deterministic | dedupe resolved paths before reading |
-| oversized artifact payloads | published plans become noisy and unstable | keep provenance bounded and structural, not full-content dumps |
-| path-normalization drift | same file can appear under multiple spellings and break ID stability | normalize workspace-relative paths once at the evidence boundary |
+| coverage derivation rereads files | latency grows for no product value | derive coverage from already-collected runtime facts wherever possible |
+| coverage rows duplicate structural refs noisily | artifact becomes unreadable and unstable | keep refs bounded and deterministic |
+| markdown parity checks become brittle | publication starts failing for formatting trivia | validate canonical ordering and item presence, not incidental whitespace |
+| blocked-run payload inflation | summary artifacts become noisy and misleading | keep partial payloads truthful and minimal |
 
-### 8.2 Reliability rules
+### 9.2 Reliability rules
 
-- no success artifact is published after an integrity failure
-- blocked planning runs must leave downstream structural lists empty
-- exit code `0` is reserved for `success`
-- the docs command and the CLI behavior must agree on terminal semantics
+- coverage derivation must not reopen the file-discovery budget
+- success publication fails closed on any broken coverage invariant
+- blocked runs always include explicit `coverage_status`
+- stable IDs must survive repeat runs on the same workspace snapshot
 
-### 8.3 Performance verdict
+### 9.3 Performance verdict
 
-Do not add caching, indexing, or background precomputation in `C1b` unless the
-fixed evidence budget proves insufficient. That would spend complexity before we
-have evidence it is needed.
+Do not add a caching layer or background coverage pass in C2.
+The new truth surface should be cheap because it reuses the planning facts the
+runtime already has.
 
-## 9. Error & Rescue Registry
+## 10. Error & Rescue Registry
 
 | Failure | User-visible impact | Rescue |
 |---|---|---|
-| request is out of corpus | planner emits nonsense or fake completeness | stop with `failed` and explain why the ask is unsupported |
-| request is in corpus but ambiguous | planner guesses the wrong seam | stop with `clarification_needed` and name the missing discriminator |
-| success path silently reuses canned payloads | milestone claims credibility without live planning | fail tests that detect canned-success fallback |
-| missing CLI binary or auth for provider-backed proof | operator assumes the whole feature is broken | emit problem + cause + fix + docs link, and keep the fixture-backed hello-world separate |
-| shared planning change regresses `analysis_review` | main harness family quietly breaks | block merge on shared-family routing, example, and smoke regressions |
-| docs or examples drift from behavior | first-time user hits dead or misleading commands | add executable docs smoke and keep docs in scope, not cleanup |
+| coverage row missing for one dimension | artifact claims completeness but has a blind spot | fail schema/integrity validation before success publication |
+| rejected assumption still props up a `covered` row | reader over-trusts the plan | fail assumption-link consistency checks |
+| uncovered delta emitted for a `covered` row | refine-loop handoff becomes nonsense | fail delta invariants |
+| blocked run omits coverage payloads | the exact uncertainty disappears | require arrays and explicit `coverage_status` in `summary.json` |
+| state reload drops planning coverage fields | rehydrated runs lose truth surfaces silently | add state-boundary tests and summary rehydration assertions |
+| schema version stays at v1 | downstream readers cannot tell the contract changed | emit `plan_artifact_v2` only |
+| markdown omits coverage section | human reader sees less truth than automation | fail markdown parity validation |
 
-## 10. Failure Modes Registry
+## 11. Failure Modes Registry
 
 | New codepath | Realistic production failure | Test covers it? | Error handling exists? | User-visible outcome | Status |
 |---|---|---:|---:|---|---|
-| planning task parse | task omits required planning fields | must add | must add | clear invalid-config error before runtime work | required |
-| corpus detection | a greenfield or multi-repo ask is treated as valid | must add | must add | fake success or useless clarification if unguarded | critical gap until covered |
-| evidence discovery | `files_hint` resolves to nothing but runtime continues anyway | must add | must add | misleading success with invented seams | critical gap until covered |
-| seam selection | two primary seams tie and runtime picks nondeterministically | must add | must add | unstable IDs and inconsistent plans | critical gap until covered |
-| workstream derivation | workstreams form circular dependencies | must add | must add | fake parallelism, unusable team split | required |
-| slice emission | slice references seam or workstream IDs that do not exist | must add | must add | invalid `plan.json`, broken markdown | critical gap until covered |
-| plan publication | `PLAN.md` and `plan.json` disagree on ordering or refs | must add | must add | operator mistrust and broken automation | critical gap until covered |
-| CLI exit handling | `clarification_needed` exits `0` | existing partial, tighten | existing partial, tighten | automation treats blocked planning as success | critical gap until covered |
-| provider-backed review | provider annotations rewrite canonical structural IDs | must add | must add | determinism contract collapses | critical gap until covered |
+| coverage derivation | one dimension is skipped silently | must add | must add | misleading completeness | critical gap until covered |
+| coverage ordering | rows emit in nondeterministic order | must add | must add | unstable diffs and flaky automation | critical gap until covered |
+| assumptions linkage | coverage row points at missing assumption ID | must add | must add | broken artifact consumers | critical gap until covered |
+| assumption rejection | rejected assumption leaves stale `covered` prose behind | must add | must add | false confidence | required |
+| delta derivation | `covered` row still emits a delta | must add | must add | bogus refine-loop handoff | critical gap until covered |
+| blocked-run summary | failure path still claims `covered` after early stop | must add | must add | dishonest summary payload | critical gap until covered |
+| state rehydration | summary reload drops coverage fields and later consumers see incomplete state | must add | must add | flaky downstream behavior | critical gap until covered |
+| markdown rendering | coverage sections drift from JSON IDs | must add | must add | human/machine disagreement | critical gap until covered |
 
-Any row with "must add" in both the test and error-handling columns is a merge
-blocker until implementation covers it.
+Any row with no test and no error handling is a merge blocker.
 
-## 11. DX and Operator Experience
+## 12. DX and Operator Experience
 
-### 11.1 Developer journey map
+### 12.1 Developer journey map
 
-| Stage | Current experience | C1b target |
+| Stage | Current experience | C2 target |
 |---|---|---|
-| Discover planning | planning appears in docs | same |
-| Pick command | command exists but trust is unclear | one canonical hello-world command is obvious |
-| Pick strategy | canonical strategy exists but still feels fixture-shaped | canonical strategy is honest about fixture versus live behavior |
-| Understand providers | family keys and concrete entries can blur together | one clear provider-family story with rescue guidance |
-| Run first plan | may feel canned or require tribal setup | first run works from repo root and fails honestly when needed |
-| Inspect artifacts | artifact shape is good | artifact shape plus provenance is trustworthy |
-| Handle failure | terminal contract exists | failure explains what is missing and what to do next |
-| Share with teammate | unclear whether workstreams are trustworthy | workstreams have honest dependency boundaries |
-| Repeat with confidence | not there yet | same bounded path works again with stable IDs |
+| discover planning | planning artifact exists | same |
+| inspect artifact | structure is visible | coverage, assumptions, and delta are visible too |
+| decide whether to trust it | requires reading prose and guessing what is missing | artifact names what is partial or uncovered explicitly |
+| compare two runs | seams/workstreams/slices are stable | coverage rows are stable too |
+| handle blocked run | summary explains stop reason | summary also exposes coverage truth accumulated before the stop |
+| decide next action | builder must infer what to ask next | uncovered delta says what input the next refine pass needs |
 
-### 11.2 TTHW target
+### 12.2 Distribution plan
 
-Current TTHW for "get one trustworthy plan" is too high because the operator
-may need to debug whether the path is real or canned.
+Distribution remains the existing CLI artifact path.
+No new package or publish workflow is required.
 
-`C1b` target:
+Canonical path:
 
-- under 5 minutes for one fixture-backed hello-world run from repo root
-- explicit second-step provider-backed credibility proof
+- repo checkout
+- `poetry run python -m anvil.cli harness-run ...`
+- inspect `summary.json` on blocked runs
+- inspect `PLAN.md` and `plan.json` on success runs
 
-Canonical hello-world target after Slice 4:
+### 12.3 DX verdict
 
-```bash
-poetry run python -m anvil.cli harness-run \
-  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
-  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
-  --out-root .forge-harness-runs \
-  --json
-```
+This is a developer-facing artifact feature.
+The main DX win is not fewer steps.
+It is less ambiguity after the command finishes.
 
-That command is only honest if the CLI defaults `--workspace` to the current
-working directory and the output clearly states whether the run was
-fixture-backed or deterministic-live.
+## 13. Worktree Parallelization Strategy
 
-### 11.3 Docs gate
+This plan has real parallelization opportunity, but only after the contract is
+frozen. The goal is parallel implementation without merge-conflict roulette.
 
-`C1b` adds two docs-surface checks:
-
-1. fixture smoke for the literal canonical hello-world command
-2. a named manual or nightly home for the provider-backed review proof
-
-Docs are product surface here. Treat them like code.
-
-## 12. Worktree Parallelization Strategy
-
-### 12.1 Dependency table
+### 13.1 Dependency table
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Contract freeze | `anvil/harness/types.py`, `anvil/harness/state.py`, `anvil/harness/strategy_graph.py`, `anvil/harness/nodes/`, `anvil/cli.py` | — |
-| B. Live planning runtime | `anvil/harness/planning_runtime.py`, `anvil/harness/subgraphs/`, `anvil/harness/files.py`, `anvil/harness/state.py` | A |
-| C. Reporting and integrity projection | `anvil/harness/reporting.py`, `anvil/harness/report.py`, `anvil/harness/schemas.py`, planning artifact tests | A, B |
-| D. Operator surface and docs | `anvil/cli.py`, `anvil/harness/cli.py`, `examples/harness/`, `README.md`, `examples/README.md`, `docs/contributing.md` | A |
-| E. Quality gates and non-regression | `tests/`, `examples/harness/tasks/`, `examples/harness/strategies/`, docs smoke | B, C, D |
-| F. Provider-backed proof capture | proof config/docs surface, proof artifact capture surface | C, D, E |
+| A. Contract and state freeze | `anvil/harness/`, `examples/harness/strategies/` | — |
+| B. Runtime coverage derivation | `anvil/harness/` | A |
+| C. Projection, rendering, and validation | `anvil/harness/` | A, B |
+| D. Example surface and docs | `examples/harness/`, repo docs | A |
+| E. Quality gates and regressions | `tests/`, `anvil/harness/`, docs surface expectations | B, C, D |
 
-### 12.2 Parallel lanes
+### 13.2 Parallel lanes
 
-Lane A: contract freeze  
-Sequential foundation lane. Freeze corpus rules, evidence budget, fixture-only
-`phase_inputs`, terminal semantics, and required state contract.
+Lane A: Contract freeze  
+Run first. Lock field names, schema version, coverage vocabulary, policy
+versioning, and the exact summary/publication contract.
 
-Lane B: live planning runtime  
-Starts after A. Owns evidence discovery, seam, workstream, and slice derivation.
+Lane B: Runtime coverage derivation  
+Run after A. Own coverage rows, assumptions, delta, and blocked-run partial
+truth in `planning_runtime.py` and `state.py`.
 
-Lane C: reporting and integrity projection  
-Starts after B has the basic live payload shape. Owns publish-time parity and
-referential integrity.
+Lane C: Projection, rendering, and validation  
+Run after B exposes the exact runtime payload shape. Own serialization,
+markdown headings, schema, and integrity gating.
 
-Lane D: operator surface and docs  
-Starts after A. Owns CLI ergonomics, rescue messaging, example honesty, and the
-canonical repo-root command. Can run in parallel with B.
+Lane D: Example surface and docs  
+Run after A. This can proceed in parallel with B because it mostly touches the
+public surface and canonical example files.
 
-Lane E: quality gates and non-regression  
-Starts after B, C, and D settle. Owns the merge-blocking test perimeter.
+Lane E: Quality gates and regressions  
+Run only after B, C, and D settle. This is the merge-blocking regression wall.
 
-Lane F: provider-backed proof capture  
-Runs last. Depends on the deterministic-live path and operator surface being
-stable first.
+### 13.3 Worktree ownership plan
 
-### 12.3 Execution order
+| Lane | Recommended owner surface | Why |
+|---|---|---|
+| A | contract owner | centralizes the noun freeze and avoids parallel drift |
+| B | runtime owner | one person owns truth derivation end to end |
+| C | publication owner | one person owns schema, markdown, and validation parity |
+| D | docs/example owner | isolated public-surface work with low overlap after A |
+| E | test owner or integrator | best done after the implementation surfaces stop moving |
+
+### 13.4 Execution order
 
 ```text
 Lane A
@@ -925,68 +1026,76 @@ Lane A
                       │
                       ▼
                     Lane E
-                      │
-                      ▼
-                    Lane F
 ```
 
 Execution order:
 
-1. Launch Lane A first and merge it.
-2. Launch Lane B and Lane D in parallel worktrees after A freezes the contract.
-3. Launch Lane C once B has the live payload shape.
+1. Launch Lane A and merge it.
+2. Launch Lane B and Lane D in parallel worktrees.
+3. Launch Lane C only after Lane B freezes the runtime payload shape.
 4. Merge B, C, and D.
-5. Run Lane E after behavior, publication, and operator surface all settle.
-6. Run Lane F last so the live proof documents shipped reality, not a moving
-   target.
+5. Run Lane E last as the merge-blocking regression wall.
 
-### 12.4 Conflict flags
+### 13.5 Merge checkpoints
 
-- Lanes A and B both touch state and planning contract semantics. B must not
-  start before A freezes them.
-- Lanes B and C both affect planning payload shape. C must not publish parity
-  rules against a moving runtime schema.
-- Lanes B and D both affect what the CLI and docs claim a planning run means.
-  Keep run-mode vocabulary aligned.
-- Lanes D and E both touch examples and docs-backed smoke surfaces. Freeze
-  filenames and commands before E starts.
-- Lane F depends on the exact structural plan contract. Do not let the
-  provider-backed proof invent new structural semantics late.
+Checkpoint 1, after Lane A:
 
-## 13. Acceptance Checklist
+- `coverage_policy` exists in the strategy example
+- `PLANNING_POLICY_FIELDS` includes `coverage_policy`
+- state field names are frozen
+- artifact version target is frozen to `plan_artifact_v2`
 
-- [ ] success-path planning no longer depends on success-path `phase_inputs`
-- [ ] `phase_inputs` remain fixture-only and explicitly labeled when used
-- [ ] corpus-membership, clarification-needed, and failed rules are codified
-- [ ] deterministic evidence budget is enforced
-- [ ] referential-integrity checks cover evidence refs, seams, workstreams, and
-      slices
-- [ ] stable seam, workstream, and slice IDs survive repeat runs on the same
-      fixture
-- [ ] the canonical docs command works from repo root
-- [ ] missing-binary and missing-auth rescue messages are explicit
-- [ ] `analysis_review_*` shared-family routing and smoke coverage stay green
-- [ ] `PLAN.md` and `plan.json` remain the canonical successful planning
-      artifacts
-- [ ] CLI JSON mode returns the planning terminal payload
-- [ ] exit code `0` is reserved for `success`
-- [ ] one provider-backed review proof exists with a named home and owner
+Checkpoint 2, after Lane B:
 
-## 14. Completion Summary
+- runtime emits the full coverage payload into state
+- all IDs and ordering rules are deterministic
+- blocked-run coverage payload behavior is frozen
 
-- Step 0: scope accepted as a planning-quality milestone, not a new
-  planning-platform milestone
-- What already exists: mapped and reused; no second parser stack, graph builder,
-  or artifact path
-- Architecture: graph shape preserved, runtime credibility deepened
-- Code quality: explicit contract, no fake alias work, no second runtime
-- Test review: coverage diagram merged into this plan and upgraded to block
-  canned-success regressions
-- Performance review: bounded evidence budget is the primary latency and
-  determinism guard
-- Failure modes: critical gaps enumerated with explicit merge blockers
-- DX: first-run path and provider-backed proof are intentionally separate
-- Parallelization: one foundation lane, two mid-flight implementation lanes, one
-  publication lane, one test lane, one proof lane
-- Lake score: choose the complete trustworthy-planner proof, not the
-  schema-valid shortcut
+Checkpoint 3, after Lane C + Lane D:
+
+- success artifacts publish the v2 contract
+- markdown headings and validation parity are locked
+- public docs describe the artifact honestly
+
+Checkpoint 4, after Lane E:
+
+- all targeted tests pass
+- no uncovered critical gaps remain
+
+### 13.6 Conflict flags
+
+- Lanes A and B both touch `anvil/harness/state.py`. B must not start before A freezes the field names.
+- Lanes A and C both touch `anvil/harness/schemas.py` and planning publication expectations. Keep the schema-version decision in A, then let C fill in the exact record shapes.
+- Lanes B and C both shape the coverage payload. C must not validate against a moving runtime contract.
+- Lanes D and E both touch public-surface expectations. Freeze visible wording before landing docs/reporting assertions.
+- Lanes B, C, and E all touch `tests/test_harness_planning_artifacts.py` if done carelessly. Prefer reserving final assertion expansion for Lane E.
+
+## 14. Acceptance Checklist
+
+- [ ] `HarnessState` includes first-class `planning_*` coverage fields
+- [ ] summary rehydration restores the new coverage fields correctly
+- [ ] canonical planning strategy exposes `coverage_policy`
+- [ ] successful runs emit `plan_artifact_v2`
+- [ ] `coverage_ledger` has exactly one row per required dimension
+- [ ] `coverage_id`, `assumption_id`, and `delta_id` are stable across repeat runs
+- [ ] `source_phase_ids` and `recommended_next_phase` use declared `phase_id` values
+- [ ] `PLAN.md` renders coverage, assumptions, and uncovered-delta sections in canonical order
+- [ ] `summary.json` preserves truthful coverage payloads on blocked runs
+- [ ] publication fails on broken assumption refs, broken delta refs, invalid coverage cardinality, or markdown parity drift
+- [ ] no strategy-name branching is introduced to make C2 work
+- [ ] no duplicate planning publication helper family is introduced
+
+## 15. Completion Summary
+
+- Step 0: scope accepted as a measurable-completeness proof, not a planner-breadth project
+- What already exists: mapped and reused, especially runtime state, projection, validation, and ledger-style patterns
+- Locked decisions: helper strategy, schema version, ownership boundaries, and non-success behavior are now explicit
+- Architecture: one engine, one truth owner, one artifact path
+- Implementation plan: five slices with exact file owners, exit criteria, and merge checkpoints
+- Code quality: explicit contract, explicit schema-version bump, minimal diff on ownership boundaries
+- Test review: coverage diagram merged into this plan and upgraded to block dishonest coverage publication and state reload drift
+- Performance review: coverage derivation must reuse planning facts, not reopen discovery
+- Failure modes: critical gaps enumerated for missing rows, stale assumptions, bogus delta, blocked-run dishonesty, and dropped state reload fields
+- DX: artifact trust improves because uncertainty becomes first-class instead of implied
+- Parallelization: one foundation lane, two middle implementation lanes, one publication lane, one regression lane
+- Lake score: choose the complete truth surface now, not the schema-valid shortcut

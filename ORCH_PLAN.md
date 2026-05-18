@@ -1,762 +1,637 @@
-# ORCH_PLAN: C1b Planning Quality and Live-Surface Credibility Proof
+# ORCH_PLAN: C2 Measurable Coverage Ledger and Assumptions Register
 
 ## Summary
 
-Repository: `/Users/spensermcconnell/__Active_Code/forge`  
-Kickoff workspace: `/Users/spensermcconnell/__Active_Code/forge`  
-Kickoff branch context: `feat/planning-strategy`  
-Kickoff dirty state: `PLAN.md` modified in the root workspace and remains
-authoritative for this run  
-Authoritative plan source: `/Users/spensermcconnell/__Active_Code/forge/PLAN.md`
+Repository: `/home/azureuser/__Active_Code/forge`  
+Execution baseline branch: `codex/c1b-planning-quality-proof`  
+Primary authority: `/home/azureuser/__Active_Code/forge/PLAN.md`  
+Milestone: `C2 Measurable Coverage Ledger and Assumptions Register`
 
-This runbook replaces the stale root orchestration for `C1a`. It defines the
-parent-agent execution model for the full `C1b` milestone from kickoff through
-final acceptance.
+This runbook supersedes the stale root C1b orchestration plan. It is the
+parent-owned execution plan for completing the full C2 session defined by
+`PLAN.md` on the current branch. The parent agent is the sole integrator.
+Workers execute bounded implementation lanes only. Concurrency is
+intentionally capped at `2` worker lanes, all on `GPT-5.4/high`.
 
-This run must deliver all six `PLAN.md` slices:
+Completion means the integrated tree proves all C2 outcomes from `PLAN.md`,
+including:
 
-1. Slice 1: Contract Freeze
-2. Slice 2: Live Evidence Planning Runtime
-3. Slice 3: Reporting and Integrity Projection
-4. Slice 4: Operator Surface, CLI, and Example Credibility
-5. Slice 5: Quality Gates and Shared-Family Non-Regression
-6. Slice 6: Provider-Backed Review Proof
-
-Current repo reality that changes orchestration mechanics:
-
-- the authoritative `PLAN.md` is currently dirty in the kickoff workspace
-- workers created from `feat/planning-strategy` worktrees will not
-  automatically inherit that
-  uncommitted `PLAN.md`
-- the parent must snapshot `PLAN.md` and this `ORCH_PLAN.md` into the state
-  root before dispatch and must packet workers against those snapshots, not
-  branch-local copies
-- `PLAN.md` is already updated and is not parent-owned for this run; do not
-  rewrite it, revert it, or require workers to edit it
-- the repository already has many historical worktrees under
-  `.codex-worktrees/`, `forge.worktrees/`, and other sibling roots; `C1b` uses
-  a fresh sibling root to avoid collisions
-
-The parent is the only integrator. Workers own narrow lanes. The parent owns
-branch creation, worktree creation, freeze publication, queue state, merge
-order, conflict resolution, reopen decisions, the provider-backed proof run,
-and final acceptance.
+- successful planning runs emit `plan_artifact_v2`
+- runtime owns `coverage_ledger`, `assumptions_register`, and `uncovered_delta`
+- `summary.json` carries truthful partial coverage on
+  `clarification_needed` and `failed`
+- every required coverage dimension has exactly one ledger row
+- cross-record refs use declared `phase_id` values, not `stage_type`
+- assumptions resolve correctly
+- delta rows exist only for `partial` or `uncovered`
+- `PLAN.md` renders coverage sections in canonical order
+- no strategy-name branching is introduced
+- no parallel helper families are introduced such as `plan_projection_v2()`,
+  `render_plan_markdown_v2()`, or `publish_planning_artifacts_v2()`
 
 ## Hard Guards
 
-1. `PLAN.md` is authoritative. If this file and the current root `PLAN.md`
-   disagree, follow the current root `PLAN.md`.
-2. The parent must preserve the dirty root `PLAN.md` exactly as found at
-   kickoff.
-3. Scope is limited to milestone `C1b Planning Quality and Live-Surface
-   Credibility Proof`.
-4. Do not widen into new planning families, new workflow DSLs, automatic agent
-   orchestration, or broad provider-platform redesign.
-5. The canonical success path must be deterministic-live and workspace-grounded.
-6. `phase_inputs` remain fixture-only for the success path. No silent success
-   fallback is allowed.
-7. Terminal states remain `success`, `clarification_needed`, and `failed`.
-8. The deterministic evidence budget from `PLAN.md` is frozen and may not be
-   widened inside lane work without a parent reopen decision.
-9. Referential integrity for evidence refs, seam refs, workstream refs, and
-   slice refs is merge-blocking.
-10. `PLAN.md` and `plan.json` remain the only canonical planning success
-    artifacts.
-11. `analysis_review_v1` is the shared-family canary and must remain green.
-12. No worker may merge, rebase for integration, resolve conflicts, or edit
-    another lane's owned files without a parent reopen packet.
-13. The parent is the only agent allowed to publish freeze docs, update queue
-    state, or change lane ownership.
-14. Maximum concurrent worker lanes is `2`.
-15. The parent does not ingest full worker transcripts. Worker returns must be
-    narrow and structured.
-16. Slice 6 is parent-only because it is credentials-bound and must not let a
-    worker improvise structural semantics late.
-17. Existing historical worktrees are out of scope. Do not reuse or clean them
-    as part of `C1b`.
-18. Final acceptance is blocked until every required freeze, gate, and proof
-    artifact is present under the `C1b` state root.
+1. `PLAN.md` is the sole authority for scope. If this file and `PLAN.md`
+   disagree, follow `PLAN.md`.
+2. Scope stops at C2. No multi-strategy coverage framework, no refine adapter,
+   no unrelated cleanup, no new planning pipeline.
+3. Runtime owns facts, reporting serializes them, validation gates them,
+   markdown renders them.
+4. Upgrade existing planning helpers in place only. Do not create sibling
+   `*_v2()` planning helper families.
+5. Keep `plan_projection_v1()`, `render_plan_markdown_v1()`, and
+   `publish_planning_artifacts_v1()` as the only planning publication helpers.
+6. `summary.json` must carry coverage truth on blocked runs. `PLAN.md` and
+   `plan.json` remain success-only artifacts.
+7. Cross-record references must use declared `phase_id` values only.
+8. The parent is the only agent allowed to merge, rebase for integration,
+   resolve conflicts, reopen lane scope, or close the milestone.
+9. Do not edit `PLAN.md`.
+10. Do not read or rely on `SKILL.md` files.
 
-## Orchestration Runtime Policy
+## Runtime and Orchestration Policy
 
-### Parent runtime policy
+Parent runtime policy:
 
-- Parent owns kickoff, baseline capture, state-root setup, packet writing,
-  branch creation, worktree creation, freeze publication, gate review, merges,
-  conflict resolution, reopen decisions, provider-proof execution, and final
-  acceptance.
-- Parent is the only integrator.
-- Parent is the only agent allowed to:
-  - switch the integration workspace off `feat/planning-strategy`
-  - create `codex/c1b-*` branches
-  - create or destroy `C1b` worktrees
-  - publish artifacts under `.runs/c1b-planning-quality-proof-orch/freezes/`
-  - rerun gates on the integrated tree
-  - mark the milestone accepted or blocked
-- Parent keeps the critical path local for every freeze boundary and every
-  integrated regression sweep.
+- Parent owns kickoff, contract freeze, worktree creation, worker packets,
+  merge order, gate review, integration, final regressions, artifact capture,
+  and milestone closeout.
+- Parent lands Slice A locally on the integration branch before any worker
+  dispatch.
+- Parent writes the frozen downstream contracts workers must consume:
+  - `.runs/c2-measurable-coverage-orch/contract-freeze.md`
+  - `.runs/c2-measurable-coverage-orch/runtime-payload-freeze.md`
+- Parent reruns every lane gate on the integrated tree before merging.
 
-### Worker runtime policy
+Worker runtime policy:
 
-- Every worker lane runs on `GPT-5.4` with `reasoning_effort=high`.
-- Worker lanes run only inside their assigned worktree, their owned files, and
-  their parent-issued packet.
-- Workers may read frozen artifacts from the state root by absolute path.
-- Workers may write only:
-  - their lane code/doc/test changes
-  - their lane return file
-  - their lane blocker files
-  - their lane sentinels
-- Workers may not mutate `queue.md`, `state.json`, freeze docs, or another
-  lane's return artifacts.
-- Workers may not widen scope, rename frozen IDs, or change lane dependencies.
+- Workers execute only the task IDs, files, and commands in their packet.
+- Workers may not change frozen nouns, artifact version targets, coverage
+  vocabulary, canonical headings, or merge order.
+- Workers return a narrow handoff with exact commands run, exit codes, changed
+  files, open blockers, and any assumptions.
 
-### Concurrency policy
+Concurrency policy:
 
-Maximum concurrent worker lanes: `2`
-
-Allowed concurrency windows:
-
-- `WS-A` runs alone.
-- After `WS-A` merges and `01-contract-freeze.md` is published, `WS-B` and
-  `WS-D` run in parallel.
-- After `WS-B` merges and `02-runtime-shape-freeze.md` is published, `WS-C` may
-  start even if `WS-D` is still active.
-- `WS-E` starts only after `WS-B`, `WS-C`, and `WS-D` are merged and frozen.
-- Slice 6 runs parent-only after `WS-E`.
-
-This preserves the `PLAN.md` lane logic while keeping the parent's active
-context narrow enough to review correctly.
+- Max concurrent worker lanes: `2`
+- Parallel window 1: `WS-B` and `WS-D` after Slice A is merged locally
+- Parallel window 2: none
+- `WS-C` waits for merged `WS-B` and a parent-published runtime payload freeze
+- `WS-E` runs only after `WS-C` and `WS-D` are merged
 
 ## Parent Critical Path
 
 | Phase | Tasks | Owner | Mode | Exit gate |
 |---|---|---|---|---|
-| Phase 0: Kickoff baseline | `task/c1b-p0-1` to `task/c1b-p0-6` | Parent | Strictly serialized | state root, snapshots, and worktree plan frozen |
-| Phase 1: Contract freeze | `task/c1b-a-1` to `task/c1b-a-4` | `WS-A` | Runs alone | `gate/c1b-ws-a-contract` |
-| Phase 2: Contract merge freeze | `task/c1b-p1-1`, `task/c1b-p1-2` | Parent | Strictly serialized | `01-contract-freeze.md` |
-| Phase 3: Runtime and operator surface | `task/c1b-b-*`, `task/c1b-d-*` | `WS-B`, `WS-D` | Parallel | `gate/c1b-ws-b-live-runtime`, `gate/c1b-ws-d-operator-surface` |
-| Phase 4: Runtime merge freeze | `task/c1b-p2-1`, `task/c1b-p2-2` | Parent | Strictly serialized | `02-runtime-shape-freeze.md` |
-| Phase 5: Reporting and integrity | `task/c1b-c-1` to `task/c1b-c-3` | `WS-C` | May overlap only with `WS-D` if still active | `gate/c1b-ws-c-reporting-integrity` |
-| Phase 6: Publication and operator freeze | `task/c1b-p3-1` to `task/c1b-p3-4` | Parent | Strictly serialized | `03-publication-integrity-freeze.md`, `04-operator-surface-freeze.md` |
-| Phase 7: Quality gates | `task/c1b-e-1` to `task/c1b-e-4` | `WS-E` | Runs alone | `gate/c1b-ws-e-quality-gates` |
-| Phase 8: Quality merge freeze | `task/c1b-p4-1`, `task/c1b-p4-2` | Parent | Strictly serialized | `05-quality-gates-freeze.md` |
-| Phase 9: Provider proof | `task/c1b-p5-1` to `task/c1b-p5-4` | Parent | Strictly serialized | `gate/c1b-parent-provider-proof`, `06-provider-proof-freeze.md` |
-| Phase 10: Final acceptance | `task/c1b-p6-1` to `task/c1b-p6-4` | Parent | Strictly serialized | `gate/c1b-parent-final-regression`, `gate/c1b-parent-acceptance`, `gate/c1b-complete` |
+| A. Authority and contract freeze | `task/c2-a1` to `task/c2-a7` | Parent | serialized | `gate/c2-contract-freeze` |
+| B. Runtime coverage derivation | `task/c2-b1` to `task/c2-b5` | `WS-B` | after A | `gate/c2-runtime` |
+| D. Example surface and docs | `task/c2-d1` to `task/c2-d4` | `WS-D` | parallel with B after A | `gate/c2-docs` |
+| C. Projection, rendering, validation | `task/c2-c1` to `task/c2-c5` | `WS-C` | after merged B | `gate/c2-publication` |
+| E. Regression wall | `task/c2-e1` to `task/c2-e4` | `WS-E` | after merged C and D | `gate/c2-regression-lane` |
+| F. Final integration and closeout | `task/c2-f1` to `task/c2-f7` | Parent | serialized | `gate/c2-final` |
 
-## Launch Order
+### End-to-End Execution Sequence
 
-1. `task/c1b-p0-1-read-authority`
-2. `task/c1b-p0-2-record-baseline`
-3. `task/c1b-p0-3-create-state-root`
-4. `task/c1b-p0-4-snapshot-authority-files`
-5. `task/c1b-p0-5-freeze-invariants`
-6. `task/c1b-p0-6-create-integration-branch-and-worktrees`
-7. Dispatch `WS-A`
-8. Merge `WS-A`
-9. Publish `01-contract-freeze.md`
-10. Dispatch `WS-B` and `WS-D`
-11. Merge `WS-B`
-12. Publish `02-runtime-shape-freeze.md`
-13. Dispatch `WS-C`
-14. Merge `WS-C`
-15. Publish `03-publication-integrity-freeze.md`
-16. Merge `WS-D`
-17. Publish `04-operator-surface-freeze.md`
-18. Dispatch `WS-E`
-19. Merge `WS-E`
-20. Publish `05-quality-gates-freeze.md`
-21. Run parent-only Slice 6 provider proof
-22. Publish `06-provider-proof-freeze.md`
-23. Run parent-only final regression and acceptance
+1. Parent reads `PLAN.md`, confirms current branch, confirms canonical harness
+   CLI surface, and freezes C2 nouns.
+2. Parent creates `.runs/c2-measurable-coverage-orch/`, gate templates, and
+   sibling worktrees.
+3. Parent lands Slice A locally on `codex/c1b-planning-quality-proof`.
+4. Parent runs `gate/c2-contract-freeze`. Do not dispatch workers until it
+   passes.
+5. Parent dispatches `WS-B` and `WS-D` in parallel.
+6. Parent reruns `WS-B` gate on the integration tree and merges `WS-B` first.
+   Do not proceed to `WS-C` until merged B is green.
+7. Parent writes `runtime-payload-freeze.md` from merged B.
+8. Parent reruns `WS-D` gate on the integration tree and merges `WS-D`.
+9. Parent dispatches `WS-C` with the frozen runtime payload contract.
+10. Parent reruns `WS-C` gate on the integration tree and merges `WS-C`.
+11. Parent dispatches `WS-E` as a regression-only lane after product surfaces
+    stop moving.
+12. Parent reruns `WS-E` gate on the integration tree and merges `WS-E`.
+13. Parent runs integrated fixture commands, targeted planning tests,
+    repo-quality checks, and full `pytest -q`.
+14. Parent captures final derived runs, gate results, acceptance notes, and
+    closes the milestone.
+
+### Fixed Merge Order
+
+1. Parent-local Slice A
+2. `WS-B` runtime truth
+3. `WS-D` docs/examples
+4. `WS-C` projection/render/validation
+5. `WS-E` regression-only lane
+6. Parent-only final verification and closeout
+
+Do not proceed conditions:
+
+- Do not dispatch any worker before `gate/c2-contract-freeze` passes.
+- Do not launch `WS-C` before `WS-B` is merged and
+  `runtime-payload-freeze.md` exists.
+- Do not launch `WS-E` before `WS-C` and `WS-D` are merged.
+- Do not close the milestone until `gate/c2-final` passes on the integrated
+  tree.
+
+## Orchestration State and Artifact Layout
+
+Repo-local orchestration root:
+
+- `.runs/c2-measurable-coverage-orch/`
+
+Required layout:
+
+- `.runs/c2-measurable-coverage-orch/queue.md`
+- `.runs/c2-measurable-coverage-orch/state.json`
+- `.runs/c2-measurable-coverage-orch/invariants.md`
+- `.runs/c2-measurable-coverage-orch/contract-freeze.md`
+- `.runs/c2-measurable-coverage-orch/runtime-payload-freeze.md`
+- `.runs/c2-measurable-coverage-orch/session.log`
+- `.runs/c2-measurable-coverage-orch/handoffs/`
+- `.runs/c2-measurable-coverage-orch/gates/`
+- `.runs/c2-measurable-coverage-orch/logs/`
+- `.runs/c2-measurable-coverage-orch/sentinels/`
+- `.runs/c2-measurable-coverage-orch/acceptance/c2-acceptance-checklist.md`
+- `.runs/c2-measurable-coverage-orch/acceptance/final-gate-report.md`
+- `.runs/c2-measurable-coverage-orch/qa/c2-final-handoff.md`
+- `.runs/c2-measurable-coverage-orch/derived-runs/success/`
+- `.runs/c2-measurable-coverage-orch/derived-runs/clarification/`
+- `.runs/c2-measurable-coverage-orch/derived-runs/failed/`
+
+Artifact roles:
+
+- `queue.md`: canonical task ledger with one row per `task/c2-*`, owner,
+  status, gate, reopen reason, and merge state
+- `state.json`: current phase, active lanes, branch names, blockers, gate
+  status, final verdict, and derived-run paths
+- `invariants.md`: frozen scope, ownership boundaries, forbidden surfaces, and
+  merge blockers
+- `contract-freeze.md`: frozen field names, schema target, coverage
+  vocabulary, canonical headings, CLI/docs truth, and worker ownership
+- `runtime-payload-freeze.md`: parent-captured runtime-owned payload shape
+  after B merge, used by `WS-C`
+- `session.log`: parent-only chronological log of dispatches, gate reruns,
+  merge decisions, reopen events, and milestone closeout
+- `handoffs/`: one worker handoff per lane, including changed files, commands,
+  exit codes, blockers, and residual risk
+- `gates/`: exact gate command sets and parent verdicts for A, B, C, D, E, and
+  final integrated verification
+- `derived-runs/*`: captured `summary.json`, success artifacts when present,
+  CLI stdout, exit codes, and parity notes
+- `acceptance/*`: final checklist and signoff notes proving each C2 success
+  condition
+- `qa/c2-final-handoff.md`: concise release-quality summary of what changed,
+  what was run, and remaining watchpoints
+
+## Worktree and Branch Plan
+
+Integration worktree:
+
+- Path: `/home/azureuser/__Active_Code/forge`
+- Branch: `codex/c1b-planning-quality-proof`
+- Owner: Parent only
+
+Sibling worktree root:
+
+- `/home/azureuser/__Active_Code/forge.worktrees/c2-measurable-coverage/`
+
+Worker lanes:
+
+- `WS-B`
+  - Path: `/home/azureuser/__Active_Code/forge.worktrees/c2-measurable-coverage/ws-b-runtime`
+  - Branch: `codex/c2-measurable-coverage-ws-b-runtime`
+  - Purpose: runtime-owned coverage truth
+- `WS-C`
+  - Path: `/home/azureuser/__Active_Code/forge.worktrees/c2-measurable-coverage/ws-c-publication`
+  - Branch: `codex/c2-measurable-coverage-ws-c-publication`
+  - Purpose: projection, schema, validation, markdown
+- `WS-D`
+  - Path: `/home/azureuser/__Active_Code/forge.worktrees/c2-measurable-coverage/ws-d-docs`
+  - Branch: `codex/c2-measurable-coverage-ws-d-docs`
+  - Purpose: canonical strategy surface, fixture wording, docs truth
+- `WS-E`
+  - Path: `/home/azureuser/__Active_Code/forge.worktrees/c2-measurable-coverage/ws-e-regression`
+  - Branch: `codex/c2-measurable-coverage-ws-e-regression`
+  - Purpose: regression-only assertion fill after product merges settle
+
+## Worker Packet Minimums
+
+Every worker packet must contain:
+
+- exact task IDs
+- authority reference to `/home/azureuser/__Active_Code/forge/PLAN.md`
+- allowed files
+- forbidden files
+- frozen nouns and explicit non-goals
+- lane-local commands to run
+- acceptance criteria
+- handoff file path under `.runs/c2-measurable-coverage-orch/handoffs/`
+
+Every worker must return:
+
+- changed files list
+- commands run with exit codes
+- brief change summary mapped to task IDs
+- blockers or residual risks
+- confirmation that no frozen noun changed
+- confirmation that no `*_v2()` helper family or strategy-name branching was
+  introduced
+
+Reopen rules:
+
+- touching forbidden files
+- changing frozen field names, enums, headings, or schema target
+- introducing helper-family sprawl
+- introducing strategy-name branching
+- omitting required commands or failing them without an explicit blocker note
+- broad unrelated cleanup or formatting churn
+
+Any reopen sends the lane back to its own worktree. Parent does not patch
+around ownership violations during integration.
 
 ## Workstream Plan
 
-| Lane ID | Slice | Owner | Depends on | Worker or parent | Branch | Gate |
-|---|---|---|---|---|---|---|
-| `WS-A` | Slice 1: Contract Freeze | Worker | kickoff only | Worker | `codex/c1b-ws-a-contract-freeze` | `gate/c1b-ws-a-contract` |
-| `WS-B` | Slice 2: Live Evidence Planning Runtime | Worker | `WS-A` merged + `01-contract-freeze.md` | Worker | `codex/c1b-ws-b-live-runtime` | `gate/c1b-ws-b-live-runtime` |
-| `WS-C` | Slice 3: Reporting and Integrity Projection | Worker | `WS-B` merged + `02-runtime-shape-freeze.md` | Worker | `codex/c1b-ws-c-reporting-integrity` | `gate/c1b-ws-c-reporting-integrity` |
-| `WS-D` | Slice 4: Operator Surface, CLI, and Example Credibility | Worker | `WS-A` merged + `01-contract-freeze.md` | Worker | `codex/c1b-ws-d-operator-surface` | `gate/c1b-ws-d-operator-surface` |
-| `WS-E` | Slice 5: Quality Gates and Shared-Family Non-Regression | Worker | `WS-B`, `WS-C`, `WS-D` merged + freezes `02` to `04` | Worker | `codex/c1b-ws-e-quality-gates` | `gate/c1b-ws-e-quality-gates` |
-| `PF` | Slice 6: Provider-Backed Review Proof + final acceptance | Parent | `WS-E` merged + `05-quality-gates-freeze.md` | Parent | `codex/c1b-planning-quality-proof` | `gate/c1b-parent-provider-proof`, `gate/c1b-parent-acceptance` |
+### Phase A: Parent-Local Contract and State Freeze
 
-### WS-A: Contract Freeze
+Task ledger:
 
-Purpose: freeze the planning contract so downstream lanes do not guess policy.
+- `task/c2-a1-confirm-authority-and-cli-surface`
+  - Read `PLAN.md`, `README.md`, `examples/README.md`, `anvil/__main__.py`,
+    and `anvil/harness/cli.py`.
+  - Confirm the current documented harness command is
+    `poetry run python -m anvil.cli harness-run`.
+  - Confirm `python -m anvil` remains the orchestration CLI entrypoint, not the
+    canonical harness command.
+- `task/c2-a2-freeze-c2-invariants`
+  - Write `invariants.md` and `contract-freeze.md` with C2 scope, frozen
+    nouns, schema target, and helper-family ban.
+- `task/c2-a3-create-orchestration-root`
+  - Create the `.runs/c2-measurable-coverage-orch/` structure, sentinels,
+    derived-run roots, and gate files.
+- `task/c2-a4-create-worktrees-and-branches`
+  - Create `WS-B`, `WS-C`, `WS-D`, and `WS-E` worktrees from the baseline
+    branch.
+- `task/c2-a5-land-slice-a-local`
+  - Land the contract-freeze slice locally, limited to field names, policy
+    version surface, and shared state/schema freeze points from `PLAN.md`.
+- `task/c2-a6-run-contract-freeze-gate`
+  - Run the parent-local gate and record the result in
+    `gates/c2-contract-freeze.md`.
+- `task/c2-a7-dispatch-ws-b-and-ws-d`
+  - Create narrow worker packets and open both lanes.
 
-Owned files:
+Parent-owned files in A:
 
-- `anvil/harness/types.py`
 - `anvil/harness/state.py`
-- `anvil/harness/strategy_graph.py`
-- `anvil/harness/semantic_validation.py`
-- `anvil/harness/nodes/validator_preflight.py`
-- `anvil/harness/nodes/select_strategy.py`
-- `anvil/cli.py`
-- `tests/test_harness_strategy_graph.py`
-- `tests/test_harness_state_boundaries.py`
-- `tests/test_harness_semantic_validation.py`
-- `tests/test_harness_cli_command.py`
-
-Conditional-touch only:
-
-- `anvil/harness/validation.py`
-  - only if contract validation already lives there and moving it would create
-    duplication
-
-Must not touch:
-
 - `anvil/harness/planning_runtime.py`
-- `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
 - `anvil/harness/schemas.py`
-- `anvil/harness/cli.py`
-- `README.md`
-- `examples/README.md`
-- `docs/contributing.md`
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
 
-Lane tasks:
+Acceptance criteria:
 
-| Task ID | Required work | Acceptance focus |
-|---|---|---|
-| `task/c1b-a-1-corpus-and-terminal-freeze` | codify in-corpus, clarification-needed, and failed rules | out-of-corpus asks fail before fake downstream output |
-| `task/c1b-a-2-evidence-budget-freeze` | codify the deterministic evidence budget and fixture-only `phase_inputs` semantics | later slices do not need to guess planner policy |
-| `task/c1b-a-3-state-and-run-mode-contract` | freeze state fields for provenance, integrity, and run-mode labeling | runtime can report fixture-backed vs deterministic-live vs provider-reviewed |
-| `task/c1b-a-4-cli-exit-contract` | freeze operator-visible terminal wording and exit semantics | `success` is the only exit `0` path |
+- canonical harness command truth is explicitly frozen in
+  `contract-freeze.md`
+- `coverage_policy: measurable_coverage_v1` is frozen as the C2 strategy
+  policy surface
+- state field names and artifact field names are frozen exactly once
+- schema target is frozen to `plan_artifact_v2`
+- no worker needs to invent nouns later
 
-`gate/c1b-ws-a-contract`
+Lane-local gate for A:
 
 ```bash
-poetry run ruff check anvil/harness/types.py anvil/harness/state.py anvil/harness/strategy_graph.py anvil/harness/semantic_validation.py anvil/harness/nodes/validator_preflight.py anvil/harness/nodes/select_strategy.py anvil/cli.py tests/test_harness_strategy_graph.py tests/test_harness_state_boundaries.py tests/test_harness_semantic_validation.py tests/test_harness_cli_command.py
-poetry run pytest -q tests/test_harness_strategy_graph.py tests/test_harness_state_boundaries.py tests/test_harness_semantic_validation.py tests/test_harness_cli_command.py
+poetry run pytest -q tests/test_harness_strategy_graph.py
+poetry run pytest -q tests/test_harness_cli_command.py
+poetry run pytest -q tests/test_harness_standalone_cli.py
 ```
 
-### WS-B: Live Evidence Planning Runtime
+### WS-B: Runtime Coverage Derivation
 
-Purpose: replace success-path canned replay with bounded live evidence
-derivation.
+Task ledger:
+
+- `task/c2-b1-seed-runtime-state`
+  - Initialize `planning_coverage_status`, `planning_coverage_ledger`,
+    `planning_assumptions_register`, and `planning_uncovered_delta` in runtime
+    state paths.
+- `task/c2-b2-derive-coverage-ledger`
+  - Emit exactly one deterministic row per required coverage dimension in
+    canonical order with stable IDs.
+- `task/c2-b3-derive-assumptions-and-delta`
+  - Derive assumptions from unresolved claims and uncovered delta only from
+    `partial` or `uncovered` rows.
+- `task/c2-b4-preserve-blocked-run-truth`
+  - Ensure blocked runs carry truthful partial coverage payloads without
+    pretending success.
+- `task/c2-b5-run-runtime-gate-and-handoff`
+  - Run lane-local tests and write a narrow handoff.
 
 Owned files:
 
-- `anvil/harness/builder.py`
 - `anvil/harness/planning_runtime.py`
-- `anvil/harness/files.py`
-- `anvil/harness/subgraphs/planning_v1.py`
-- `anvil/harness/subgraphs/__init__.py`
+- `anvil/harness/state.py`
 - `tests/test_harness_planning_graph.py`
-
-Conditional-touch only:
-
-- `anvil/harness/state.py`
-  - additive population only against the `WS-A` frozen field names
+- `tests/test_harness_state_boundaries.py`
 
 Must not touch:
 
 - `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
-- `anvil/harness/schemas.py`
-- `anvil/harness/cli.py`
-- `anvil/cli.py`
-- docs and example surfaces
-
-Lane tasks:
-
-| Task ID | Required work | Acceptance focus |
-|---|---|---|
-| `task/c1b-b-1-bounded-evidence-discovery` | implement bounded workspace evidence discovery | no unbounded crawl and no fake success when `files_hint` resolves to nothing |
-| `task/c1b-b-2-live-structure-derivation` | derive rubric findings, seams, workstreams, and slices from inspected files | success-path structure is not copied from success-path `phase_inputs` |
-| `task/c1b-b-3-deterministic-runtime-honesty` | preserve deterministic IDs and stop cleanly with `clarification_needed` or `failed` | repeat-run IDs stay stable and blocked runs stay structurally empty |
-
-`gate/c1b-ws-b-live-runtime`
-
-```bash
-poetry run ruff check anvil/harness/builder.py anvil/harness/planning_runtime.py anvil/harness/files.py anvil/harness/subgraphs/planning_v1.py anvil/harness/subgraphs/__init__.py tests/test_harness_planning_graph.py
-poetry run pytest -q tests/test_harness_planning_graph.py
-```
-
-### WS-C: Reporting and Integrity Projection
-
-Purpose: make `PLAN.md` and `plan.json` a single canonical projection with
-publish-time integrity checks.
-
-Owned files:
-
-- `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
-- `anvil/harness/schemas.py`
 - `anvil/harness/validation.py`
-- `tests/test_harness_planning_artifacts.py`
-- `tests/test_harness_reporting.py`
-
-Must not touch:
-
-- `anvil/harness/planning_runtime.py`
-- `anvil/harness/cli.py`
-- `anvil/cli.py`
-- docs and example surfaces
-
-Lane tasks:
-
-| Task ID | Required work | Acceptance focus |
-|---|---|---|
-| `task/c1b-c-1-canonical-projection` | project deterministic-live payloads into `PLAN.md` and `plan.json` with shared ordering and IDs | the two artifacts cannot disagree silently |
-| `task/c1b-c-2-referential-integrity-publish-gate` | validate evidence refs, seam refs, workstream refs, and slice refs before success publication | invalid references fail before success artifacts are written |
-| `task/c1b-c-3-terminal-alignment` | align summary payload and artifact terminal semantics | summary payload and published artifact stay in lockstep |
-
-`gate/c1b-ws-c-reporting-integrity`
-
-```bash
-poetry run ruff check anvil/harness/reporting.py anvil/harness/report.py anvil/harness/schemas.py anvil/harness/validation.py tests/test_harness_planning_artifacts.py tests/test_harness_reporting.py
-poetry run pytest -q tests/test_harness_planning_artifacts.py tests/test_harness_reporting.py
-```
-
-### WS-D: Operator Surface, CLI, and Example Credibility
-
-Purpose: make the canonical repo-root planning path runnable and honest.
-
-Owned files:
-
-- `anvil/harness/cli.py`
 - `README.md`
 - `examples/README.md`
-- `docs/contributing.md`
+
+Acceptance criteria:
+
+- runtime, not reporting, derives coverage truth
+- every required dimension has exactly one row
+- ordering and IDs are stable across repeat runs on the same workspace snapshot
+- blocked runs stamp truthful `planning_coverage_status`
+- no cross-record ref uses `stage_type`
+- no strategy-name branching is introduced
+
+Lane-local gate for B:
+
+```bash
+poetry run pytest -q tests/test_harness_planning_graph.py
+poetry run pytest -q tests/test_harness_state_boundaries.py
+```
+
+### WS-D: Example Surface and Docs
+
+Task ledger:
+
+- `task/c2-d1-freeze-strategy-surface`
+  - Add or confirm `coverage_policy` in the canonical planning strategy
+    example.
+- `task/c2-d2-update-fixture-task-wording`
+  - Keep success, clarification, and failed fixture wording honest about
+    emitted artifacts and blocked-run behavior.
+- `task/c2-d3-update-readmes`
+  - Update `README.md` and `examples/README.md` to describe C2 outputs without
+    overselling capability.
+- `task/c2-d4-run-docs-gate-and-handoff`
+  - Run lane-local checks and write a narrow handoff.
+
+Owned files:
+
 - `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_success.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_clarification.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_failed.yaml`
-- `tests/test_harness_standalone_cli.py`
-- `tests/test_docs_surface.py`
-- `tests/test_harness_example_strategy_wiring.py`
-
-Conditional-touch only:
-
-- `anvil/cli.py`
-  - workspace default and rescue messaging only; no changes to frozen exit-code
-    semantics or terminal state vocabulary without a parent reopen
-- `tests/test_harness_cli_command.py`
-  - only if the canonical repo-root command or rescue wording requires a narrow
-    assertion update
+- `README.md`
+- `examples/README.md`
 
 Must not touch:
 
 - `anvil/harness/planning_runtime.py`
 - `anvil/harness/reporting.py`
-- `anvil/harness/report.py`
-- `anvil/harness/schemas.py`
+- `anvil/harness/validation.py`
 
-Lane tasks:
+Acceptance criteria:
 
-| Task ID | Required work | Acceptance focus |
-|---|---|---|
-| `task/c1b-d-1-cli-workspace-default` | default `--workspace` to the current working directory on the canonical harness path | the canonical hello-world command works from repo root |
-| `task/c1b-d-2-rescue-messaging` | tighten missing-binary and missing-auth rescue messaging | failure modes tell operators what to do next |
-| `task/c1b-d-3-example-and-doc-honesty` | align docs and examples to the real bounded planning surface and provider-family story | examples stop implying broader capability than the runtime supports |
+- docs use the exact canonical harness command frozen in A
+- docs distinguish `python -m anvil` orchestration CLI from
+  `python -m anvil.cli harness-run`
+- success docs mention `PLAN.md` and `plan.json`
+- blocked-run docs mention `summary.json` only and truthful coverage payloads
+- wording stays inside C2 and does not imply a broader planning engine
 
-`gate/c1b-ws-d-operator-surface`
+Lane-local gate for D:
 
 ```bash
-poetry run ruff check anvil/harness/cli.py anvil/cli.py tests/test_harness_standalone_cli.py tests/test_docs_surface.py tests/test_harness_example_strategy_wiring.py tests/test_harness_cli_command.py
-poetry run pytest -q tests/test_harness_standalone_cli.py tests/test_docs_surface.py tests/test_harness_example_strategy_wiring.py tests/test_harness_cli_command.py
+poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+poetry run pytest -q tests/test_docs_surface.py
 ```
 
-Docs and example surfaces are verified through the pytest layer in this gate.
-Do not run Ruff directly against Markdown or YAML files.
+### WS-C: Projection, Rendering, and Validation
 
-### WS-E: Quality Gates and Shared-Family Non-Regression
+Task ledger:
 
-Purpose: make fake completeness impossible to merge and keep shared harness
-families safe.
+- `task/c2-c1-extend-schema-to-v2`
+  - Define the `plan_artifact_v2` contract and nested record schemas.
+- `task/c2-c2-extend-projection`
+  - Keep `plan_projection_v1()` as the single planning payload assembler and
+    emit the C2 fields in both `plan.json` and `summary.json`.
+- `task/c2-c3-render-canonical-markdown`
+  - Keep `render_plan_markdown_v1()` as the single renderer and add the
+    canonical C2 section order.
+- `task/c2-c4-extend-validation`
+  - Keep `publish_planning_artifacts_v1()` as the single publisher and make
+    success publication fail closed on broken coverage invariants.
+- `task/c2-c5-run-publication-gate-and-handoff`
+  - Run lane-local tests and write a narrow handoff.
 
 Owned files:
 
-- `tests/test_harness_planning_graph.py`
+- `anvil/harness/reporting.py`
+- `anvil/harness/schemas.py`
+- `anvil/harness/validation.py`
 - `tests/test_harness_planning_artifacts.py`
-- `tests/test_harness_example_strategy_wiring.py`
+- `tests/test_harness_reporting.py`
 - `tests/test_harness_strategy_graph.py`
-- `tests/test_harness_cli_command.py`
-- `tests/test_harness_standalone_cli.py`
-- `tests/test_harness_provider_adapter.py`
-- `tests/test_docs_surface.py`
-- `tests/test_harness_analysis_review_graph.py`
-- `tests/test_lg_offline_smoke.py`
-
-Conditional-touch only:
-
-- `examples/harness/tasks/`
-- `examples/harness/strategies/`
-  - only if a docs-smoke or regression fixture must change after the `04`
-    freeze and the parent explicitly reopens the lane
 
 Must not touch:
 
-- runtime modules
-- publication modules
-- CLI implementation modules
-- docs prose outside test fixtures
+- `anvil/harness/planning_runtime.py`
+- docs files unless parent reopens minimal wording cleanup explicitly
 
-Lane tasks:
+Acceptance criteria:
 
-| Task ID | Required work | Acceptance focus |
-|---|---|---|
-| `task/c1b-e-1-live-success-coverage` | prove success-path planning is live-derived and deterministic | canned replay cannot pass as success |
-| `task/c1b-e-2-integrity-and-parity-coverage` | add referential-integrity and artifact-parity coverage | invalid refs or ordering mismatches block merge |
-| `task/c1b-e-3-docs-smoke-coverage` | add executable coverage for the literal canonical docs command | repo-root hello-world smoke stays real |
-| `task/c1b-e-4-shared-family-canary` | keep `analysis_review_*` routing, examples, and one offline smoke path green | planning changes do not regress the shared family |
+- no new planning helper family appears
+- success artifacts publish `plan_artifact_v2`
+- `summary.json` preserves the same coverage surfaces on blocked runs
+- markdown renders sections in canonical order
+- validation fails on cardinality drift, broken refs, invalid delta rows, and
+  markdown parity drift
+- projection serializes runtime truth only and does not infer missing facts
 
-`gate/c1b-ws-e-quality-gates`
+Lane-local gate for C:
 
 ```bash
-poetry run pytest -q tests/test_harness_planning_graph.py tests/test_harness_planning_artifacts.py tests/test_harness_example_strategy_wiring.py tests/test_harness_strategy_graph.py tests/test_harness_cli_command.py tests/test_harness_standalone_cli.py tests/test_harness_provider_adapter.py tests/test_docs_surface.py tests/test_harness_analysis_review_graph.py tests/test_lg_offline_smoke.py
+poetry run pytest -q tests/test_harness_planning_artifacts.py
+poetry run pytest -q tests/test_harness_reporting.py
+poetry run pytest -q tests/test_harness_strategy_graph.py
 ```
 
-### PF: Provider-Backed Review Proof and Final Acceptance
+### WS-E: Regression-Only Lane
 
-Purpose: run the narrow provider-backed credibility proof only after the
-deterministic-live path, publication surface, operator surface, and quality
-gates are all frozen.
+Why this lane is safe:
 
-Parent-only surfaces:
+- It launches only after B, C, and D are merged, so product surfaces have
+  stopped moving.
+- It owns regression expansion only. It must not change runtime, reporting,
+  validation, or docs behavior except for the smallest test-driven fix
+  explicitly reopened by the parent.
+- Its purpose is to encode final acceptance gaps discovered after integration,
+  not to redesign implementation.
 
-- `.runs/c1b-planning-quality-proof-orch/acceptance/provider-proof/`
-- `.runs/c1b-planning-quality-proof-orch/freezes/06-provider-proof-freeze.md`
-- one named provider-backed acceptance config or command surface under
-  `examples/harness/live_acceptance/` if `WS-D` or `WS-E` did not already add
-  it during implementation
+Task ledger:
 
-Parent tasks:
+- `task/c2-e1-audit-integrated-gaps`
+  - Compare integrated tree behavior against `PLAN.md` acceptance and parent
+    acceptance checklist.
+- `task/c2-e2-add-final-regression-assertions`
+  - Add remaining negative cases and round-trip assertions for helper-family
+    bans, blocked-run truth, state rehydration, CLI/docs contract, and
+    canonical ordering.
+- `task/c2-e3-run-regression-lane-gate`
+  - Run the regression lane gate and capture failures precisely.
+- `task/c2-e4-write-regression-handoff`
+  - Write a handoff that maps every new assertion to a C2 acceptance
+    condition.
 
-| Task ID | Required work | Acceptance focus |
-|---|---|---|
-| `task/c1b-p5-1-verify-proof-entrypoint` | verify the named config or command surface exists and matches frozen semantics | provider proof has a stable home |
-| `task/c1b-p5-2-run-provider-proof` | run one canonical provider-backed review or challenge pass when credentials and binaries are present | provider-backed review runs end-to-end |
-| `task/c1b-p5-3-capture-proof-artifacts` | record command, environment prerequisites, output paths, and proof artifact set under the state root | proof is reproducible and reviewable |
-| `task/c1b-p5-4-freeze-proof-home` | publish the final owner path and operating instructions | proof does not rot as a one-off demo |
+Owned files:
 
-## Approvals and Freeze Gates
+- `tests/test_harness_planning_artifacts.py`
+- `tests/test_harness_reporting.py`
+- `tests/test_harness_state_boundaries.py`
+- `tests/test_harness_example_strategy_wiring.py`
+- `tests/test_docs_surface.py`
 
-The parent publishes exactly six freeze artifacts. Downstream lanes may rely
-only on published freezes, not on worker intent.
+Must not touch without explicit parent reopen:
 
-| Freeze | Published after | Contents |
-|---|---|---|
-| `freezes/00-kickoff-baseline.md` | kickoff baseline | root branch, head SHA, dirty files, authority snapshot paths, branch/worktree plan |
-| `freezes/01-contract-freeze.md` | `WS-A` merged and re-gated | corpus rules, terminal semantics, evidence budget, run-mode vocabulary, frozen state keys, CLI exit semantics |
-| `freezes/02-runtime-shape-freeze.md` | `WS-B` merged and re-gated | live payload shape, deterministic ID rules, blocked-state empties, provenance expectations |
-| `freezes/03-publication-integrity-freeze.md` | `WS-C` merged and re-gated | publish-time parity rules, integrity checks, artifact ordering, failure semantics |
-| `freezes/04-operator-surface-freeze.md` | `WS-D` merged and re-gated | canonical repo-root command, workspace default semantics, rescue messaging, example filenames |
-| `freezes/05-quality-gates-freeze.md` | `WS-E` merged and re-gated | merge-blocking test set, shared-family canary set, docs smoke command, repeat-run expectations |
-| `freezes/06-provider-proof-freeze.md` | parent proof run complete | named proof home, prerequisite list, command surface, captured artifact paths, last verified date |
+- any file under `anvil/harness/`
+- `README.md`
+- `examples/README.md`
 
-Approval rules:
+Acceptance criteria:
 
-- A lane is not considered accepted when the worker says "done". It is accepted
-  only when the parent reruns the lane gate on the lane branch or integrated
-  branch and records the result under `gates/`.
-- A downstream lane may start only after the required freeze exists.
-- Any frozen contract drift requires a parent reopen decision and a new freeze
-  revision note.
+- all final acceptance conditions are represented in tests
+- blocked-run summary truth, state rehydration, and docs/CLI contract drift
+  are explicitly guarded
+- no product-code churn is introduced by the lane
+- the lane produces only regression coverage or the smallest reopened fix
+  approved by the parent
 
-## Worktree and Branch Plan
+Lane-local gate for E:
 
-Integration workspace:
+```bash
+poetry run pytest -q tests/test_harness_planning_artifacts.py
+poetry run pytest -q tests/test_harness_reporting.py
+poetry run pytest -q tests/test_harness_state_boundaries.py
+poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+poetry run pytest -q tests/test_docs_surface.py
+```
 
-- Path: `/Users/spensermcconnell/__Active_Code/forge`
-- Initial branch context: `feat/planning-strategy`
-- Integration branch: `codex/c1b-planning-quality-proof`
-- Owner: parent only
+## Parent Final Integration Phase
 
-Sibling worktree root:
+Task ledger:
 
-- `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/`
+1. `task/c2-f1-merge-ws-b-and-freeze-runtime-payload`
+   - Rerun `gate/c2-runtime` on the integration tree, merge `WS-B`, and write
+     `runtime-payload-freeze.md`.
+2. `task/c2-f2-merge-ws-d`
+   - Rerun `gate/c2-docs` on the integration tree and merge `WS-D`.
+3. `task/c2-f3-dispatch-merge-ws-c`
+   - Dispatch `WS-C` against the frozen runtime payload, rerun
+     `gate/c2-publication`, and merge only if green.
+4. `task/c2-f4-dispatch-merge-ws-e`
+   - Dispatch `WS-E`, rerun `gate/c2-regression-lane`, and merge only if green.
+5. `task/c2-f5-run-integrated-derived-runs`
+   - Run success, clarification, and failed planning fixtures and capture
+     outputs under `derived-runs/`.
+6. `task/c2-f6-run-final-quality-gates`
+   - Run targeted planning tests, repo-quality checks, and full integrated
+     `pytest`.
+7. `task/c2-f7-capture-acceptance-and-close`
+   - Write final gate report, acceptance checklist, QA handoff, and milestone
+     closeout note.
 
-Worker worktrees:
+## Parent Integration Discipline
 
-- `WS-A`
-  - Path:
-    `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/ws-a-contract-freeze`
-  - Branch: `codex/c1b-ws-a-contract-freeze`
-- `WS-B`
-  - Path:
-    `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/ws-b-live-runtime`
-  - Branch: `codex/c1b-ws-b-live-runtime`
-- `WS-C`
-  - Path:
-    `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/ws-c-reporting-integrity`
-  - Branch: `codex/c1b-ws-c-reporting-integrity`
-- `WS-D`
-  - Path:
-    `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/ws-d-operator-surface`
-  - Branch: `codex/c1b-ws-d-operator-surface`
-- `WS-E`
-  - Path:
-    `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/ws-e-quality-gates`
-  - Branch: `codex/c1b-ws-e-quality-gates`
+Parent reruns every lane gate before merging. Parent does not rely on
+worker-reported green status alone. Parent records each rerun and merge result
+in `session.log`.
 
-Branch rules:
+Parent integrated fixture commands:
 
-- Parent creates `codex/c1b-planning-quality-proof` from the current
-  `feat/planning-strategy` head after baseline capture. Do not clean or stash
-  the dirty root `PLAN.md`.
-- Worker branches are created from the integration branch head, not from
-  historical feature branches.
-- Worker packets must point to authority snapshots under `.runs/.../inputs/`
-  because the current root `PLAN.md` is uncommitted.
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --out-root .runs/c2-measurable-coverage-orch/derived-runs/success \
+  --json
 
-## Orchestration State Root
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_clarification.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --out-root .runs/c2-measurable-coverage-orch/derived-runs/clarification \
+  --json
 
-State root:
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_failed.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --out-root .runs/c2-measurable-coverage-orch/derived-runs/failed \
+  --json
+```
 
-- `.runs/c1b-planning-quality-proof-orch/`
+Expected truths:
 
-Required layout:
+- success exits `0` and emits `PLAN.md`, `plan.json`, and `summary.json`
+- clarification and failed exit `1` and emit `summary.json` only
+- blocked runs still carry truthful coverage payloads
 
-- `.runs/c1b-planning-quality-proof-orch/queue.md`
-- `.runs/c1b-planning-quality-proof-orch/state.json`
-- `.runs/c1b-planning-quality-proof-orch/session.log`
-- `.runs/c1b-planning-quality-proof-orch/inputs/`
-- `.runs/c1b-planning-quality-proof-orch/handoffs/`
-- `.runs/c1b-planning-quality-proof-orch/returns/`
-- `.runs/c1b-planning-quality-proof-orch/gates/`
-- `.runs/c1b-planning-quality-proof-orch/freezes/`
-- `.runs/c1b-planning-quality-proof-orch/blockers/`
-- `.runs/c1b-planning-quality-proof-orch/sentinels/`
-- `.runs/c1b-planning-quality-proof-orch/acceptance/`
+## Repo Quality Gates
 
-Required input snapshots:
+Lane-local gates are narrow and lane-specific. Final integrated parent gates
+are broader and merge-blocking.
 
-- `inputs/PLAN.session.md`
-- `inputs/ORCH_PLAN.session.md`
-- `inputs/git-baseline.txt`
-- `inputs/worktree-inventory.txt`
-
-Queue rules:
-
-- `queue.md` is the canonical task ledger.
-- One row per `task/c1b-*`.
-- Minimum columns:
-  - `task_id`
-  - `lane`
-  - `owner`
-  - `depends_on`
-  - `status`
-  - `gate`
-  - `branch`
-  - `worktree`
-  - `reopen_count`
-  - `blocker_artifact`
-
-State rules:
-
-- `state.json` tracks:
-  - current phase
-  - integration branch
-  - active lanes
-  - merged lanes
-  - published freezes
-  - blockers
-  - final verdict
-
-Return rules:
-
-- each worker writes one return file:
-  - `returns/ws-a-return.md`
-  - `returns/ws-b-return.md`
-  - `returns/ws-c-return.md`
-  - `returns/ws-d-return.md`
-  - `returns/ws-e-return.md`
-- each return file must contain only:
-  - summary of landed changes
-  - touched files
-  - commands run
-  - observed risks
-  - explicit reopen requests, if any
-
-## Sentinel, Queue, and Blocker Protocol
-
-Sentinels live under:
-
-- `.runs/c1b-planning-quality-proof-orch/sentinels/`
-
-Required sentinel names:
-
-- `ws-a.dispatched`
-- `ws-a.ready`
-- `ws-a.blocked`
-- `ws-a.merged`
-- `ws-a.reopened`
-- repeat for `ws-b`, `ws-c`, `ws-d`, and `ws-e`
-- `parent.provider-proof.ready`
-- `parent.acceptance.complete`
-
-Sentinel meanings:
-
-- `.dispatched`
-  - parent issued the packet and opened the lane
-- `.ready`
-  - worker claims the lane gate is ready for parent verification
-- `.blocked`
-  - worker cannot proceed without a parent decision
-- `.merged`
-  - parent merged the lane and reran its gate successfully
-- `.reopened`
-  - parent rejected the lane gate or found integration drift and issued a new
-    narrow blocker packet
-
-Blocker artifacts live under:
-
-- `.runs/c1b-planning-quality-proof-orch/blockers/`
-
-Blocker file naming:
-
-- `blockers/ws-<lane>/<timestamp>-<slug>.md`
-
-Every blocker file must state:
-
-- exact blocked task ID
-- reason for block
-- frozen files or strings involved
-- one required parent decision
-- one recommended next action
-
-Reopen protocol:
-
-1. Parent records the failed gate or integration conflict under `gates/`.
-2. Parent writes a blocker artifact under `blockers/`.
-3. Parent increments `reopen_count` in `queue.md`.
-4. Parent touches `<lane>.reopened`.
-5. Worker may address only the recorded blocker scope before returning again.
-
-## Context-Control Rules
-
-1. Parent reads the root `PLAN.md` and this `ORCH_PLAN.md` once at kickoff,
-   snapshots both, and then works from the snapshots plus freeze docs.
-2. Parent does not ask workers to read branch-local `PLAN.md` because the
-   authoritative file is dirty and uncommitted in the kickoff workspace.
-3. Parent keeps only one active freeze, one active worker packet, one gate
-   result, and the queue row for the current lane in active context.
-4. Parent does not ingest full worker transcripts, chain-of-thought, or broad
-   exploratory notes.
-5. Parent reads worker return files before opening code diffs.
-6. Parent opens only the owned files listed in the worker packet unless a
-   blocker requires more.
-7. Parent resolves cross-lane questions by updating a freeze doc, not by
-   relaying ad hoc chat between workers.
-8. Workers receive only:
-   - the lane packet
-   - the required freeze docs
-   - the exact gate command
-   - the absolute path to authority snapshots
-9. Workers do not receive full transcripts from other lanes.
-10. If a lane needs a wider contract than its packet or freeze allows, it must
-    block and wait. It may not infer new scope locally.
-
-## Merge Order
-
-Merge order is fixed:
-
-1. `WS-A`
-2. `WS-B`
-3. `WS-C`
-4. `WS-D`
-5. `WS-E`
-6. parent-only Slice 6 proof
-7. parent-only final acceptance
-
-Rules:
-
-- `WS-D` may finish before `WS-C`, but it does not merge until the parent has
-  published `03-publication-integrity-freeze.md` and verified that docs and CLI
-  language still match the final publication surface.
-- `WS-E` never starts against moving runtime, publication, or docs surfaces.
-- If merging one lane invalidates another lane's freeze assumptions, the parent
-  reopens the downstream lane instead of patching it directly on the
-  integration branch.
-
-## Tests and Acceptance
-
-### Parent gate recording
-
-Every gate rerun is recorded under:
-
-- `.runs/c1b-planning-quality-proof-orch/gates/<gate-name>.md`
-
-Each gate record must include:
-
-- branch and worktree path
-- exact commands
-- pass or fail verdict
-- touched files reviewed
-- blocker link if failed
-
-### Required final integrated gates
-
-`gate/c1b-parent-final-regression`
+Final parent gate sequence:
 
 ```bash
 poetry run pytest -q tests/test_harness_planning_graph.py
 poetry run pytest -q tests/test_harness_planning_artifacts.py
 poetry run pytest -q tests/test_harness_example_strategy_wiring.py
 poetry run pytest -q tests/test_harness_strategy_graph.py
-poetry run pytest -q tests/test_harness_provider_adapter.py
-poetry run pytest -q tests/test_harness_cli_command.py
-poetry run pytest -q tests/test_harness_standalone_cli.py
-poetry run pytest -q tests/test_docs_surface.py
-poetry run pytest -q tests/test_harness_analysis_review_graph.py
-poetry run pytest -q tests/test_lg_offline_smoke.py
+poetry run pytest -q tests/test_harness_state_boundaries.py
+poetry run pytest -q tests/test_harness_reporting.py
+poetry run ruff check anvil tests
+poetry run black --check anvil tests examples
+poetry run isort --check-only anvil tests examples
+poetry run mypy anvil
+poetry run pytest -q
 ```
 
-`gate/c1b-parent-hello-world`
+Gate policy:
 
-```bash
-poetry run python -m anvil.cli harness-run --task examples/harness/tasks/deterministic_feature_planning_success.yaml --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml --out-root .forge-harness-runs --json
-```
+- targeted planning suites run first for fast signal
+- static checks run on the integrated tree only
+- full `pytest -q` runs last as the repo-wide non-regression wall
+- any failure reopens the narrowest responsible lane unless the parent
+  identifies a purely mechanical integration fix
 
-`gate/c1b-parent-provider-proof`
+## Merge and Conflict Policy
 
-- run the named provider-backed proof command or config surface after verifying
-  prerequisites
-- if credentials or binaries are missing, record the exact missing prerequisite
-  and stop acceptance; do not mark `C1b` complete
+- `state.py` is parent-frozen in A before B starts to avoid noun drift.
+- `schemas.py` version target is frozen in A. C fills contract details later.
+- `tests/test_harness_planning_artifacts.py` is first touched by C and only
+  reopened to E after C is merged.
+- Docs wording is frozen by D before E adds docs-surface assertions.
+- Parent rejects any lane that creates `*_v2()` planning helper families,
+  computes coverage truth in `reporting.py`, or introduces strategy-name
+  branching.
 
-### Final acceptance flow
+## Failure-Routing Matrix
 
-1. Confirm `WS-A` through `WS-E` are merged and every freeze `00` through `05`
-   exists.
-2. Rerun `gate/c1b-parent-final-regression` on the integrated tree.
-3. Run `gate/c1b-parent-hello-world` from repo root and capture emitted
-   `PLAN.md` and `plan.json` paths under
-   `.runs/c1b-planning-quality-proof-orch/acceptance/hello-world/`.
-4. Verify the hello-world output reports the correct run mode and non-zero exit
-   behavior for blocked terminals.
-5. Run `gate/c1b-parent-provider-proof` and capture the proof artifact set under
-   `.runs/c1b-planning-quality-proof-orch/acceptance/provider-proof/`.
-6. Verify every `PLAN.md` acceptance checklist item from section 13 is satisfied.
-7. Publish `06-provider-proof-freeze.md`.
-8. Record the final verdict in `state.json`, `queue.md`, and `session.log`.
-
-Acceptance is green only when all of the following are true:
-
-- success-path planning is live-derived, not success-path `phase_inputs` replay
-- referential integrity is enforced at publication time
-- deterministic IDs survive repeat runs on the same fixture
-- the canonical repo-root command works and tells the truth
-- `analysis_review_*` stays green
-- one provider-backed review proof has a named home and a captured artifact set
+| Failure | Detection point | Recovery route | Owner |
+|---|---|---|---|
+| helper-family proliferation | lane review or final gate | reject lane, reopen same lane with explicit helper-family removal | Parent + responsible worker |
+| blocked-run summary truth drift | `tests/test_harness_planning_artifacts.py` or derived blocked runs | reopen `WS-B` if truth derivation is wrong, `WS-C` if serialization is wrong | Parent + B or C |
+| state rehydration drift | `tests/test_harness_state_boundaries.py` | reopen `WS-B` for state/runtime ownership or `WS-E` for missing assertion only | Parent + B or E |
+| CLI/docs contract drift | `tests/test_docs_surface.py`, parent fixture run, or A audit | reopen `WS-D`; if command truth itself changed unexpectedly, parent redoes A freeze before any docs merge | Parent + D |
+| coverage cardinality or ordering drift | `tests/test_harness_planning_graph.py` or final fixture artifacts | reopen `WS-B` only | Parent + B |
+| assumption or delta ref integrity drift | `tests/test_harness_planning_artifacts.py` | reopen `WS-C` if validation/projection issue, `WS-B` if runtime emits bad refs | Parent + B or C |
+| markdown parity drift | `tests/test_harness_planning_artifacts.py` or final success artifact inspection | reopen `WS-C` only | Parent + C |
+| final integrated gate failure after all merges | `gate/c2-final` | isolate first failing command, reopen the narrowest lane, rerun merged-tree gates after fix | Parent |
+| ownership violation or forbidden-file edits | handoff review | reject merge, reopen same lane from its worktree, no parent patch-around | Parent |
 
 ## Assumptions
 
-1. The current root `PLAN.md` content is the real C1b authority even though it
-   is uncommitted. That is why worker packets must target the state-root
-   snapshots.
-2. The current `feat/planning-strategy` head at kickoff is the correct base for
-   the integration branch.
-3. The fresh sibling worktree root
-   `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/`
-   is available and will not collide with historical worktree roots.
-4. Slice 6 credentials and binaries may not be present in every local
-   environment. If they are missing, the milestone remains blocked until the
-   proof is run in an environment that satisfies the prerequisites.
-5. `WS-D` can develop in parallel with `WS-B` against the `01` freeze, but its
-   merge still waits for `03-publication-integrity-freeze.md` so the docs do
-   not get ahead of the artifact surface.
+- `PLAN.md` remains the authoritative C2 specification throughout the session.
+- The canonical documented harness command for this repo is currently
+  `poetry run python -m anvil.cli harness-run`.
+- `python -m anvil` remains the general orchestration CLI entrypoint and should
+  not replace the harness command in C2 docs.
+- `.runs/` is available for repo-local orchestration state.
+- Sibling worktrees under
+  `/home/azureuser/__Active_Code/forge.worktrees/c2-measurable-coverage/` are
+  acceptable.
+- No human approval gate beyond normal parent integration review is required.
