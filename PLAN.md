@@ -1,7 +1,7 @@
 # PLAN: C1b Planning Quality and Live-Surface Credibility Proof
 
-Status: ready for implementation on `main`  
-Target branch: `main`  
+Status: ready for implementation on `feat/planning-strategy`  
+Target branch: `feat/planning-strategy`  
 Milestone: `C1`  
 Sub-milestone: `C1b`  
 Prepared from repo state on: `2026-05-17`

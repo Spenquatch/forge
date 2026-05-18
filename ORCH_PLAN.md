@@ -4,7 +4,7 @@
 
 Repository: `/Users/spensermcconnell/__Active_Code/forge`  
 Kickoff workspace: `/Users/spensermcconnell/__Active_Code/forge`  
-Kickoff branch context: `main` at `375ff1b`  
+Kickoff branch context: `feat/planning-strategy`  
 Kickoff dirty state: `PLAN.md` modified in the root workspace and remains
 authoritative for this run  
 Authoritative plan source: `/Users/spensermcconnell/__Active_Code/forge/PLAN.md`
@@ -25,7 +25,8 @@ This run must deliver all six `PLAN.md` slices:
 Current repo reality that changes orchestration mechanics:
 
 - the authoritative `PLAN.md` is currently dirty in the kickoff workspace
-- workers created from `main` worktrees will not automatically inherit that
+- workers created from `feat/planning-strategy` worktrees will not
+  automatically inherit that
   uncommitted `PLAN.md`
 - the parent must snapshot `PLAN.md` and this `ORCH_PLAN.md` into the state
   root before dispatch and must packet workers against those snapshots, not
@@ -86,7 +87,7 @@ and final acceptance.
   acceptance.
 - Parent is the only integrator.
 - Parent is the only agent allowed to:
-  - switch the integration workspace off `main`
+  - switch the integration workspace off `feat/planning-strategy`
   - create `codex/c1b-*` branches
   - create or destroy `C1b` worktrees
   - publish artifacts under `.runs/c1b-planning-quality-proof-orch/freezes/`
@@ -461,7 +462,7 @@ Approval rules:
 Integration workspace:
 
 - Path: `/Users/spensermcconnell/__Active_Code/forge`
-- Initial branch context: `main`
+- Initial branch context: `feat/planning-strategy`
 - Integration branch: `codex/c1b-planning-quality-proof`
 - Owner: parent only
 
@@ -494,8 +495,9 @@ Worker worktrees:
 
 Branch rules:
 
-- Parent creates `codex/c1b-planning-quality-proof` from the current `main`
-  head after baseline capture. Do not clean or stash the dirty root `PLAN.md`.
+- Parent creates `codex/c1b-planning-quality-proof` from the current
+  `feat/planning-strategy` head after baseline capture. Do not clean or stash
+  the dirty root `PLAN.md`.
 - Worker branches are created from the integration branch head, not from
   historical feature branches.
 - Worker packets must point to authority snapshots under `.runs/.../inputs/`
@@ -747,7 +749,8 @@ Acceptance is green only when all of the following are true:
 1. The current root `PLAN.md` content is the real C1b authority even though it
    is uncommitted. That is why worker packets must target the state-root
    snapshots.
-2. `main` at `375ff1b` is the correct base for the integration branch.
+2. The current `feat/planning-strategy` head at kickoff is the correct base for
+   the integration branch.
 3. The fresh sibling worktree root
    `/Users/spensermcconnell/__Active_Code/forge.worktrees/c1b-planning-quality-proof/`
    is available and will not collide with historical worktree roots.
