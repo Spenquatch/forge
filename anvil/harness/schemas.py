@@ -586,6 +586,7 @@ def planning_workstream_schema() -> dict[str, Any]:
             "seam_ids": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 1,
             },
             "worktree_recommended": {"type": "boolean"},
         },
@@ -609,10 +610,12 @@ def planning_slice_schema() -> dict[str, Any]:
             "seam_ids": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 1,
             },
             "acceptance_criteria": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 1,
             },
         },
         "required": [
@@ -661,6 +664,14 @@ def plan_json_schema() -> dict[str, Any]:
                 "type": "string",
                 "enum": ["success", "clarification_needed", "failed"],
             },
+            "run_mode": {
+                "type": "string",
+                "enum": [
+                    "fixture-backed",
+                    "deterministic-live",
+                    "provider-reviewed",
+                ],
+            },
             "stop_reason": {"type": "string"},
             "problem_statement": {"type": "string"},
             "clarification_requests": {
@@ -707,6 +718,7 @@ def plan_json_schema() -> dict[str, Any]:
             "task",
             "strategy",
             "terminal_status",
+            "run_mode",
             "stop_reason",
             "problem_statement",
             "clarification_requests",

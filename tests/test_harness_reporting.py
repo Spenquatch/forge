@@ -3623,6 +3623,48 @@ def _recommendation_payload(*titles: str) -> dict[str, object]:
     }
 
 
+def test_render_report_includes_planning_terminal_alignment_section():
+    report = render_report(
+        {
+            "verdict": "success",
+            "verdicts": {
+                "run_verdict": "success",
+                "content_verdict": "success",
+                "validator_verdict": "not_applicable",
+                "policy_verdict": "pass",
+                "config_verdict": "pass",
+            },
+            "task": {
+                "id": "task-plan",
+                "task_kind": "planning",
+            },
+            "strategy_name": "deterministic planning",
+            "strategy_kind": "deterministic_feature_planning_v1",
+            "workspace": "/tmp/workspace",
+            "artifacts": {},
+            "planning_terminal_status": "success",
+            "planning_run_mode": "deterministic-live",
+            "repo_evidence_refs": [
+                "anvil/harness/reporting.py",
+                "anvil/harness/report.py",
+            ],
+            "search_pass_count": 2,
+            "inspected_file_count": 4,
+            "discovery_budget_escalated": False,
+            "clarification_requests": [],
+        }
+    )
+
+    overview = _top_level_section(report, "## Overview")
+    planning_status = _top_level_section(report, "## Planning Status")
+
+    assert "- Terminal status: `success`" in overview
+    assert "- Planning run mode: `deterministic-live`" in overview
+    assert "- Terminal status: `success`" in planning_status
+    assert "- Run mode: `deterministic-live`" in planning_status
+    assert "- Repo evidence refs: `anvil/harness/reporting.py`, `anvil/harness/report.py`" in planning_status
+
+
 def _canonical_seam_fields() -> dict[str, object]:
     return {
         "primary_seam": {
