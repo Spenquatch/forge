@@ -66,6 +66,7 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
     assert "one existing repo" in readme
     assert "clarification_needed" in readme
     assert "failed" in readme
+    assert "publish `summary.json` only with truthful coverage payloads" in readme
 
     assert "codex_cli" in readme
     assert "claude_code" in readme
@@ -73,6 +74,7 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
     assert "FORGE_CLAUDE_BIN" in readme
 
     assert "explicit stop-path fixtures" in examples_readme
+    assert "summary.json` only with truthful coverage payloads" in examples_readme
     assert "codex_cli" in examples_readme
     assert "claude_code" in examples_readme
     assert "FORGE_CODEX_BIN" in examples_readme
