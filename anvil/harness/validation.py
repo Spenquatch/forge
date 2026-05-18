@@ -266,6 +266,9 @@ _PLANNING_MARKDOWN_SECTION_HEADINGS = (
     "## Architectural Seams",
     "## Parallel Workstreams/Worktrees",
     "## Executable Slices",
+    "## Coverage Ledger",
+    "## Assumptions Register",
+    "## Uncovered Delta",
 )
 
 
@@ -452,6 +455,118 @@ def validate_planning_success_artifacts(
                 f"slices[{index}] must include at least one concrete acceptance criterion."
             )
 
+    declared_phase_ids = {
+        phase_id
+        for phase_id in _string_list((plan_payload.get("strategy") or {}).get("phases"))
+        if phase_id
+    }
+    coverage_ledger = _dict_records(plan_payload.get("coverage_ledger"))
+    expected_dimensions = [
+        "problem_frame",
+        "repo_surface",
+        "seam_selection",
+        "dependency_shape",
+        "execution_partitioning",
+        "acceptance_shape",
+        "risk_and_unknowns",
+    ]
+    if [str(item.get("dimension") or "") for item in coverage_ledger] != expected_dimensions:
+        errors.append("coverage_ledger dimensions must appear exactly once in canonical order.")
+
+    declared_coverage_ids: set[str] = set()
+    for index, coverage_row in enumerate(coverage_ledger, start=1):
+        coverage_id = _string_or_empty(coverage_row.get("coverage_id"))
+        if not coverage_id:
+            errors.append(f"coverage_ledger[{index}] is missing coverage_id.")
+        elif coverage_id in declared_coverage_ids:
+            errors.append(f"Duplicate coverage_id in plan payload: {coverage_id}")
+        else:
+            declared_coverage_ids.add(coverage_id)
+        status = _string_or_empty(coverage_row.get("status"))
+        source_phase_ids = _string_list(coverage_row.get("source_phase_ids"))
+        if not source_phase_ids:
+            errors.append(f"coverage_ledger[{index}] must include source_phase_ids.")
+        for phase_id in source_phase_ids:
+            if phase_id not in declared_phase_ids:
+                errors.append(
+                    f"coverage_ledger[{index}] references unknown phase_id: {phase_id}"
+                )
+        seam_ids = _string_list(coverage_row.get("seam_ids"))
+        workstream_ids = _string_list(coverage_row.get("workstream_ids"))
+        slice_ids = _string_list(coverage_row.get("slice_ids"))
+        evidence_refs = _string_list(coverage_row.get("evidence_refs"))
+        if status in {"covered", "partial"} and not (
+            evidence_refs or seam_ids or workstream_ids or slice_ids
+        ):
+            errors.append(
+                f"coverage_ledger[{index}] must include evidence_refs or structural refs when status is {status}."
+            )
+        for seam_id in seam_ids:
+            if seam_id not in declared_seam_ids:
+                errors.append(
+                    f"coverage_ledger[{index}] references unknown seam_id: {seam_id}"
+                )
+        for workstream_id in workstream_ids:
+            if workstream_id not in declared_workstream_ids:
+                errors.append(
+                    f"coverage_ledger[{index}] references unknown workstream_id: {workstream_id}"
+                )
+        for slice_id in slice_ids:
+            if slice_id not in declared_slice_ids:
+                errors.append(
+                    f"coverage_ledger[{index}] references unknown slice_id: {slice_id}"
+                )
+
+    assumptions_register = _dict_records(plan_payload.get("assumptions_register"))
+    declared_assumption_ids: set[str] = set()
+    for index, assumption_row in enumerate(assumptions_register, start=1):
+        assumption_id = _string_or_empty(assumption_row.get("assumption_id"))
+        if not assumption_id:
+            errors.append(f"assumptions_register[{index}] is missing assumption_id.")
+        elif assumption_id in declared_assumption_ids:
+            errors.append(
+                f"Duplicate assumption_id in plan payload: {assumption_id}"
+            )
+        else:
+            declared_assumption_ids.add(assumption_id)
+        linked_coverage_ids = _string_list(assumption_row.get("linked_coverage_ids"))
+        for coverage_id in linked_coverage_ids:
+            if coverage_id not in declared_coverage_ids:
+                errors.append(
+                    f"assumptions_register[{index}] references unknown coverage_id: {coverage_id}"
+                )
+        source_phase_id = _string_or_empty(assumption_row.get("source_phase_id"))
+        if source_phase_id and source_phase_id not in declared_phase_ids:
+            errors.append(
+                f"assumptions_register[{index}] references unknown phase_id: {source_phase_id}"
+            )
+
+    coverage_status_by_id = {
+        _string_or_empty(row.get("coverage_id")): _string_or_empty(row.get("status"))
+        for row in coverage_ledger
+    }
+    uncovered_delta = _dict_records(plan_payload.get("uncovered_delta"))
+    for index, delta_row in enumerate(uncovered_delta, start=1):
+        coverage_id = _string_or_empty(delta_row.get("coverage_id"))
+        if coverage_id not in declared_coverage_ids:
+            errors.append(f"uncovered_delta[{index}] references unknown coverage_id: {coverage_id}")
+        elif coverage_status_by_id.get(coverage_id) not in {"partial", "uncovered"}:
+            errors.append(
+                f"uncovered_delta[{index}] may only target partial or uncovered coverage rows."
+            )
+        recommended_next_phase = _string_or_empty(
+            delta_row.get("recommended_next_phase")
+        )
+        if recommended_next_phase not in declared_phase_ids | {"clarify"}:
+            errors.append(
+                f"uncovered_delta[{index}] references invalid recommended_next_phase: {recommended_next_phase}"
+            )
+        for assumption_id in _string_list(delta_row.get("blocking_assumption_ids")):
+            if assumption_id not in declared_assumption_ids:
+                errors.append(
+                    f"uncovered_delta[{index}] references unknown assumption_id: {assumption_id}"
+                )
+
     heading_positions: list[int] = []
     for heading in _PLANNING_MARKDOWN_SECTION_HEADINGS:
         index = markdown_text.find(heading)
@@ -487,6 +602,27 @@ def validate_planning_success_artifacts(
             "## Executable Slices",
             "PLAN.md executable slices",
             [f"- `{_string_or_empty(item.get('slice_id'))}`:" for item in slices],
+        ),
+        (
+            "## Coverage Ledger",
+            "PLAN.md coverage ledger",
+            [
+                f"- `{_string_or_empty(item.get('coverage_id'))}`:"
+                for item in coverage_ledger
+            ],
+        ),
+        (
+            "## Assumptions Register",
+            "PLAN.md assumptions register",
+            [
+                f"- `{_string_or_empty(item.get('assumption_id'))}`:"
+                for item in assumptions_register
+            ],
+        ),
+        (
+            "## Uncovered Delta",
+            "PLAN.md uncovered delta",
+            [f"- `{_string_or_empty(item.get('delta_id'))}`:" for item in uncovered_delta],
         ),
     )
     for heading, label, prefixes in section_expectations:
