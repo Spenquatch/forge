@@ -61,3 +61,55 @@ def tail_text(text: str, max_chars: int = 4000) -> str:
     if len(text) <= max_chars:
         return text
     return f"...[truncated to last {max_chars} chars]\n{text[-max_chars:]}"
+
+
+def workspace_glob_paths(
+    workspace_root: str | Path,
+    pattern: str,
+    *,
+    include_hidden: bool = False,
+) -> list[str]:
+    root = Path(workspace_root).resolve()
+    normalized_pattern = str(pattern or "").strip()
+    if not normalized_pattern:
+        return []
+
+    matches: list[str] = []
+    seen: set[str] = set()
+    for path in root.glob(normalized_pattern):
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not resolved.is_file():
+            continue
+        rel_path = resolved.relative_to(root).as_posix()
+        if not include_hidden and any(part.startswith(".") for part in resolved.parts):
+            continue
+        if rel_path in seen:
+            continue
+        seen.add(rel_path)
+        matches.append(rel_path)
+    return sorted(matches)
+
+
+def read_workspace_text(
+    workspace_root: str | Path,
+    relative_path: str,
+    *,
+    max_bytes: int | None = None,
+) -> str:
+    root = Path(workspace_root).resolve()
+    path = (root / relative_path).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{relative_path!r} is outside workspace_root") from exc
+
+    if max_bytes is None:
+        data = path.read_bytes()
+    else:
+        with path.open("rb") as handle:
+            data = handle.read(max(0, max_bytes))
+    return data.decode("utf-8", errors="ignore")
