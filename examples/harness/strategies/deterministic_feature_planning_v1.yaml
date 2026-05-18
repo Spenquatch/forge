@@ -1,6 +1,8 @@
 # Canonical bounded planning strategy for one existing repo.
+# This canonical example now documents the C2 measurable coverage surface.
 # `phase_inputs` below remain fixture-only scaffolding for stop-path regression coverage;
-# the canonical success path must derive structure from live workspace evidence.
+# the canonical success path must derive structure and coverage truth from live
+# workspace evidence.
 name: deterministic-feature-planning-v1
 kind: deterministic_feature_planning_v1
 runtime_target: planning_v1
@@ -32,8 +34,9 @@ phase_inputs:
     search_pass_count: 1
     inspected_file_count: 2
     summary: >
-      The planning objective is coherent, bounded to the C1 wedge, and can be
-      decomposed deterministically through the shared planning runtime.
+      The planning objective is coherent, bounded to the C2 measurable coverage
+      ledger and assumptions register proof, and can be decomposed
+      deterministically through the shared planning runtime.
   seam_decomposition:
     repo_evidence_refs:
       - anvil/harness/builder.py
@@ -65,7 +68,9 @@ phase_inputs:
         worktree_recommended: true
       - id: workstream-artifact-surface
         title: Artifact Surface
-        summary: Project the frozen planning payload into PLAN.md and plan.json.
+        summary: >
+          Project the frozen C2 planning payload into PLAN.md and plan.json on
+          success, and summary.json only on blocked runs.
         seam_ids:
           - seam-artifact-publication
         worktree_recommended: true
@@ -84,7 +89,9 @@ phase_inputs:
           - planning routes directly to artifact writing
       - id: slice-publish-planning-artifacts
         title: Publish planning artifacts
-        summary: Emit deterministic PLAN.md and plan.json artifacts for successful runs.
+        summary: >
+          Emit deterministic PLAN.md and plan.json artifacts with C2 coverage
+          truth for successful runs.
         workstream_id: workstream-artifact-surface
         seam_ids:
           - seam-artifact-publication
