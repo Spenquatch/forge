@@ -26,4 +26,6 @@ files_hint:
   - PLAN.md
   - anvil/harness/*
 notes: |
-  This fixture should complete successfully and publish deterministic planning artifacts.
+  This fixture should complete successfully from live workspace evidence and publish
+  deterministic planning artifacts.
+  It is intentionally bounded to one existing repo and does not use planning_fixture_mode.

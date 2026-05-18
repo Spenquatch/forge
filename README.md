@@ -2,7 +2,7 @@
 
 Forge is a modular AI agent system with two active repo surfaces:
 
-- a harness for structured analysis-review and deterministic planning runs
+- a harness for structured analysis-review and bounded deterministic existing-repo planning runs
 - a leadership/orchestration foundation built on LangGraph for configurable multi-role execution
 
 The harness builds on the same repo and thesis as the orchestration stack; it does not replace it.
@@ -43,14 +43,17 @@ Run the deterministic planning harness:
 poetry run python -m anvil.cli harness-run \
   --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
   --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
-  --workspace /path/to/repo \
   --out-root .forge-harness-runs \
   --json
 ```
 
-Successful planning runs publish `PLAN.md` and `plan.json`. Planning exits `0` only for `success`; `clarification_needed` and `failed` return exit code `1`.
+On `harness-run`, omitting `--workspace` uses the current working directory, so the planning command above is copy-pasteable from the repo root.
 
-Most provider-backed runs require API keys in `.env`, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+The deterministic planning surface is intentionally bounded: it plans against one existing repo, scans only a limited evidence budget, and stops honestly with `clarification_needed` or `failed` when the ask is out of corpus or underspecified. Successful planning runs publish `PLAN.md` and `plan.json`. Planning exits `0` only for `success`; `clarification_needed` and `failed` return exit code `1`.
+
+Harness strategies use provider family keys from `config/models.yaml` such as `codex_cli` and `claude_code`, not raw binary names in the YAML files. CLI-backed families still respect `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN` when you need to point at a local install.
+
+Most provider-backed runs require API keys in `.env`, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or a prior login for the corresponding CLI provider.
 
 ## Test commands
 

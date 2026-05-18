@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import re
 import sys
 from typing import Any, Mapping, cast
 
@@ -34,7 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--task", required=True, help="Path to task YAML/JSON")
     run.add_argument("--strategy", required=True, help="Path to strategy YAML/JSON")
-    run.add_argument("--workspace", required=True, help="Target workspace directory")
+    run.add_argument(
+        "--workspace",
+        default=os.getcwd(),
+        help="Target workspace directory (defaults to the current working directory)",
+    )
     run.add_argument(
         "--out-root",
         default=".forge-harness-runs",
@@ -187,6 +193,65 @@ def _summary_exit_code(summary: dict[str, Any]) -> int:
     return 0 if run_verdict in _SUCCESSFUL_RUN_VERDICTS else 1
 
 
+def _format_error_with_rescue_guidance(exc: BaseException) -> str:
+    message = str(exc).strip()
+    if not message:
+        return ""
+
+    hints: list[str] = []
+    lowered = message.lower()
+
+    if any(
+        token in lowered
+        for token in (
+            "could not find codex binary",
+            "could not find claude binary",
+            "not found on path",
+            "no binary configured",
+        )
+    ):
+        if "codex" in lowered and "claude" not in lowered:
+            hints.append(
+                "Next step: install the Codex CLI or point FORGE_CODEX_BIN at the executable."
+            )
+        elif "claude" in lowered and "codex" not in lowered:
+            hints.append(
+                "Next step: install the Claude CLI or point FORGE_CLAUDE_BIN at the executable."
+            )
+        else:
+            hints.append(
+                "Next step: install the required CLI binary or point FORGE_CODEX_BIN / FORGE_CLAUDE_BIN at the executable."
+            )
+
+    auth_tokens = (
+        "api key",
+        "authentication failed",
+        "authentication error",
+        "unauthorized",
+        "not logged in",
+        "login",
+        "environment variable",
+    )
+    env_vars = sorted(set(re.findall(r"\b[A-Z][A-Z0-9_]*_API_KEY\b", message)))
+    if any(token in lowered for token in auth_tokens) or (
+        env_vars and any(token in lowered for token in ("not set", "missing"))
+    ):
+        if env_vars:
+            hints.append(
+                "Next step: set "
+                + ", ".join(env_vars)
+                + " in .env or the environment before retrying, or log in to the CLI provider if this strategy uses a CLI family."
+            )
+        else:
+            hints.append(
+                "Next step: set the required provider credential in .env or the environment before retrying, or log in to the CLI provider if this strategy uses a CLI family."
+            )
+
+    if not hints:
+        return message
+    return " ".join([message, *hints])
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -200,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             KeyError,
             FileNotFoundError,
         ) as exc:
-            print(f"error={exc}", file=sys.stderr)
+            print(f"error={_format_error_with_rescue_guidance(exc)}", file=sys.stderr)
             return 2
 
         if args.json:

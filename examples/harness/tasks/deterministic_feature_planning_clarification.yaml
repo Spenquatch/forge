@@ -27,3 +27,5 @@ files_hint:
   - anvil/harness/*
 notes: |
   planning_fixture_mode=clarification_needed
+  This is an explicit fixture-only clarification stop path for the bounded planning
+  surface; it does not imply a broader planning capability.

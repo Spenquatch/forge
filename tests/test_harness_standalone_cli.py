@@ -75,6 +75,51 @@ def test_harness_standalone_cli_returns_zero_for_accepted(monkeypatch) -> None:
     assert exit_code == 0
 
 
+def test_harness_standalone_cli_defaults_workspace_to_current_directory(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.summary_payload = {
+        "verdict": "accepted",
+        "verdicts": {
+            "run_verdict": "accepted",
+            "content_verdict": "accepted",
+            "validator_verdict": "pass",
+            "policy_verdict": "pass",
+            "config_verdict": "pass",
+        },
+        "artifacts": {},
+    }
+    _FakeExecutor.execute_error = None
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+        ]
+    )
+
+    assert exit_code == 0
+    assert _FakeExecutor.instances[-1].execute_calls == [
+        {
+            "task_path": "task.yaml",
+            "strategy_path": "strategy.yaml",
+            "workspace": str(tmp_path),
+            "out_root": ".forge-harness-runs",
+            "config_path": "config/models.yaml",
+            "thread_id": None,
+            "auto_fit_strategy": True,
+            "analysis_review_execution_mode": "legacy_bridge",
+        }
+    ]
+
+
 def test_harness_standalone_cli_uses_native_artifact_index_fallback(
     monkeypatch, capsys
 ) -> None:
@@ -319,6 +364,63 @@ def test_harness_standalone_cli_reports_yaml_parse_errors_without_traceback(
     assert exit_code == 2
     assert "error=Failed to parse" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_harness_standalone_cli_adds_missing_binary_rescue_guidance(
+    monkeypatch, capsys
+) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = RuntimeError(
+        "Could not find codex binary 'codex' on PATH."
+    )
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "FORGE_CODEX_BIN" in captured.err
+    assert "Next step:" in captured.err
+
+
+def test_harness_standalone_cli_adds_missing_auth_rescue_guidance(
+    monkeypatch, capsys
+) -> None:
+    _FakeExecutor.instances.clear()
+    _FakeExecutor.execute_error = RuntimeError(
+        "Environment variable OPENAI_API_KEY not set"
+    )
+    monkeypatch.setattr(harness_cli_module, "HarnessLangGraphExecutor", _FakeExecutor)
+    monkeypatch.setattr(harness_cli_module, "HarnessRunner", _UnexpectedRunner)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            "task.yaml",
+            "--strategy",
+            "strategy.yaml",
+            "--workspace",
+            "/tmp/workspace",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "OPENAI_API_KEY" in captured.err
+    assert ".env" in captured.err
+    assert "Next step:" in captured.err
 
 
 def _write_harness_specs(tmp_path: Path, *, task_kind: str) -> tuple[Path, Path, Path]:

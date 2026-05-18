@@ -487,6 +487,31 @@ def test_planning_example_tasks_cover_success_clarification_and_failed_modes():
             assert "planning_fixture_mode=" not in str(task_payload.get("notes") or "")
 
 
+def test_planning_example_surface_describes_bounded_live_and_fixture_modes():
+    strategy_text = _planning_strategy_path().read_text(encoding="utf-8")
+    success_payload = load_structured_file(_planning_task_path("success"))
+    clarification_payload = load_structured_file(_planning_task_path("clarification"))
+    failed_payload = load_structured_file(_planning_task_path("failed"))
+
+    assert "Canonical bounded planning strategy for one existing repo." in strategy_text
+    assert "fixture-only scaffolding" in strategy_text
+    assert "provider: codex_cli" in strategy_text
+
+    assert "live workspace evidence" in str(success_payload.get("notes") or "")
+    assert "one existing repo" in str(success_payload.get("notes") or "")
+    assert "planning_fixture_mode=" not in str(success_payload.get("notes") or "")
+
+    assert "planning_fixture_mode=clarification_needed" in str(
+        clarification_payload.get("notes") or ""
+    )
+    assert "fixture-only clarification stop path" in str(
+        clarification_payload.get("notes") or ""
+    )
+
+    assert "planning_fixture_mode=failed" in str(failed_payload.get("notes") or "")
+    assert "fixture-only failed stop path" in str(failed_payload.get("notes") or "")
+
+
 def test_planning_example_fixture_corpus_proves_all_terminal_outcomes(tmp_path: Path):
     success_state = _run_planning_example_fixture(
         _planning_task_path("success"),

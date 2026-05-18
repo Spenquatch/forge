@@ -63,7 +63,12 @@ except Exception:  # pragma: no cover - handled at command runtime
     ForgeState = None
     create_state = None
 
-from anvil.harness.cli import _print_summary, _summary_exit_code, summary_from_state_v1
+from anvil.harness.cli import (
+    _format_error_with_rescue_guidance,
+    _print_summary,
+    _summary_exit_code,
+    summary_from_state_v1,
+)
 from anvil.harness.executor import HarnessLangGraphExecutor
 from anvil.harness.runner import HarnessError
 from anvil.harness.runner import HarnessRunner as _HarnessRunner
@@ -1075,7 +1080,7 @@ async def harness_run_command(
         )
         summary = summary_from_state_v1(state)
     except (HarnessError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
-        print(f"❌ HARNESS RUN FAILED: {exc}")
+        print(f"❌ HARNESS RUN FAILED: {_format_error_with_rescue_guidance(exc)}")
         return 2
 
     if json_output:
@@ -1136,7 +1141,9 @@ async def main_async(argv=None) -> int:
         "--strategy", required=True, help="Path to strategy YAML/JSON"
     )
     harness_parser.add_argument(
-        "--workspace", required=True, help="Target workspace directory"
+        "--workspace",
+        default=os.getcwd(),
+        help="Target workspace directory (defaults to the current working directory)",
     )
     harness_parser.add_argument(
         "--out-root",
