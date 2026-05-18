@@ -11,6 +11,59 @@ from anvil.harness.builder import build_harness_langgraph
 from anvil.harness.state import initialize_harness_state
 
 
+def _write_workspace_file(workspace: Path, relative_path: str, content: str) -> None:
+    path = workspace / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _seed_planning_workspace(
+    workspace: Path,
+    *,
+    include_hint_matches: bool = True,
+) -> None:
+    if not include_hint_matches:
+        _write_workspace_file(workspace, "README.md", "# workspace\n")
+        return
+
+    _write_workspace_file(workspace, "PLAN.md", "# C1 planning package\n")
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/builder.py",
+        "def build_harness_langgraph():\n    return 'planning_v1'\n",
+    )
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/strategy_graph.py",
+        "PLANNING_RUNTIME_TARGET = 'planning_v1'\n",
+    )
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/planning_runtime.py",
+        "def execute_planning_runtime(state):\n    return state\n",
+    )
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/reporting.py",
+        "def publish_state_artifacts_v1(state):\n    return state\n",
+    )
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/artifacts.py",
+        "def artifact_description(name):\n    return name\n",
+    )
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/report.py",
+        "def render_report(summary):\n    return summary\n",
+    )
+    _write_workspace_file(
+        workspace,
+        "anvil/harness/subgraphs/planning_v1.py",
+        "def planning_v1_subgraph(state):\n    return state\n",
+    )
+
+
 def _planning_state(tmp_path: Path) -> dict[str, Any]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -32,6 +85,7 @@ def _planning_state(tmp_path: Path) -> dict[str, Any]:
         "objective": "Plan a deterministic rollout for the planning runtime.",
         "task_kind": "planning",
         "workspace_write_policy": {"mode": "forbid"},
+        "files_hint": ["PLAN.md", "anvil/harness/*"],
     }
     state["task_kind"] = "planning"  # type: ignore[assignment]
     state["strategy_spec"] = {
@@ -66,13 +120,19 @@ def _planning_state(tmp_path: Path) -> dict[str, Any]:
 def _planning_graph_state(
     tmp_path: Path,
     *,
-    phase_inputs: dict[str, Any],
+    phase_inputs: dict[str, Any] | None = None,
+    include_hint_matches: bool = True,
 ) -> dict[str, Any]:
     state = _planning_state(tmp_path)
-    state["strategy_spec"] = {
-        **dict(state["strategy_spec"]),
-        "phase_inputs": phase_inputs,
-    }
+    _seed_planning_workspace(
+        Path(str(state["workspace_root"])),
+        include_hint_matches=include_hint_matches,
+    )
+    if phase_inputs is not None:
+        state["strategy_spec"] = {
+            **dict(state["strategy_spec"]),
+            "phase_inputs": phase_inputs,
+        }
     state["strategy_graph_spec"] = {
         "runtime_target": "planning_v1",
         "post_runtime_action": "write_artifacts",
@@ -117,78 +177,7 @@ def test_planning_runtime_success_populates_frozen_state_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = _planning_graph_state(
-        tmp_path,
-        phase_inputs={
-            "design_doc": {
-                "repo_evidence_refs": [
-                    "anvil/harness/builder.py",
-                    "anvil/harness/planning_runtime.py",
-                ],
-                "search_pass_count": 1,
-                "inspected_file_count": 2,
-                "summary": "The design doc gate passed with bounded repo evidence.",
-            },
-            "seam_decomposition": {
-                "repo_evidence_refs": ["anvil/harness/subgraphs/planning_v1.py"],
-                "search_pass_count": 1,
-                "inspected_file_count": 3,
-                "planning_seams": [
-                    {
-                        "title": "Graph Routing",
-                        "summary": "Mount the shared runtime target in the builder.",
-                        "dependency_reasoning": ["Unblocks the shared graph path."],
-                        "ambiguity_flags": [],
-                    },
-                    {
-                        "title": "Terminal State",
-                        "summary": "Populate frozen planning fields directly in graph-owned state.",
-                        "dependency_reasoning": ["Needed before artifact publication."],
-                        "ambiguity_flags": [],
-                    },
-                ],
-            },
-            "parallel_planning": {
-                "search_pass_count": 2,
-                "inspected_file_count": 4,
-                "planning_workstreams": [
-                    {
-                        "title": "Runtime Wiring",
-                        "summary": "Builder and runtime mounting changes.",
-                        "dependency_reasoning": ["Depends on the graph routing seam."],
-                        "ambiguity_flags": [],
-                    },
-                    {
-                        "title": "Coverage",
-                        "summary": "Planning graph tests for terminal outcomes.",
-                        "dependency_reasoning": [
-                            "Depends on runtime-owned state fields."
-                        ],
-                        "ambiguity_flags": [],
-                    },
-                ],
-            },
-            "slice_emission": {
-                "search_pass_count": 1,
-                "inspected_file_count": 2,
-                "discovery_budget_escalated": True,
-                "planning_slices": [
-                    {
-                        "title": "Mount planning_v1",
-                        "summary": "Add the planning subgraph and shared post-runtime routing.",
-                        "dependency_reasoning": ["Requires the Graph Routing seam."],
-                        "ambiguity_flags": [],
-                    },
-                    {
-                        "title": "Record planning terminals",
-                        "summary": "Persist success, clarification, and failed outcomes honestly.",
-                        "dependency_reasoning": ["Requires Terminal State seam."],
-                        "ambiguity_flags": [],
-                    },
-                ],
-            },
-        },
-    )
+    state = _planning_graph_state(tmp_path)
 
     result = _run_graph(state, monkeypatch)
 
@@ -197,18 +186,18 @@ def test_planning_runtime_success_populates_frozen_state_fields(
     assert result["run_verdict"] == "success"
     assert result["content_verdict"] == "success"
     assert result["clarification_requests"] == []
-    assert len(result["repo_evidence_refs"]) == 3
-    assert [item["title"] for item in result["planning_seams"]] == [
-        "Graph Routing",
-        "Terminal State",
+    assert "anvil/harness/subgraphs/planning_v1.py" in result["repo_evidence_refs"]
+    assert [item["seam_id"] for item in result["planning_seams"]] == [
+        "seam-runtime-routing",
+        "seam-artifact-publication",
     ]
-    assert [item["title"] for item in result["planning_workstreams"]] == [
-        "Runtime Wiring",
-        "Coverage",
+    assert [item["workstream_id"] for item in result["planning_workstreams"]] == [
+        "workstream-runtime-wiring",
+        "workstream-artifact-surface",
     ]
-    assert [item["title"] for item in result["planning_slices"]] == [
-        "Mount planning_v1",
-        "Record planning terminals",
+    assert [item["slice_id"] for item in result["planning_slices"]] == [
+        "slice-mount-planning-runtime",
+        "slice-publish-planning-artifacts",
     ]
     assert [item["stage_type"] for item in result["planning_phase_results"]] == [
         "rubric_design_doc",
@@ -223,11 +212,12 @@ def test_planning_runtime_success_populates_frozen_state_fields(
         "rubric_policy": "design_doc_gate_v1",
         "stop_policy": "clarification_or_stop_v1",
     }
-    assert result["search_pass_count"] == 5
-    assert result["inspected_file_count"] == 11
+    assert result["search_pass_count"] == 2
+    assert result["inspected_file_count"] == 8
     assert result["discovery_budget_escalated"] is True
     assert result["drafts"] == []
     assert Path(result["summary_payload"]["artifacts"]["summary_json"]).exists()
+    assert result["run_details"]["planning_run_mode"] == "deterministic-live"
 
 
 def test_planning_runtime_stops_for_clarification_without_fake_downstream_records(
@@ -236,33 +226,22 @@ def test_planning_runtime_stops_for_clarification_without_fake_downstream_record
 ) -> None:
     state = _planning_graph_state(
         tmp_path,
-        phase_inputs={
-            "design_doc": {
-                "repo_evidence_refs": ["PLAN.md"],
-                "status": "clarification_needed",
-                "stop_reason": "rubric_scope_ambiguous",
-                "clarification_requests": [
-                    {
-                        "question": "Which user journey should the planning package prioritize first?",
-                        "rationale": "The objective names multiple surfaces without a primary path.",
-                    }
-                ],
-                "ambiguity_flags": ["multiple_candidate_entrypoints"],
-            }
-        },
+        include_hint_matches=False,
     )
 
     result = _run_graph(state, monkeypatch)
 
     assert result["planning_terminal_status"] == "clarification_needed"
-    assert result["planning_stop_reason"] == "rubric_scope_ambiguous"
+    assert result["planning_stop_reason"] == "files_hint_unresolved"
     assert result["run_verdict"] == "clarification_needed"
     assert result["content_verdict"] == "clarification_needed"
     assert [item["question"] for item in result["clarification_requests"]] == [
-        "Which user journey should the planning package prioritize first?"
+        "Which concrete repository path or seam should the planning package inspect first?"
     ]
     assert len(result["planning_phase_results"]) == 1
     assert result["planning_phase_results"][0]["status"] == "clarification_needed"
+    assert result["planning_phase_results"][0]["repo_evidence_refs"] == []
+    assert result["planning_seams"] == []
     assert result["planning_workstreams"] == []
     assert result["planning_slices"] == []
     assert result["drafts"] == []
@@ -274,30 +253,17 @@ def test_planning_runtime_failed_sets_explicit_stop_reason(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = _planning_graph_state(
-        tmp_path,
-        phase_inputs={
-            "design_doc": {
-                "repo_evidence_refs": ["PLAN.md"],
-            },
-            "seam_decomposition": {
-                "status": "failed",
-                "stop_reason": "seam_signal_insufficient",
-                "repo_evidence_refs": ["anvil/harness/state.py"],
-            },
-        },
-    )
+    state = _planning_graph_state(tmp_path)
+    state["task_spec"]["objective"] = "Plan a brand-new system from scratch."
 
     result = _run_graph(state, monkeypatch)
 
     assert result["planning_terminal_status"] == "failed"
-    assert result["planning_stop_reason"] == "seam_signal_insufficient"
+    assert result["planning_stop_reason"] == "planning_request_out_of_corpus"
     assert result["run_verdict"] == "failed"
     assert result["content_verdict"] == "failed"
-    assert [item["status"] for item in result["planning_phase_results"]] == [
-        "success",
-        "failed",
-    ]
+    assert [item["status"] for item in result["planning_phase_results"]] == ["failed"]
+    assert result["planning_seams"] == []
     assert result["planning_workstreams"] == []
     assert result["planning_slices"] == []
 
@@ -305,21 +271,7 @@ def test_planning_runtime_failed_sets_explicit_stop_reason(
 def test_planning_runtime_bypasses_select_best_draft(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    state = _planning_graph_state(
-        tmp_path,
-        phase_inputs={
-            "design_doc": {"repo_evidence_refs": ["PLAN.md"]},
-            "seam_decomposition": {
-                "planning_seams": [{"title": "Seam A", "summary": "A"}],
-            },
-            "parallel_planning": {
-                "planning_workstreams": [{"title": "Workstream A", "summary": "A"}],
-            },
-            "slice_emission": {
-                "planning_slices": [{"title": "Slice A", "summary": "A"}],
-            },
-        },
-    )
+    state = _planning_graph_state(tmp_path)
 
     monkeypatch.setattr(
         "anvil.harness.builder.select_best_draft_node",
