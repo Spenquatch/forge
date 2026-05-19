@@ -43,7 +43,7 @@ Deterministic planning examples use the canonical strategy `examples/harness/str
 - `examples/harness/tasks/deterministic_feature_planning_clarification.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_failed.yaml`
 
-These planning fixtures are intentionally narrow: they plan one existing repo from bounded workspace evidence, and the clarification/failed fixtures are explicit stop-path fixtures rather than a broader planning capability.
+These planning fixtures are intentionally narrow: they plan one existing repo from bounded workspace evidence, and the clarification/failed fixtures are explicit stop-path fixtures rather than a broader planning capability. The fixture-only IDs embedded in the example strategy remain deterministic scaffolding for regression coverage, while successful live runs derive repo-specific seams, workstreams, and slices from workspace evidence.
 
 Run the successful planning fixture from the repo root with:
 

@@ -87,6 +87,7 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
                 "phase_id": "rubric_design_doc",
                 "status": "success",
                 "summary": "Problem statement and rubric are coherent.",
+                "primary_cut_summary": "Selected primary cut `anvil/harness`.",
             },
             {
                 "phase_id": "architecture_seam_decomposition",
@@ -309,6 +310,9 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     assert plan_payload["terminal_status"] == "success"
     assert plan_payload["run_mode"] == "deterministic-live"
     assert plan_payload["coverage_status"] == "success"
+    assert plan_payload["phase_results"][0]["primary_cut_summary"] == (
+        "Selected primary cut `anvil/harness`."
+    )
     assert [row["dimension"] for row in plan_payload["coverage_ledger"]] == [
         "problem_frame",
         "repo_surface",
@@ -327,6 +331,9 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     )
     assert summary["planning_terminal_status"] == "success"
     assert summary["planning_run_mode"] == "deterministic-live"
+    assert summary["planning_phase_results"][0]["primary_cut_summary"] == (
+        "Selected primary cut `anvil/harness`."
+    )
     assert "- Terminal status: `success`" in markdown
     assert "- Run mode: `deterministic-live`" in markdown
     assert markdown.index("## Problem Statement") < markdown.index("## Rubric Results")

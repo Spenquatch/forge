@@ -98,7 +98,13 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
         "planning_seams": [{"seam_id": "seam-release-watch"}],
         "planning_workstreams": [{"workstream_id": "stream-a"}],
         "planning_slices": [{"slice_id": "slice-1"}],
-        "planning_phase_results": [{"phase_id": "design_doc", "status": "complete"}],
+        "planning_phase_results": [
+            {
+                "phase_id": "design_doc",
+                "status": "complete",
+                "primary_cut_summary": "Selected primary cut `src/release`.",
+            }
+        ],
         "planning_coverage_status": "clarification_needed",
         "planning_coverage_ledger": [
             {
@@ -147,7 +153,11 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
     assert state["planning_workstreams"] == [{"workstream_id": "stream-a"}]
     assert state["planning_slices"] == [{"slice_id": "slice-1"}]
     assert state["planning_phase_results"] == [
-        {"phase_id": "design_doc", "status": "complete"}
+        {
+            "phase_id": "design_doc",
+            "status": "complete",
+            "primary_cut_summary": "Selected primary cut `src/release`.",
+        }
     ]
     assert state["planning_policy_versions"] == {
         "artifact_policy": "planning_package_v1",
