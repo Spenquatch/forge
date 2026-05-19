@@ -102,3 +102,25 @@ poetry run python scripts/run_focus_gate_acceptance.py \
 ```
 
 The legacy `scripts/run_m2_focus_gate_live_acceptance.py` entrypoint remains as an explicit compatibility shim. Its legacy local config name stays `examples/harness/live_acceptance/m2_focus_gate_local.yaml`, and it still accepts the old `strategies:` shorthand surface, but its trust slot should still point at the canonical attestation-first `analysis_review_trust_*` strategy unless you are intentionally running a `legacy_full_review` compatibility check with an explicit `analysis_review_trust_legacy_*` file.
+
+Opt-in real-repo planning smoke for `gsd-browser` lives at `examples/harness/live_acceptance/gsd_browser_session_lifecycle_planning.template.yaml`. It is intentionally not part of `pytest -q`: the default suite keeps fixture-backed determinism, while this smoke proves the planner can stay honest on an external repo with existing dashboard and management API footholds.
+
+Run it with the helper script:
+
+```bash
+examples/harness/live_acceptance/run_gsd_browser_session_lifecycle_smoke.sh \
+  /path/to/gsd-browser
+```
+
+Or run the underlying harness command directly:
+
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/live_acceptance/gsd_browser_session_lifecycle_planning.template.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_v1.yaml \
+  --workspace /path/to/gsd-browser \
+  --out-root .forge-harness-runs-live/gsd-browser-session-lifecycle \
+  --json
+```
+
+This smoke must leave the target workspace untouched. Its job is to prove repo-derived planning truth on a credible operator-facing feature, not to replace the deterministic fixture corpus.

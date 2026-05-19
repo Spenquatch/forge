@@ -1,0 +1,46 @@
+id: gsd_browser_session_lifecycle_dashboard_feature
+task_kind: planning
+objective: >
+  Produce a deterministic execution plan for improving operator-visible session
+  lifecycle management in the gsd-browser workspace, anchored in the existing
+  dashboard session list, live session view, lifecycle controls, and backend
+  management API surfaces.
+workspace_write_policy:
+  mode: forbid
+  allowed_paths: []
+  denied_paths: []
+  allow_untracked: false
+  allow_renames: false
+  allow_deletions: false
+  max_touched_files: 0
+  require_clean_start: false
+acceptance:
+  - Emit a successful planning terminal payload if the workspace evidence is sufficient.
+  - Produce deterministic repo-derived seams, workstreams, and slices for backend and dashboard session lifecycle flows.
+  - Ground the plan in the existing session list, live session, control, and management API surfaces.
+  - Do not modify repository files.
+constraints:
+  - Stay bounded to session lifecycle flows that are already partially present.
+  - Treat existing terminate, pause/resume, session list, live status, and session-view surfaces as footholds rather than inventing a fresh product area.
+  - Stop with clarification_needed instead of inventing missing lifecycle states or API contracts.
+context: |
+  The repo already has partial session lifecycle management in the dashboard and
+  backend. Plan the next bounded feature slice needed to make operator-visible
+  session lifecycle behavior feel coherent and trustworthy from the dashboard.
+files_hint:
+  - gsd-dashboard/src/pages/SessionsPage.tsx
+  - gsd-dashboard/src/pages/LiveSessionPage.tsx
+  - gsd-dashboard/src/components/ControlPanel.tsx
+  - gsd-dashboard/src/hooks/useSessions.ts
+  - gsd-dashboard/src/hooks/useSession.ts
+  - gsd-dashboard/src/lib/api.ts
+  - gsd-dashboard/src/lib/types.ts
+  - gsd-browser/src/gsd_browser/management_api/app.py
+  - gsd-browser/src/gsd_browser/streaming/session_registry.py
+  - gsd-browser/src/gsd_browser/optionb/task_ownership.py
+  - docs/planning/MULTI_TENANT_SAAS_PLAN.md
+  - docs/planning/BACKLOG.md
+notes: |
+  This is an opt-in real-repo planning smoke run.
+  It must not write to the target workspace.
+  Output artifacts should be published only under the Forge harness out-root.

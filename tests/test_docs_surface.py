@@ -84,6 +84,11 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
     assert "claude_code" in examples_readme
     assert "FORGE_CODEX_BIN" in examples_readme
     assert "FORGE_CLAUDE_BIN" in examples_readme
+    assert "gsd_browser_session_lifecycle_planning.template.yaml" in examples_readme
+    assert "run_gsd_browser_session_lifecycle_smoke.sh" in examples_readme
+    assert "not part of `pytest -q`" in examples_readme
+    assert "run_gsd_browser_session_lifecycle_smoke.sh" in contributing
+    assert "external workspace" in contributing
 
 
 def test_history_and_future_files_live_under_project_management():

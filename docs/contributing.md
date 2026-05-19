@@ -75,6 +75,15 @@ Run the offline LangGraph smoke tests:
 poetry run pytest -q tests/test_lg_offline_smoke.py
 ```
 
+Opt-in real-repo planning smoke:
+
+```bash
+examples/harness/live_acceptance/run_gsd_browser_session_lifecycle_smoke.sh \
+  /path/to/gsd-browser
+```
+
+That smoke uses `examples/harness/live_acceptance/gsd_browser_session_lifecycle_planning.template.yaml` plus the canonical planning strategy to prove repo-derived seams on an external workspace. Keep it out of the default `pytest -q` path so the main suite stays self-contained and deterministic.
+
 ## Working conventions
 
 - Keep contributor-facing docs anchored in `README.md`, this guide, the analysis-review contract, and the roadmap.

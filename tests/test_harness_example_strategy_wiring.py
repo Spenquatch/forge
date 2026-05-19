@@ -312,6 +312,37 @@ def test_focus_gate_live_acceptance_templates_still_target_canonical_trust_examp
     )
 
 
+def test_gsd_browser_session_lifecycle_live_smoke_stays_bounded_and_repo_truthful():
+    task = load_structured_file(
+        Path(
+            "examples/harness/live_acceptance/"
+            "gsd_browser_session_lifecycle_planning.template.yaml"
+        )
+    )
+
+    assert task["id"] == "gsd_browser_session_lifecycle_dashboard_feature"
+    assert task["task_kind"] == "planning"
+    assert task["workspace_write_policy"] == {
+        "mode": "forbid",
+        "allowed_paths": [],
+        "denied_paths": [],
+        "allow_untracked": False,
+        "allow_renames": False,
+        "allow_deletions": False,
+        "max_touched_files": 0,
+        "require_clean_start": False,
+    }
+    assert "operator-visible session lifecycle management" in task["objective"]
+    assert "clarification_needed" in task["constraints"][2]
+    assert Path(
+        "examples/harness/live_acceptance/" "run_gsd_browser_session_lifecycle_smoke.sh"
+    ).is_file()
+    assert "gsd-dashboard/src/pages/SessionsPage.tsx" in task["files_hint"]
+    assert "gsd-dashboard/src/pages/LiveSessionPage.tsx" in task["files_hint"]
+    assert "gsd-browser/src/gsd_browser/management_api/app.py" in task["files_hint"]
+    assert "opt-in real-repo planning smoke run" in task["notes"]
+
+
 def test_m2_focus_gate_fixture_wiring_triads_resolve_task_strategy_and_workspace():
     triads = load_structured_file(
         Path("tests/fixtures/harness/m2_focus_gate_fixture_wiring/triads.yaml")
