@@ -64,6 +64,11 @@ def _seed_planning_workspace(
     )
 
 
+def _seed_workspace_files(workspace: Path, files: dict[str, str]) -> None:
+    for relative_path, content in files.items():
+        _write_workspace_file(workspace, relative_path, content)
+
+
 def _planning_state(tmp_path: Path) -> dict[str, Any]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -189,6 +194,9 @@ def test_planning_runtime_success_populates_frozen_state_fields(
     assert result["content_verdict"] == "success"
     assert result["clarification_requests"] == []
     assert "anvil/harness/subgraphs/planning_v1.py" in result["repo_evidence_refs"]
+    assert result["planning_phase_results"][0]["primary_cut_summary"].startswith(
+        "Selected primary cut `anvil/harness`"
+    )
     assert [item["seam_id"] for item in result["planning_seams"]] == [
         "seam-runtime-routing",
         "seam-artifact-publication",
@@ -297,6 +305,71 @@ def test_planning_runtime_stops_for_clarification_without_fake_downstream_record
     assert result["drafts"] == []
     assert result.get("best_draft_id") is None
     assert result.get("selected_draft_id") is None
+
+
+def test_planning_runtime_uses_feature_specific_clarification_for_credible_live_cuts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _planning_state(tmp_path)
+    workspace = Path(str(state["workspace_root"]))
+    _seed_workspace_files(
+        workspace,
+        {
+            "gsd-browser/src/gsd_browser/optionb/task_backend.py": (
+                "TASK_STATUS = 'queued'\n"
+                "def update_task_status(task_id, status):\n"
+                "    return {'task_id': task_id, 'status': status}\n"
+            ),
+            "gsd-browser/src/gsd_browser/optionb/progress.py": (
+                "def stream_task_status(task_id):\n"
+                "    return {'task_id': task_id, 'status': 'running'}\n"
+            ),
+            "gsd-dashboard/src/hooks/useSession.ts": (
+                "export function useSessionStatus() {\n"
+                "  return { status: 'running' };\n"
+                "}\n"
+            ),
+            "gsd-dashboard/src/components/SessionViewer.tsx": (
+                "export function SessionViewer() {\n"
+                "  return <div>task status</div>;\n"
+                "}\n"
+            ),
+        },
+    )
+    state["task_spec"]["objective"] = (
+        "Plan a bounded slice for the Option B task status contract and dashboard "
+        "session status flow."
+    )
+    state["task_spec"]["acceptance"] = [
+        "Keep backend task status ownership explicit.",
+        "Keep dashboard session status consumption explicit.",
+    ]
+    state["task_spec"]["files_hint"] = [
+        "gsd-browser/src/gsd_browser/optionb/*.py",
+        "gsd-dashboard/src/hooks/*.ts",
+        "gsd-dashboard/src/components/*.tsx",
+    ]
+    state["strategy_graph_spec"] = {
+        "runtime_target": "planning_v1",
+        "post_runtime_action": "write_artifacts",
+    }
+
+    result = _run_graph(state, monkeypatch)
+
+    assert result["planning_terminal_status"] == "clarification_needed"
+    assert result["planning_stop_reason"] == "primary_cut_not_credible"
+    assert result["planning_phase_results"][0]["primary_cut_summary"].startswith(
+        "Selected primary cut `gsd-browser/src/gsd_browser/optionb`"
+    )
+    assert result["clarification_requests"]
+    question = result["clarification_requests"][0]["question"]
+    assert "runtime routing" not in question.lower()
+    assert "artifact publication" not in question.lower()
+    assert "gsd-browser/src/gsd_browser/optionb" in question
+    assert result["planning_seams"] == []
+    assert result["planning_workstreams"] == []
+    assert result["planning_slices"] == []
 
 
 def test_planning_runtime_failed_sets_explicit_stop_reason(

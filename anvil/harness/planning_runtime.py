@@ -341,7 +341,7 @@ def _planning_phase_result(
     policy_versions: Mapping[str, str],
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    return {
+    phase_result = {
         "phase_id": phase_id,
         "stage_type": stage_type,
         "status": status,
@@ -365,6 +365,10 @@ def _planning_phase_result(
         "policy_versions": dict(policy_versions),
         "summary": str(payload.get("summary") or "").strip(),
     }
+    primary_cut_summary = str(payload.get("primary_cut_summary") or "").strip()
+    if primary_cut_summary:
+        phase_result["primary_cut_summary"] = primary_cut_summary
+    return phase_result
 
 
 def _normalize_clarification_requests(
@@ -1339,16 +1343,6 @@ def _planning_query_tokens(
     values.extend(task_spec.get("acceptance") or [])
     values.extend(task_spec.get("constraints") or [])
     values.extend(task_spec.get("files_hint") or [])
-    values.extend(
-        [
-            "planning_v1",
-            "builder",
-            "reporting",
-            "strategy graph",
-            "subgraph",
-            "artifact",
-        ]
-    )
     tokens: list[str] = []
     for value in values:
         tokens.extend(_tokenize(value))
@@ -1358,24 +1352,9 @@ def _planning_query_tokens(
 def _score_path(path: str, *, query_tokens: list[str]) -> int:
     normalized = path.lower()
     score = 0
-    for seam_spec in _CANONICAL_SEAM_SPECS:
-        if normalized in seam_spec["path_hints"]:
-            score += 100
     for token in query_tokens:
         if token in normalized:
             score += 10
-    filename = Path(path).name.lower()
-    if filename in {
-        "builder.py",
-        "reporting.py",
-        "artifacts.py",
-        "planning_runtime.py",
-    }:
-        score += 25
-    if "planning" in normalized:
-        score += 15
-    if "report" in normalized or "artifact" in normalized:
-        score += 10
     if normalized.endswith(".py"):
         score += 2
     if normalized.endswith(".md"):
@@ -1413,16 +1392,26 @@ def _discovered_workspace_matches(
 ) -> list[str]:
     workspace_root = _workspace_root(state)
     discovered: list[str] = []
-    roots = sorted({str(Path(path).parent) for path in selected_paths if "/" in path})
-    if "anvil/harness" in roots or any(
-        path.startswith("anvil/harness/") for path in selected_paths
-    ):
-        if (workspace_root / "anvil/harness/subgraphs/planning_v1.py").is_file():
-            discovered.append("anvil/harness/subgraphs/planning_v1.py")
-    for seam_spec in _CANONICAL_SEAM_SPECS:
-        for rel_path in seam_spec["path_hints"]:
-            if (workspace_root / rel_path).is_file():
-                discovered.append(rel_path)
+    roots = sorted(
+        {
+            str(Path(path).parent)
+            for path in selected_paths
+            if "/" in path and str(Path(path).parent) not in {"", "."}
+        }
+    )
+    for root in roots:
+        root_path = workspace_root / root
+        if not root_path.is_dir():
+            continue
+        for pattern in (
+            "**/*.py",
+            "**/*.md",
+            "**/*.yaml",
+            "**/*.yml",
+            "**/*.ts",
+            "**/*.tsx",
+        ):
+            discovered.extend(workspace_glob_paths(workspace_root, f"{root}/{pattern}"))
     return _dedupe_strings(discovered)
 
 
@@ -1448,6 +1437,159 @@ def _read_workspace_evidence(
         evidence[relative_path] = text
         remaining_bytes -= len(text.encode("utf-8"))
     return evidence
+
+
+def _path_cluster(path: str) -> tuple[str, str]:
+    parts = Path(path).parts
+    parent_parts = parts[:-1]
+    if len(parent_parts) >= 2 and parts[0] == ".github" and parts[1] == "workflows":
+        return ("workflow-boundary", ".github/workflows")
+    if (
+        len(parent_parts) >= 2
+        and parts[0] == "docs"
+        and parts[1]
+        in {
+            "adr",
+            "planning",
+        }
+    ):
+        return ("workflow-boundary", "/".join(parts[:2]))
+    if len(parent_parts) >= 2 and parts[0] in {"anvil", "tests", "examples"}:
+        return ("module-package", "/".join(parts[:2]))
+    if len(parent_parts) >= 3 and parent_parts[1] in {"src", "app", "lib"}:
+        return ("module-package", "/".join(parent_parts[: min(4, len(parent_parts))]))
+    if len(parent_parts) >= 2:
+        return ("module-package", "/".join(parent_parts[:2]))
+    if parent_parts:
+        return ("integration-seam", "/".join(parent_parts))
+    return ("integration-seam", path)
+
+
+def _primary_cut_candidates(
+    *,
+    candidate_paths: list[str],
+    evidence_by_path: Mapping[str, str],
+    query_tokens: list[str],
+) -> list[dict[str, Any]]:
+    clusters: dict[str, dict[str, Any]] = {}
+    for path in _dedupe_strings(candidate_paths):
+        kind, label = _path_cluster(path)
+        cluster = clusters.setdefault(
+            label,
+            {
+                "kind": kind,
+                "label": label,
+                "supporting_paths": [],
+                "matched_query_tokens": set(),
+                "grounded_paths": set(),
+            },
+        )
+        cluster["supporting_paths"].append(path)
+        haystack = " ".join(
+            [path.lower(), str(evidence_by_path.get(path) or "").lower()]
+        )
+        matched_tokens = {token for token in query_tokens if token in haystack}
+        if matched_tokens:
+            cluster["matched_query_tokens"].update(matched_tokens)
+            cluster["grounded_paths"].add(path)
+
+    priority = {
+        "workflow-boundary": 0,
+        "module-package": 1,
+        "integration-seam": 2,
+    }
+    candidates: list[dict[str, Any]] = []
+    for cluster in clusters.values():
+        supporting_paths = _dedupe_strings(cluster["supporting_paths"])
+        matched_query_tokens = sorted(cluster["matched_query_tokens"])
+        grounded_paths = sorted(cluster["grounded_paths"])
+        signal_labels: list[str] = []
+        if len(supporting_paths) >= 2:
+            signal_labels.append("multi_path_cluster")
+        if len(matched_query_tokens) >= 2:
+            signal_labels.append("task_token_grounding")
+        if len(grounded_paths) >= 2:
+            signal_labels.append("cross_file_grounding")
+        candidates.append(
+            {
+                "kind": cluster["kind"],
+                "label": cluster["label"],
+                "supporting_paths": supporting_paths,
+                "matched_query_tokens": matched_query_tokens,
+                "grounded_paths": grounded_paths,
+                "signal_labels": signal_labels,
+                "signal_count": len(signal_labels),
+            }
+        )
+
+    return sorted(
+        candidates,
+        key=lambda item: (
+            -int(item["signal_count"]),
+            -len(item["grounded_paths"]),
+            -len(item["supporting_paths"]),
+            priority.get(str(item["kind"]), 99),
+            str(item["label"]),
+        ),
+    )
+
+
+def _primary_cut_summary(primary_cut: Mapping[str, Any]) -> str:
+    supporting_paths = list(primary_cut.get("supporting_paths") or [])
+    signal_labels = list(primary_cut.get("signal_labels") or [])
+    summary = (
+        f"Selected primary cut `{primary_cut.get('label')}` "
+        f"({primary_cut.get('kind')}) from {len(supporting_paths)} supporting "
+        f"path(s) with {len(signal_labels)} credibility signal(s)."
+    )
+    if supporting_paths:
+        summary = f"{summary} Anchors: {', '.join(supporting_paths[:3])}."
+    return summary
+
+
+def _primary_cut_clarification_question(
+    *,
+    primary_cut: Mapping[str, Any] | None,
+    candidates: list[dict[str, Any]],
+) -> tuple[str, str]:
+    if primary_cut is not None:
+        label = str(primary_cut.get("label") or "the current repo surface")
+        if len(candidates) > 1:
+            alternate = str(candidates[1].get("label") or "another repo surface")
+            return (
+                f"Should the planner stay focused on `{label}` or pivot to `{alternate}` for this slice?",
+                (
+                    "The bounded repo evidence suggests a credible primary cut, but "
+                    "the downstream structure is not yet explicit enough to continue "
+                    "without operator confirmation."
+                ),
+            )
+        return (
+            f"Should the planner stay focused on `{label}`, or is another repository surface in scope for this slice?",
+            (
+                "The bounded repo evidence suggests a credible primary cut, but the "
+                "requested implementation slice still needs confirmation before "
+                "continuing."
+            ),
+        )
+    if candidates:
+        candidate_labels = [
+            f"`{candidate['label']}`"
+            for candidate in candidates[:2]
+            if candidate.get("label")
+        ]
+        if candidate_labels:
+            return (
+                f"Which repository surface is the intended planning slice: {' or '.join(candidate_labels)}?",
+                (
+                    "The bounded repo evidence surfaced multiple plausible cuts, but "
+                    "none passed the frozen credibility threshold."
+                ),
+            )
+    return (
+        "Which concrete repository path or seam should the planning package inspect first?",
+        "The current files_hint slice did not isolate a credible first cut.",
+    )
 
 
 def _objective_is_out_of_corpus(task_spec: Mapping[str, Any]) -> bool:
@@ -1692,6 +1834,55 @@ def _derive_live_phase_payloads(
         query_tokens=query_tokens,
     )
     inspected_file_count = len(evidence_by_path)
+    primary_cut_candidates = _primary_cut_candidates(
+        candidate_paths=selected_paths,
+        evidence_by_path=evidence_by_path,
+        query_tokens=query_tokens,
+    )
+    primary_cut = (
+        dict(primary_cut_candidates[0])
+        if primary_cut_candidates
+        and int(primary_cut_candidates[0]["signal_count"]) >= 2
+        else None
+    )
+    clarification_question, clarification_rationale = (
+        _primary_cut_clarification_question(
+            primary_cut=primary_cut,
+            candidates=primary_cut_candidates,
+        )
+    )
+    primary_cut_summary = (
+        _primary_cut_summary(primary_cut) if primary_cut is not None else ""
+    )
+
+    if primary_cut is None:
+        tentative_summary = (
+            _primary_cut_summary(primary_cut_candidates[0])
+            if primary_cut_candidates
+            else ""
+        )
+        return (
+            {
+                str(design_phase["id"]): {
+                    **_clarification_payload(
+                        phase_id=str(design_phase["id"]),
+                        stop_reason="primary_cut_not_credible",
+                        summary=(
+                            "The planner could not choose a credible primary cut from "
+                            "the bounded workspace evidence."
+                        ),
+                        repo_evidence_refs=selected_paths,
+                        search_pass_count=search_pass_count,
+                        inspected_file_count=inspected_file_count,
+                        discovery_budget_escalated=discovery_budget_escalated,
+                        question=clarification_question,
+                        rationale=clarification_rationale,
+                    ),
+                    "primary_cut_summary": tentative_summary,
+                }
+            },
+            run_mode,
+        )
 
     seams = _seam_paths(
         candidate_paths=selected_paths,
@@ -1704,22 +1895,18 @@ def _derive_live_phase_payloads(
                     phase_id=str(design_phase["id"]),
                     stop_reason="primary_cut_not_credible",
                     summary=(
-                        "The planner could not derive a credible primary seam from the "
-                        "bounded workspace evidence."
+                        "The planner found a credible primary cut, but the bounded "
+                        "workspace evidence was still too weak to emit truthful "
+                        "downstream planning structure."
                     ),
                     repo_evidence_refs=selected_paths,
                     search_pass_count=search_pass_count,
                     inspected_file_count=inspected_file_count,
                     discovery_budget_escalated=discovery_budget_escalated,
-                    question=(
-                        "Should the planner prioritize runtime routing or artifact "
-                        "publication first?"
-                    ),
-                    rationale=(
-                        "The inspected workspace evidence did not isolate a confident "
-                        "first cut inside the frozen budget."
-                    ),
+                    question=clarification_question,
+                    rationale=clarification_rationale,
                 )
+                | {"primary_cut_summary": primary_cut_summary}
             },
             run_mode,
         )
@@ -1754,12 +1941,13 @@ def _derive_live_phase_payloads(
         str(design_phase["id"]): {
             "summary": (
                 "The planning objective is coherent, bounded to the workspace, and "
-                "credible within the deterministic evidence budget."
+                "anchored to a credible repo-derived primary cut."
             ),
             "repo_evidence_refs": repo_evidence_refs,
             "search_pass_count": search_pass_count,
             "inspected_file_count": inspected_file_count,
             "discovery_budget_escalated": discovery_budget_escalated,
+            "primary_cut_summary": primary_cut_summary,
         },
         str(seam_phase["id"]): {
             "summary": (
