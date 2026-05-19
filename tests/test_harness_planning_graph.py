@@ -198,17 +198,20 @@ def test_planning_runtime_success_populates_frozen_state_fields(
         "Selected primary cut `anvil/harness`"
     )
     assert [item["seam_id"] for item in result["planning_seams"]] == [
-        "seam-runtime-routing",
-        "seam-artifact-publication",
+        "seam-01-anvil-harness"
     ]
     assert [item["workstream_id"] for item in result["planning_workstreams"]] == [
-        "workstream-runtime-wiring",
-        "workstream-artifact-surface",
+        "workstream-01-anvil-harness"
     ]
     assert [item["slice_id"] for item in result["planning_slices"]] == [
-        "slice-mount-planning-runtime",
-        "slice-publish-planning-artifacts",
+        "slice-01-anvil-harness"
     ]
+    assert result["planning_workstreams"][0]["seam_ids"] == ["seam-01-anvil-harness"]
+    assert (
+        result["planning_slices"][0]["workstream_id"] == "workstream-01-anvil-harness"
+    )
+    assert result["planning_slices"][0]["seam_ids"] == ["seam-01-anvil-harness"]
+    assert len(result["planning_slices"][0]["acceptance_criteria"]) == 2
     assert [item["stage_type"] for item in result["planning_phase_results"]] == [
         "rubric_design_doc",
         "architecture_seam_decomposition",
@@ -307,7 +310,7 @@ def test_planning_runtime_stops_for_clarification_without_fake_downstream_record
     assert result.get("selected_draft_id") is None
 
 
-def test_planning_runtime_uses_feature_specific_clarification_for_credible_live_cuts(
+def test_planning_runtime_emits_repo_derived_structure_for_credible_live_cuts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -357,19 +360,33 @@ def test_planning_runtime_uses_feature_specific_clarification_for_credible_live_
 
     result = _run_graph(state, monkeypatch)
 
-    assert result["planning_terminal_status"] == "clarification_needed"
-    assert result["planning_stop_reason"] == "primary_cut_not_credible"
+    assert result["planning_terminal_status"] == "success"
+    assert result["planning_stop_reason"] is None
     assert result["planning_phase_results"][0]["primary_cut_summary"].startswith(
         "Selected primary cut `gsd-browser/src/gsd_browser/optionb`"
     )
-    assert result["clarification_requests"]
-    question = result["clarification_requests"][0]["question"]
-    assert "runtime routing" not in question.lower()
-    assert "artifact publication" not in question.lower()
-    assert "gsd-browser/src/gsd_browser/optionb" in question
-    assert result["planning_seams"] == []
-    assert result["planning_workstreams"] == []
-    assert result["planning_slices"] == []
+    assert result["clarification_requests"] == []
+    seam_ids = [item["seam_id"] for item in result["planning_seams"]]
+    assert seam_ids[0] == "seam-01-gsd-browser-src-gsd-browser-optionb"
+    assert "seam-runtime-routing" not in seam_ids
+    assert "seam-artifact-publication" not in seam_ids
+    assert [item["workstream_id"] for item in result["planning_workstreams"]] == [
+        "workstream-01-gsd-browser-src-gsd-browser-optionb",
+        "workstream-02-gsd-dashboard-src-components",
+        "workstream-03-gsd-dashboard-src-hooks",
+    ]
+    assert [item["slice_id"] for item in result["planning_slices"]] == [
+        "slice-01-gsd-browser-src-gsd-browser-optionb",
+        "slice-02-gsd-dashboard-src-components",
+        "slice-03-gsd-dashboard-src-hooks",
+    ]
+    assert result["planning_workstreams"][1]["depends_on_workstream_ids"] == [
+        "workstream-01-gsd-browser-src-gsd-browser-optionb"
+    ]
+    assert result["planning_workstreams"][2]["depends_on_workstream_ids"] == [
+        "workstream-02-gsd-dashboard-src-components"
+    ]
+    assert all(item["acceptance_criteria"] for item in result["planning_slices"])
 
 
 def test_planning_runtime_failed_sets_explicit_stop_reason(

@@ -1592,6 +1592,13 @@ def _primary_cut_clarification_question(
     )
 
 
+def _cluster_title(label: str) -> str:
+    parts = [part for part in re.split(r"[/_-]+", label) if part]
+    if not parts:
+        return "Repo Surface"
+    return " ".join(part.capitalize() for part in parts[-2:])
+
+
 def _objective_is_out_of_corpus(task_spec: Mapping[str, Any]) -> bool:
     values = [
         task_spec.get("objective"),
@@ -1603,76 +1610,132 @@ def _objective_is_out_of_corpus(task_spec: Mapping[str, Any]) -> bool:
 
 def _seam_paths(
     *,
-    candidate_paths: list[str],
-    evidence_by_path: Mapping[str, str],
+    candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    available_paths = _dedupe_strings(list(candidate_paths) + list(evidence_by_path))
     seams: list[dict[str, Any]] = []
-    for seam_spec in _CANONICAL_SEAM_SPECS:
-        seam_paths = [
-            path for path in seam_spec["path_hints"] if path in available_paths
-        ]
+    for index, candidate in enumerate(candidates, start=1):
+        signal_count = int(candidate.get("signal_count") or 0)
+        if index == 1 and signal_count < 2:
+            continue
+        if index > 1 and signal_count < 1:
+            continue
+        seam_paths = _dedupe_strings(list(candidate.get("supporting_paths") or []))
         if not seam_paths:
             continue
+        label = str(candidate.get("label") or f"repo-surface-{index}")
+        seam_id = _stable_id("seam", index, label)
         seams.append(
             {
-                "id": seam_spec["seam_id"],
-                "seam_id": seam_spec["seam_id"],
-                "title": seam_spec["title"],
-                "summary": seam_spec["summary"],
+                "id": seam_id,
+                "seam_id": seam_id,
+                "title": f"{_cluster_title(label)} Seam",
+                "summary": (
+                    f"Ground the bounded plan in `{label}` using "
+                    f"{len(seam_paths)} repo-backed anchor path(s)."
+                ),
                 "paths": seam_paths,
                 "repo_evidence_refs": seam_paths,
-                "dependency_reasoning": [f"Grounded in {', '.join(seam_paths)}."],
+                "dependency_reasoning": [
+                    f"Derived from the repo-backed primary-cut candidate `{label}`."
+                ],
                 "ambiguity_flags": [],
+                "candidate_label": label,
             }
         )
+        if len(seams) >= 3:
+            break
     return seams
 
 
 def _workstreams_for_seams(seams: list[dict[str, Any]]) -> list[dict[str, Any]]:
     workstreams: list[dict[str, Any]] = []
-    for seam_spec in _CANONICAL_SEAM_SPECS:
-        seam_id = seam_spec["seam_id"]
-        if not any(
-            str(seam.get("seam_id") or seam.get("id")) == seam_id for seam in seams
-        ):
+    previous_workstream_id: str | None = None
+    for index, seam in enumerate(seams, start=1):
+        seam_id = str(seam.get("seam_id") or seam.get("id") or "").strip()
+        label = str(seam.get("candidate_label") or seam.get("title") or seam_id)
+        if not seam_id:
             continue
-        workstream = dict(seam_spec["workstream"])
-        workstream.update(
+        workstream_id = _stable_id("workstream", index, label)
+        dependency_reasoning = [f"Grounded in `{seam_id}`."]
+        summary = f"Translate `{label}` into a bounded implementation workstream."
+        depends_on_workstream_ids: list[str] = []
+        if previous_workstream_id:
+            depends_on_workstream_ids.append(previous_workstream_id)
+            dependency_reasoning.append(
+                f"Sequence this after `{previous_workstream_id}` to preserve the repo-derived execution order."
+            )
+            summary = (
+                f"Translate `{label}` into a bounded implementation workstream after "
+                f"`{previous_workstream_id}`."
+            )
+        workstreams.append(
             {
-                "id": workstream["workstream_id"],
+                "id": workstream_id,
+                "workstream_id": workstream_id,
+                "title": f"{_cluster_title(label)} Workstream",
+                "summary": summary,
                 "seam_ids": [seam_id],
                 "worktree_recommended": True,
-                "dependency_reasoning": [f"Depends on `{seam_id}`."],
+                "dependency_reasoning": dependency_reasoning,
                 "ambiguity_flags": [],
+                "depends_on_workstream_ids": depends_on_workstream_ids,
+                "candidate_label": label,
             }
         )
-        workstreams.append(workstream)
+        previous_workstream_id = workstream_id
     return workstreams
 
 
-def _slices_for_workstreams(workstreams: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _slices_for_workstreams(
+    workstreams: list[dict[str, Any]],
+    *,
+    seams: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     slices: list[dict[str, Any]] = []
-    for seam_spec in _CANONICAL_SEAM_SPECS:
-        workstream_id = seam_spec["workstream"]["workstream_id"]
-        seam_id = seam_spec["seam_id"]
-        if not any(
-            str(workstream.get("workstream_id") or workstream.get("id"))
-            == workstream_id
-            for workstream in workstreams
-        ):
+    seams_by_id = {
+        str(seam.get("seam_id") or seam.get("id") or ""): seam for seam in seams
+    }
+    for index, workstream in enumerate(workstreams, start=1):
+        workstream_id = str(
+            workstream.get("workstream_id") or workstream.get("id") or ""
+        ).strip()
+        seam_ids = _normalize_string_list(workstream.get("seam_ids") or [])
+        if not workstream_id or not seam_ids:
             continue
-        slice_record = dict(seam_spec["slice"])
-        slice_record.update(
+        label = str(
+            workstream.get("candidate_label")
+            or workstream.get("title")
+            or workstream_id
+        )
+        anchor_paths: list[str] = []
+        for seam_id in seam_ids:
+            seam = seams_by_id.get(seam_id) or {}
+            anchor_paths.extend(_normalize_string_list(seam.get("paths") or []))
+        anchor_paths = _dedupe_strings(anchor_paths)
+        slice_id = _stable_id("slice", index, label)
+        slices.append(
             {
-                "id": slice_record["slice_id"],
+                "id": slice_id,
+                "slice_id": slice_id,
+                "title": f"{_cluster_title(label)} Slice",
+                "summary": (
+                    f"Define the next executable change slice for `{label}` using "
+                    "the repo-backed anchors from its parent workstream."
+                ),
                 "workstream_id": workstream_id,
-                "seam_ids": [seam_id],
+                "seam_ids": seam_ids,
+                "acceptance_criteria": [
+                    (
+                        f"Anchor the slice to concrete repo paths such as "
+                        f"{', '.join(anchor_paths[:2]) or label}."
+                    ),
+                    f"Keep the execution scope bounded to the `{label}` surface and its declared workstream dependencies.",
+                ],
                 "dependency_reasoning": [f"Implements `{workstream_id}`."],
                 "ambiguity_flags": [],
+                "candidate_label": label,
             }
         )
-        slices.append(slice_record)
     return slices
 
 
@@ -1884,10 +1947,7 @@ def _derive_live_phase_payloads(
             run_mode,
         )
 
-    seams = _seam_paths(
-        candidate_paths=selected_paths,
-        evidence_by_path=evidence_by_path,
-    )
+    seams = _seam_paths(candidates=primary_cut_candidates)
     if not seams:
         return (
             {
@@ -1930,10 +1990,10 @@ def _derive_live_phase_payloads(
         )
 
     workstreams = _workstreams_for_seams(seams)
-    slices = _slices_for_workstreams(workstreams)
+    slices = _slices_for_workstreams(workstreams, seams=seams)
 
     repo_evidence_refs = _dedupe_strings(
-        ["PLAN.md"]
+        (["PLAN.md"] if (_workspace_root(state) / "PLAN.md").is_file() else [])
         + selected_paths
         + [path for seam in seams for path in seam.get("paths", [])]
     )

@@ -541,9 +541,9 @@ def test_planning_example_fixture_corpus_proves_all_terminal_outcomes(tmp_path: 
     assert success_plan["terminal_status"] == "success"
     assert success_plan["coverage_status"] == "success"
     assert len(success_plan["coverage_ledger"]) == 7
-    assert len(success_plan["seams"]) == 2
-    assert len(success_plan["workstreams"]) == 2
-    assert len(success_plan["slices"]) == 2
+    assert len(success_plan["seams"]) == 1
+    assert len(success_plan["workstreams"]) == 1
+    assert len(success_plan["slices"]) == 1
 
     assert clarification_summary["terminal_status"] == "clarification_needed"
     assert clarification_summary["coverage_status"] == "clarification_needed"
@@ -581,16 +581,13 @@ def test_planning_example_success_repeat_runs_preserve_stable_ids(
         == [
             (
                 [
-                    "seam-runtime-routing",
-                    "seam-artifact-publication",
+                    "seam-01-anvil-harness",
                 ],
                 [
-                    "workstream-runtime-wiring",
-                    "workstream-artifact-surface",
+                    "workstream-01-anvil-harness",
                 ],
                 [
-                    "slice-mount-planning-runtime",
-                    "slice-publish-planning-artifacts",
+                    "slice-01-anvil-harness",
                 ],
             )
         ]
