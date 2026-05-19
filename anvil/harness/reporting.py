@@ -182,27 +182,29 @@ def _normalize_planning_phase_results(
         phase_id = _first_present_string(item, "phase_id", "id", "phase")
         if not phase_id:
             continue
-        normalized.append(
-            {
-                "phase_id": phase_id,
-                "status": _first_present_string(
-                    item,
-                    "status",
-                    "outcome",
-                    "verdict",
-                    "result",
-                )
-                or "done",
-                "summary": _first_present_string(
-                    item,
-                    "summary",
-                    "result_summary",
-                    "notes",
-                    "description",
-                )
-                or phase_id,
-            }
-        )
+        phase_result = {
+            "phase_id": phase_id,
+            "status": _first_present_string(
+                item,
+                "status",
+                "outcome",
+                "verdict",
+                "result",
+            )
+            or "done",
+            "summary": _first_present_string(
+                item,
+                "summary",
+                "result_summary",
+                "notes",
+                "description",
+            )
+            or phase_id,
+        }
+        primary_cut_summary = _first_present_string(item, "primary_cut_summary")
+        if primary_cut_summary:
+            phase_result["primary_cut_summary"] = primary_cut_summary
+        normalized.append(phase_result)
     return normalized
 
 

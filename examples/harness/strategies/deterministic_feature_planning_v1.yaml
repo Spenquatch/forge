@@ -1,7 +1,8 @@
 # Canonical bounded planning strategy for one existing repo.
 # This canonical example now documents the C2 measurable coverage surface.
-# `phase_inputs` below remain fixture-only scaffolding for stop-path regression coverage;
-# the canonical success path must derive structure and coverage truth from live
+# `phase_inputs` below remain fixture-only scaffolding for stop-path regression coverage.
+# The canonical seam/workstream/slice IDs below are not live success truth.
+# The canonical success path must derive structure and coverage truth from live
 # workspace evidence.
 name: deterministic-feature-planning-v1
 kind: deterministic_feature_planning_v1
