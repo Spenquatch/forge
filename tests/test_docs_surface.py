@@ -6,6 +6,8 @@ EXAMPLES_README = ROOT / "examples" / "README.md"
 DOCS_ROADMAP = ROOT / "docs" / "roadmap.md"
 CONTRIBUTING = ROOT / "docs" / "contributing.md"
 PM_README = ROOT / "docs" / "project_management" / "README.md"
+CONTRACT_DOC = ROOT / "docs" / "strategy_dsl_public_subset_contract.md"
+PUBLIC_SUBSET_README = ROOT / "examples" / "harness" / "public_subset" / "README.md"
 
 CANONICAL_PLANNING_COMMAND = """poetry run python -m anvil.cli harness-run \\
   --task examples/harness/tasks/deterministic_feature_planning_success.yaml \\
@@ -105,6 +107,37 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
     assert "public subset example pack" in contributing
     assert "run_gsd_browser_session_lifecycle_smoke.sh" in contributing
     assert "external workspace" in contributing
+
+
+def test_public_subset_docs_surface_tracks_live_c3_taxonomy():
+    contract_doc = CONTRACT_DOC.read_text(encoding="utf-8")
+    public_subset_readme = PUBLIC_SUBSET_README.read_text(encoding="utf-8")
+
+    for text in (
+        "StrategyConfig.from_dict()",
+        "validator_preflight_node()",
+        "canonical_public",
+        "compatibility_only",
+        "internal_or_private",
+        "analysis_review_v1` remains accepted only as compatibility input",
+        "Invalid canonical public authoring is rejected during parsing",
+        "examples/harness/public_subset/canonical/",
+        "examples/harness/public_subset/compatibility/",
+        "examples/harness/public_subset/negative/",
+    ):
+        assert text in contract_doc
+
+    for text in (
+        "the recommended public `C3 v1` authoring examples",
+        "accepted legacy input that remains non-canonical",
+        "explicit warning path in preflight",
+        "one-violation contract fixtures",
+        "internal and fixture-backed",
+        "compatibility/analysis_review_v1.yaml",
+        "negative/runtime_owned_phase_inputs.yaml",
+        "negative/metadata_only_schema_version.yaml",
+    ):
+        assert text in public_subset_readme
 
 
 def test_history_and_future_files_live_under_project_management():
