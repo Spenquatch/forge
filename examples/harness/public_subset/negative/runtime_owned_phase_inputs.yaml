@@ -1,0 +1,27 @@
+# Negative contract fixture: runtime-owned phase_inputs.
+dsl_version: c3_strategy_v1
+name: runtime-owned-phase-inputs
+kind: deterministic_feature_planning_v1
+runtime_target: planning_v1
+roles:
+  planner:
+    provider: codex_cli
+    access: read
+phases:
+  - id: design_doc
+    stage_type: rubric_design_doc
+  - id: seam_decomposition
+    stage_type: architecture_seam_decomposition
+  - id: parallel_planning
+    stage_type: parallel_workstream_planning
+  - id: slice_emission
+    stage_type: executable_slice_emission
+artifact_policy: planning_package_v1
+determinism_policy: stable_structure_v1
+discovery_policy: bounded_repo_scan_v1
+rubric_policy: design_doc_gate_v1
+stop_policy: clarification_or_stop_v1
+phase_inputs:
+  design_doc:
+    repo_evidence_refs:
+      - PLAN.md

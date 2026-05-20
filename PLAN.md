@@ -1,178 +1,204 @@
-# PLAN: C2 Honest Live Planning Alignment
+# PLAN: C2.9 Public Subset Gate for C3
 
-Status: ready for implementation on `codex/c1b-planning-quality-proof`  
-Milestone: `C2`  
-Prepared from repo state on: `2026-05-18`
+Status: hardened, implementation-ready on `codex/c1b-planning-quality-proof`  
+Milestone: `C2.9`  
+Prepared from repo state on: `2026-05-20`
 
 Source of truth:
-- `/home/azureuser/.gstack/projects/Spenquatch-forge/azureuser-codex-c1b-planning-quality-proof-design-20260518-223850.md`
-- current repository code in `anvil/harness/`, `examples/harness/`, `tests/`, `README.md`, and `examples/README.md`
+- `/home/azureuser/.gstack/projects/Spenquatch-forge/azureuser-c29-public-subset-gate-design-20260520-015124.md`
+- current repository code in `anvil/harness/`, `examples/harness/`, `tests/`, `README.md`, `examples/README.md`, and `docs/contributing.md`
 
-Branch context:
-- the earlier `C2` pass already landed the measurable coverage contract
-- this branch is the closeout pass that makes the live planner honest enough to justify that contract
-- this file supersedes the older root planning pass and is the authoritative implementation guide for `C2`
+Plan authority:
+- this file is the authoritative implementation guide for `C2.9`
+- there are no blocking open questions for this milestone
+- `C2.9` ends at contract-freeze artifacts plus drift tests
+- `C3` parser/preflight/runtime enforcement is explicitly next work, not hidden inside this branch
 
 ## Executive Summary
 
-`C2` is not blocked on coverage artifacts anymore.
+`C2.9` is not blocked on whether Forge can emit a bounded planning artifact.
 
-The real remaining gap is upstream of the artifacts. The live planning runtime in
-[`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py)
-still inspects a real repo, then falls back to Forge-self seam truth:
+`C2.9` is blocked on contract honesty.
 
-- `_score_path()` gives explicit weight to canonical seam hint files
-- `_discovered_workspace_matches()` re-injects canonical planning files
-- `_seam_paths()`, `_workstreams_for_seams()`, and `_slices_for_workstreams()` all derive structure from `_CANONICAL_SEAM_SPECS`
-- `_derive_live_phase_payloads()` asks the canned clarification
-  `"Should the planner prioritize runtime routing or artifact publication first?"`
-  when that scaffold does not fit
+The repo currently exposes real behavior through several different layers at the
+same time:
 
-That means the coverage ledger is more honest than the runtime it describes. Backward.
+- public strategy names
+- compatibility aliases
+- runtime-owned knobs
+- emitted graph metadata
+- fixture-only planning scaffolding
+- runnable internal harness examples
 
-This plan finishes `C2` by keeping the shipped artifact contract and replacing the
-live structural truth source. After this lands, a bounded real feature ask in a real
-repo must yield repo-derived seams, repo-derived workstreams, repo-derived slices,
-and truthful blocked-run coverage when the evidence is not good enough.
+Those surfaces are all real. They are not all public contract.
+
+This branch closes `C2.9` by freezing one explicit, truthful public subset for
+`C3 v1`, then making the repo say exactly that and nothing more. The work is a
+contract-hardening pass:
+
+- one canonical contract doc
+- one machine-readable registry
+- one public example pack split by intent
+- one relabeling pass for the existing runnable fixture examples
+- one regression wall that prevents the story from drifting again
+
+No runtime behavior change is required to finish this milestone.
 
 ## 1. Objective and Success Bar
 
 ### 1.1 Objective
 
-Ship an honest live planning runtime for
-`deterministic_feature_planning_v1` by replacing canonical scaffold-driven seam
-selection in
-[`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py)
-with bounded, deterministic, repo-derived phase outputs while preserving the
-already-landed `C2` coverage artifact contract.
+Ship a repo-owned `C2.9` contract freeze for `C3 v1` public strategy authoring
+that:
+
+- separates canonical public surface, broader public built-ins,
+  compatibility-only surface, runtime-owned surface, metadata-only surface, and
+  fixture-only surface
+- gives `C3` one machine-readable registry instead of prose-only decisions
+- gives contributors one canonical doc and one canonical example pack for the
+  future public strategy surface
+- stops front-door docs from presenting internal harness fixtures as the public
+  DSL
 
 ### 1.2 Exact problem statement
 
-What already works:
+What exists today is useful, but it is not yet an honest public contract.
 
-- `plan_artifact_v2` publication
-- `coverage_ledger`
-- `assumptions_register`
-- `uncovered_delta`
-- success-only `PLAN.md` / `plan.json` publication
-- truthful blocked/failed `summary.json` output
+Verified repo facts:
 
-What is still wrong:
+- `anvil/harness/types.py` still treats `StrategyConfig.kind` as an open string
+  transport field and still accepts planning-only fields in the same transport
+  object
+- `anvil/harness/nodes/prepare_run.py` still merges raw top-level task and
+  strategy keys back into state
+- `anvil/harness/nodes/validator_preflight.py` still normalizes
+  `analysis_review_v1` to `analysis_review_bounded_v1`
+- `anvil/harness/providers.py` still falls back to `execute` semantics for
+  unknown role-like names
+- `anvil/harness/strategy_graph.py` emits `schema_version` and `subset` as
+  runtime metadata on graph specs
+- `anvil/harness/planning_runtime.py` still treats `coverage_policy` and
+  `phase_inputs` as live planning-runtime inputs
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml` is still
+  a runnable fixture-backed strategy, not a clean public DSL example
+- `README.md`, `examples/README.md`, and `docs/contributing.md` still steer
+  readers first toward the runnable fixture planning example
 
-```text
-task input
-  -> bounded path discovery
-  -> bounded file reads
-  -> canonical seam lookup
-  -> canonical workstream emission
-  -> canonical slice emission
-  -> coverage derivation
-```
+Those surfaces are not wrong. They are just not the same thing.
 
-The first half is real. The second half is demo scaffolding.
-
-That is why an outside repo can be inspected successfully and still get a
-Forge-internal clarification instead of a repo-specific planning answer.
+`C2.9` exists to classify them precisely and freeze one honest future-facing
+subset before `C3` starts coding against folklore.
 
 ### 1.3 Success bar
 
-`C2` is complete only when all of the following are true:
+`C2.9` is complete only when all of the following are true:
 
-- a bounded real feature ask in an outside repo can emit repo-specific seams
-  instead of `seam-runtime-routing` and `seam-artifact-publication`
-- `design_doc`, `seam_decomposition`, `parallel_planning`, and `slice_emission`
-  each own real live outputs
-- the live clarification path is feature-specific and evidence-specific, not
-  Forge-internal
-- repeat runs on the same repo snapshot preserve seam/workstream/slice IDs,
-  counts, and ordering
-- blocked and failed runs still publish truthful partial coverage in
-  `summary.json`
-- no strategy-name branching is introduced
-- no second planning runtime family is introduced
-- the existing coverage contract stays intact unless a minimal extension is
-  required to preserve live phase truth
-- at least one outside-repo canary, with `gsd-browser` first, proves the live
-  planner can emit non-canonical seams
+- the repo has one canonical contract doc for the `C3 v1` public strategy
+  subset
+- the repo has one machine-readable registry for public kinds, stage families,
+  role families, graph primitives, transition forms, planning phase types,
+  runtime-owned exclusions, and metadata-only fields
+- the repo has one classified example pack split into canonical,
+  compatibility-only, and negative examples
+- front-door docs explicitly distinguish canonical public examples from runnable
+  internal harness fixtures
+- the current runnable fixture surfaces continue to work and continue to be
+  documented, but they are no longer mislabeled as the public DSL
+- regression tests fail if docs, registries, and example packs drift out of
+  sync
+- no part of this milestone silently starts implementing `C3` runtime behavior
 
 ## 2. Step 0: Scope Challenge
 
 ### 2.1 What already exists
 
-| Sub-problem | Existing code | Plan decision |
+| Sub-problem | Existing surface | Reuse decision |
 |---|---|---|
-| bounded repo discovery | [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py): `_direct_workspace_matches()`, `_discovered_workspace_matches()`, `_read_workspace_evidence()`, `_rank_paths()` | reuse the bounded discovery budget, do not create a new discovery subsystem |
-| phase runtime skeleton | `PLANNING_PHASE_ORDER`, `PLANNING_PHASE_REGISTRY`, `_run_rubric_design_doc()`, `_run_architecture_seam_decomposition()`, `_run_parallel_workstream_planning()`, `_run_executable_slice_emission()` | keep the four-phase runtime family, make each phase produce real outputs |
-| coverage truth pipeline | `_derive_planning_coverage()`, [`anvil/harness/reporting.py`](/home/azureuser/__Active_Code/forge/anvil/harness/reporting.py), [`anvil/harness/validation.py`](/home/azureuser/__Active_Code/forge/anvil/harness/validation.py), [`anvil/harness/schemas.py`](/home/azureuser/__Active_Code/forge/anvil/harness/schemas.py), [`anvil/harness/state.py`](/home/azureuser/__Active_Code/forge/anvil/harness/state.py) | preserve this contract unless a small metadata-preservation change is required |
-| example strategy surface | [`examples/harness/strategies/deterministic_feature_planning_v1.yaml`](/home/azureuser/__Active_Code/forge/examples/harness/strategies/deterministic_feature_planning_v1.yaml) | keep one visible canonical strategy |
-| fixture stop paths | `examples/harness/tasks/deterministic_feature_planning_*.yaml` | keep fixtures for deterministic regression coverage, remove them as live seam truth |
-| existing regression wall | [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py), [`tests/test_harness_planning_artifacts.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_artifacts.py), [`tests/test_harness_example_strategy_wiring.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py), [`tests/test_harness_state_boundaries.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_state_boundaries.py) | widen existing tests instead of creating a second acceptance harness |
+| Contract artifact precedent | `docs/analysis_review_contract.md` | mirror this format instead of inventing a second contract-doc style |
+| Public-kind and runtime-target truth | `anvil/harness/types.py`, `anvil/harness/nodes/validator_preflight.py` | use these files as the verified source for names, aliases, and planning runtime-target rules |
+| Internal graph vocabulary | `anvil/harness/strategy_graph.py` | derive graph primitives, transition forms, planning phase types, and metadata-only fields from here |
+| Stage-family to provider-role mapping | `anvil/harness/providers.py` | freeze the public stage-family registry and role-family bindings from this verified mapping |
+| Runtime-owned planning leakage | `anvil/harness/planning_runtime.py`, `anvil/harness/nodes/prepare_run.py` | use these as the explicit evidence for excluded public fields |
+| Existing runnable example tree | `examples/harness/strategies/` | keep runnable examples in place, but reclassify them instead of moving them |
+| Existing docs entry points | `README.md`, `examples/README.md`, `docs/contributing.md` | update routing instead of building new entry documents |
+| Existing docs/example regression tests | `tests/test_docs_surface.py`, `tests/test_harness_example_strategy_wiring.py` | extend these instead of inventing a second docs-audit framework |
 
 ### 2.2 Minimum complete scope
 
-Nothing below is optional if this branch is going to close `C2` honestly:
+Nothing below is optional if this milestone is going to close `C2.9` honestly:
 
-1. Replace canonical live seam derivation with evidence-driven primary-cut
-   selection inside
-   [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py).
-2. Make `design_doc`, `seam_decomposition`, `parallel_planning`, and
-   `slice_emission` produce genuine live outputs from bounded repo evidence.
-3. Preserve deterministic ordering, stable IDs, and frozen discovery budgets.
-4. Preserve truthful blocked/failed coverage behavior.
-5. Update example strategy/tests/docs so they prove repo-derived live planning,
-   not canonical Forge-self seam scaffolding.
-6. Add at least one outside-repo canary run, with `gsd-browser` first.
+1. `docs/strategy_dsl_public_subset_contract.md`
+2. `anvil/harness/public_subset_registry.py`
+3. `examples/harness/public_subset/README.md`
+4. `examples/harness/public_subset/canonical/`
+5. `examples/harness/public_subset/compatibility/`
+6. `examples/harness/public_subset/negative/`
+7. updates to `README.md`
+8. updates to `examples/README.md`
+9. updates to `docs/contributing.md`
+10. explicit relabeling in `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+11. `tests/test_harness_public_subset_contract.py`
+12. focused updates to `tests/test_docs_surface.py`
+13. focused updates to `tests/test_harness_example_strategy_wiring.py`
 
 ### 2.3 Complexity verdict
 
-This branch touches more than eight files. That usually smells. Here the smell is
-acceptable because the blast radius is tightly clustered around one runtime family
-plus its already-existing artifact and test surfaces.
+This branch touches more than eight files. That is normally a smell.
+
+Here it is acceptable because the blast radius is tightly constrained:
+
+- one new canonical contract doc
+- one new data-only registry module
+- one new public example pack
+- three front-door doc updates
+- one relabeling pass on the existing planning fixture example
+- one new contract regression file plus two focused test updates
 
 What would be overbuilt:
 
-- a new planning runtime family
-- a new discovery engine
-- provider-backed seam synthesis
-- a generalized planner-breadth project
-- broad artifact schema churn for a problem that mostly lives in live derivation
+- implementing parser or preflight enforcement inside `C2.9`
+- wiring the new registry into runtime selection logic
+- rewriting the planning runtime
+- moving the entire example tree for aesthetics
+- freezing a public task-spec contract in the same PR
 
-### 2.4 Search/build verdict
+### 2.4 TODOS cross-reference
 
-No new platform needs to be invented.
+`docs/project_management/future/TODOS.md` contains no deferred item that blocks
+this milestone.
 
-Reuse what already exists:
+This plan should add or preserve explicit post-`C2.9` follow-ups for:
 
-- bounded discovery and read budgets in `planning_runtime.py`
-- the current phase registry and terminal status plumbing
-- the shipped coverage/artifact/validation pipeline
-- the existing fixture strategy and task set
+- parser/preflight enforcement of the frozen public subset
+- public task-spec contract work, if desired later
+- richer diagnostics/publication work beyond the contract freeze
 
-Do not add:
+### 2.5 Completeness and distribution verdict
 
-- a `planning_v2`
-- a `*_live_v2` helper family
-- a config-name switch on `deterministic_feature_planning_v1`
-- a secondary schema/reporting family
+Completeness verdict:
 
-### 2.5 TODO cross-reference
+- the complete version of this milestone includes the negative example pack and
+  the drift wall
+- omitting those would save little effort and would leave the contract easy to
+  misrepresent again
 
-[`docs/project_management/future/TODOS.md`](/home/azureuser/__Active_Code/forge/docs/project_management/future/TODOS.md)
-contains no deferred item that blocks this milestone.
+Distribution verdict:
 
-This branch may create follow-up TODOs around planner breadth or future strategy
-reuse, but those are explicitly outside this implementation.
+- this milestone introduces no new binary, package, container, or deployable
+  runtime artifact
+- no CI/CD or publish pipeline changes are required
 
-### 2.6 NOT in scope
+### 2.6 Not in scope
 
-- user-authored graph config or public strategy authoring
-- widening planning beyond the supported bounded corpus
-- a second planning runtime family
-- a runnable refine adapter
-- provider/model redesign
-- multi-repo planning
-- background indexing or cached search infrastructure
-- new CLI distribution or publish workflow
+- implementing full public parser enforcement
+- changing builder/runtime routing
+- changing planning runtime semantics
+- deleting compatibility aliases from the runtime
+- removing raw merge-back from harness state
+- changing provider/model configuration
+- publishing a public validator contract
+- imports, overlays, inheritance, or arbitrary DAG composition
+- freezing a public task-spec contract
 
 ## 3. Locked Decisions
 
@@ -180,748 +206,597 @@ These decisions are frozen. Implementation may explain them, not reopen them.
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| visible strategy surface | keep one canonical strategy, `deterministic_feature_planning_v1` | product scope stays narrow |
-| runtime target | keep `planning_v1` | no new runtime family |
-| live truth source | remove `_CANONICAL_SEAM_SPECS` from the live success path | fixture truth must not masquerade as live truth |
-| graph/config boundary | key behavior off phase semantics, never strategy name | preserves the architecture promise |
-| discovery budget | keep `PLANNING_MATCH_LIMIT=25`, `PLANNING_READ_LIMIT=12`, `PLANNING_READ_BYTES_LIMIT=150 KiB` | bounded deterministic planning remains the product boundary |
-| primary-cut credibility | require at least two supporting signals before proceeding | stops generic fake cuts |
-| clarification behavior | clarification must be feature-specific and evidence-specific | canned Forge seam questions are not acceptable |
-| artifact contract | preserve current success-only `PLAN.md` / `plan.json` rule and summary-only blocked/failed rule | minimal diff, already shipped |
-| metadata preservation | if `primary_cut_summary` is emitted, preserve it through `reporting.py` and state round-trip instead of inventing a parallel reporting surface | keeps live truth inspectable without new artifact families |
+| Milestone boundary | `C2.9` ends at contract-freeze artifacts plus drift tests | keeps `C2.9` honest and keeps `C3` implementation work separate |
+| Public unit of declaration | one full strategy spec | matches how the current runtime already reasons |
+| Contract path | `docs/strategy_dsl_public_subset_contract.md` | one canonical human-facing artifact |
+| Machine-readable source of truth | `anvil/harness/public_subset_registry.py` | prose-only contracts drift too easily |
+| Example taxonomy path | `examples/harness/public_subset/` with `canonical/`, `compatibility/`, and `negative/` | separates truthful public examples from runnable internal fixtures |
+| Public version field | `dsl_version: c3_strategy_v1` | explicit versioning is part of the public contract |
+| Canonical `C3` graph-DSL kinds | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, `deterministic_feature_planning_v1` | these are the narrowed forward-looking public family |
+| Broader public built-ins | `single_pass`, `pfr_v1` remain public, but they are not themselves proof of the `C3` graph-DSL story | avoids widening the claim by accident |
+| Compatibility-only kind | `analysis_review_v1` stays compatibility-only and must never appear in canonical examples | keeps forward docs honest while preserving runtime compatibility |
+| Runtime target rule | canonical non-planning examples omit `runtime_target`; canonical planning example declares `runtime_target: planning_v1` | matches current `StrategyConfig` validation and keeps public examples DRY |
+| Runtime-owned excluded strategy fields | `coverage_policy` and `phase_inputs` are excluded from the public strategy subset | these are real runtime surfaces, but not truthful public authoring fields |
+| Metadata-only fields | `schema_version` and `subset` are runtime-emitted metadata only | users must not treat emitted graph labels as authoring keys |
+| Existing runnable planning strategy | keep `examples/harness/strategies/deterministic_feature_planning_v1.yaml` runnable, but relabel it as fixture-backed internal harness scaffolding | preserves regression value without teaching the wrong contract |
+| Code boundary | the new registry module is data-only and is not wired into runtime behavior yet | avoids accidental half-implementation of `C3` |
+| Scope boundary | this milestone freezes the public strategy-spec surface only | prevents task-spec scope creep inside a strategy-contract branch |
 
-## 4. Current Code Diagnosis
+## 4. Verified Current-State Evidence
 
-### 4.1 The exact truth gap
+| Surface | Verified fact | Implementation implication |
+|---|---|---|
+| `anvil/harness/types.py` | defines current strategy kinds, infers runtime targets, enforces planning runtime-target coupling, and freezes planning phase stage-type order | registry must reuse these verified names and canonical planning phase order |
+| `anvil/harness/strategy_graph.py` | defines internal graph vocabulary and emits `schema_version` and `subset` in `StrategyGraphSpec.to_dict()` | contract doc must classify graph vocabulary separately from metadata-only fields |
+| `anvil/harness/providers.py` | maps `solver`, `proposer`, `falsifier`, `critic`, `patcher`, `reviser`, and `auditor` to `execute`, `critique`, `refine`, and `review`, while unknown names fall back to `execute` | public stage-family registry must be closed, and role-family bindings must be explicit |
+| `anvil/harness/nodes/prepare_run.py` | merges raw task/strategy payloads back into state alongside typed `to_dict()` output | current transport shape is broader than the future public contract |
+| `anvil/harness/nodes/validator_preflight.py` | normalizes `analysis_review_v1` to `analysis_review_bounded_v1` and performs runtime-target/task-kind compatibility checks | compatibility alias remains real runtime behavior, but it is not canonical public authoring |
+| `anvil/harness/planning_runtime.py` | still treats `coverage_policy` and `phase_inputs` as active runtime inputs | those fields must be called runtime-owned and excluded from canonical public examples |
+| `examples/harness/strategies/deterministic_feature_planning_v1.yaml` | still carries `coverage_policy` and `phase_inputs` in a runnable example | that file must be relabeled, not promoted |
+| `README.md`, `examples/README.md`, `docs/contributing.md` | still route planning readers first to the runnable fixture example | docs routing must change so public readers start at the contract doc and example pack |
+| `tests/test_docs_surface.py`, `tests/test_harness_example_strategy_wiring.py` | already protect docs routing and example relationships | extend them instead of building parallel test infrastructure |
 
-The current live path still hardcodes canonical planning truth:
+## 5. Target Artifact Set and Authority Chain
 
-- `_score_path()` gives a `+100` score to `_CANONICAL_SEAM_SPECS["path_hints"]`
-- `_discovered_workspace_matches()` injects canonical planning files back into the candidate set
-- `_seam_paths()` emits seams only from `_CANONICAL_SEAM_SPECS`
-- `_workstreams_for_seams()` emits workstreams only from `_CANONICAL_SEAM_SPECS`
-- `_slices_for_workstreams()` emits slices only from `_CANONICAL_SEAM_SPECS`
-- `_derive_live_phase_payloads()` asks the canned runtime-routing-vs-artifact-publication question when that scaffold does not fit
-
-The repo is being read. The structure is still being faked.
-
-### 4.2 The test suite currently encodes the wrong thing
-
-Current tests prove the existing wrong behavior:
-
-- [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py)
-  asserts `seam-runtime-routing`, `seam-artifact-publication`,
-  `workstream-runtime-wiring`, and `slice-mount-planning-runtime`
-- [`tests/test_harness_example_strategy_wiring.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py)
-  asserts repeat-run stability on those same canonical IDs
-
-Those tests were correct for the old demo scaffold. They are wrong for the `C2`
-closeout we actually want.
-
-### 4.3 The reporting path has one concrete metadata trap
-
-[`anvil/harness/schemas.py`](/home/azureuser/__Active_Code/forge/anvil/harness/schemas.py)
-already allows extra keys on `phase_results`.
-
-But [`anvil/harness/reporting.py`](/home/azureuser/__Active_Code/forge/anvil/harness/reporting.py)
-normalizes phase results down to three fields:
-
-- `phase_id`
-- `status`
-- `summary`
-
-So if we want `primary_cut_summary`, ambiguity flags, or other phase-owned metadata
-to survive into artifacts, `reporting.py` has to preserve those fields deliberately.
-Otherwise the runtime becomes more honest internally than the published plan.
-
-### 4.4 Required runtime decision flow
-
-This is the minimum deterministic live behavior the runtime must implement:
-
-1. Rank candidate paths from task signals plus repo evidence.
-2. In `design_doc`, choose a primary cut only when at least two credibility signals support it.
-3. In `seam_decomposition`, synthesize `1-3` repo-derived seams from that cut.
-4. In `parallel_planning`, derive workstreams from emitted seams and make dependency direction explicit.
-5. In `slice_emission`, derive `1-2` executable slices per workstream with explicit acceptance criteria.
-6. Only after those steps, derive coverage from what the runtime actually emitted.
-
-## 5. Target Architecture
-
-### 5.1 Target runtime shape
+### 5.1 Authority chain
 
 ```text
-task yaml + strategy yaml
-        │
-        ▼
-execute_planning_runtime()
-        │
-        ├── bounded discovery
-        │   ├── _direct_workspace_matches()
-        │   ├── _discovered_workspace_matches()   [live, not canonical-biased]
-        │   ├── _rank_paths()
-        │   └── _read_workspace_evidence()
-        │
-        ├── design_doc
-        │   ├── supported corpus check
-        │   ├── primary cut selection
-        │   └── feature-specific clarification when the cut is not credible
-        │
-        ├── seam_decomposition
-        │   └── repo-derived seams
-        │
-        ├── parallel_planning
-        │   └── repo-derived workstreams + dependency reasoning
-        │
-        ├── slice_emission
-        │   └── executable slices + acceptance criteria
-        │
-        ├── _derive_planning_coverage()
-        │   └── existing coverage contract, now grounded in real live structure
-        │
-        ▼
-plan_projection_v1() / publish_state_artifacts_v1()
-        │
-        ├── success -> PLAN.md + plan.json + summary.json
-        └── blocked/failed -> summary.json only
+public_subset_registry.py
+        |
+        +--> strategy_dsl_public_subset_contract.md
+        |
+        +--> examples/harness/public_subset/
+        |
+        +--> docs routing in README.md / examples/README.md / docs/contributing.md
+        |
+        +--> tests/test_harness_public_subset_contract.py
+              tests/test_docs_surface.py
+              tests/test_harness_example_strategy_wiring.py
 ```
 
-### 5.2 Exact ownership map
-
-| Concern | Canonical owner | Required outcome |
-|---|---|---|
-| path ranking and evidence budget | `planning_runtime.py` | deterministic candidate set within the frozen budget |
-| primary cut selection | `planning_runtime.py` | credible repo-derived cut or truthful clarification |
-| seam/workstream/slice truth | `planning_runtime.py` | repo-derived live structures, no canonical scaffold dependency |
-| phase result durability | `planning_runtime.py`, `reporting.py`, `state.py` | live phase metadata survives if it is needed for artifact truth |
-| coverage truth | `_derive_planning_coverage()` plus existing reporting/validation | preserve contract, improve truth by improving upstream structure |
-| example truth | `examples/harness/` | fixtures stay deterministic but stop pretending to be the live success path |
-| acceptance proof | `tests/` plus outside-repo canary | repo-derived live planning is provable and repeatable |
-
-### 5.3 Concrete live heuristics
-
-#### Candidate path ranking
-
-Input signals:
-
-- explicit `files_hint` matches
-- objective-token overlap
-- acceptance-token overlap
-- repeated directory roots
-- implementation-file bias over broad docs when both match
-
-Tie-break rules:
-
-1. higher score wins
-2. if scores tie, shorter repo-relative path wins
-3. if still tied, lexical order wins
-
-Determinism rule:
-
-- same repo snapshot plus same task input must yield the same ranked path order
-
-#### Primary cut selection in `design_doc`
-
-A primary cut is credible only if at least two of these signals support it:
-
-- repeated task-token overlap across a shared module or directory root
-- implementation files plus matching API/UI/supporting files in the same area
-- docs or ADR references that name the same subsystem as live code matches
-- an obvious user-facing and backend surface meeting at one workflow boundary
-
-If no cut reaches two signals, stop with `clarification_needed`.
-
-#### Seam synthesis in `seam_decomposition`
-
-Generate `1-3` seams using this fallback order:
-
-1. workflow boundary seams
-2. module/package seams
-3. integration seams
-
-Each seam must include:
-
-- `seam_id`
-- `title`
-- `summary`
-- `repo_evidence_refs`
-- optional `dependency_reasoning`
-- optional `ambiguity_flags`
-
-#### Workstream derivation in `parallel_planning`
-
 Rules:
 
-- one workstream per seam by default
-- merge seams only when the evidence shows they cannot ship independently
-- record dependency direction explicitly
-- set `worktree_recommended` only when the workstream boundary is genuinely isolated
+- the registry is the only machine-readable source of truth
+- the contract doc mirrors the registry, it does not invent a second list
+- canonical public examples must conform to the registry and contract doc
+- docs route readers to the contract doc and public example pack first
+- tests prove the four surfaces stay aligned
 
-#### Slice derivation in `slice_emission`
+### 5.2 Exact registry contents
 
-Rules:
+`anvil/harness/public_subset_registry.py` must be data-only and must export the
+exact public sets needed for `C2.9`.
 
-- emit `1-2` slices per workstream
-- slice one proves the core user-visible or architecture-visible move
-- slice two, when present, covers follow-through or contract work
-- every slice must include explicit acceptance criteria
+Required constants:
 
-### 5.4 Stable ID rules
-
-- `seam_id = seam-{index:02d}-{slug}`
-- `workstream_id = workstream-{index:02d}-{primary-seam-slug}`
-- `slice_id = slice-{workstream_index:02d}-{action-slug}`
-
-Collision rule:
-
-- preserve discovery order
-- keep the index distinct
-- do not mutate the slug to hide nondeterminism
-
-### 5.5 Phase output contract
-
-| Phase | Required live outputs | Optional outputs | Downstream consumers |
-|---|---|---|---|
-| `design_doc` | `summary`, `repo_evidence_refs`, `search_pass_count`, `inspected_file_count`, `discovery_budget_escalated`, `primary_cut_summary` | `clarification_requests`, `ambiguity_flags` | stop-path logic, coverage `problem_frame`, coverage `repo_surface` |
-| `seam_decomposition` | `planning_seams[]` with `seam_id`, `title`, `summary`, `repo_evidence_refs` | `dependency_reasoning`, `ambiguity_flags` | coverage `seam_selection`, workstream derivation |
-| `parallel_planning` | `planning_workstreams[]` with `workstream_id`, `title`, `summary`, `seam_ids`, `worktree_recommended` | `dependency_reasoning`, `ambiguity_flags` | coverage `dependency_shape`, `execution_partitioning`, slice derivation |
-| `slice_emission` | `planning_slices[]` with `slice_id`, `title`, `summary`, `workstream_id`, `seam_ids`, `acceptance_criteria[]` | `dependency_reasoning`, `ambiguity_flags` | coverage `acceptance_shape`, final artifact truth |
-
-Implementation note:
-
-- if `primary_cut_summary` is emitted, preserve it through `planning_phase_results`
-  and plan payload normalization
-- do not create a second phase-reporting surface just to carry it
-
-## 6. Implementation Plan
-
-### 6.1 Primary files to touch
-
-| File | Why it changes |
+| Constant group | Exact content |
 |---|---|
-| [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py) | core live-planning truth gap lives here |
-| [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py) | runtime success, clarification, failure, and determinism assertions must change materially |
-| [`tests/test_harness_planning_artifacts.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_artifacts.py) | artifact assertions must prove coverage is grounded in repo-derived structures |
-| [`tests/test_harness_example_strategy_wiring.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py) | example success path must stop asserting canonical seam IDs for live success |
-| [`examples/harness/strategies/deterministic_feature_planning_v1.yaml`](/home/azureuser/__Active_Code/forge/examples/harness/strategies/deterministic_feature_planning_v1.yaml) | fixture/example language must clearly distinguish fixture truth from live truth |
-| `examples/harness/tasks/deterministic_feature_planning_*.yaml` | stop-path fixtures must stay honest |
-| [`README.md`](/home/azureuser/__Active_Code/forge/README.md) | supported planning corpus and artifact truth need an honest description |
-| [`examples/README.md`](/home/azureuser/__Active_Code/forge/examples/README.md) | example behavior must distinguish fixture scaffolding from live repo-derived planning |
-| [`anvil/harness/reporting.py`](/home/azureuser/__Active_Code/forge/anvil/harness/reporting.py) | required if phase-result metadata must survive publication |
-| [`anvil/harness/state.py`](/home/azureuser/__Active_Code/forge/anvil/harness/state.py) and [`tests/test_harness_state_boundaries.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_state_boundaries.py) | required if phase-result metadata must survive summary round-trip |
-| [`anvil/harness/validation.py`](/home/azureuser/__Active_Code/forge/anvil/harness/validation.py) | touch only if new preserved metadata needs validation or stale assumptions emerge |
+| `PUBLIC_SUBSET_DSL_VERSION` | `c3_strategy_v1` |
+| `C3_GRAPH_DSL_KINDS` | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, `deterministic_feature_planning_v1` |
+| `BROADER_PUBLIC_BUILTIN_KINDS` | `single_pass`, `pfr_v1` |
+| `COMPATIBILITY_ONLY_KINDS` | `analysis_review_v1` |
+| `PUBLIC_GRAPH_PRIMITIVES` | `stage`, `linear_edge`, `conditional_branch`, `bounded_loop`, `terminal_outcome`, `planning_phase` |
+| `PUBLIC_TRANSITION_FORMS` | `linear_next`, `enumerated_branch`, `bounded_loop_back_edge`, `terminal_exit` |
+| `PUBLIC_STAGE_FAMILIES` | `solver`, `proposer`, `falsifier`, `patcher`, `critic`, `reviser`, `auditor`, `focus_gate`, `planner` |
+| `PUBLIC_ROLE_FAMILIES` | `execute`, `critique`, `refine`, `review` |
+| `STAGE_FAMILY_ROLE_BINDINGS` | `solver -> execute`, `proposer -> execute`, `planner -> execute`, `focus_gate -> execute`, `falsifier -> critique`, `critic -> critique`, `patcher -> refine`, `reviser -> refine`, `auditor -> review` |
+| `CANONICAL_PLANNING_PHASE_STAGE_TYPES` | `rubric_design_doc`, `architecture_seam_decomposition`, `parallel_workstream_planning`, `executable_slice_emission` |
+| `PLANNING_REQUIRED_POLICY_FIELDS` | `artifact_policy`, `determinism_policy`, `discovery_policy`, `rubric_policy`, `stop_policy` |
+| `RUNTIME_OWNED_EXCLUDED_FIELDS` | `coverage_policy`, `phase_inputs` |
+| `METADATA_ONLY_FIELDS` | `schema_version`, `subset` |
 
-### 6.2 Execution contract
+Registry implementation rules:
 
-| Slice | Why it exists | Cannot start until | Produces |
-|---|---|---|---|
-| A. Freeze runtime rules | lock heuristics, cut criteria, and object contract | — | one unambiguous runtime decision flow |
-| B. Make `design_doc` real | move supported-corpus and primary-cut truth into phase 1 | A | credible cut selection or feature-specific clarification |
-| C. Make seam/workstream/slice derivation real | replace canonical scaffold truth with repo-derived structure | A, B | repo-derived seams, workstreams, slices |
-| D. Preserve artifact truth | keep coverage, reporting, docs, and examples aligned with live reality | B, C | truthful artifacts, honest docs, honest fixtures |
-| E. Add canaries and regression wall | prove this works on fixtures and outside repos | B, C, D | repeatable acceptance proof |
+- use plain tuples, frozensets, and dictionaries only
+- do not add validation or parser logic to this module
+- do not wire this module into runtime behavior in `C2.9`
+- prefer defining the public sets directly in this module and letting tests
+  compare them against current runtime constants, rather than importing half the
+  truth from multiple runtime modules
 
-Rules:
+### 5.3 Contract doc requirements
 
-- Slice A freezes the nouns and heuristics.
-- Slice B owns the first real decision: is the ask grounded enough to proceed?
-- Slice C owns structural truth.
-- Slice D keeps the shipped contract honest.
-- Slice E is the merge wall.
+`docs/strategy_dsl_public_subset_contract.md` must be the human-readable mirror
+of the registry and must include all of the following sections:
 
-### 6.3 Slice A: Freeze runtime rules
+1. Scope and milestone boundary
+2. Canonical public strategy kinds versus broader public built-ins
+3. Compatibility-only kinds
+4. Public versioning via `dsl_version`
+5. Public graph primitives
+6. Public transition forms
+7. Public stage families and role-family bindings
+8. Planning-specific canonical phase order and required policy refs
+9. Runtime-owned excluded fields
+10. Metadata-only fields
+11. Canonical example taxonomy
+12. Explicit exclusions and post-`C2.9` follow-up boundary
 
-Goal: remove ambiguity before changing behavior.
+Doc rules:
 
-Primary files:
+- it freezes the public strategy-spec subset only
+- it does not claim parser enforcement already exists
+- it calls `coverage_policy` and `phase_inputs` runtime-owned, not deprecated
+  public fields
+- it calls `schema_version` and `subset` metadata-only, not authoring keys
+- it states that canonical non-planning examples omit `runtime_target`
+- it states that canonical planning examples include `runtime_target: planning_v1`
 
-- [`PLAN.md`](/home/azureuser/__Active_Code/forge/PLAN.md)
-- [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py)
-- strategy/example comments if wording must align immediately
+### 5.4 Example pack requirements
 
-Concrete changes:
+The public example pack must be new and separate from existing runnable
+fixtures.
 
-- freeze the supported-corpus language in code comments and docs
-- freeze the primary-cut two-signal rule
-- freeze the seam synthesis fallback order:
-  workflow boundary -> module/package -> integration seam
-- freeze the ID recipes and tie-break rules
-- freeze the rule that `_CANONICAL_SEAM_SPECS` becomes fixture/example scaffolding only
-- decide now that `primary_cut_summary` is required plan truth, not optional branch lore
+Required files:
 
-Definition of done:
+- `examples/harness/public_subset/README.md`
+- `examples/harness/public_subset/canonical/analysis_review_bounded_v1.yaml`
+- `examples/harness/public_subset/canonical/analysis_review_trust_v1.yaml`
+- `examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml`
+- `examples/harness/public_subset/compatibility/analysis_review_v1.yaml`
+- `examples/harness/public_subset/negative/invalid_kind.yaml`
+- `examples/harness/public_subset/negative/unknown_top_level_key.yaml`
+- `examples/harness/public_subset/negative/invalid_stage_family.yaml`
+- `examples/harness/public_subset/negative/runtime_owned_phase_inputs.yaml`
+- `examples/harness/public_subset/negative/metadata_only_schema_version.yaml`
 
-- all later implementation can point to one set of heuristics
-- no later slice needs to reinterpret what counts as a credible primary cut
+Canonical example rules:
 
-### 6.4 Slice B: Make `design_doc` real
+- every canonical example carries `dsl_version: c3_strategy_v1`
+- canonical examples use canonical kinds only
+- canonical examples never use `analysis_review_v1`
+- canonical examples never use `coverage_policy`
+- canonical examples never use `phase_inputs`
+- canonical examples never use `schema_version`
+- canonical examples never use `subset`
+- canonical non-planning examples omit `runtime_target`
+- canonical planning example includes `runtime_target: planning_v1`
+- canonical planning example keeps the current verified phase order and the
+  required planning policy refs
 
-Goal: turn phase 1 into a real live planning gate instead of a pass-through.
+Compatibility example rules:
 
-Primary files:
+- `analysis_review_v1.yaml` is accepted legacy input, not a canonical public
+  example
+- it should make the compatibility-only status obvious in file comments and in
+  the example-pack README
+- it should not be presented anywhere as the recommended starting point
 
-- [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py)
-- [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py)
+Negative example rules:
 
-Exact implementation work:
+- each negative example maps to exactly one contract violation
+- `examples/harness/public_subset/README.md` must explain the expected rejection
+  reason for each negative file
+- negative examples are documentation and future parser fixtures, not runnable
+  happy-path harness examples
 
-1. Refactor `_score_path()` so live ranking no longer awards canonical seam hints.
-2. Refactor `_discovered_workspace_matches()` so it expands from selected roots and live repo structure, not from `_CANONICAL_SEAM_SPECS`.
-3. Add a focused primary-cut helper inside `planning_runtime.py`. One helper is fine. A new module is not.
-   The helper must:
-   - score candidate clusters
-   - require two credibility signals
-   - emit `primary_cut_summary`
-   - emit feature-specific clarification text when the cut is not credible
-4. Thread `search_pass_count`, `inspected_file_count`, and `discovery_budget_escalated`
-   through the phase result exactly as they work today.
+### 5.5 Front-door routing requirements
 
-Definition of done:
+The repo must teach the public subset first, while preserving runnable harness
+examples as runnable harness examples.
 
-- a credible supported ask proceeds
-- an unsupported or weakly grounded ask stops honestly
-- the clarification text references the feature or repo surface, not Forge internals
+Front-door rules:
 
-### 6.5 Slice C: Make seam/workstream/slice derivation real
+- `README.md` must point readers first to the contract doc and public example
+  pack for the future public subset
+- `examples/README.md` must distinguish canonical public examples from runnable
+  harness fixtures
+- `docs/contributing.md` must explain the same split for maintainers
+- the current planning run command can stay, but it must be clearly framed as a
+  runnable internal harness example path, not the canonical public DSL example
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml` must be
+  relabeled as internal or fixture-backed scaffolding in its header comments
 
-Goal: derive structural outputs from the selected primary cut instead of from
-`_CANONICAL_SEAM_SPECS`.
+## 6. Exact Implementation Plan
 
-Primary files:
+### 6.1 Workstream A: Freeze the registry and contract doc
 
-- [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py)
-- [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py)
-- [`tests/test_harness_example_strategy_wiring.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py)
+Goal: make the public subset explicit in one code artifact and one doc artifact.
 
-Exact implementation work:
+Primary paths:
 
-1. Replace `_seam_paths()` with repo-derived seam synthesis.
-2. Replace `_workstreams_for_seams()` with emitted-seam-driven workstream derivation.
-3. Replace `_slices_for_workstreams()` with workstream-driven slice emission.
-4. Keep all of this in `planning_runtime.py`. Do not create a parallel helper framework.
-5. Preserve:
-   - `1-3` seams
-   - deterministic ordering
-   - stable IDs
-   - explicit `repo_evidence_refs`
-   - explicit seam/workstream/slice linkage
-   - explicit dependency reasoning when seams merge or sequence
+- `anvil/harness/public_subset_registry.py`
+- `docs/strategy_dsl_public_subset_contract.md`
 
-Definition of done:
+Implementation tasks:
 
-- success runs can emit non-canonical seam IDs on a real outside repo
-- repeat runs against the same repo snapshot preserve IDs, counts, and ordering
-
-### 6.6 Slice D: Preserve artifact truth
-
-Goal: keep the already-shipped coverage and publication contract while making it
-describe the new live truth source honestly.
-
-Primary files:
-
-- [`anvil/harness/planning_runtime.py`](/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py)
-- [`anvil/harness/reporting.py`](/home/azureuser/__Active_Code/forge/anvil/harness/reporting.py), conditionally
-- [`anvil/harness/state.py`](/home/azureuser/__Active_Code/forge/anvil/harness/state.py), conditionally
-- [`tests/test_harness_planning_artifacts.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_artifacts.py)
-- [`tests/test_harness_state_boundaries.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_state_boundaries.py), conditionally
-- [`README.md`](/home/azureuser/__Active_Code/forge/README.md)
-- [`examples/README.md`](/home/azureuser/__Active_Code/forge/examples/README.md)
-- [`examples/harness/strategies/deterministic_feature_planning_v1.yaml`](/home/azureuser/__Active_Code/forge/examples/harness/strategies/deterministic_feature_planning_v1.yaml)
-- `examples/harness/tasks/deterministic_feature_planning_*.yaml`
-
-Exact implementation work:
-
-1. Confirm `_derive_planning_coverage()` still derives truthful rows from repo-derived structures.
-2. Preserve `primary_cut_summary` through `phase_results` normalization if it is part of the published truth.
-3. Update README/example prose so it says clearly:
-   - fixture mode remains deterministic scaffolding
-   - live success mode is repo-derived
-   - blocked/failed runs still publish `summary.json` only
-4. Update example success assertions so they check determinism and honesty, not Forge-self seam IDs.
-
-Definition of done:
-
-- docs no longer imply that canonical seam IDs are the live success path
-- plan payloads and summaries preserve the live metadata the user needs to inspect
-- artifact tests prove coverage is grounded in emitted repo-derived structures
-
-### 6.7 Slice E: Add canaries and regression wall
-
-Goal: prove the runtime is now honest on both fixture-backed and live repo asks.
-
-Primary files:
-
-- [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py)
-- [`tests/test_harness_planning_artifacts.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_artifacts.py)
-- [`tests/test_harness_example_strategy_wiring.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py)
-- canary procedure captured in docs or branch notes
-
-Exact implementation work:
-
-- update fixture success assertions to validate determinism without pinning live success to Forge-self seams
-- add repeat-run assertions for stable repo-derived IDs
-- add a regression that fails if the canned clarification question appears for a credible supported outside-repo ask
-- add the `gsd-browser` canary requirement:
-  - live run emits `1-3` non-canonical seams
-  - none of them equal `seam-runtime-routing` or `seam-artifact-publication`
-  - workstreams and slices reference those seams cleanly
+1. Add `public_subset_registry.py` with the exact constants listed in section
+   5.2.
+2. Write `strategy_dsl_public_subset_contract.md` so each enumerated public set
+   maps 1:1 to a registry constant group.
+3. Make the doc explicit about the following three layers:
+   - canonical public strategy-spec surface
+   - compatibility-only accepted runtime inputs
+   - runtime-owned and metadata-only surfaces that are not public authoring
+4. State plainly that this milestone freezes the contract but does not yet
+   enforce it at runtime.
+5. State plainly that task-spec surface freeze is out of scope for this branch.
 
 Definition of done:
 
-- fixture paths still pass
-- outside-repo canary proves repo-derived planning
-- determinism still holds
+- the registry exists as code data
+- the contract doc exists as the human-facing source of truth
+- the doc and registry agree on all enumerated sets
+- the doc does not blur broader public built-ins with the narrower `C3`
+  graph-DSL family
 
-## 7. Code Quality and Contract Hygiene
+### 6.2 Workstream B: Build the classified public example pack
 
-### 7.1 Engineering rules
+Goal: give the repo one clean example pack that matches the new contract
+exactly.
 
-- Keep the diff minimal. Most contract work is already shipped.
-- Bias toward explicit over clever.
-- Reuse the current runtime/publication/validation surfaces.
-- Prefer extending existing helpers over spawning `*_v2` families.
-- Keep deterministic ID rules close to derivation logic.
-- Do not mix this structural change with speculative planner breadth.
+Primary paths:
 
-### 7.2 Truth ownership boundaries
+- `examples/harness/public_subset/README.md`
+- `examples/harness/public_subset/canonical/`
+- `examples/harness/public_subset/compatibility/`
+- `examples/harness/public_subset/negative/`
 
-| Concern | Owner | Rule |
-|---|---|---|
-| bounded discovery and primary-cut selection | `planning_runtime.py` | runtime decides what evidence matters |
-| seam/workstream/slice structure | `planning_runtime.py` | runtime emits live structure, examples do not |
-| coverage truth | `_derive_planning_coverage()` | coverage summarizes runtime-owned structure, it does not invent it |
-| artifact serialization | `reporting.py` | publish exactly what runtime produced |
-| integrity gating | `validation.py` | reject inconsistent success artifacts before publication |
-| fixture scaffolding | `examples/harness/` | fixture truths are for regression coverage only |
+Implementation tasks:
 
-### 7.3 Anti-patterns explicitly rejected
+1. Add the example-pack README with three sections:
+   - canonical
+   - compatibility-only
+   - negative
+2. Add the three canonical examples.
+3. Add the one compatibility-only legacy alias example.
+4. Add the five negative examples named in section 5.4.
+5. Make the planning canonical example structurally honest:
+   - keep `runtime_target: planning_v1`
+   - keep the canonical phase order from `StrategyConfig`
+   - keep required planning policy refs
+   - omit `coverage_policy`
+   - omit `phase_inputs`
+6. Keep the negative examples simple enough that `C3` parser/preflight work can
+   reuse them directly later.
 
-- keeping `_CANONICAL_SEAM_SPECS` in the live success path
-- changing docs without changing runtime behavior
-- solving this with strategy-name branching
-- adding provider calls or LLM prompts to synthesize seams
-- reopening `plan_artifact_v2` wholesale when a metadata-preservation patch will do
-- adding new abstraction layers for hypothetical future strategies before one honest built-in strategy exists
+Definition of done:
 
-## 8. Test Review
+- the example pack exists and is navigable
+- canonical examples are clean public examples, not fixture mirrors
+- compatibility example is obviously non-canonical
+- negative examples cover kind closure, unknown top-level key rejection,
+  stage-family closure, runtime-owned field exclusion, and metadata-only field
+  exclusion
+
+### 6.3 Workstream C: Align docs and relabel runnable fixtures
+
+Goal: stop the repo from teaching the wrong surface first.
+
+Primary paths:
+
+- `README.md`
+- `examples/README.md`
+- `docs/contributing.md`
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+
+Implementation tasks:
+
+1. Update the three docs so the future public subset points to:
+   - `docs/strategy_dsl_public_subset_contract.md`
+   - `examples/harness/public_subset/README.md`
+2. Preserve current runnable commands and current example paths where practical.
+3. Change wording that currently calls the runnable deterministic planning
+   example canonical public DSL.
+4. Add explicit header comments to
+   `examples/harness/strategies/deterministic_feature_planning_v1.yaml` that say:
+   - this file is a runnable internal harness fixture
+   - it preserves regression scaffolding
+   - it is not the canonical public `C3 v1` example
+
+Definition of done:
+
+- no front-door doc teaches the fixture-backed planning strategy as the
+  canonical public DSL example
+- public readers can discover the contract doc and example pack from the repo
+  front door
+- runnable fixtures stay easy to find and easy to run
+
+### 6.4 Workstream D: Add the contract drift wall
+
+Goal: make it difficult for the repo to drift back into mixed stories.
+
+Primary paths:
+
+- `tests/test_harness_public_subset_contract.py`
+- `tests/test_docs_surface.py`
+- `tests/test_harness_example_strategy_wiring.py`
+
+Implementation tasks:
+
+1. Add `tests/test_harness_public_subset_contract.py`.
+2. Extend `tests/test_docs_surface.py` so front-door routing points at the
+   public contract and example pack first.
+3. Extend `tests/test_harness_example_strategy_wiring.py` so the new public
+   example pack and the old runnable fixture tree coexist with explicit labels.
+
+Definition of done:
+
+- docs, registry, and example pack cannot silently diverge
+- canonical public examples cannot silently regain runtime-owned fields
+- existing runnable example coverage remains intact
+
+## 7. Test Review
 
 Framework: `pytest`  
-Coverage target: every changed branch in the live planning path gets regression
-coverage.  
-Ship rule: `C2` is not done if tests only prove schema validity while the live
-runtime still emits Forge-self seams.
+Goal: every contract decision frozen by `C2.9` gets a drift test.
 
-### 8.1 Codepath coverage diagram
+### 7.1 Coverage diagram
 
 ```text
-CODE PATH COVERAGE
-===========================
-[+] anvil/harness/planning_runtime.py
-    │
-    ├── _score_path()
-    │   ├── [EXISTING] bounded scoring and lexical ordering
-    │   └── [GAP]      remove canonical seam hint bias from live scoring
-    │
-    ├── _discovered_workspace_matches()
-    │   ├── [EXISTING] second-pass discovery hook
-    │   └── [GAP]      stop injecting canonical planning files as live truth
-    │
-    ├── _derive_live_phase_payloads()
-    │   ├── [EXISTING] out-of-corpus rejection
-    │   ├── [EXISTING] bounded path discovery and file reads
-    │   ├── [GAP]      primary-cut selection using repo evidence
-    │   ├── [GAP]      feature-specific clarification when the cut is not credible
-    │   └── [GAP]      live payloads that are not scaffold-driven
-    │
-    ├── _seam_paths() or replacement
-    │   ├── [EXISTING] canonical seam match
-    │   └── [GAP]      repo-derived seam synthesis
-    │
-    ├── _workstreams_for_seams() or replacement
-    │   ├── [EXISTING] canonical workstream emission
-    │   └── [GAP]      dependency-aware workstream derivation from emitted seams
-    │
-    ├── _slices_for_workstreams() or replacement
-    │   ├── [EXISTING] canonical slice emission
-    │   └── [GAP]      slice derivation with explicit acceptance criteria from workstream intent
-    │
-    └── _derive_planning_coverage()
-        ├── [EXISTING] coverage rows, assumptions, delta
-        └── [GAP]      prove those rows stay truthful when live structure becomes repo-derived
+CONTRACT COVERAGE
+=================
+[+] anvil/harness/public_subset_registry.py
+    |
+    |-- canonical kinds
+    |-- broader public built-ins
+    |-- compatibility-only kinds
+    |-- graph primitives
+    |-- transition forms
+    |-- stage families
+    |-- role families and bindings
+    |-- planning phase stage types
+    |-- required planning policy refs
+    |-- runtime-owned excluded fields
+    `-- metadata-only fields
 
-[+] tests/test_harness_planning_graph.py
-    │
-    ├── [EXISTING] success / clarification_needed / failed terminal assertions
-    ├── [GAP]      primary-cut assertions
-    ├── [GAP]      non-canonical seam/workstream/slice assertions on live success
-    ├── [GAP]      clarification text regression assertions
-    └── [GAP]      repeat-run determinism assertions for repo-derived IDs
+[+] docs/strategy_dsl_public_subset_contract.md
+    |
+    |-- must mirror registry names and exclusions
+    |-- must separate public vs compatibility vs runtime-owned vs metadata-only
+    `-- must state the C2.9/C3 boundary honestly
 
-[+] tests/test_harness_example_strategy_wiring.py
-    │
-    ├── [EXISTING] fixture/example strategy assertions
-    └── [GAP]      stop asserting live success equals Forge-self seam IDs
+[+] examples/harness/public_subset/canonical/
+    |
+    |-- must use canonical names only
+    |-- must carry dsl_version
+    |-- must omit runtime-owned fields
+    `-- must omit metadata-only fields
 
-[+] tests/test_harness_planning_artifacts.py
-    │
-    ├── [EXISTING] plan_artifact_v2 and coverage contract assertions
-    ├── [GAP]      assert coverage truth references repo-derived live structures correctly
-    └── [GAP]      assert preserved design-phase metadata survives if published
+[+] examples/harness/public_subset/compatibility/
+    |
+    `-- must teach legacy accepted input without pretending it is canonical
 
-[+] tests/test_harness_state_boundaries.py
-    │
-    ├── [EXISTING] summary round-trip checks
-    └── [GAP]      preserve new phase-result metadata if it becomes part of the contract
+[+] examples/harness/public_subset/negative/
+    |
+    |-- invalid_kind.yaml
+    |-- unknown_top_level_key.yaml
+    |-- invalid_stage_family.yaml
+    |-- runtime_owned_phase_inputs.yaml
+    `-- metadata_only_schema_version.yaml
 
-USER / OPERATOR FLOW COVERAGE
-===========================
-[+] Successful bounded live planning run
-    ├── [EXISTING] emits PLAN.md and plan.json
-    ├── [GAP]      emits repo-derived seams for a real target repo
-    └── [GAP]      coverage surfaces describe those repo-derived seams honestly
+[+] front-door docs
+    |
+    |-- README.md
+    |-- examples/README.md
+    `-- docs/contributing.md
+        must point readers at the correct public surfaces first
 
-[+] Clarification-needed run
-    ├── [EXISTING] emits summary only
-    └── [GAP]      asks a feature-specific clarification, not a Forge-internal seam question
-
-[+] Failed run
-    ├── [EXISTING] emits summary only
-    └── [GAP]      still carries truthful partial coverage based on what the runtime actually learned
+[+] runnable fixture example
+    |
+    `-- examples/harness/strategies/deterministic_feature_planning_v1.yaml
+        must remain runnable and must be explicitly labeled internal/fixture-backed
 ```
 
-### 8.2 Required test additions
+### 7.2 Required tests
 
-1. Runtime decision tests in
-   [`tests/test_harness_planning_graph.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_graph.py):
-   prove `design_doc` chooses a primary cut only when the two-signal rule is satisfied.
-2. Clarification-path tests in the same file:
-   prove credible outside-repo asks do not fall back to the canned
-   `"runtime routing or artifact publication"` question.
-3. Live success tests in the same file:
-   prove repo-derived seam IDs are emitted for non-Forge repo surfaces.
-4. Determinism tests in
-   [`tests/test_harness_example_strategy_wiring.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py)
-   and/or the graph tests:
-   prove repeat runs preserve seam/workstream/slice counts and IDs.
-5. Coverage-grounding tests in
-   [`tests/test_harness_planning_artifacts.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_planning_artifacts.py):
-   prove `coverage_ledger` rows still resolve against emitted structural IDs when those IDs are repo-derived.
-6. Metadata round-trip tests in
-   [`tests/test_harness_state_boundaries.py`](/home/azureuser/__Active_Code/forge/tests/test_harness_state_boundaries.py),
-   if `primary_cut_summary` becomes part of published phase truth.
-7. Outside-repo canary procedure:
-   record one `gsd-browser` planning ask and assert non-canonical seam IDs plus clean downstream links.
+#### A. `tests/test_harness_public_subset_contract.py`
 
-### 8.3 Suggested commands
+This new test file must assert all of the following:
+
+1. registry constants equal the exact sets listed in section 5.2
+2. the contract doc contains each canonical kind, broader built-in kind,
+   compatibility-only kind, stage family, role family, transition form,
+   excluded field, and metadata-only field
+3. canonical examples:
+   - exist at the expected paths
+   - carry `dsl_version: c3_strategy_v1`
+   - use canonical kinds only
+   - omit `analysis_review_v1`
+   - omit `coverage_policy`
+   - omit `phase_inputs`
+   - omit `schema_version`
+   - omit `subset`
+4. canonical planning example:
+   - includes `runtime_target: planning_v1`
+   - declares phases in the exact canonical order
+   - includes the required planning policy refs
+5. canonical non-planning examples omit `runtime_target`
+6. compatibility example:
+   - exists at the expected path
+   - uses `kind: analysis_review_v1`
+   - is labeled compatibility-only in raw text or in the example-pack README
+7. negative examples:
+   - all exist
+   - are indexed in `examples/harness/public_subset/README.md`
+   - each map to the expected rejection reason
+
+#### B. `tests/test_docs_surface.py`
+
+Update existing docs-surface tests to assert:
+
+- `README.md` links to `docs/strategy_dsl_public_subset_contract.md`
+- `README.md` links to `examples/harness/public_subset/README.md`
+- `examples/README.md` distinguishes canonical public examples from runnable
+  harness fixtures
+- `docs/contributing.md` uses the same taxonomy
+- the planning run command still exists where intended
+- the docs no longer call
+  `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+  the canonical public DSL example
+
+#### C. `tests/test_harness_example_strategy_wiring.py`
+
+Update existing example-wiring tests to assert:
+
+- the new public example-pack directories exist
+- canonical, compatibility, and negative example counts match the plan
+- the existing deterministic planning fixture example still exists at the
+  current path
+- the existing deterministic planning fixture raw text now labels it as
+  internal or fixture-backed
+- existing analysis-review example wiring assertions still pass
+
+### 7.3 Suggested commands
 
 ```bash
-poetry run pytest -q tests/test_harness_planning_graph.py
-poetry run pytest -q tests/test_harness_planning_artifacts.py
+poetry run pytest -q tests/test_harness_public_subset_contract.py
+poetry run pytest -q tests/test_docs_surface.py
 poetry run pytest -q tests/test_harness_example_strategy_wiring.py
-poetry run pytest -q tests/test_harness_state_boundaries.py
-poetry run pytest -q tests/test_harness_reporting.py
 ```
 
-Run the reporting test only if phase-result normalization changes.
+Optional broader smoke tests if example surface changes spill further than
+expected:
 
-### 8.4 Human acceptance checks
+```bash
+poetry run pytest -q tests/test_harness_strategy_graph.py
+poetry run pytest -q tests/test_harness_planning_graph.py
+```
 
-- real-repo rubric:
-  emitted seams read like the target repo, not Forge internals
-- skeptical-reader rubric:
-  the artifact explains what is covered and what is assumed without branch lore
-- honesty rubric:
-  blocked runs expose the actual missing cut or missing evidence, not a generic fallback question
+### 7.4 Diagram maintenance and code-comment verdict
 
-## 9. Performance and Reliability Review
+Plan-level ASCII diagrams are required and are already included here.
 
-### 9.1 Performance risks
+Inline code-comment diagrams are not required in implementation files for
+`C2.9`, because this branch should not add new multi-step runtime logic. If the
+implementation unexpectedly adds logic beyond data/docs/test surfaces, that is a
+scope-break smell and should be challenged before merging.
 
-| Risk | Why it matters | Required mitigation |
+## 8. Reliability, Failure Modes, and Performance
+
+### 8.1 Reliability rules
+
+- `C2.9` must not change runtime behavior
+- current runnable harness examples must keep their existing paths unless a move
+  is strictly necessary
+- canonical public examples must live in a separate namespace from internal
+  runnable fixtures
+- every public set that matters to `C3` must live in code data once
+
+### 8.2 Failure modes registry
+
+| Failure | User-visible impact | Planned protection |
 |---|---|---|
-| primary-cut heuristics overread the workspace | planning latency grows with no product value | reuse the existing bounded discovery and read budgets |
-| seam synthesis uses too many weak signals | runtime becomes unstable across repeat runs | keep the two-signal cut rule and deterministic tie-breakers |
-| docs dominate ranking | planner chooses prose instead of implementation surfaces | keep implementation-file bias when both docs and code match |
-| feature-specific clarification becomes nondeterministic prose | test output becomes flaky and hard to trust | derive clarification from explicit stop reasons and selected evidence |
+| canonical example accidentally includes `phase_inputs` | public example teaches fixture scaffolding as public API | contract test asserts canonical examples omit runtime-owned fields |
+| canonical example includes `schema_version` or `subset` | users mistake metadata for authoring keys | contract test asserts canonical examples omit metadata-only fields |
+| `analysis_review_v1` appears in canonical docs or examples | legacy alias is mistaken for forward contract | contract test and docs-surface test enforce the canonical/compatibility split |
+| contract doc and registry disagree | future `C3` work starts from conflicting truth | new contract test fails |
+| front-door docs still point readers first to fixture examples | contributors keep learning the wrong surface | docs-surface test fails |
+| runnable planning fixture loses its runnable status during relabeling | regression coverage breaks for the wrong reason | example-wiring test keeps path and raw-file presence stable |
 
-### 9.2 Reliability rules
+### 8.3 Performance verdict
 
-- no phase may reopen the discovery budget after `design_doc`
-- the live success path must never depend on `_CANONICAL_SEAM_SPECS`
-- repeat runs on the same repo snapshot must preserve IDs, counts, and ordering
-- success publication must still fail closed on broken coverage invariants
+There is no meaningful runtime performance risk in this milestone because the
+branch is artifact-, docs-, and test-focused.
 
-### 9.3 Performance verdict
+The real risk is contract drift. The regression wall addresses that directly.
 
-Do not add caching, background indexing, or a second search-pass framework in
-`C2`. The current bounded runtime should stay cheap and boring.
+## 9. Worktree Parallelization Strategy
 
-## 10. Error & Rescue Registry
+This branch is moderately parallelizable once the registry vocabulary is frozen.
 
-| Failure | User-visible impact | Rescue |
-|---|---|---|
-| primary cut is too broad | plan feels generic and not executable | tighten the two-signal rule and add targeted clarification |
-| canonical seam question still appears | planner exposes Forge-internal fallback instead of target-repo truth | add explicit regression coverage and remove the live fallback |
-| seam titles are unstable across reruns | artifact churn and trust loss | enforce deterministic title and slug generation |
-| workstream dependencies are implicit | false parallelism and bad worktree advice | require explicit dependency reasoning on merged seams |
-| phase-result metadata is lost in reporting | runtime gets more honest than published artifacts | preserve whitelisted phase metadata in reporting/state round-trip |
-| coverage stays formally valid but semantically weak | artifact looks honest while structure is fake | tie artifact assertions to emitted seam/workstream/slice IDs |
-
-## 11. Failure Modes Registry
-
-| New codepath | Realistic production failure | Test covers it? | Error handling exists? | User-visible outcome | Status |
-|---|---|---:|---:|---|---|
-| primary-cut selection | planner chooses a docs-only surface and misses the implementation boundary | must add | must add | vague or misleading plan | critical gap until covered |
-| clarification path | credible ask still emits the Forge seam question | must add | must add | user gets irrelevant guidance | critical gap until covered |
-| seam synthesis | same repo snapshot yields different seam IDs across reruns | must add | must add | unstable artifacts and flaky automation | critical gap until covered |
-| workstream derivation | seams that should be sequential are marked parallel | must add | must add | merge-conflict bait and invalid worktree advice | required |
-| slice derivation | acceptance criteria are absent or too generic | must add | must add | non-executable slices | required |
-| coverage grounding | coverage rows reference repo-derived IDs incorrectly after runtime refactor | must add | existing validation partially helps | broken trust surface | critical gap until covered |
-| phase metadata preservation | `primary_cut_summary` disappears from published plan payload | must add | must add | user cannot inspect why the cut was chosen | required if metadata is published |
-| outside-repo canary | canary still resolves to canonical Forge seams | must add | must add | milestone claim remains unproven | critical gap until covered |
-
-Any row with no test and no clear stop-path handling is a merge blocker.
-
-## 12. DX and Operator Experience
-
-### 12.1 Developer journey map
-
-| Stage | Current experience | C2 target |
-|---|---|---|
-| run planner | command succeeds | same |
-| inspect seams | often sees Forge-self seams | sees target-repo seams |
-| interpret clarification | may get Forge-internal question | gets feature-specific missing-input question |
-| trust coverage artifact | mechanically valid, semantically shaky | mechanically and semantically aligned |
-| split implementation | worktree advice may reflect fake seams | worktree advice reflects real repo boundaries |
-
-### 12.2 Distribution plan
-
-Distribution remains the existing CLI artifact path.
-
-No new package, workflow, or publish step is required. The product proof remains:
-
-- run the planner through the current CLI
-- inspect `summary.json` on blocked runs
-- inspect `PLAN.md` and `plan.json` on success runs
-
-### 12.3 DX verdict
-
-This is a DX improvement through honesty, not through new commands. The command
-count stays the same. The ambiguity after the command finishes should drop
-materially.
-
-## 13. Worktree Parallelization Strategy
-
-This branch is only partly parallelizable. The core behavior change is concentrated
-in `anvil/harness/planning_runtime.py`, so the structural middle of the branch is
-mostly sequential. The real safe parallel lane is docs/examples/canary prep after
-the runtime rules are frozen.
-
-### 13.1 Dependency table
+### 9.1 Dependency table
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Freeze runtime rules | `anvil/harness/`, plan/docs surface | — |
-| B. Implement real `design_doc` and primary-cut logic | `anvil/harness/` | A |
-| C. Implement real seam/workstream/slice derivation | `anvil/harness/`, runtime tests | B |
-| D. Align reporting, docs, fixtures, and examples | `anvil/harness/`, `examples/harness/`, repo docs | A, B |
-| E. Regression wall and canary verification | `tests/`, `anvil/harness/`, docs/examples surface | C, D |
+| A. Freeze registry and contract doc | `anvil/harness/`, `docs/` | — |
+| B. Build public example pack | `examples/harness/public_subset/` | A |
+| C. Align docs and relabel runnable planning fixture | `README.md`, `examples/`, `docs/`, `examples/harness/strategies/` | A |
+| D. Add regression wall | `tests/`, plus read access to all surfaces above | B, C |
 
-### 13.2 Parallel lanes
+### 9.2 Parallel lanes
 
-Lane A: rule freeze  
-Run first. This locks the heuristics, output expectations, and what counts as a
-credible primary cut.
+Lane A: foundation  
+Freeze registry names, exclusions, versioning, and contract vocabulary.
 
-Lane B: phase-1 runtime gate  
-Run after A. This owns the ranking cleanup, primary-cut selection, and clarification path.
+Lane B: example pack  
+Owns `examples/harness/public_subset/` and nothing else.
 
-Lane C: structural derivation  
-Run after B. This owns repo-derived seams, workstreams, slices, and stable live IDs.
+Lane C: docs alignment  
+Owns front-door wording plus the header relabeling in
+`examples/harness/strategies/deterministic_feature_planning_v1.yaml`.
 
-Lane D: docs/examples/reporting alignment  
-Run after B in parallel with C, as long as the reporting change stays narrowly scoped.
-This lane owns:
+Lane D: regression wall  
+Owns the test integration pass after example and docs work land.
 
-- example wording
-- fixture wording
-- README/example updates
-- plan/report normalization changes needed to preserve phase metadata
-
-Lane E: regression wall  
-Run last. This finalizes tests and outside-repo verification after behavior and wording settle.
-
-### 13.3 Execution order
+### 9.3 Execution order
 
 ```text
 Lane A
-  │
-  ▼
-Lane B
-  │
-  ├──────────────► Lane C
-  │
-  └──────────────► Lane D
-                      │
-              Lane C + Lane D complete
-                      │
-                      ▼
-                    Lane E
+  |
+  +-----> Lane B
+  |
+  +-----> Lane C
+             |
+     Lane B + Lane C merge
+             |
+             v
+           Lane D
 ```
 
 Execution order:
 
-1. Launch Lane A and freeze the rules.
-2. Launch Lane B and land the phase-1 gate.
-3. Launch Lane C and Lane D in parallel worktrees.
-4. Merge C and D.
-5. Run Lane E as the merge-blocking regression wall and canary proof.
+1. Launch Lane A first.
+2. After A lands, launch B and C in parallel worktrees.
+3. Merge B and C.
+4. Run D last as the merge-blocking drift wall.
 
-### 13.4 Recommended worktree ownership
+### 9.4 Conflict flags
 
-| Lane | Primary owner surface | Why |
-|---|---|---|
-| A | `PLAN.md`, runtime comments | freezes decisions before code spreads |
-| B | `planning_runtime.py`, graph tests | one file family, high coupling |
-| C | `planning_runtime.py`, graph/example wiring tests | structural truth and stable IDs |
-| D | `reporting.py`, `state.py`, docs, example strategy/tasks | low-risk contract threading plus wording alignment |
-| E | `tests/`, canary notes | final integration proof |
+- Lane A and Lane B both care about exact registry names, so B must wait for A
+- Lane A and Lane C both care about canonical terminology, so C must wait for A
+- Lanes B and D both touch example-pack expectations, so D must run last
+- Lanes C and D both touch docs-surface assertions, so D must run last
+- do not expand Lane D into parser enforcement, that would break scope
 
-### 13.5 Conflict flags
+## 10. Acceptance Checklist
 
-- Lanes A and B both touch `planning_runtime.py`. B must wait for A.
-- Lanes B and C both touch `planning_runtime.py`. C must wait for B.
-- Lanes C and E both touch planning graph tests. Keep final assertion shape in E.
-- Lanes D and E may both touch artifact/reporting tests. Final truth assertions belong in E.
-- If phase-result metadata preservation expands beyond a narrow whitelist, stop and re-evaluate. That is how this branch accidentally turns into contract churn.
+- [ ] `docs/strategy_dsl_public_subset_contract.md` exists and is discoverable
+- [ ] `anvil/harness/public_subset_registry.py` exists and is data-only
+- [ ] `C3_GRAPH_DSL_KINDS` contains exactly `analysis_review_bounded_v1`, `analysis_review_trust_v1`, and `deterministic_feature_planning_v1`
+- [ ] broader public built-ins are explicitly separated from the narrower `C3` graph-DSL claim
+- [ ] `analysis_review_v1` is documented as compatibility-only, not canonical
+- [ ] canonical public examples live under `examples/harness/public_subset/canonical/`
+- [ ] canonical public examples carry `dsl_version: c3_strategy_v1`
+- [ ] canonical public examples do not contain `coverage_policy`, `phase_inputs`, `schema_version`, or `subset`
+- [ ] canonical non-planning examples omit `runtime_target`
+- [ ] canonical planning example includes `runtime_target: planning_v1`
+- [ ] compatibility example lives under `examples/harness/public_subset/compatibility/`
+- [ ] negative examples live under `examples/harness/public_subset/negative/`
+- [ ] front-door docs route readers to the contract doc and public example pack first
+- [ ] the existing runnable deterministic planning strategy is explicitly labeled fixture-backed/internal
+- [ ] `tests/test_harness_public_subset_contract.py` exists and passes
+- [ ] `tests/test_docs_surface.py` and `tests/test_harness_example_strategy_wiring.py` are updated and pass
+- [ ] no runtime behavior change is claimed or required for this milestone
 
-## 14. Acceptance Checklist
+## 11. Post-C2.9 Follow-Ups
 
-- [ ] live success no longer depends on `_CANONICAL_SEAM_SPECS`
-- [ ] `_score_path()` and `_discovered_workspace_matches()` no longer bias live success toward canonical Forge seams
-- [ ] `design_doc` chooses a credible primary cut or emits a feature-specific clarification
-- [ ] `seam_decomposition` emits `1-3` repo-derived seams
-- [ ] `parallel_planning` emits workstreams derived from those seams
-- [ ] `slice_emission` emits slices with explicit acceptance criteria
-- [ ] repeat runs preserve seam/workstream/slice counts, IDs, and ordering
-- [ ] outside-repo canary emits non-canonical seam IDs
-- [ ] the canned Forge seam clarification question is gone from credible supported outside-repo asks
-- [ ] `coverage_ledger`, `assumptions_register`, and `uncovered_delta` remain truthful without reopening the `C2` artifact contract
-- [ ] published artifacts preserve any newly required design-phase metadata
-- [ ] blocked/failed runs still publish `summary.json` only
-- [ ] no strategy-name branching is introduced
-- [ ] no second planning runtime family is introduced
+These are explicitly after `C2.9`, not blockers for this plan:
 
-## 15. Completion Summary
+- add parser/preflight enforcement for unknown top-level keys, closed kind
+  registry, stage-family closure, runtime-owned field rejection, and
+  metadata-only field rejection
+- decide whether to freeze a public task-spec contract as a separate packet
+- decide whether to publish richer public diagnostics guidance once runtime
+  enforcement exists
+- decide whether to widen the public surface later to imports, overlays, or
+  broader graph composition
 
-- Step 0: scope accepted as live-planner honesty work, not another coverage-contract project
-- What already exists: mapped and reused, especially the landed `C2` coverage contract and publication gates
-- Locked decisions: one built-in strategy, one runtime family, one bounded corpus, one live truth source
-- Architecture: live phase outputs become repo-derived while coverage stays on the shipped contract
-- Implementation plan: five slices with exact file ownership, sequencing rules, and acceptance proof
-- Code quality: explicit heuristics, explicit tie-breakers, minimal diff, no new framework work
-- Test review: coverage now targets the real truth gap in `_derive_live_phase_payloads()` and the canonical seam scaffold
-- Performance review: bounded discovery stays frozen and cheap
-- Failure modes: critical gaps enumerated for fake cuts, canned clarifications, unstable IDs, semantically weak coverage truth, and dropped phase metadata
-- DX: same command surface, much less ambiguity after the run
-- Parallelization: one foundation lane, one phase-1 lane, one structural lane, one docs/reporting lane, one regression lane
-- Lake score: do the complete honest live-planning fix now, not the wording-only shortcut
+## 12. Completion Summary
+
+- Step 0 verdict: scope accepted as contract-freeze work, not hidden `C3`
+  runtime work
+- What already exists: reused directly, especially `types.py`,
+  `strategy_graph.py`, `providers.py`, the current docs entry points, and the
+  existing docs/example tests
+- Locked decisions: milestone boundary, registry ownership, versioning,
+  canonical kinds, compatibility-only aliasing, runtime-owned exclusions, and
+  example taxonomy are all frozen
+- Architecture: one registry, one contract doc, one public example pack, one
+  docs-routing pass, one regression wall
+- Test review: full contract coverage is specified, including negative-example
+  indexing and canonical/non-canonical example assertions
+- Performance review: runtime performance risk is effectively zero; contract
+  drift is the real risk and is directly covered
+- Parallelization: one foundation lane, two safe content lanes, one final test
+  lane

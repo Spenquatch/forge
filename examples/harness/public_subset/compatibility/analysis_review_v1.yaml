@@ -1,0 +1,17 @@
+# Compatibility-only accepted legacy input.
+# This is not the canonical public C3 v1 authoring example.
+name: analysis-review-v1-compatibility
+kind: analysis_review_v1
+roles:
+  proposer:
+    provider: codex_cli
+    access: read
+  critic:
+    provider: claude_code
+    access: read
+  reviser:
+    provider: codex_cli
+    access: read
+  auditor:
+    provider: claude_code
+    access: read

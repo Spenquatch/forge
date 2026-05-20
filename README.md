@@ -7,6 +7,17 @@ Forge is a modular AI agent system with two active repo surfaces:
 
 The harness builds on the same repo and thesis as the orchestration stack; it does not replace it.
 
+## Public strategy subset
+
+If you are authoring the future public `C3` strategy DSL, start here first:
+
+- [Strategy DSL public subset contract](docs/strategy_dsl_public_subset_contract.md)
+- [Public subset example pack](examples/harness/public_subset/README.md)
+
+The runnable harness YAML files under `examples/harness/strategies/` remain
+useful internal and fixture-backed examples, but they are not by themselves the
+canonical public `C3 v1` authoring surface.
+
 ## Quick start
 
 Install dependencies:
@@ -37,7 +48,7 @@ poetry run python -m anvil.cli harness-run \
   --out-root .forge-harness-runs
 ```
 
-Run the deterministic planning harness:
+Run the runnable internal planning fixture:
 
 ```bash
 poetry run python -m anvil.cli harness-run \
@@ -51,6 +62,10 @@ This harness command is distinct from the general orchestration entrypoint
 `poetry run python -m anvil` shown above.
 
 On `harness-run`, omitting `--workspace` uses the current working directory, so the planning command above is copy-pasteable from the repo root.
+
+That planning strategy path remains a runnable internal harness fixture, not
+the canonical public `C3 v1` example. For the frozen public authoring contract,
+start with the contract doc and public example pack linked above.
 
 The deterministic planning surface is intentionally bounded: it plans against
 one existing repo, scans only a limited evidence budget, and stops honestly
@@ -81,6 +96,7 @@ poetry run pytest -q tests/test_lg_offline_smoke.py
 
 ## Canonical docs
 
+- [Strategy DSL public subset contract](docs/strategy_dsl_public_subset_contract.md)
 - [Contributing guide](docs/contributing.md)
 - [Analysis-review contract](docs/analysis_review_contract.md)
 - [Roadmap](docs/roadmap.md)

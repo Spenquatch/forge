@@ -30,6 +30,10 @@ BANNED_DOC_LINKS = [
 def test_readme_links_only_current_canonical_docs():
     readme = README.read_text(encoding="utf-8")
 
+    assert (
+        "[Strategy DSL public subset contract]"
+        "(docs/strategy_dsl_public_subset_contract.md)"
+    ) in readme
     assert "[Contributing guide](docs/contributing.md)" in readme
     assert "[Analysis-review contract](docs/analysis_review_contract.md)" in readme
     assert "[Roadmap](docs/roadmap.md)" in readme
@@ -67,6 +71,12 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
         in contributing
     )
 
+    for text in (readme, examples_readme, contributing):
+        assert "strategy_dsl_public_subset_contract.md" in text
+        assert "examples/harness/public_subset/README.md" in text or (
+            "harness/public_subset/README.md" in text
+        )
+
     assert "bounded deterministic existing-repo planning runs" in readme
     assert "one existing repo" in readme
     assert "clarification_needed" in readme
@@ -87,6 +97,12 @@ def test_planning_docs_surface_uses_repo_root_command_and_bounded_language():
     assert "gsd_browser_session_lifecycle_planning.template.yaml" in examples_readme
     assert "run_gsd_browser_session_lifecycle_smoke.sh" in examples_readme
     assert "not part of `pytest -q`" in examples_readme
+    assert "fixture-backed" in readme
+    assert "canonical public `C3 v1`" in readme
+    assert "fixture-backed" in examples_readme
+    assert "canonical public `C3 v1` authoring example" in examples_readme
+    assert "fixture-backed" in contributing
+    assert "public subset example pack" in contributing
     assert "run_gsd_browser_session_lifecycle_smoke.sh" in contributing
     assert "external workspace" in contributing
 

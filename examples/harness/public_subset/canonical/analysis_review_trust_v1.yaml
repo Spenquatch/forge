@@ -1,0 +1,19 @@
+# Canonical public C3 v1 trust analysis-review example.
+dsl_version: c3_strategy_v1
+name: analysis-review-trust-v1
+kind: analysis_review_trust_v1
+trust_review:
+  execution_mode: attestation_over_bounded
+roles:
+  proposer:
+    provider: codex_cli
+    access: read
+  critic:
+    provider: claude_code
+    access: read
+  reviser:
+    provider: codex_cli
+    access: read
+  auditor:
+    provider: claude_code
+    access: read

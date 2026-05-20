@@ -2,6 +2,16 @@
 
 Small, runnable examples for common Forge workflows.
 
+If you want the frozen future public `C3` strategy authoring surface, start
+with:
+
+- [`docs/strategy_dsl_public_subset_contract.md`](../docs/strategy_dsl_public_subset_contract.md)
+- [`examples/harness/public_subset/README.md`](harness/public_subset/README.md)
+
+The files under `examples/harness/strategies/` remain runnable harness
+fixtures. They are useful operational examples, but they are not the canonical
+public `C3 v1` example pack.
+
 Run these from the repo root (recommended):
 
 ```bash
@@ -37,7 +47,14 @@ That canonical `analysis_review_trust_*` entrypoint is attestation-first in M3A.
 
 Harness strategy YAML uses provider family keys from `config/models.yaml`, such as `codex_cli` and `claude_code`. CLI-backed families still honor `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN` if you need to override the installed binary location.
 
-Deterministic planning examples use the canonical strategy `examples/harness/strategies/deterministic_feature_planning_v1.yaml` with these bounded task fixtures:
+The public subset planning example lives in
+`examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml`.
+The runnable strategy below remains the internal, fixture-backed harness path
+for deterministic planning regressions:
+
+- `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+
+Use it with these bounded task fixtures:
 
 - `examples/harness/tasks/deterministic_feature_planning_success.yaml`
 - `examples/harness/tasks/deterministic_feature_planning_clarification.yaml`
@@ -59,6 +76,9 @@ This harness command is distinct from the general orchestration entrypoint
 `poetry run python -m anvil`.
 
 On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json` with C2 coverage, assumptions, and uncovered delta. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and publish `summary.json` only with truthful coverage payloads. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
+
+That runnable planning fixture is internal and fixture-backed, not the
+canonical public `C3 v1` authoring example.
 
 These adjudicate strategies are runnable examples, not by themselves the authoritative focus-gate acceptance proof.
 

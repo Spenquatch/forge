@@ -1,0 +1,18 @@
+# Negative contract fixture: unsupported top-level key.
+dsl_version: c3_strategy_v1
+name: unknown-top-level-key
+kind: analysis_review_bounded_v1
+unsupported_top_level_key: true
+roles:
+  proposer:
+    provider: codex_cli
+    access: read
+  critic:
+    provider: claude_code
+    access: read
+  reviser:
+    provider: codex_cli
+    access: read
+  auditor:
+    provider: claude_code
+    access: read

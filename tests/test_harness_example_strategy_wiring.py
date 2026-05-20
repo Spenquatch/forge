@@ -8,6 +8,7 @@ from anvil.harness.executor import HarnessLangGraphExecutor
 from anvil.harness.files import load_structured_file
 from anvil.harness.nodes.prepare_run import prepare_run_node
 from anvil.harness.nodes.validator_preflight import validator_preflight_node
+from anvil.harness.public_subset_registry import PUBLIC_SUBSET_DSL_VERSION
 from anvil.harness.strategy_graph import (
     STRATEGY_GRAPH_SUBSET,
     build_strategy_graph_spec,
@@ -496,6 +497,35 @@ def test_planning_example_strategy_matches_frozen_surface_and_graph_metadata(
     ]
 
 
+def test_public_subset_example_pack_coexists_with_runnable_planning_fixture():
+    public_example = Path(
+        "examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml"
+    )
+    compatibility_example = Path(
+        "examples/harness/public_subset/compatibility/analysis_review_v1.yaml"
+    )
+    fixture_path = _planning_strategy_path()
+    fixture_text = fixture_path.read_text(encoding="utf-8")
+
+    assert public_example.is_file()
+    assert compatibility_example.is_file()
+    assert fixture_path.is_file()
+    assert "internal" in fixture_text
+    assert "fixture-backed" in fixture_text
+    assert "not the canonical" in fixture_text
+
+    public_payload = load_structured_file(public_example)
+    fixture_payload = load_structured_file(fixture_path)
+    compatibility_payload = load_structured_file(compatibility_example)
+
+    assert public_payload["dsl_version"] == PUBLIC_SUBSET_DSL_VERSION
+    assert public_payload["kind"] == fixture_payload["kind"]
+    assert public_payload["runtime_target"] == fixture_payload["runtime_target"]
+    assert "coverage_policy" not in public_payload
+    assert "phase_inputs" not in public_payload
+    assert compatibility_payload["kind"] == "analysis_review_v1"
+
+
 def test_planning_example_tasks_cover_success_clarification_and_failed_modes():
     cases = [
         (_planning_task_path("success"), ""),
@@ -525,8 +555,9 @@ def test_planning_example_surface_describes_bounded_live_and_fixture_modes():
     clarification_payload = load_structured_file(_planning_task_path("clarification"))
     failed_payload = load_structured_file(_planning_task_path("failed"))
 
-    assert "Canonical bounded planning strategy for one existing repo." in strategy_text
+    assert "Runnable internal planning fixture for one existing repo." in strategy_text
     assert "fixture-only scaffolding" in strategy_text
+    assert "not the canonical" in strategy_text
     assert "provider: codex_cli" in strategy_text
 
     assert "live workspace evidence" in str(success_payload.get("notes") or "")

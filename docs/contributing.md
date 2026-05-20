@@ -10,6 +10,18 @@
 
 Preserved plans, historical notes, and future-planning material live under `docs/project_management/`.
 
+## Public strategy docs first
+
+If you are updating strategy-authoring docs or examples, route readers to these
+surfaces first:
+
+- [Strategy DSL public subset contract](strategy_dsl_public_subset_contract.md)
+- [Public subset example pack](../examples/harness/public_subset/README.md)
+
+The runnable harness YAML files under `examples/harness/strategies/` remain
+useful fixture-backed coverage surfaces, but they are not the canonical public
+`C3 v1` authoring examples unless a doc explicitly says otherwise.
+
 ## Setup
 
 Install dependencies from the repo root:
@@ -45,7 +57,7 @@ poetry run python -m anvil.cli harness-run \
   --out-root .forge-harness-runs
 ```
 
-Canonical repo-root planning harness command:
+Runnable internal planning fixture command:
 
 ```bash
 poetry run python -m anvil.cli harness-run \
@@ -56,6 +68,9 @@ poetry run python -m anvil.cli harness-run \
 ```
 
 On `harness-run`, omitting `--workspace` defaults to the current working directory. The planning surface is intentionally bounded to one existing repo and will stop with `clarification_needed` or `failed` instead of implying a generic greenfield planner.
+
+That strategy file remains internal and fixture-backed. The canonical public
+`C3 v1` planning example now lives in the public subset example pack.
 
 Harness strategy YAML uses provider family keys from `config/models.yaml`, including `codex_cli` and `claude_code`. When those families back a run through a local CLI, Forge still respects `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN`; API-backed providers still require credentials such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 

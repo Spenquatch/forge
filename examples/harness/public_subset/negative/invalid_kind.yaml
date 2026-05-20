@@ -1,0 +1,17 @@
+# Negative contract fixture: invalid strategy kind.
+dsl_version: c3_strategy_v1
+name: invalid-kind
+kind: analysis_review_experimental_v1
+roles:
+  proposer:
+    provider: codex_cli
+    access: read
+  critic:
+    provider: claude_code
+    access: read
+  reviser:
+    provider: codex_cli
+    access: read
+  auditor:
+    provider: claude_code
+    access: read
