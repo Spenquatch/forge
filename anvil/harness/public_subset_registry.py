@@ -79,6 +79,23 @@ PLANNING_REQUIRED_POLICY_FIELDS = (
     "stop_policy",
 )
 
+CANONICAL_PUBLIC_TOP_LEVEL_FIELDS = (
+    "dsl_version",
+    "name",
+    "kind",
+    "roles",
+    "runtime_target",
+    "phases",
+    "artifact_policy",
+    "determinism_policy",
+    "discovery_policy",
+    "rubric_policy",
+    "stop_policy",
+    "trust_review",
+)
+
+CANONICAL_PLANNING_RUNTIME_TARGET = "planning_v1"
+
 RUNTIME_OWNED_EXCLUDED_FIELDS = (
     "coverage_policy",
     "phase_inputs",
@@ -101,6 +118,8 @@ __all__ = (
     "STAGE_FAMILY_ROLE_BINDINGS",
     "CANONICAL_PLANNING_PHASE_STAGE_TYPES",
     "PLANNING_REQUIRED_POLICY_FIELDS",
+    "CANONICAL_PUBLIC_TOP_LEVEL_FIELDS",
+    "CANONICAL_PLANNING_RUNTIME_TARGET",
     "RUNTIME_OWNED_EXCLUDED_FIELDS",
     "METADATA_ONLY_FIELDS",
 )
