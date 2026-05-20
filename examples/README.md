@@ -2,7 +2,7 @@
 
 Small, runnable examples for common Forge workflows.
 
-If you want the frozen future public `C3` strategy authoring surface, start
+If you want the live bounded public `C3` strategy authoring surface, start
 with:
 
 - [`docs/strategy_dsl_public_subset_contract.md`](../docs/strategy_dsl_public_subset_contract.md)
@@ -10,7 +10,9 @@ with:
 
 The files under `examples/harness/strategies/` remain runnable harness
 fixtures. They are useful operational examples, but they are not the canonical
-public `C3 v1` example pack.
+public `C3 v1` example pack. Canonical public payloads are enforced at the
+parser boundary, while `analysis_review_v1` remains a compatibility-only input
+with an explicit legacy-warning path.
 
 Run these from the repo root (recommended):
 

@@ -9,11 +9,14 @@ The harness builds on the same repo and thesis as the orchestration stack; it do
 
 ## Public strategy subset
 
-If you are authoring the future public `C3` strategy DSL, start here first:
+If you are authoring against the live bounded public `C3` strategy DSL, start
+here first:
 
 - [Strategy DSL public subset contract](docs/strategy_dsl_public_subset_contract.md)
 - [Public subset example pack](examples/harness/public_subset/README.md)
 
+Canonical public authoring is enforced at `StrategyConfig.from_dict()`, and
+preflight reuses that boundary for legacy-warning and invalid-config behavior.
 The runnable harness YAML files under `examples/harness/strategies/` remain
 useful internal and fixture-backed examples, but they are not by themselves the
 canonical public `C3 v1` authoring surface.
@@ -64,8 +67,8 @@ This harness command is distinct from the general orchestration entrypoint
 On `harness-run`, omitting `--workspace` uses the current working directory, so the planning command above is copy-pasteable from the repo root.
 
 That planning strategy path remains a runnable internal harness fixture, not
-the canonical public `C3 v1` example. For the frozen public authoring contract,
-start with the contract doc and public example pack linked above.
+the canonical public `C3 v1` example. For the live bounded public authoring
+contract, start with the contract doc and public example pack linked above.
 
 The deterministic planning surface is intentionally bounded: it plans against
 one existing repo, scans only a limited evidence budget, and stops honestly

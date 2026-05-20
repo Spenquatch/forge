@@ -22,6 +22,10 @@ The runnable harness YAML files under `examples/harness/strategies/` remain
 useful fixture-backed coverage surfaces, but they are not the canonical public
 `C3 v1` authoring examples unless a doc explicitly says otherwise.
 
+The live public-boundary enforcement gate is `StrategyConfig.from_dict()`, and
+preflight now adapts that parser-owned boundary for compatibility warnings and
+invalid-config stop behavior.
+
 ## Setup
 
 Install dependencies from the repo root:
@@ -70,7 +74,9 @@ poetry run python -m anvil.cli harness-run \
 On `harness-run`, omitting `--workspace` defaults to the current working directory. The planning surface is intentionally bounded to one existing repo and will stop with `clarification_needed` or `failed` instead of implying a generic greenfield planner.
 
 That strategy file remains internal and fixture-backed. The canonical public
-`C3 v1` planning example now lives in the public subset example pack.
+`C3 v1` planning example now lives in the public subset example pack, while the
+fixture-backed strategy remains a regression surface rather than public
+authoring truth.
 
 Harness strategy YAML uses provider family keys from `config/models.yaml`, including `codex_cli` and `claude_code`. When those families back a run through a local CLI, Forge still respects `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN`; API-backed providers still require credentials such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
