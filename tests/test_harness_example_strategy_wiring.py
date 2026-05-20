@@ -38,7 +38,13 @@ def _scenario_names(scenarios: list[dict[str, object]]) -> list[str]:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[1]
+    if ".worktrees" not in repo_root.parts:
+        return repo_root
+
+    # Hidden worktree ancestors are intentionally skipped by bounded workspace
+    # discovery, so live planning fixtures should target the visible repo root.
+    return Path(*repo_root.parts[: repo_root.parts.index(".worktrees")])
 
 
 def _planning_strategy_path() -> Path:
