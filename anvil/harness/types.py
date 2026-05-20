@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
 
+from .public_subset_validation import validate_public_strategy_payload
+
 VALID_TASK_KINDS = {"patch", "analysis_review", "planning"}
 ANALYSIS_REVIEW_BOUNDED_KIND = "analysis_review_bounded_v1"
 ANALYSIS_REVIEW_TRUST_KIND = "analysis_review_trust_v1"
@@ -764,6 +766,7 @@ class StrategyConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyConfig":
+        validate_public_strategy_payload(data)
         kind = str(data.get("kind") or "pfr_v1")
         runtime_target_value = data.get("runtime_target")
         runtime_target = (

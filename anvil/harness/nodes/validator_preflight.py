@@ -4,10 +4,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from ..public_subset_validation import classify_public_strategy_surface
 from ..state import HarnessState
 from ..types import (
     ANALYSIS_REVIEW_BOUNDED_KIND,
-    ANALYSIS_REVIEW_LEGACY_KIND,
     PLANNING_RUNTIME_TARGET,
     StrategyConfig,
     TaskSpec,
@@ -67,9 +67,8 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
             stop_reason="task_spec_parse",
         )
 
-    if strategy_kind == ANALYSIS_REVIEW_LEGACY_KIND:
-        strategy_spec_dict["kind"] = ANALYSIS_REVIEW_BOUNDED_KIND
-        strategy_kind = ANALYSIS_REVIEW_BOUNDED_KIND
+    strategy_surface = classify_public_strategy_surface(strategy_spec_dict)
+    if strategy_surface == "compatibility_only":
         warnings.append(
             "Strategy kind analysis_review_v1 is deprecated and now resolves to analysis_review_bounded_v1."
         )
@@ -84,6 +83,7 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
             errors=errors,
             stop_reason="strategy_spec_parse",
         )
+    strategy_kind = strategy_spec.kind
 
     runtime_target = str(strategy_spec.runtime_target or "").strip()
 
@@ -111,6 +111,7 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
                 "Auto-fit changed strategy kind from pfr_v1 to analysis_review_bounded_v1 for an analysis_review task."
             )
             strategy_spec = StrategyConfig.from_dict(strategy_spec_dict)
+            strategy_kind = strategy_spec.kind
         else:
             errors.append(
                 "analysis_review tasks are incompatible with pfr_v1 unless auto-fit is enabled."
@@ -132,6 +133,7 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
                 f"Auto-fit changed strategy kind from {original_kind} to pfr_v1 for a patch task."
             )
             strategy_spec = StrategyConfig.from_dict(strategy_spec_dict)
+            strategy_kind = strategy_spec.kind
         else:
             errors.append(
                 f"patch tasks are incompatible with {strategy_kind} unless auto-fit is enabled."

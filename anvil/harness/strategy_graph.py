@@ -176,13 +176,12 @@ def route_after_strategy_selection(state: Mapping[str, Any]) -> str:
 def build_strategy_graph_spec(
     strategy_kind: str, strategy_spec: Mapping[str, Any] | None = None
 ) -> StrategyGraphSpec:
-    strategy_kind = _normalize_strategy_kind(strategy_kind)
-    strategy_spec = strategy_spec or {}
-    runtime_target = str(
-        strategy_spec.get("runtime_target")
-        or infer_runtime_target_for_strategy_kind(strategy_kind)
-        or ""
-    ).strip()
+    parsed_strategy = StrategyConfig.from_dict(
+        {"kind": strategy_kind, **dict(strategy_spec or {})}
+    )
+    strategy_kind = _normalize_strategy_kind(parsed_strategy.kind)
+    strategy_spec = parsed_strategy.to_dict()
+    runtime_target = str(parsed_strategy.runtime_target or "").strip()
     if runtime_target == PLANNING_RUNTIME_TARGET:
         return _build_planning_spec(strategy_kind, strategy_spec)
     if strategy_kind == "single_pass":
