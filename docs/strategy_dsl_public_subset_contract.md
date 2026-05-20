@@ -1,47 +1,67 @@
 # Strategy DSL Public Subset Contract
 
-## 1. Scope and milestone boundary
+## 1. Scope and live enforcement
 
-This document freezes the `C2.9` public strategy-spec subset for future `C3`
-authoring work.
+This document describes the live bounded public `C3` strategy-authoring
+surface.
 
-- It covers the public strategy-spec surface only.
-- It does not claim parser enforcement, preflight enforcement, or runtime
-  wiring already exists.
-- It does not freeze a public task-spec contract in this branch.
-- `C2.9` ends at contract-freeze artifacts plus drift tests.
+- `StrategyConfig.from_dict()` is the universal public-boundary enforcement
+  gate.
+- `anvil/harness/public_subset_validation.py` owns raw-payload
+  classification and canonical-public validation.
+- `validator_preflight_node()` reuses that parser-owned boundary to emit the
+  compatibility warning path and invalid-config adaptation before model work
+  starts.
+- Task-spec enforcement remains out of scope for this milestone.
 
-## 2. Canonical public strategy kinds versus broader public built-ins
+## 2. Surface classification
 
-Canonical `C3` graph-DSL kinds:
+Every raw strategy payload is treated as one of these surfaces:
+
+- `canonical_public`: the payload declares `dsl_version` and is validated as
+  canonical public authoring
+- `compatibility_only`: the payload omits `dsl_version` and uses legacy kind
+  `analysis_review_v1`
+- `internal_or_private`: every remaining payload, including internal and
+  fixture-backed harness strategies
+
+Omitting `dsl_version` does not make a payload canonical public. It leaves the
+payload on either the compatibility-only or internal/private surface.
+
+## 3. Canonical public version and kinds
+
+Canonical public examples must declare:
+
+- `dsl_version: c3_strategy_v1`
+
+Canonical public `kind` values are:
 
 - `analysis_review_bounded_v1`
 - `analysis_review_trust_v1`
 - `deterministic_feature_planning_v1`
 
-Broader public built-ins that remain public but are not the narrowed `C3`
-graph-DSL proof surface:
+Declaring `dsl_version` on any other kind is rejected at the parser boundary.
 
-- `single_pass`
-- `pfr_v1`
+## 4. Canonical public top-level rules
 
-## 3. Compatibility-only kinds
+Canonical public authoring is restricted to the registry-owned allowlist in
+`CANONICAL_PUBLIC_TOP_LEVEL_FIELDS`.
 
-Compatibility-only accepted runtime input:
+Canonical public authoring must not declare runtime-owned fields:
 
-- `analysis_review_v1`
+- `coverage_policy`
+- `phase_inputs`
 
-`analysis_review_v1` is not a canonical public `C3 v1` authoring example.
+Canonical public authoring must not declare metadata-only fields:
 
-## 4. Public versioning via `dsl_version`
+- `schema_version`
+- `subset`
 
-Canonical public examples declare:
-
-- `dsl_version: c3_strategy_v1`
+Unknown top-level keys are rejected as invalid canonical public authoring.
 
 ## 5. Public graph primitives
 
-The frozen public graph primitives are:
+The canonical public graph primitives are:
 
 - `stage`
 - `linear_edge`
@@ -52,7 +72,7 @@ The frozen public graph primitives are:
 
 ## 6. Public transition forms
 
-The frozen public transition forms are:
+The canonical public transition forms are:
 
 - `linear_next`
 - `enumerated_branch`
@@ -61,7 +81,7 @@ The frozen public transition forms are:
 
 ## 7. Public stage families and role-family bindings
 
-Public stage families:
+Canonical public role keys must stay within these public stage families:
 
 - `solver`
 - `proposer`
@@ -73,14 +93,7 @@ Public stage families:
 - `focus_gate`
 - `planner`
 
-Public role families:
-
-- `execute`
-- `critique`
-- `refine`
-- `review`
-
-Frozen stage-family to role-family bindings:
+The frozen stage-family to role-family bindings are:
 
 - `solver -> execute`
 - `proposer -> execute`
@@ -92,49 +105,56 @@ Frozen stage-family to role-family bindings:
 - `reviser -> refine`
 - `auditor -> review`
 
-## 8. Planning-specific canonical phase order and required policy refs
+## 8. Planning-specific canonical requirements
 
-Canonical planning phase stage types:
+Canonical planning public authoring is the `deterministic_feature_planning_v1`
+kind with:
 
-- `rubric_design_doc`
-- `architecture_seam_decomposition`
-- `parallel_workstream_planning`
-- `executable_slice_emission`
+- `runtime_target: planning_v1`
+- all required planning policy refs:
+  `artifact_policy`, `determinism_policy`, `discovery_policy`,
+  `rubric_policy`, and `stop_policy`
+- a non-empty `phases` list
+- canonical planning phase order:
+  `rubric_design_doc`, `architecture_seam_decomposition`,
+  `parallel_workstream_planning`, `executable_slice_emission`
 
-Required planning policy refs:
+Canonical non-planning public authoring:
 
-- `artifact_policy`
-- `determinism_policy`
-- `discovery_policy`
-- `rubric_policy`
-- `stop_policy`
+- must omit `runtime_target`
+- must omit `phases`
+- must omit planning-only policy refs
 
-Canonical planning examples include `runtime_target: planning_v1`.
-Canonical non-planning examples omit `runtime_target`.
+## 9. Compatibility-only input
 
-## 9. Runtime-owned excluded fields
+`analysis_review_v1` remains accepted only as compatibility input when
+`dsl_version` is omitted.
 
-These runtime-owned fields are real runtime surfaces, but they are not part of
-the canonical public strategy authoring subset:
+- It is not a canonical public `C3 v1` authoring example.
+- Preflight emits an explicit legacy warning for this input.
+- Docs and examples should route new public authoring to the canonical
+  `analysis_review_bounded_v1` and `analysis_review_trust_v1` examples instead.
 
-- `coverage_policy`
-- `phase_inputs`
+## 10. Internal and private preserved surfaces
 
-## 10. Metadata-only fields
+Everything outside canonical public authoring and the one compatibility-only
+path remains internal or private for this milestone.
 
-These metadata-only fields are runtime-emitted graph labels, not public
-authoring keys:
+This includes the runnable harness fixture
+`examples/harness/strategies/deterministic_feature_planning_v1.yaml`, which
+remains useful regression scaffolding but is not the canonical public `C3 v1`
+authoring example.
 
-- `schema_version`
-- `subset`
+Internal and private fixture-backed strategies are preserved; this milestone
+does not relabel them as canonical public authoring.
 
-## 11. Canonical example taxonomy
+## 11. Example taxonomy
 
 Canonical public examples live under:
 
 - `examples/harness/public_subset/canonical/`
 
-Compatibility-only accepted input examples live under:
+Compatibility-only accepted input lives under:
 
 - `examples/harness/public_subset/compatibility/`
 
@@ -142,20 +162,18 @@ Negative contract fixtures live under:
 
 - `examples/harness/public_subset/negative/`
 
-The existing runnable harness fixture
-`examples/harness/strategies/deterministic_feature_planning_v1.yaml` remains
-useful for regression coverage, but it is internal fixture-backed scaffolding,
-not the canonical public `C3 v1` example.
+The negative fixtures document one-violation rejection cases for canonical
+public authoring. They are not happy-path runnable examples.
 
-## 12. Explicit exclusions and post-`C2.9` follow-up boundary
+## 12. Diagnostics and out-of-scope boundary
 
-This contract does not:
+Invalid canonical public authoring is rejected during parsing and surfaced
+through preflight as `invalid_config`, so the harness can stop before model
+work starts.
 
-- wire `anvil/harness/public_subset_registry.py` into runtime behavior
-- relabel compatibility-only, runtime-owned, or metadata-only surfaces as
-  canonical public DSL
-- implement parser enforcement, preflight enforcement, or runtime enforcement
+This milestone does not:
+
+- create a second parser or a public-only runtime target
+- relabel compatibility-only or internal/private surfaces as canonical public
+  authoring
 - freeze a public task-spec contract
-
-Post-`C2.9` work may add enforcement and diagnostics, but that work belongs to
-later milestones rather than this contract-freeze branch.

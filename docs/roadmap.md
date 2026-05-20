@@ -15,6 +15,10 @@ Two cross-cutting investments shape the roadmap:
 - make provider initialization lazy by default
 - enforce shared budget and stop-condition handling across roles
 - keep offline smoke coverage deterministic
+- keep the bounded public `C3` strategy surface honest: parser-owned
+  enforcement, explicit compatibility warnings for `analysis_review_v1`, and
+  docs/example taxonomy that match live behavior without promoting
+  fixture-backed internal strategies to canonical public authoring
 
 ### Add durable run visibility
 

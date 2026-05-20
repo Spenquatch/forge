@@ -1,14 +1,17 @@
 # Public Strategy DSL Example Pack
 
-This directory is the classified example pack for the frozen `C2.9` public
-subset contract described in
+This directory is the classified example pack for the live bounded public `C3`
+strategy contract described in
 [`docs/strategy_dsl_public_subset_contract.md`](../../../docs/strategy_dsl_public_subset_contract.md).
 
 ## Taxonomy
 
-- `canonical/`: the recommended public `C3 v1` authoring examples
-- `compatibility/`: accepted legacy input that remains non-canonical
-- `negative/`: one-violation contract fixtures for docs and future parser tests
+- `canonical/`: the recommended public `C3 v1` authoring examples accepted by
+  the parser-owned public boundary
+- `compatibility/`: accepted legacy input that remains non-canonical and emits
+  an explicit warning path in preflight
+- `negative/`: one-violation contract fixtures for canonical public rejection
+  cases
 
 The existing runnable strategy
 `examples/harness/strategies/deterministic_feature_planning_v1.yaml` stays in
@@ -42,5 +45,5 @@ than the canonical public planning example.
 - `negative/metadata_only_schema_version.yaml`: adds metadata-only
   `schema_version` as if it were a public authoring field
 
-These negative files are documentation and future parser fixtures, not runnable
-happy-path harness examples.
+These negative files document the live rejection surface for canonical public
+authoring. They are not runnable happy-path harness examples.
