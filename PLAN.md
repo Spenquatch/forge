@@ -1,802 +1,746 @@
-# PLAN: C2.9 Public Subset Gate for C3
+# PLAN: C3 Bounded Public Strategy DSL Enforcement
 
-Status: hardened, implementation-ready on `codex/c1b-planning-quality-proof`  
-Milestone: `C2.9`  
+Status: unified, implementation-ready on `codex/c1b-planning-quality-proof`  
+Milestone: `C3`  
 Prepared from repo state on: `2026-05-20`
 
 Source of truth:
-- `/home/azureuser/.gstack/projects/Spenquatch-forge/azureuser-c29-public-subset-gate-design-20260520-015124.md`
-- current repository code in `anvil/harness/`, `examples/harness/`, `tests/`, `README.md`, `examples/README.md`, and `docs/contributing.md`
+- `/home/azureuser/.gstack/projects/Spenquatch-forge/azureuser-c3-bounded-public-strategy-graph-dsl-design-20260519-141721.md`
+- `/home/azureuser/__Active_Code/forge/docs/strategy_dsl_public_subset_contract.md`
+- `/home/azureuser/__Active_Code/forge/docs/roadmap.md`
+- `/home/azureuser/__Active_Code/forge/README.md`
+- `/home/azureuser/__Active_Code/forge/examples/README.md`
+- `/home/azureuser/__Active_Code/forge/docs/contributing.md`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/public_subset_registry.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/types.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/nodes/prepare_run.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/strategy_graph.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/runner.py`
+- `/home/azureuser/__Active_Code/forge/tests/test_harness_public_subset_contract.py`
+- `/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py`
 
 Plan authority:
-- this file is the authoritative implementation guide for `C2.9`
-- there are no blocking open questions for this milestone
-- `C2.9` ends at contract-freeze artifacts plus drift tests
-- `C3` parser/preflight/runtime enforcement is explicitly next work, not hidden inside this branch
+- this file is the implementation authority for `C3` on this branch
+- the May 19 design doc is intent authority for the bounded public DSL direction
+- `docs/strategy_dsl_public_subset_contract.md` and
+  `anvil/harness/public_subset_registry.py` are vocabulary authority for the
+  frozen public subset
+- if public-contract wording and runtime-owned internals disagree, keep the
+  public boundary strict at authoring time and keep runtime truth owned by the
+  existing builder, graph spec, and planning runtime after acceptance
 
 ## Executive Summary
 
-`C2.9` is not blocked on whether Forge can emit a bounded planning artifact.
+`C2` and `C2.9` got Forge to an honest place on planning truth and public
+contract vocabulary, but they stopped short of live enforcement.
 
-`C2.9` is blocked on contract honesty.
+The repo now has the right frozen nouns:
 
-The repo currently exposes real behavior through several different layers at the
-same time:
+- the public registry
+- the canonical example pack
+- the compatibility example
+- the negative fixtures
+- the internal runnable planning fixture
 
-- public strategy names
-- compatibility aliases
-- runtime-owned knobs
-- emitted graph metadata
-- fixture-only planning scaffolding
-- runnable internal harness examples
+What it does not yet have is one enforcement seam that makes those nouns real.
+Today, direct `StrategyConfig.from_dict()` callers, `prepare_run_node()`,
+`validator_preflight_node()`, `runner.py`, and fixture-oriented tests can still
+reach parse/runtime behavior without a shared public-boundary gate.
 
-Those surfaces are all real. They are not all public contract.
-
-This branch closes `C2.9` by freezing one explicit, truthful public subset for
-`C3 v1`, then making the repo say exactly that and nothing more. The work is a
-contract-hardening pass:
-
-- one canonical contract doc
-- one machine-readable registry
-- one public example pack split by intent
-- one relabeling pass for the existing runnable fixture examples
-- one regression wall that prevents the story from drifting again
-
-No runtime behavior change is required to finish this milestone.
+`C3` closes that gap by adding one shared raw-payload validation seam, making
+parser enforcement universal, surfacing compatibility warnings in preflight, and
+proving the whole thing with canonical/compatibility/negative/internal fixture
+coverage.
 
 ## 1. Objective and Success Bar
 
 ### 1.1 Objective
 
-Ship a repo-owned `C2.9` contract freeze for `C3 v1` public strategy authoring
-that:
+Ship one enforceable public strategy authoring surface for `C3` that:
 
-- separates canonical public surface, broader public built-ins,
-  compatibility-only surface, runtime-owned surface, metadata-only surface, and
-  fixture-only surface
-- gives `C3` one machine-readable registry instead of prose-only decisions
-- gives contributors one canonical doc and one canonical example pack for the
-  future public strategy surface
-- stops front-door docs from presenting internal harness fixtures as the public
-  DSL
+- accepts canonical public `dsl_version: c3_strategy_v1` strategies
+- accepts the one compatibility-only legacy input `analysis_review_v1`
+- preserves existing internal fixture-backed planning behavior
+- rejects public-contract violations before model work
+- keeps the current strategy graph builder and runtime targets authoritative
 
 ### 1.2 Exact problem statement
 
-What exists today is useful, but it is not yet an honest public contract.
+Forge currently tells users that:
 
-Verified repo facts:
+- the canonical public `C3 v1` examples live under
+  `examples/harness/public_subset/canonical/`
+- the compatibility-only legacy example lives under
+  `examples/harness/public_subset/compatibility/`
+- the negative fixtures represent real contract violations
 
-- `anvil/harness/types.py` still treats `StrategyConfig.kind` as an open string
-  transport field and still accepts planning-only fields in the same transport
-  object
-- `anvil/harness/nodes/prepare_run.py` still merges raw top-level task and
-  strategy keys back into state
-- `anvil/harness/nodes/validator_preflight.py` still normalizes
-  `analysis_review_v1` to `analysis_review_bounded_v1`
-- `anvil/harness/providers.py` still falls back to `execute` semantics for
-  unknown role-like names
-- `anvil/harness/strategy_graph.py` emits `schema_version` and `subset` as
-  runtime metadata on graph specs
-- `anvil/harness/planning_runtime.py` still treats `coverage_policy` and
-  `phase_inputs` as live planning-runtime inputs
-- `examples/harness/strategies/deterministic_feature_planning_v1.yaml` is still
-  a runnable fixture-backed strategy, not a clean public DSL example
-- `README.md`, `examples/README.md`, and `docs/contributing.md` still steer
-  readers first toward the runnable fixture planning example
+But runtime behavior still relies too heavily on convention:
 
-Those surfaces are not wrong. They are just not the same thing.
+- direct parser entrypoints do not universally enforce the public boundary
+- preflight does not yet own crisp compatibility-vs-canonical messaging for the
+  public subset
+- internal fixture scaffolding and canonical public authoring can still be
+  confused if enforcement is implemented too late or too narrowly
 
-`C2.9` exists to classify them precisely and freeze one honest future-facing
-subset before `C3` starts coding against folklore.
+That means the public contract is frozen in docs and tests, but not yet fully
+enforced in code.
 
 ### 1.3 Success bar
 
-`C2.9` is complete only when all of the following are true:
+`C3` is complete only when all of the following are true:
 
-- the repo has one canonical contract doc for the `C3 v1` public strategy
-  subset
-- the repo has one machine-readable registry for public kinds, stage families,
-  role families, graph primitives, transition forms, planning phase types,
-  runtime-owned exclusions, and metadata-only fields
-- the repo has one classified example pack split into canonical,
-  compatibility-only, and negative examples
-- front-door docs explicitly distinguish canonical public examples from runnable
-  internal harness fixtures
-- the current runnable fixture surfaces continue to work and continue to be
-  documented, but they are no longer mislabeled as the public DSL
-- regression tests fail if docs, registries, and example packs drift out of
-  sync
-- no part of this milestone silently starts implementing `C3` runtime behavior
+- canonical public examples with `dsl_version: c3_strategy_v1` parse cleanly
+  through `StrategyConfig.from_dict()`
+- canonical public examples then pass `validator_preflight_node()` without
+  public-surface warnings or invalid-config failures
+- compatibility-only `analysis_review_v1` input remains accepted, but is
+  explicitly labeled as legacy and non-canonical before model work
+- each negative public fixture fails with one targeted public-contract error
+- invalid public examples stop before provider initialization or runtime graph
+  execution
+- internal fixture-backed strategies under `examples/harness/strategies/`
+  continue to work, including `coverage_policy` and `phase_inputs`
+- no second parser, no public-only runtime target, and no alternate graph-spec
+  builder are introduced
+- docs and regression tests clearly separate canonical public, compatibility,
+  and internal fixture-backed surfaces
 
-## 2. Step 0: Scope Challenge
-
-### 2.1 What already exists
-
-| Sub-problem | Existing surface | Reuse decision |
-|---|---|---|
-| Contract artifact precedent | `docs/analysis_review_contract.md` | mirror this format instead of inventing a second contract-doc style |
-| Public-kind and runtime-target truth | `anvil/harness/types.py`, `anvil/harness/nodes/validator_preflight.py` | use these files as the verified source for names, aliases, and planning runtime-target rules |
-| Internal graph vocabulary | `anvil/harness/strategy_graph.py` | derive graph primitives, transition forms, planning phase types, and metadata-only fields from here |
-| Stage-family to provider-role mapping | `anvil/harness/providers.py` | freeze the public stage-family registry and role-family bindings from this verified mapping |
-| Runtime-owned planning leakage | `anvil/harness/planning_runtime.py`, `anvil/harness/nodes/prepare_run.py` | use these as the explicit evidence for excluded public fields |
-| Existing runnable example tree | `examples/harness/strategies/` | keep runnable examples in place, but reclassify them instead of moving them |
-| Existing docs entry points | `README.md`, `examples/README.md`, `docs/contributing.md` | update routing instead of building new entry documents |
-| Existing docs/example regression tests | `tests/test_docs_surface.py`, `tests/test_harness_example_strategy_wiring.py` | extend these instead of inventing a second docs-audit framework |
-
-### 2.2 Minimum complete scope
-
-Nothing below is optional if this milestone is going to close `C2.9` honestly:
-
-1. `docs/strategy_dsl_public_subset_contract.md`
-2. `anvil/harness/public_subset_registry.py`
-3. `examples/harness/public_subset/README.md`
-4. `examples/harness/public_subset/canonical/`
-5. `examples/harness/public_subset/compatibility/`
-6. `examples/harness/public_subset/negative/`
-7. updates to `README.md`
-8. updates to `examples/README.md`
-9. updates to `docs/contributing.md`
-10. explicit relabeling in `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
-11. `tests/test_harness_public_subset_contract.py`
-12. focused updates to `tests/test_docs_surface.py`
-13. focused updates to `tests/test_harness_example_strategy_wiring.py`
-
-### 2.3 Complexity verdict
-
-This branch touches more than eight files. That is normally a smell.
-
-Here it is acceptable because the blast radius is tightly constrained:
-
-- one new canonical contract doc
-- one new data-only registry module
-- one new public example pack
-- three front-door doc updates
-- one relabeling pass on the existing planning fixture example
-- one new contract regression file plus two focused test updates
-
-What would be overbuilt:
-
-- implementing parser or preflight enforcement inside `C2.9`
-- wiring the new registry into runtime selection logic
-- rewriting the planning runtime
-- moving the entire example tree for aesthetics
-- freezing a public task-spec contract in the same PR
-
-### 2.4 TODOS cross-reference
-
-`docs/project_management/future/TODOS.md` contains no deferred item that blocks
-this milestone.
-
-This plan should add or preserve explicit post-`C2.9` follow-ups for:
-
-- parser/preflight enforcement of the frozen public subset
-- public task-spec contract work, if desired later
-- richer diagnostics/publication work beyond the contract freeze
-
-### 2.5 Completeness and distribution verdict
-
-Completeness verdict:
-
-- the complete version of this milestone includes the negative example pack and
-  the drift wall
-- omitting those would save little effort and would leave the contract easy to
-  misrepresent again
-
-Distribution verdict:
-
-- this milestone introduces no new binary, package, container, or deployable
-  runtime artifact
-- no CI/CD or publish pipeline changes are required
-
-### 2.6 Not in scope
-
-- implementing full public parser enforcement
-- changing builder/runtime routing
-- changing planning runtime semantics
-- deleting compatibility aliases from the runtime
-- removing raw merge-back from harness state
-- changing provider/model configuration
-- publishing a public validator contract
-- imports, overlays, inheritance, or arbitrary DAG composition
-- freezing a public task-spec contract
-
-## 3. Locked Decisions
-
-These decisions are frozen. Implementation may explain them, not reopen them.
+## 2. Locked Decisions
 
 | Decision | Locked choice | Why |
 |---|---|---|
-| Milestone boundary | `C2.9` ends at contract-freeze artifacts plus drift tests | keeps `C2.9` honest and keeps `C3` implementation work separate |
-| Public unit of declaration | one full strategy spec | matches how the current runtime already reasons |
-| Contract path | `docs/strategy_dsl_public_subset_contract.md` | one canonical human-facing artifact |
-| Machine-readable source of truth | `anvil/harness/public_subset_registry.py` | prose-only contracts drift too easily |
-| Example taxonomy path | `examples/harness/public_subset/` with `canonical/`, `compatibility/`, and `negative/` | separates truthful public examples from runnable internal fixtures |
-| Public version field | `dsl_version: c3_strategy_v1` | explicit versioning is part of the public contract |
-| Canonical `C3` graph-DSL kinds | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, `deterministic_feature_planning_v1` | these are the narrowed forward-looking public family |
-| Broader public built-ins | `single_pass`, `pfr_v1` remain public, but they are not themselves proof of the `C3` graph-DSL story | avoids widening the claim by accident |
-| Compatibility-only kind | `analysis_review_v1` stays compatibility-only and must never appear in canonical examples | keeps forward docs honest while preserving runtime compatibility |
-| Runtime target rule | canonical non-planning examples omit `runtime_target`; canonical planning example declares `runtime_target: planning_v1` | matches current `StrategyConfig` validation and keeps public examples DRY |
-| Runtime-owned excluded strategy fields | `coverage_policy` and `phase_inputs` are excluded from the public strategy subset | these are real runtime surfaces, but not truthful public authoring fields |
-| Metadata-only fields | `schema_version` and `subset` are runtime-emitted metadata only | users must not treat emitted graph labels as authoring keys |
-| Existing runnable planning strategy | keep `examples/harness/strategies/deterministic_feature_planning_v1.yaml` runnable, but relabel it as fixture-backed internal harness scaffolding | preserves regression value without teaching the wrong contract |
-| Code boundary | the new registry module is data-only and is not wired into runtime behavior yet | avoids accidental half-implementation of `C3` |
-| Scope boundary | this milestone freezes the public strategy-spec surface only | prevents task-spec scope creep inside a strategy-contract branch |
+| Public-contract trigger | `dsl_version: c3_strategy_v1` | explicit opt-in marker for canonical public authoring |
+| Canonical public kinds | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, `deterministic_feature_planning_v1` | already frozen in `C2.9` |
+| Broader public built-ins | `single_pass`, `pfr_v1` remain public but outside the narrowed `C3` proof surface | keeps `C3` focused |
+| Compatibility-only input | `analysis_review_v1` without `dsl_version` remains accepted | preserves intentional legacy bridge |
+| Enforcement ownership | parser-owned validation with preflight-owned messaging | covers all direct parse entrypoints without duplicating rule lists |
+| Runtime architecture | reuse current builder, graph spec, runtime targets, and reporting flows | no second compiler, no second runner |
+| Runtime-owned exclusions | `coverage_policy`, `phase_inputs` stay internal-only | canonical public authoring must not own fixture/runtime scaffolding |
+| Metadata-only exclusions | `schema_version`, `subset` stay runtime-emitted only | graph metadata is not public authoring input |
+| Public boundary | strategy spec only | task-spec freezing is later work |
+| State policy | do not add new durable state only to label authoring surface | warning/error surfaces are enough for `C3` |
+| Planning artifact schema | no `plan.json` or `plan.md` contract change | `C3` is an authoring-boundary milestone, not an artifact-schema milestone |
 
-## 4. Verified Current-State Evidence
+## 3. Step 0: Scope Challenge
 
-| Surface | Verified fact | Implementation implication |
+### 3.1 What already exists
+
+| Sub-problem | Existing surface | Reuse decision |
 |---|---|---|
-| `anvil/harness/types.py` | defines current strategy kinds, infers runtime targets, enforces planning runtime-target coupling, and freezes planning phase stage-type order | registry must reuse these verified names and canonical planning phase order |
-| `anvil/harness/strategy_graph.py` | defines internal graph vocabulary and emits `schema_version` and `subset` in `StrategyGraphSpec.to_dict()` | contract doc must classify graph vocabulary separately from metadata-only fields |
-| `anvil/harness/providers.py` | maps `solver`, `proposer`, `falsifier`, `critic`, `patcher`, `reviser`, and `auditor` to `execute`, `critique`, `refine`, and `review`, while unknown names fall back to `execute` | public stage-family registry must be closed, and role-family bindings must be explicit |
-| `anvil/harness/nodes/prepare_run.py` | merges raw task/strategy payloads back into state alongside typed `to_dict()` output | current transport shape is broader than the future public contract |
-| `anvil/harness/nodes/validator_preflight.py` | normalizes `analysis_review_v1` to `analysis_review_bounded_v1` and performs runtime-target/task-kind compatibility checks | compatibility alias remains real runtime behavior, but it is not canonical public authoring |
-| `anvil/harness/planning_runtime.py` | still treats `coverage_policy` and `phase_inputs` as active runtime inputs | those fields must be called runtime-owned and excluded from canonical public examples |
-| `examples/harness/strategies/deterministic_feature_planning_v1.yaml` | still carries `coverage_policy` and `phase_inputs` in a runnable example | that file must be relabeled, not promoted |
-| `README.md`, `examples/README.md`, `docs/contributing.md` | still route planning readers first to the runnable fixture example | docs routing must change so public readers start at the contract doc and example pack |
-| `tests/test_docs_surface.py`, `tests/test_harness_example_strategy_wiring.py` | already protect docs routing and example relationships | extend them instead of building parallel test infrastructure |
+| Frozen public vocabulary | `anvil/harness/public_subset_registry.py` | reuse as the single source of truth for kinds, stage families, exclusions, and canonical planning phase order |
+| Public contract narrative | `docs/strategy_dsl_public_subset_contract.md` | reuse as the normative authoring description; update only where enforcement becomes live |
+| Canonical, compatibility, and negative corpora | `examples/harness/public_subset/` | reuse as the acceptance corpus rather than inventing a second fixture family |
+| Typed strategy parsing | `anvil/harness/types.py` | extend the existing parser instead of adding a public-only parser |
+| Direct runtime load path | `anvil/harness/nodes/prepare_run.py` | treat as proof that parser-owned enforcement is mandatory, not optional |
+| Preflight invalid-config surface | `anvil/harness/nodes/validator_preflight.py` | reuse for warning/error adaptation before model work |
+| Runtime graph selection | `anvil/harness/strategy_graph.py` | keep the current runtime-target routing authoritative |
+| Direct execution entrypoint | `anvil/harness/runner.py` | audit because it reparses strategy payloads directly |
+| Analysis-review subgraph bridge | `anvil/harness/subgraphs/analysis_review_v1.py` | audit because it reparses bounded payloads directly |
+| Internal planning fixture | `examples/harness/strategies/deterministic_feature_planning_v1.yaml` | preserve as internal fixture-backed scaffolding, not public canonical authoring |
+| Existing public-subset drift wall | `tests/test_harness_public_subset_contract.py`, `tests/test_harness_example_strategy_wiring.py`, `tests/test_docs_surface.py` | extend rather than replace |
 
-## 5. Target Artifact Set and Authority Chain
+### 3.2 Minimum complete scope
 
-### 5.1 Authority chain
+This is the minimum complete implementation. Separate edit-required surfaces from
+audit-required surfaces so the diff stays honest.
+
+Edit-required surfaces:
+
+1. `anvil/harness/public_subset_registry.py` only if shared constants need
+   additive cleanup for enforcement reuse
+2. new shared helper: `anvil/harness/public_subset_validation.py`
+3. `anvil/harness/types.py`
+4. `anvil/harness/nodes/validator_preflight.py`
+5. `tests/test_harness_public_subset_contract.py`
+6. `tests/test_harness_example_strategy_wiring.py`
+7. one focused enforcement test file:
+   - `tests/test_harness_public_subset_enforcement.py`, or
+   - equivalent concentrated coverage in an existing harness test file
+8. `tests/test_harness_strategy_graph.py`
+9. `tests/test_harness_cli_command.py`
+10. `tests/test_harness_standalone_cli.py`
+11. `docs/strategy_dsl_public_subset_contract.md`
+12. `README.md`
+13. `examples/README.md`
+14. `docs/contributing.md`
+15. `docs/roadmap.md`
+
+Audit-required surfaces:
+
+1. `anvil/harness/nodes/prepare_run.py`
+2. `anvil/harness/runner.py`
+3. `anvil/harness/subgraphs/analysis_review_v1.py`
+4. `anvil/harness/strategy_graph.py`
+5. `anvil/harness/planning_runtime.py`
+
+Audit-required means:
+
+- confirm the parser-owned gate covers the path without a second validator
+- add or update tests if the path proves a missed branch
+- do not patch the module unless the audit shows a real loophole
+
+### 3.3 Complexity verdict
+
+This milestone touches more than eight files. That is normally a smell.
+
+Here it is justified because the contract really spans:
+
+- raw strategy payload classification
+- typed parser integration
+- preflight warning/error adaptation
+- CLI invalid-config behavior
+- direct parse entrypoint audits
+- example-pack regression coverage
+- contributor-facing docs
+
+What would be overbuilt:
+
+- a second public parser
+- path-based "public mode" detection
+- a second graph-spec type
+- a second runtime target
+- a JSON schema compiler or new standalone linter binary
+- task-spec freezing in the same cut
+
+### 3.4 Search and reuse verdict
+
+This plan should stay boring by default.
+
+Reuse calls:
+
+- [Layer 1] reuse `public_subset_registry.py` for all frozen vocabulary
+- [Layer 1] reuse `StrategyConfig.from_dict()` as the universal parse gate
+- [Layer 1] reuse `validator_preflight_node()` for warning/error adaptation
+- [Layer 1] reuse the current CLI invalid-config surface rather than inventing
+  a new command
+- [Layer 3] validate raw payloads before typed coercion, then hand accepted
+  payloads to the existing parser and runtime flow
+
+### 3.5 TODOS cross-reference
+
+`/home/azureuser/__Active_Code/forge/docs/project_management/future/TODOS.md`
+contains no blocker for `C3`.
+
+`C3` should explicitly leave follow-up room for:
+
+- public task-spec contract work
+- eventual retirement of `analysis_review_v1` compatibility input
+- richer authoring diagnostics or formatting tooling
+- future decisions about whether `single_pass` and `pfr_v1` should enter or
+  leave the narrowed canonical proof surface
+
+### 3.6 Completeness and distribution verdict
+
+Completeness verdict:
+
+- the complete version includes canonical accept, compatibility accept, and
+  negative reject behavior
+- the complete version proves that direct parser entrypoints cannot bypass the
+  public boundary
+- the complete version preserves internal runnable planning fixtures
+- the complete version updates docs so runtime behavior and author guidance say
+  the same thing
+
+A docs-only or examples-only cut would be dishonest and only save minutes.
+
+Distribution verdict:
+
+- this is not a new binary or package
+- the distribution surface remains the existing harness CLI and tests
+- because Forge is a developer tool, parser behavior plus contributor docs are
+  part of the product surface for this milestone
+
+### 3.7 NOT in scope
+
+- a public task-spec contract
+- a hosted authoring UI or editor integration
+- removal of internal fixture-backed strategies
+- removal of `single_pass` or `pfr_v1`
+- full retirement of `analysis_review_v1`
+- a new standalone strategy compiler or linter binary
+- changes to `C2` planning artifact schema or planning runtime truth behavior
+- provider/model behavior changes unrelated to public-surface enforcement
+
+## 4. Architecture Plan
+
+### 4.1 Exact enforcement model
+
+This plan makes one explicit architectural choice:
+
+- `StrategyConfig.from_dict()` becomes the universal enforcement gate for the
+  public authoring boundary
+- one new shared helper module,
+  `anvil/harness/public_subset_validation.py`, owns raw-payload classification
+  and public-surface validation
+- `validator_preflight_node()` reuses that helper for compatibility messaging
+  and invalid-config adaptation, but it does not own independent copies of the
+  allowlists or exclusion rules
+
+Why this is the right choice:
+
+- `prepare_run_node()` calls `StrategyConfig.from_dict()` directly
+- `runner.py` calls `StrategyConfig.from_dict()` directly
+- `analysis_review_v1.py` reparses bounded strategy payloads directly
+- tests also exercise `StrategyConfig.from_dict()` directly
+
+If enforcement lived only in preflight, those paths would remain loopholes.
+
+### 4.2 Shared helper contract
+
+The helper module should expose exactly two public seams:
+
+1. `classify_public_strategy_surface(raw_payload)`
+   - returns one of:
+     - `canonical_public`
+     - `compatibility_only`
+     - `internal_or_private`
+
+2. `validate_public_strategy_payload(raw_payload)`
+   - validates only the canonical public surface
+   - raises `ValueError` with one crisp reason when the payload violates the
+     public contract
+   - no side effects
+
+The helper must not:
+
+- mutate strategy kinds
+- infer public mode from file path
+- build graph specs
+- know about task-spec compatibility
+- emit warnings directly into run state
+
+### 4.3 Canonical authoring and runtime flow
 
 ```text
-public_subset_registry.py
-        |
-        +--> strategy_dsl_public_subset_contract.md
-        |
-        +--> examples/harness/public_subset/
-        |
-        +--> docs routing in README.md / examples/README.md / docs/contributing.md
-        |
-        +--> tests/test_harness_public_subset_contract.py
-              tests/test_docs_surface.py
-              tests/test_harness_example_strategy_wiring.py
+strategy.yaml
+    |
+    v
+load_structured_file()
+    |
+    v
+classify_public_strategy_surface(raw_payload)
+    |
+    +--> canonical_public
+    |      - requires dsl_version: c3_strategy_v1
+    |      - kind must be one of the frozen canonical kinds
+    |      - top-level keys must be in the public allowlist
+    |      - stage families must be in the frozen set
+    |      - planning examples must use canonical phase order
+    |      - no runtime-owned fields
+    |      - no metadata-only fields
+    |
+    +--> compatibility_only
+    |      - kind: analysis_review_v1
+    |      - accepted runtime input, not canonical public authoring
+    |      - warning surfaced in preflight
+    |
+    +--> internal_or_private
+           - existing internal fixtures remain allowed
+           - current runtime-only scaffolding remains allowed
+    |
+    v
+validate_public_strategy_payload(raw_payload)  [canonical_public only]
+    |
+    v
+StrategyConfig.from_dict()
+    |
+    v
+validator_preflight_node()
+    |
+    +--> canonical invalid payload
+    |      stop before model work
+    |      run_verdict=invalid_config
+    |
+    +--> compatibility_only payload
+    |      accepted with explicit legacy warning
+    |
+    +--> accepted config
+           existing graph/runtime path
+    |
+    v
+build_strategy_graph_spec(...)
+    |
+    v
+runtime_target routing
 ```
 
-Rules:
+### 4.4 Ownership boundaries
 
-- the registry is the only machine-readable source of truth
-- the contract doc mirrors the registry, it does not invent a second list
-- canonical public examples must conform to the registry and contract doc
-- docs route readers to the contract doc and public example pack first
-- tests prove the four surfaces stay aligned
+| Surface | Owner | Responsibility |
+|---|---|---|
+| canonical kinds, stage families, exclusions, canonical planning phase order | `public_subset_registry.py` | vocabulary source of truth |
+| raw public-surface classification and canonical validation | `public_subset_validation.py` | classify and validate raw payloads |
+| typed strategy parsing | `types.py` | coerce accepted payloads into `StrategyConfig` |
+| compatibility warning and invalid-config stop behavior | `validator_preflight.py` | adapt parser/helper results into run-state warnings/errors |
+| graph spec construction and runtime target routing | `strategy_graph.py` | remain runtime-owned after acceptance |
+| planning fixture runtime scaffolding | `planning_runtime.py` and internal strategy fixtures | remain valid for internal/private surfaces only |
+| direct execution entrypoints | `prepare_run.py`, `runner.py`, subgraphs | audit to ensure the parser-owned gate is sufficient |
 
-### 5.2 Exact registry contents
+### 4.5 Canonical boundary rules
 
-`anvil/harness/public_subset_registry.py` must be data-only and must export the
-exact public sets needed for `C2.9`.
+Canonical public payloads are allowed to declare only:
 
-Required constants:
+- `dsl_version`
+- `name`
+- `kind`
+- `roles`
+- `runtime_target`
+- `phases`
+- `artifact_policy`
+- `determinism_policy`
+- `discovery_policy`
+- `rubric_policy`
+- `stop_policy`
+- `trust_review`
 
-| Constant group | Exact content |
-|---|---|
-| `PUBLIC_SUBSET_DSL_VERSION` | `c3_strategy_v1` |
-| `C3_GRAPH_DSL_KINDS` | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, `deterministic_feature_planning_v1` |
-| `BROADER_PUBLIC_BUILTIN_KINDS` | `single_pass`, `pfr_v1` |
-| `COMPATIBILITY_ONLY_KINDS` | `analysis_review_v1` |
-| `PUBLIC_GRAPH_PRIMITIVES` | `stage`, `linear_edge`, `conditional_branch`, `bounded_loop`, `terminal_outcome`, `planning_phase` |
-| `PUBLIC_TRANSITION_FORMS` | `linear_next`, `enumerated_branch`, `bounded_loop_back_edge`, `terminal_exit` |
-| `PUBLIC_STAGE_FAMILIES` | `solver`, `proposer`, `falsifier`, `patcher`, `critic`, `reviser`, `auditor`, `focus_gate`, `planner` |
-| `PUBLIC_ROLE_FAMILIES` | `execute`, `critique`, `refine`, `review` |
-| `STAGE_FAMILY_ROLE_BINDINGS` | `solver -> execute`, `proposer -> execute`, `planner -> execute`, `focus_gate -> execute`, `falsifier -> critique`, `critic -> critique`, `patcher -> refine`, `reviser -> refine`, `auditor -> review` |
-| `CANONICAL_PLANNING_PHASE_STAGE_TYPES` | `rubric_design_doc`, `architecture_seam_decomposition`, `parallel_workstream_planning`, `executable_slice_emission` |
-| `PLANNING_REQUIRED_POLICY_FIELDS` | `artifact_policy`, `determinism_policy`, `discovery_policy`, `rubric_policy`, `stop_policy` |
-| `RUNTIME_OWNED_EXCLUDED_FIELDS` | `coverage_policy`, `phase_inputs` |
-| `METADATA_ONLY_FIELDS` | `schema_version`, `subset` |
+Canonical public payloads must obey all of these rules:
 
-Registry implementation rules:
+- `dsl_version` must equal `c3_strategy_v1`
+- `kind` must be one of:
+  - `analysis_review_bounded_v1`
+  - `analysis_review_trust_v1`
+  - `deterministic_feature_planning_v1`
+- analysis-review canonical examples omit `runtime_target`
+- planning canonical examples require `runtime_target: planning_v1`
+- planning canonical examples must declare the four canonical phase
+  `stage_type` values in the frozen order
+- role keys must stay inside the frozen public stage-family set
+- `coverage_policy` and `phase_inputs` are forbidden in canonical public mode
+- `schema_version` and `subset` are forbidden in canonical public mode
 
-- use plain tuples, frozensets, and dictionaries only
-- do not add validation or parser logic to this module
-- do not wire this module into runtime behavior in `C2.9`
-- prefer defining the public sets directly in this module and letting tests
-  compare them against current runtime constants, rather than importing half the
-  truth from multiple runtime modules
+Compatibility-only payloads obey these rules:
 
-### 5.3 Contract doc requirements
+- `kind: analysis_review_v1`
+- no `dsl_version`
+- still accepted by parser and preflight
+- warning must say it is legacy accepted input, not canonical public `C3 v1`
 
-`docs/strategy_dsl_public_subset_contract.md` must be the human-readable mirror
-of the registry and must include all of the following sections:
+Internal/private payloads obey these rules:
 
-1. Scope and milestone boundary
-2. Canonical public strategy kinds versus broader public built-ins
-3. Compatibility-only kinds
-4. Public versioning via `dsl_version`
-5. Public graph primitives
-6. Public transition forms
-7. Public stage families and role-family bindings
-8. Planning-specific canonical phase order and required policy refs
-9. Runtime-owned excluded fields
-10. Metadata-only fields
-11. Canonical example taxonomy
-12. Explicit exclusions and post-`C2.9` follow-up boundary
+- may continue using runtime-owned scaffolding needed by internal fixtures
+- must not be relabeled as canonical public authoring in docs or examples
 
-Doc rules:
+### 4.6 Ordered implementation sequence
 
-- it freezes the public strategy-spec subset only
-- it does not claim parser enforcement already exists
-- it calls `coverage_policy` and `phase_inputs` runtime-owned, not deprecated
-  public fields
-- it calls `schema_version` and `subset` metadata-only, not authoring keys
-- it states that canonical non-planning examples omit `runtime_target`
-- it states that canonical planning examples include `runtime_target: planning_v1`
+1. Add the shared helper and lock the exact classification/validation rules.
+2. Wire `StrategyConfig.from_dict()` to call the helper before typed coercion.
+3. Update `validator_preflight_node()` to reuse the helper for compatibility
+   warnings and invalid-config adaptation.
+4. Extend tests so parser, preflight, CLI, and example wiring all prove the
+   same contract.
+5. Update docs only after the live enforcement behavior is in place.
 
-### 5.4 Example pack requirements
+Hard rule:
 
-The public example pack must be new and separate from existing runnable
-fixtures.
+- `strategy_graph.py`, `planning_runtime.py`, and reporting code are downstream
+  truth surfaces after acceptance. `C3` does not duplicate or reinterpret them.
 
-Required files:
+## 5. Code Quality Rules
 
-- `examples/harness/public_subset/README.md`
-- `examples/harness/public_subset/canonical/analysis_review_bounded_v1.yaml`
-- `examples/harness/public_subset/canonical/analysis_review_trust_v1.yaml`
-- `examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml`
-- `examples/harness/public_subset/compatibility/analysis_review_v1.yaml`
-- `examples/harness/public_subset/negative/invalid_kind.yaml`
-- `examples/harness/public_subset/negative/unknown_top_level_key.yaml`
-- `examples/harness/public_subset/negative/invalid_stage_family.yaml`
-- `examples/harness/public_subset/negative/runtime_owned_phase_inputs.yaml`
-- `examples/harness/public_subset/negative/metadata_only_schema_version.yaml`
+### 5.1 Boring by default
 
-Canonical example rules:
+- no second parser
+- no second graph spec
+- no public-only runtime target
+- no path-based "public mode" heuristics
+- no duplicate allowlists across parser and preflight
 
-- every canonical example carries `dsl_version: c3_strategy_v1`
-- canonical examples use canonical kinds only
-- canonical examples never use `analysis_review_v1`
-- canonical examples never use `coverage_policy`
-- canonical examples never use `phase_inputs`
-- canonical examples never use `schema_version`
-- canonical examples never use `subset`
-- canonical non-planning examples omit `runtime_target`
-- canonical planning example includes `runtime_target: planning_v1`
-- canonical planning example keeps the current verified phase order and the
-  required planning policy refs
+### 5.2 Explicit over clever
 
-Compatibility example rules:
+- public mode is triggered by `dsl_version`, not by vibes
+- compatibility is explicit, not inferred
+- one negative fixture should fail for one crisp reason
+- one helper owns the boundary; everyone else calls it
 
-- `analysis_review_v1.yaml` is accepted legacy input, not a canonical public
-  example
-- it should make the compatibility-only status obvious in file comments and in
-  the example-pack README
-- it should not be presented anywhere as the recommended starting point
+### 5.3 DRY boundaries
 
-Negative example rules:
+Keep one source of truth for:
 
-- each negative example maps to exactly one contract violation
-- `examples/harness/public_subset/README.md` must explain the expected rejection
-  reason for each negative file
-- negative examples are documentation and future parser fixtures, not runnable
-  happy-path harness examples
+- canonical public kinds
+- compatibility-only kinds
+- public stage families
+- runtime-owned excluded fields
+- metadata-only excluded fields
+- canonical planning phase order
 
-### 5.5 Front-door routing requirements
+### 5.4 Smallest clean diff
 
-The repo must teach the public subset first, while preserving runnable harness
-examples as runnable harness examples.
+Prefer one focused shared helper plus small integrations over scattering public
+contract logic across every caller.
 
-Front-door rules:
+The smallest acceptable clean diff is:
 
-- `README.md` must point readers first to the contract doc and public example
-  pack for the future public subset
-- `examples/README.md` must distinguish canonical public examples from runnable
-  harness fixtures
-- `docs/contributing.md` must explain the same split for maintainers
-- the current planning run command can stay, but it must be clearly framed as a
-  runnable internal harness example path, not the canonical public DSL example
-- `examples/harness/strategies/deterministic_feature_planning_v1.yaml` must be
-  relabeled as internal or fixture-backed scaffolding in its header comments
+- one new helper module
+- one parser integration
+- one preflight integration
+- tests and docs that reflect the live behavior
 
-## 6. Exact Implementation Plan
+### 5.5 Diagram maintenance
 
-### 6.1 Workstream A: Freeze the registry and contract doc
+If the helper logic or preflight integration grows a non-obvious branch split,
+add one short ASCII diagram comment near the boundary. Do not add decorative
+diagrams.
 
-Goal: make the public subset explicit in one code artifact and one doc artifact.
+## 6. Test Review
 
-Primary paths:
+100% coverage is the goal for the new public-authoring codepaths. The critical
+coverage is branch coverage across canonical, compatibility, internal, and
+invalid public inputs.
 
-- `anvil/harness/public_subset_registry.py`
-- `docs/strategy_dsl_public_subset_contract.md`
+### 6.1 Code path and user-flow diagram
 
-Implementation tasks:
+```text
+CODE PATHS
+[+] raw strategy surface classification
+  ├── [TEST] canonical public payload identified by dsl_version
+  ├── [TEST] compatibility-only legacy payload identified without dsl_version
+  └── [TEST] internal fixture-backed payload bypasses canonical-only exclusions
 
-1. Add `public_subset_registry.py` with the exact constants listed in section
-   5.2.
-2. Write `strategy_dsl_public_subset_contract.md` so each enumerated public set
-   maps 1:1 to a registry constant group.
-3. Make the doc explicit about the following three layers:
-   - canonical public strategy-spec surface
-   - compatibility-only accepted runtime inputs
-   - runtime-owned and metadata-only surfaces that are not public authoring
-4. State plainly that this milestone freezes the contract but does not yet
-   enforce it at runtime.
-5. State plainly that task-spec surface freeze is out of scope for this branch.
+[+] parser-owned public validation
+  ├── [TEST] canonical bounded example accepted
+  ├── [TEST] canonical trust example accepted
+  ├── [TEST] canonical planning example accepted
+  ├── [TEST] invalid kind rejected
+  ├── [TEST] unknown top-level key rejected
+  ├── [TEST] invalid public stage family rejected
+  ├── [TEST] runtime-owned phase_inputs rejected in public mode
+  └── [TEST] metadata-only schema_version rejected in public mode
 
-Definition of done:
+[+] direct parse entrypoints
+  ├── [TEST] prepare_run_node cannot bypass public validation
+  ├── [TEST] runner direct parse cannot bypass public validation
+  └── [TEST] internal planning fixture still parses with coverage_policy + phase_inputs
 
-- the registry exists as code data
-- the contract doc exists as the human-facing source of truth
-- the doc and registry agree on all enumerated sets
-- the doc does not blur broader public built-ins with the narrower `C3`
-  graph-DSL family
+[+] validator preflight
+  ├── [TEST] invalid public payload stops before model work
+  ├── [TEST] compatibility-only legacy input emits warning, not error
+  └── [TEST] existing task/runtime mismatch checks still fire
 
-### 6.2 Workstream B: Build the classified public example pack
+[+] strategy graph routing
+  ├── [TEST] canonical planning example routes to planning_v1
+  ├── [TEST] canonical analysis public examples route to analysis_review_v1
+  └── [TEST] compatibility-only legacy input still normalizes to bounded runtime behavior
 
-Goal: give the repo one clean example pack that matches the new contract
-exactly.
+[+] CLI/report invalid-config surface
+  ├── [TEST] invalid public example exits non-zero
+  ├── [TEST] summary/error text names the contract violation
+  └── [TEST] no provider/model work starts on invalid public input
 
-Primary paths:
+USER FLOWS
+[+] author uses canonical public example
+  ├── [TEST] parse + preflight succeeds
+  └── [TEST] runtime routing matches the declared public example shape
 
-- `examples/harness/public_subset/README.md`
-- `examples/harness/public_subset/canonical/`
-- `examples/harness/public_subset/compatibility/`
-- `examples/harness/public_subset/negative/`
+[+] author uses compatibility-only legacy input
+  ├── [TEST] run is accepted
+  └── [TEST] warning says "legacy accepted input, not canonical public C3"
 
-Implementation tasks:
+[+] author copies a negative fixture by mistake
+  ├── [TEST] run fails before model work
+  └── [TEST] operator sees a precise fix instead of a late runtime error
 
-1. Add the example-pack README with three sections:
-   - canonical
-   - compatibility-only
-   - negative
-2. Add the three canonical examples.
-3. Add the one compatibility-only legacy alias example.
-4. Add the five negative examples named in section 5.4.
-5. Make the planning canonical example structurally honest:
-   - keep `runtime_target: planning_v1`
-   - keep the canonical phase order from `StrategyConfig`
-   - keep required planning policy refs
-   - omit `coverage_policy`
-   - omit `phase_inputs`
-6. Keep the negative examples simple enough that `C3` parser/preflight work can
-   reuse them directly later.
+[+] maintainer runs internal planning fixture
+  ├── [TEST] internal fixture still loads
+  └── [TEST] deterministic fixture-backed stop-path coverage is preserved
+```
 
-Definition of done:
-
-- the example pack exists and is navigable
-- canonical examples are clean public examples, not fixture mirrors
-- compatibility example is obviously non-canonical
-- negative examples cover kind closure, unknown top-level key rejection,
-  stage-family closure, runtime-owned field exclusion, and metadata-only field
-  exclusion
-
-### 6.3 Workstream C: Align docs and relabel runnable fixtures
-
-Goal: stop the repo from teaching the wrong surface first.
-
-Primary paths:
-
-- `README.md`
-- `examples/README.md`
-- `docs/contributing.md`
-- `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
-
-Implementation tasks:
-
-1. Update the three docs so the future public subset points to:
-   - `docs/strategy_dsl_public_subset_contract.md`
-   - `examples/harness/public_subset/README.md`
-2. Preserve current runnable commands and current example paths where practical.
-3. Change wording that currently calls the runnable deterministic planning
-   example canonical public DSL.
-4. Add explicit header comments to
-   `examples/harness/strategies/deterministic_feature_planning_v1.yaml` that say:
-   - this file is a runnable internal harness fixture
-   - it preserves regression scaffolding
-   - it is not the canonical public `C3 v1` example
-
-Definition of done:
-
-- no front-door doc teaches the fixture-backed planning strategy as the
-  canonical public DSL example
-- public readers can discover the contract doc and example pack from the repo
-  front door
-- runnable fixtures stay easy to find and easy to run
-
-### 6.4 Workstream D: Add the contract drift wall
-
-Goal: make it difficult for the repo to drift back into mixed stories.
-
-Primary paths:
+### 6.2 Required test files
 
 - `tests/test_harness_public_subset_contract.py`
-- `tests/test_docs_surface.py`
 - `tests/test_harness_example_strategy_wiring.py`
+- one focused enforcement file:
+  - `tests/test_harness_public_subset_enforcement.py`, or
+  - equivalent focused coverage in an existing file
+- `tests/test_harness_strategy_graph.py`
+- `tests/test_harness_cli_command.py`
+- `tests/test_harness_standalone_cli.py`
+- `tests/test_docs_surface.py`
 
-Implementation tasks:
+### 6.3 Regression rule
 
-1. Add `tests/test_harness_public_subset_contract.py`.
-2. Extend `tests/test_docs_surface.py` so front-door routing points at the
-   public contract and example pack first.
-3. Extend `tests/test_harness_example_strategy_wiring.py` so the new public
-   example pack and the old runnable fixture tree coexist with explicit labels.
+Every new public-contract rule must land with:
 
-Definition of done:
+- one example or inline payload that exercises the rule
+- one parser/preflight test that proves the acceptance or rejection behavior
+- one message assertion that proves the error or warning is actionable
 
-- docs, registry, and example pack cannot silently diverge
-- canonical public examples cannot silently regain runtime-owned fields
-- existing runnable example coverage remains intact
+No docs-only contract rule is allowed.
 
-## 7. Test Review
-
-Framework: `pytest`  
-Goal: every contract decision frozen by `C2.9` gets a drift test.
-
-### 7.1 Coverage diagram
-
-```text
-CONTRACT COVERAGE
-=================
-[+] anvil/harness/public_subset_registry.py
-    |
-    |-- canonical kinds
-    |-- broader public built-ins
-    |-- compatibility-only kinds
-    |-- graph primitives
-    |-- transition forms
-    |-- stage families
-    |-- role families and bindings
-    |-- planning phase stage types
-    |-- required planning policy refs
-    |-- runtime-owned excluded fields
-    `-- metadata-only fields
-
-[+] docs/strategy_dsl_public_subset_contract.md
-    |
-    |-- must mirror registry names and exclusions
-    |-- must separate public vs compatibility vs runtime-owned vs metadata-only
-    `-- must state the C2.9/C3 boundary honestly
-
-[+] examples/harness/public_subset/canonical/
-    |
-    |-- must use canonical names only
-    |-- must carry dsl_version
-    |-- must omit runtime-owned fields
-    `-- must omit metadata-only fields
-
-[+] examples/harness/public_subset/compatibility/
-    |
-    `-- must teach legacy accepted input without pretending it is canonical
-
-[+] examples/harness/public_subset/negative/
-    |
-    |-- invalid_kind.yaml
-    |-- unknown_top_level_key.yaml
-    |-- invalid_stage_family.yaml
-    |-- runtime_owned_phase_inputs.yaml
-    `-- metadata_only_schema_version.yaml
-
-[+] front-door docs
-    |
-    |-- README.md
-    |-- examples/README.md
-    `-- docs/contributing.md
-        must point readers at the correct public surfaces first
-
-[+] runnable fixture example
-    |
-    `-- examples/harness/strategies/deterministic_feature_planning_v1.yaml
-        must remain runnable and must be explicitly labeled internal/fixture-backed
-```
-
-### 7.2 Required tests
-
-#### A. `tests/test_harness_public_subset_contract.py`
-
-This new test file must assert all of the following:
-
-1. registry constants equal the exact sets listed in section 5.2
-2. the contract doc contains each canonical kind, broader built-in kind,
-   compatibility-only kind, stage family, role family, transition form,
-   excluded field, and metadata-only field
-3. canonical examples:
-   - exist at the expected paths
-   - carry `dsl_version: c3_strategy_v1`
-   - use canonical kinds only
-   - omit `analysis_review_v1`
-   - omit `coverage_policy`
-   - omit `phase_inputs`
-   - omit `schema_version`
-   - omit `subset`
-4. canonical planning example:
-   - includes `runtime_target: planning_v1`
-   - declares phases in the exact canonical order
-   - includes the required planning policy refs
-5. canonical non-planning examples omit `runtime_target`
-6. compatibility example:
-   - exists at the expected path
-   - uses `kind: analysis_review_v1`
-   - is labeled compatibility-only in raw text or in the example-pack README
-7. negative examples:
-   - all exist
-   - are indexed in `examples/harness/public_subset/README.md`
-   - each map to the expected rejection reason
-
-#### B. `tests/test_docs_surface.py`
-
-Update existing docs-surface tests to assert:
-
-- `README.md` links to `docs/strategy_dsl_public_subset_contract.md`
-- `README.md` links to `examples/harness/public_subset/README.md`
-- `examples/README.md` distinguishes canonical public examples from runnable
-  harness fixtures
-- `docs/contributing.md` uses the same taxonomy
-- the planning run command still exists where intended
-- the docs no longer call
-  `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
-  the canonical public DSL example
-
-#### C. `tests/test_harness_example_strategy_wiring.py`
-
-Update existing example-wiring tests to assert:
-
-- the new public example-pack directories exist
-- canonical, compatibility, and negative example counts match the plan
-- the existing deterministic planning fixture example still exists at the
-  current path
-- the existing deterministic planning fixture raw text now labels it as
-  internal or fixture-backed
-- existing analysis-review example wiring assertions still pass
-
-### 7.3 Suggested commands
+### 6.4 Required validation commands
 
 ```bash
 poetry run pytest -q tests/test_harness_public_subset_contract.py
-poetry run pytest -q tests/test_docs_surface.py
 poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+poetry run pytest -q tests/test_harness_strategy_graph.py
+poetry run pytest -q tests/test_harness_cli_command.py tests/test_harness_standalone_cli.py
+poetry run pytest -q tests/test_docs_surface.py
 ```
 
-Optional broader smoke tests if example surface changes spill further than
-expected:
+If a dedicated enforcement file is added:
 
 ```bash
-poetry run pytest -q tests/test_harness_strategy_graph.py
-poetry run pytest -q tests/test_harness_planning_graph.py
+poetry run pytest -q tests/test_harness_public_subset_enforcement.py
 ```
 
-### 7.4 Diagram maintenance and code-comment verdict
+## 7. Performance Review
 
-Plan-level ASCII diagrams are required and are already included here.
+This milestone is not performance-heavy, but it still has one real requirement:
+invalid public authoring must fail cheaply.
 
-Inline code-comment diagrams are not required in implementation files for
-`C2.9`, because this branch should not add new multi-step runtime logic. If the
-implementation unexpectedly adds logic beyond data/docs/test surfaces, that is a
-scope-break smell and should be challenged before merging.
+Performance rules:
 
-## 8. Reliability, Failure Modes, and Performance
+- raw public validation runs once per parse
+- preflight reuses classification results or reuses the same helper, but does
+  not duplicate deep validation logic in a second implementation
+- validation cost stays linear in top-level keys, roles, and phases
+- invalid public payloads must not initialize providers or enter runtime graph
+  execution
+- compatibility warnings must not require a separate graph build
 
-### 8.1 Reliability rules
+The only acceptable expensive path is a valid strategy entering the existing
+runtime flow.
 
-- `C2.9` must not change runtime behavior
-- current runnable harness examples must keep their existing paths unless a move
-  is strictly necessary
-- canonical public examples must live in a separate namespace from internal
-  runnable fixtures
-- every public set that matters to `C3` must live in code data once
+## 8. Failure Modes Registry
 
-### 8.2 Failure modes registry
+| Codepath | Realistic failure | Test required | Error handling required | User-visible outcome |
+|---|---|---|---|---|
+| parser-owned validation | canonical public payload silently ignores forbidden `phase_inputs` | yes | hard parse failure surfaced as invalid-config in preflight | clear authoring error |
+| parser-owned validation | canonical payload accepts `schema_version` or `subset` and looks legitimate | yes | hard parse failure surfaced as invalid-config | clear authoring error |
+| compatibility path | `analysis_review_v1` is accepted but looks canonical | yes | warning before model work | explicit legacy notice |
+| direct parse entrypoint | `prepare_run_node()` bypasses the boundary while preflight would catch it | yes | parser owns the gate | no loophole |
+| internal planning fixture | parser-owned enforcement accidentally rejects `coverage_policy` or `phase_inputs` on internal fixtures | yes | classify as internal/private before canonical checks | no regression for internal fixture corpus |
+| graph routing | accepted canonical public example routes differently from its current runtime family | yes | route through current graph-spec builder | predictable behavior |
+| CLI/reporting | invalid public example exits as success | yes | non-zero exit and invalid_config verdict | automation sees failure |
+| docs/examples | docs still describe enforcement as future-only after behavior is live | yes | doc refresh + docs-surface tests | contributor trust preserved |
 
-| Failure | User-visible impact | Planned protection |
-|---|---|---|
-| canonical example accidentally includes `phase_inputs` | public example teaches fixture scaffolding as public API | contract test asserts canonical examples omit runtime-owned fields |
-| canonical example includes `schema_version` or `subset` | users mistake metadata for authoring keys | contract test asserts canonical examples omit metadata-only fields |
-| `analysis_review_v1` appears in canonical docs or examples | legacy alias is mistaken for forward contract | contract test and docs-surface test enforce the canonical/compatibility split |
-| contract doc and registry disagree | future `C3` work starts from conflicting truth | new contract test fails |
-| front-door docs still point readers first to fixture examples | contributors keep learning the wrong surface | docs-surface test fails |
-| runnable planning fixture loses its runnable status during relabeling | regression coverage breaks for the wrong reason | example-wiring test keeps path and raw-file presence stable |
+Critical-gap rule:
 
-### 8.3 Performance verdict
-
-There is no meaningful runtime performance risk in this milestone because the
-branch is artifact-, docs-, and test-focused.
-
-The real risk is contract drift. The regression wall addresses that directly.
+- no public authoring failure may be silent, untested, and only discoverable
+  after model work
 
 ## 9. Worktree Parallelization Strategy
 
-This branch is moderately parallelizable once the registry vocabulary is frozen.
+This plan has real parallelization opportunity once the shared helper contract
+is frozen.
 
 ### 9.1 Dependency table
 
 | Step | Modules touched | Depends on |
 |---|---|---|
-| A. Freeze registry and contract doc | `anvil/harness/`, `docs/` | — |
-| B. Build public example pack | `examples/harness/public_subset/` | A |
-| C. Align docs and relabel runnable planning fixture | `README.md`, `examples/`, `docs/`, `examples/harness/strategies/` | A |
-| D. Add regression wall | `tests/`, plus read access to all surfaces above | B, C |
+| A. Freeze public validation contract | `anvil/harness/` validation surfaces | — |
+| B. Parser + preflight integration | `anvil/harness/` parse/preflight surfaces | A |
+| C. Example pack and docs alignment | `examples/harness/public_subset/`, `docs/`, `README.md`, `examples/README.md` | A |
+| D. Regression wall | `tests/` | B, C |
 
 ### 9.2 Parallel lanes
 
-Lane A: foundation  
-Freeze registry names, exclusions, versioning, and contract vocabulary.
+```text
+Lane A: contract freeze
+  A1. helper API
+  A2. canonical allowlist and exclusion rules
+  A3. canonical planning-specific rules
 
-Lane B: example pack  
-Owns `examples/harness/public_subset/` and nothing else.
+Lane B: parser + preflight integration
+  B1. StrategyConfig.from_dict() hook-in
+  B2. preflight warning/error adaptation
+  B3. direct parse entrypoint audit notes or fixes
 
-Lane C: docs alignment  
-Owns front-door wording plus the header relabeling in
-`examples/harness/strategies/deterministic_feature_planning_v1.yaml`.
+Lane C: docs + examples
+  C1. contract doc wording refresh
+  C2. example-pack wording and taxonomy refresh
+  C3. README / contributing / roadmap alignment
 
-Lane D: regression wall  
-Owns the test integration pass after example and docs work land.
+Lane D: regression wall
+  D1. parser acceptance and rejection tests
+  D2. direct-entrypoint bypass tests
+  D3. CLI invalid-config and no-model-work tests
+```
 
 ### 9.3 Execution order
 
-```text
-Lane A
-  |
-  +-----> Lane B
-  |
-  +-----> Lane C
-             |
-     Lane B + Lane C merge
-             |
-             v
-           Lane D
-```
-
-Execution order:
-
-1. Launch Lane A first.
-2. After A lands, launch B and C in parallel worktrees.
+1. Launch Lane A first and freeze the helper API plus exact validation rules.
+2. Launch Lanes B and C in parallel after A is stable.
 3. Merge B and C.
-4. Run D last as the merge-blocking drift wall.
+4. Launch Lane D last because it must test the final accepted behavior and final
+   wording.
 
 ### 9.4 Conflict flags
 
-- Lane A and Lane B both care about exact registry names, so B must wait for A
-- Lane A and Lane C both care about canonical terminology, so C must wait for A
-- Lanes B and D both touch example-pack expectations, so D must run last
-- Lanes C and D both touch docs-surface assertions, so D must run last
-- do not expand Lane D into parser enforcement, that would break scope
+- Lanes B and C must not invent vocabulary beyond Lane A.
+- Lane B must not hardcode a second copy of the allowlist or exclusion sets.
+- Lane C must not relabel the internal planning fixture as canonical public
+  authoring.
+- Lane D must assert final error text and final taxonomy, not draft wording.
 
-## 10. Acceptance Checklist
+## 10. Implementation Tasks
 
-- [ ] `docs/strategy_dsl_public_subset_contract.md` exists and is discoverable
-- [ ] `anvil/harness/public_subset_registry.py` exists and is data-only
-- [ ] `C3_GRAPH_DSL_KINDS` contains exactly `analysis_review_bounded_v1`, `analysis_review_trust_v1`, and `deterministic_feature_planning_v1`
-- [ ] broader public built-ins are explicitly separated from the narrower `C3` graph-DSL claim
-- [ ] `analysis_review_v1` is documented as compatibility-only, not canonical
-- [ ] canonical public examples live under `examples/harness/public_subset/canonical/`
-- [ ] canonical public examples carry `dsl_version: c3_strategy_v1`
-- [ ] canonical public examples do not contain `coverage_policy`, `phase_inputs`, `schema_version`, or `subset`
-- [ ] canonical non-planning examples omit `runtime_target`
-- [ ] canonical planning example includes `runtime_target: planning_v1`
-- [ ] compatibility example lives under `examples/harness/public_subset/compatibility/`
-- [ ] negative examples live under `examples/harness/public_subset/negative/`
-- [ ] front-door docs route readers to the contract doc and public example pack first
-- [ ] the existing runnable deterministic planning strategy is explicitly labeled fixture-backed/internal
-- [ ] `tests/test_harness_public_subset_contract.py` exists and passes
-- [ ] `tests/test_docs_surface.py` and `tests/test_harness_example_strategy_wiring.py` are updated and pass
-- [ ] no runtime behavior change is claimed or required for this milestone
+Synthesized from the design lineage, the live repo seams, and the current
+contract gap.
 
-## 11. Post-C2.9 Follow-Ups
+- [ ] **T1 (P1, human: ~2h / CC: ~20min)** — shared public-boundary helper — add `anvil/harness/public_subset_validation.py` with one classification seam and one canonical validation seam driven entirely by the frozen registry constants
+  - Surfaced by: Step 0 + Architecture review — the contract needs one owner
+  - Files: `anvil/harness/public_subset_validation.py`, optional light registry cleanup
+  - Verify: focused enforcement coverage plus `tests/test_harness_public_subset_contract.py`
+- [ ] **T2 (P1, human: ~1.5h / CC: ~15min)** — parser-owned enforcement — wire `StrategyConfig.from_dict()` to call the shared helper before typed coercion so direct parse callers cannot bypass the public boundary
+  - Surfaced by: Architecture review — preflight-only enforcement leaves real loopholes
+  - Files: `anvil/harness/types.py`
+  - Verify: parser acceptance/rejection tests plus direct-entrypoint coverage
+- [ ] **T3 (P1, human: ~1.5h / CC: ~15min)** — preflight compatibility and invalid-config adaptation — reuse the shared helper in `validator_preflight_node()` for legacy warnings and invalid-config stop behavior without duplicating rule lists
+  - Surfaced by: Architecture + Failure-modes review — users need precise answers before model work starts
+  - Files: `anvil/harness/nodes/validator_preflight.py`
+  - Verify: `tests/test_harness_cli_command.py`, `tests/test_harness_standalone_cli.py`
+- [ ] **T4 (P1, human: ~1h / CC: ~10min)** — audit direct parse entrypoints — confirm `prepare_run_node()`, `runner.py`, `analysis_review_v1.py`, and graph-building helpers are covered by parser-owned enforcement and patch only if the audit reveals a real bypass
+  - Surfaced by: Step 0 scope challenge — these are the easiest loopholes to miss
+  - Files: audit of `anvil/harness/nodes/prepare_run.py`, `anvil/harness/runner.py`, `anvil/harness/subgraphs/analysis_review_v1.py`, `anvil/harness/strategy_graph.py`
+  - Verify: direct-entrypoint tests in example wiring and focused enforcement coverage
+- [ ] **T5 (P1, human: ~2h / CC: ~20min)** — regression wall for canonical, compatibility, and internal/private examples — add or tighten acceptance and rejection tests so one violation yields one targeted failure and internal planning scaffolding remains intact
+  - Surfaced by: Test review — the contract is not real until the negative fixtures become live enforcement coverage
+  - Files: `tests/test_harness_public_subset_contract.py`, `tests/test_harness_example_strategy_wiring.py`, focused enforcement tests, CLI tests
+  - Verify: targeted pytest commands for contract, wiring, graph, and CLI
+- [ ] **T6 (P2, human: ~1h / CC: ~10min)** — docs and roadmap alignment — update the contract doc, examples README, contributor docs, and roadmap so they describe enforcement as live and preserve the canonical/compatibility/internal distinction
+  - Surfaced by: Scope review — contributors should not need to reverse-engineer the boundary from tests
+  - Files: `docs/strategy_dsl_public_subset_contract.md`, `README.md`, `examples/README.md`, `docs/contributing.md`, `docs/roadmap.md`
+  - Verify: `poetry run pytest -q tests/test_docs_surface.py`
 
-These are explicitly after `C2.9`, not blockers for this plan:
+## 11. Retrospective Learning From This Branch
 
-- add parser/preflight enforcement for unknown top-level keys, closed kind
-  registry, stage-family closure, runtime-owned field rejection, and
-  metadata-only field rejection
-- decide whether to freeze a public task-spec contract as a separate packet
-- decide whether to publish richer public diagnostics guidance once runtime
-  enforcement exists
-- decide whether to widen the public surface later to imports, overlays, or
-  broader graph composition
+The branch history and current file layout point to one important lesson:
+
+- `C2` and `C2.9` already paid the cost to make planning and public vocabulary
+  honest
+- the main way `C3` can fail now is not "missing ideas"
+- it is enforcing the right idea in the wrong place
+
+That means review posture for `C3` should stay aggressive about:
+
+- raw payload validation before typed coercion
+- not duplicating runtime vocabulary in more than one place
+- preserving internal fixture-backed planning behavior
+- keeping docs, example taxonomy, parser behavior, and tests in lockstep
 
 ## 12. Completion Summary
 
-- Step 0 verdict: scope accepted as contract-freeze work, not hidden `C3`
-  runtime work
-- What already exists: reused directly, especially `types.py`,
-  `strategy_graph.py`, `providers.py`, the current docs entry points, and the
-  existing docs/example tests
-- Locked decisions: milestone boundary, registry ownership, versioning,
-  canonical kinds, compatibility-only aliasing, runtime-owned exclusions, and
-  example taxonomy are all frozen
-- Architecture: one registry, one contract doc, one public example pack, one
-  docs-routing pass, one regression wall
-- Test review: full contract coverage is specified, including negative-example
-  indexing and canonical/non-canonical example assertions
-- Performance review: runtime performance risk is effectively zero; contract
-  drift is the real risk and is directly covered
-- Parallelization: one foundation lane, two safe content lanes, one final test
-  lane
+`C3` is ready to call done only when this checklist is true:
+
+- [ ] canonical public `c3_strategy_v1` examples are accepted by `StrategyConfig.from_dict()`
+- [ ] canonical public examples then pass preflight cleanly
+- [ ] compatibility-only `analysis_review_v1` input is accepted with an explicit non-canonical warning
+- [ ] each negative public fixture fails before model work with one targeted invalid-config reason
+- [ ] direct parse entrypoints have been audited and no public-boundary bypass remains
+- [ ] internal fixture-backed planning strategies still accept runtime-owned scaffolding
+- [ ] accepted public canonical specs route through the existing runtime graph families with no second compiler
+- [ ] CLI exits non-zero for invalid public authoring
+- [ ] docs and example pack describe live enforcement accurately
+- [ ] task-spec freezing is still explicitly out of scope
+
+## 13. Post-C3 Follow-Ups
+
+These are explicitly after `C3`, not blockers for this plan:
+
+- public task-spec contract definition and enforcement
+- eventual retirement plan for `analysis_review_v1`
+- richer authoring diagnostics or formatter/generator support
+- broader decisions about whether `single_pass` and `pfr_v1` should move into or
+  out of the narrowed canonical proof surface

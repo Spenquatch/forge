@@ -1,618 +1,771 @@
-# ORCH_PLAN: C2.9 Public Subset Gate for C3
+# ORCH_PLAN: C3 Bounded Public Strategy DSL Enforcement
 
-## 1. Summary
+## Summary
+
+Execute the current `PLAN.md` from the live integration branch
+`codex/c1b-planning-quality-proof`.
+
+The parent owns the critical path, the only integration worktree, every merge,
+and the final acceptance decision. Workers execute bounded lanes in isolated
+worktrees under:
+
+- `/home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/`
+
+Worker branches must use this pattern:
+
+- `codex/c3-public-subset-<lane>-<slug>`
+
+Concurrency cap: `2`.
+
+Why the cap is fixed at `2`:
+
+- `Lane A` must freeze the helper contract and exact rule ownership first.
+- `Lane B` and `Lane C` may run in parallel only after `Lane A` merges.
+- `Lane D` must run last because it proves the final merged behavior and final
+  wording.
+- Higher concurrency would create false parallelism across shared contract
+  language and increase reopen risk.
+
+Orchestration state lives under this source-of-truth control plane:
+
+- `/home/azureuser/__Active_Code/forge/.runs/c3-public-subset-enforcement-orch/`
+
+Parallelism policy:
+
+- allowed in parallel: `Lane B` and `Lane C`
+- cannot run in parallel:
+  - `Lane A` with anything
+  - `Lane D` with anything
+  - `Lane C` may execute in parallel with `Lane B`, but it must not merge before
+    `Lane B` is integrated
+
+This runbook is `C3`-specific. It replaces stale `C2.9` framing completely.
+
+## Authority and Scope
 
 Repository: `/home/azureuser/__Active_Code/forge`  
 Integration branch: `codex/c1b-planning-quality-proof`  
 Authority file: `/home/azureuser/__Active_Code/forge/PLAN.md`  
-Milestone: `C2.9 Public Subset Gate for C3`  
-Stale file being replaced: `/home/azureuser/__Active_Code/forge/ORCH_PLAN.md`
+Supersedes: stale `/home/azureuser/__Active_Code/forge/ORCH_PLAN.md`
 
-This file is the parent-owned orchestration runbook for executing `PLAN.md` on
-the current branch. `C2.9` is a contract-freeze milestone only. It must not add
-parser enforcement, preflight enforcement, runtime wiring, or any runtime
-behavior change.
+Mission:
 
-The parent is the only integrator. Workers execute bounded lanes and return
-handoffs. Workstream A freezes the contract vocabulary first. Workstreams B and
-C may run in parallel only after A is merged. Workstream D runs last as the
-drift wall.
+- ship one shared helper:
+  `anvil/harness/public_subset_validation.py`
+- make `StrategyConfig.from_dict()` the universal public-boundary enforcement
+  gate
+- make `validator_preflight_node()` own compatibility warning and invalid-config
+  adaptation
+- preserve internal fixture-backed planning behavior
+- prove the contract with parser, preflight, graph, CLI, docs, and wiring tests
+- update docs only after live enforcement behavior is in place
 
-## 2. Orchestration Runtime Policy
+## Hard Guards
 
-Parent runtime policy:
-
-- Role: parent orchestrator and sole integrator
-- Model: `GPT-5.4`
-- Reasoning: `high`
-
-Worker runtime policy:
-
-- Role: bounded implementation worker for a single lane
-- Model: `GPT-5.4`
-- Reasoning: `high`
-
-Concurrency policy:
-
-- Maximum concurrency window: `2`
-- Why it cannot be higher:
-  - Workstream A must freeze the vocabulary before any downstream content work
-    starts.
-  - Workstreams B and C both depend on A’s exact vocabulary and terminology.
-  - Workstream D depends on the merged outputs of both B and C and must run
-    last.
-  - Higher concurrency would create false parallelism across shared contract
-    language and increase reopen risk without improving throughput on this
-    branch.
-
-## 3. Hard Guards
-
-1. `/home/azureuser/__Active_Code/forge/PLAN.md` is authoritative. If this
-   file and `PLAN.md` disagree, follow `PLAN.md`.
-2. Do not edit `PLAN.md`.
-3. `C2.9` ends at contract-freeze artifacts plus drift tests.
-4. Runtime behavior must not change.
-5. Do not wire `anvil/harness/public_subset_registry.py` into runtime behavior
-   in this branch.
-6. Do not implement parser enforcement, preflight enforcement, or task-spec
-   contract work in this branch.
-7. Do not relabel compatibility-only or runtime-owned surfaces as canonical
-   public DSL.
-8. Do not move or delete
-   `examples/harness/strategies/deterministic_feature_planning_v1.yaml`; keep
-   it runnable and relabel it honestly.
-9. Do not invent new public kinds, stage families, role families, transition
-   forms, planning phase types, excluded fields, or metadata-only fields beyond
+1. `PLAN.md` is the authority. If this file and `PLAN.md` disagree, follow
    `PLAN.md`.
-10. The parent is the only integrator.
-11. Any worker that needs to change another workstream’s frozen vocabulary or
-    owned files must stop and reopen to the parent.
-12. B and C must not start before A is merged.
-13. D must not start before both B and C are merged.
-14. No unrelated repo cleanup, refactors, formatting sweeps, or doc rewrites
-    outside the scoped files.
+2. Scope is `C3` implementation, not contract-freeze-only work.
+3. `StrategyConfig.from_dict()` is the universal enforcement gate.
+4. `anvil/harness/public_subset_validation.py` is the only shared helper seam
+   for raw-payload classification and canonical-public validation.
+5. `validator_preflight_node()` owns warning/error adaptation only. It must not
+   own a second copy of the rules.
+6. Do not introduce a second parser.
+7. Do not introduce a public-only runtime target.
+8. Do not introduce a second graph-spec builder, second compiler, or second
+   runner path.
+9. Do not duplicate canonical kinds, stage families, exclusions, or canonical
+   planning phase order across modules.
+10. Do not infer public mode from file path, example directory, or naming
+    conventions.
+11. Do not relabel internal/private fixture-backed strategies as canonical public
+    authoring.
+12. Do not add task-spec enforcement in this milestone.
+13. Do not change planning artifact schema, reporting schema, or durable state
+    just to label the public surface.
+14. Audit-only surfaces may be patched only if the audit proves a real loophole.
+15. No unrelated cleanup, formatting sweep, or opportunistic refactor outside
+    scoped files.
+16. The parent is the only integrator.
 
-## 4. Parent-Owned Critical Path and Merge Order
+## Parent Execution Script
 
-### 4.1 Critical path
+The parent executes this sequence serially.
 
-| Phase | Task IDs | Owner | Mode | Gate |
-|---|---|---|---|---|
-| Parent kickoff | `task/c29-p01` to `task/c29-p04` | Parent | serialized | `gate/c29-kickoff` |
-| Workstream A: registry + contract doc | `task/c29-a1` to `task/c29-a4` | `WS-A` | serialized | `gate/c29-a-contract-freeze` |
-| Parent freeze publish | `task/c29-p05` to `task/c29-p06` | Parent | serialized | `gate/c29-a-merged` |
-| Workstreams B and C | `task/c29-b1` to `task/c29-b5`, `task/c29-c1` to `task/c29-c5` | `WS-B`, `WS-C` | parallel, max 2 | `gate/c29-b-example-pack`, `gate/c29-c-front-door` |
-| Parent integration of B and C | `task/c29-p07` to `task/c29-p09` | Parent | serialized | `gate/c29-bc-merged` |
-| Workstream D: drift wall tests | `task/c29-d1` to `task/c29-d4` | `WS-D` | serialized | `gate/c29-d-drift-wall` |
-| Final closeout | `task/c29-p10` to `task/c29-p12` | Parent | serialized | `gate/c29-final` |
+### Parent task list
 
-### 4.2 Fixed merge order
+- `task/c3-p01-read-authority`
+  Read `PLAN.md`, confirm this runbook is aligned, and treat `PLAN.md` as the
+  final authority.
+- `task/c3-p02-confirm-branch`
+  Confirm current branch is `codex/c1b-planning-quality-proof`.
+- `task/c3-p03-check-repo-assumptions`
+  Check for dirty-worktree or unrelated-change conditions that would affect lane
+  ownership; do not revert user changes.
+- `task/c3-p04-create-state-root`
+  Create the `.runs/c3-public-subset-enforcement-orch/` control plane.
+- `task/c3-p05-create-worktrees`
+  Create all worker worktrees and branches from the integration branch.
+- `task/c3-p06-dispatch-a`
+  Dispatch `Lane A` with only its minimal context packet.
+- `task/c3-p07-merge-a`
+  Review `Lane A`, rerun its gate, merge it, and publish the contract-freeze
+  artifact.
+- `task/c3-p08-dispatch-bc`
+  Dispatch `Lane B` and `Lane C` in parallel using the frozen contract summary.
+- `task/c3-p09-merge-b`
+  Review `Lane B`, rerun its gate, merge it first, and record audit results.
+- `task/c3-p10-merge-c`
+  Review `Lane C`, rerun its gate after `Lane B` is merged, and then merge it.
+- `task/c3-p11-dispatch-d`
+  Dispatch `Lane D` against the merged `A+B+C` branch only.
+- `task/c3-p12-merge-d`
+  Review `Lane D`, rerun the full regression wall, and merge it.
+- `task/c3-p13-final-gate`
+  Run the final focused acceptance suite on the integration branch.
+- `task/c3-p14-closeout`
+  Close all worker records, write the final session note, and mark the run done
+  only if every acceptance criterion is satisfied.
 
-1. Parent kickoff and state-root setup
-2. Merge `WS-A`
-3. Parent publishes the A freeze note
-4. Run `WS-B` and `WS-C` in parallel
-5. Merge `WS-B`
-6. Merge `WS-C`
-7. Run and merge `WS-D`
-8. Parent reruns final validation on `codex/c1b-planning-quality-proof`
+### Parent serialized checklist
 
-### 4.3 Do-not-proceed gates
+1. Read `/home/azureuser/__Active_Code/forge/PLAN.md`.
+2. Confirm the current branch is `codex/c1b-planning-quality-proof`.
+3. Inspect repo state for unrelated edits that could affect lane boundaries.
+4. Create `.runs/c3-public-subset-enforcement-orch/`.
+5. Initialize `queue.json`, `session-log.md`, `merge-log.md`, and sentinel
+   files.
+6. Create all worker worktrees and branches.
+7. Dispatch `Lane A`.
+8. Review `Lane A` handoff.
+9. Rerun `Lane A` gate on the integration branch.
+10. Merge `Lane A`.
+11. Publish `contract-freeze.md`.
+12. Dispatch `Lane B` and `Lane C` in parallel.
+13. Review `Lane B` handoff and audit report.
+14. Rerun `Lane B` gate on the integration branch.
+15. Merge `Lane B`.
+16. Review `Lane C` handoff.
+17. Rerun `Lane C` gate after `Lane B` is merged.
+18. Merge `Lane C`.
+19. Dispatch `Lane D`.
+20. Review `Lane D` handoff.
+21. Rerun `Lane D` gate on the integration branch.
+22. Merge `Lane D`.
+23. Run the final acceptance gate.
+24. Write final results to `session-log.md` and `merge-log.md`.
+25. Mark the run done only if the final gate and all acceptance criteria pass.
 
-- Do not dispatch `WS-B` or `WS-C` until `gate/c29-a-contract-freeze` passes.
-- Do not dispatch `WS-D` until both `gate/c29-b-example-pack` and
-  `gate/c29-c-front-door` pass and both branches are merged.
-- Do not merge a worker if its diff crosses into another lane’s owned files
-  without explicit parent reassignment.
-- Do not proceed if any lane requires runtime wiring, parser enforcement, or
-  scope beyond the artifacts listed in `PLAN.md` section 2.2.
+## Worktree and Branch Plan
 
-## 5. Workstream Plan
+### Integration worktree
 
-### 5.1 Parent-owned orchestration tasks
+- Path: `/home/azureuser/__Active_Code/forge`
+- Branch: `codex/c1b-planning-quality-proof`
+- Owner: parent only
 
-- `task/c29-p01-read-authority`
-  Read `PLAN.md` and the current `ORCH_PLAN.md`, then seed the repo-local
-  orchestration state.
-- `task/c29-p02-create-state-root`
-  Create the `.runs/c29-public-subset-gate-orch/` layout and sentinel
-  conventions.
-- `task/c29-p03-create-worktrees`
-  Create all worker worktrees from `codex/c1b-planning-quality-proof`.
-- `task/c29-p04-dispatch-ws-a`
-  Dispatch the contract-freeze lane first.
-- `task/c29-p05-review-merge-ws-a`
-  Review `WS-A`, rerun the A gate checks, and merge only if vocabulary exactly
-  matches `PLAN.md`.
-- `task/c29-p06-publish-a-freeze`
-  Write `contract-freeze.md` under the state root with the exact approved
-  vocabulary and exclusions.
-- `task/c29-p07-dispatch-ws-b-ws-c`
-  Dispatch the example-pack and front-door-doc lanes in parallel.
-- `task/c29-p08-merge-ws-b`
-  Review and merge the example pack.
-- `task/c29-p09-merge-ws-c`
-  Review and merge the front-door docs and runnable fixture relabeling.
-- `task/c29-p10-dispatch-ws-d`
-  Dispatch the drift-wall tests only after B and C are integrated.
-- `task/c29-p11-merge-ws-d`
-  Review and merge the test lane.
-- `task/c29-p12-final-validation-closeout`
-  Rerun final validation commands on the integration branch and close the
-  milestone only if all pass.
+### Worker worktree root
 
-### 5.2 Workstream A: registry + contract doc
+- `/home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/`
 
-Owner: `WS-A`  
-Purpose: freeze the contract vocabulary and terminology that every later lane
-depends on.
+### Worker branches and worktrees
 
-Owned paths:
+| Lane | Branch | Worktree |
+|---|---|---|
+| `Lane A` | `codex/c3-public-subset-a-helper-contract` | `/home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-a-helper-contract` |
+| `Lane B` | `codex/c3-public-subset-b-parser-preflight` | `/home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-b-parser-preflight` |
+| `Lane C` | `codex/c3-public-subset-c-docs-taxonomy` | `/home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-c-docs-taxonomy` |
+| `Lane D` | `codex/c3-public-subset-d-regression-wall` | `/home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-d-regression-wall` |
 
+### Worktree creation commands
+
+```bash
+mkdir -p /home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement
+
+git -C /home/azureuser/__Active_Code/forge worktree add \
+  /home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-a-helper-contract \
+  -b codex/c3-public-subset-a-helper-contract \
+  codex/c1b-planning-quality-proof
+
+git -C /home/azureuser/__Active_Code/forge worktree add \
+  /home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-b-parser-preflight \
+  -b codex/c3-public-subset-b-parser-preflight \
+  codex/c1b-planning-quality-proof
+
+git -C /home/azureuser/__Active_Code/forge worktree add \
+  /home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-c-docs-taxonomy \
+  -b codex/c3-public-subset-c-docs-taxonomy \
+  codex/c1b-planning-quality-proof
+
+git -C /home/azureuser/__Active_Code/forge worktree add \
+  /home/azureuser/__Active_Code/forge/.worktrees/c3-public-subset-enforcement/ws-d-regression-wall \
+  -b codex/c3-public-subset-d-regression-wall \
+  codex/c1b-planning-quality-proof
+```
+
+### Parent merge commands
+
+```bash
+git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c3-public-subset-a-helper-contract
+git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c3-public-subset-b-parser-preflight
+git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c3-public-subset-c-docs-taxonomy
+git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c3-public-subset-d-regression-wall
+```
+
+## Control Plane State Root
+
+State root:
+
+- `/home/azureuser/__Active_Code/forge/.runs/c3-public-subset-enforcement-orch/`
+
+### Source-of-truth artifacts
+
+- `queue.json`
+  Machine-readable lane/task status and gate state.
+- `session-log.md`
+  Parent narrative log of dispatches, merges, stops, and final closeout.
+- `merge-log.md`
+  Chronological merge record with branch names, gate results, and commit ids.
+- `contract-freeze.md`
+  Parent-published frozen helper contract and rule summary after `Lane A`.
+- `handoffs/ws-a.md`
+- `handoffs/ws-b.md`
+- `handoffs/ws-c.md`
+- `handoffs/ws-d.md`
+
+### Supporting artifacts
+
+- `gates/ws-a.txt`
+- `gates/ws-b.txt`
+- `gates/ws-c.txt`
+- `gates/ws-d.txt`
+- `gates/final.txt`
+- `audits/ws-b.json`
+  Required audit return for `Lane B`
+- `sentinels/`
+- `packets/`
+- `logs/`
+
+### Required queue shape
+
+`queue.json` must track at least:
+
+- task id
+- owner
+- lane
+- status: `pending | in_progress | blocked | ready | merged | closed`
+- worktree path
+- branch
+- depends_on
+- gate name
+- last_update
+- reopen_reason
+
+### Sentinel conventions
+
+Minimum sentinel files:
+
+- `sentinels/ws-a.dispatched`
+- `sentinels/ws-a.ready`
+- `sentinels/ws-a.merged`
+- `sentinels/ws-b.dispatched`
+- `sentinels/ws-b.ready`
+- `sentinels/ws-b.merged`
+- `sentinels/ws-c.dispatched`
+- `sentinels/ws-c.ready`
+- `sentinels/ws-c.merged`
+- `sentinels/ws-d.dispatched`
+- `sentinels/ws-d.ready`
+- `sentinels/ws-d.merged`
+- `sentinels/gate-c3-a.pass`
+- `sentinels/gate-c3-b.pass`
+- `sentinels/gate-c3-c.pass`
+- `sentinels/gate-c3-d.pass`
+- `sentinels/gate-c3-final.pass`
+
+Optional per-task sentinels are allowed under `sentinels/tasks/`.
+
+## Context Control
+
+### Parent live context
+
+The parent should keep only:
+
+- `/home/azureuser/__Active_Code/forge/PLAN.md`
+- this runbook
+- current dispatch packet
+- current worker handoff
+- current narrow diff
+- current gate output
+- current control-plane files
+
+After a lane is merged, the parent closes it in the control plane and drops its
+full working context.
+
+### Worker packet minimums
+
+Every packet under `packets/` must include:
+
+- worker ID
+- lane ID
+- task IDs
+- authority branch
+- worktree path and branch
+- owned paths
+- forbidden paths
+- relevant `PLAN.md` sections only
+- lane definition of done
+- lane gate commands
+- bounce triggers
+- handoff destination
+- explicit reminder that the parent is the only integrator
+
+### Worker return minimums
+
+Every handoff file must include:
+
+- tasks completed
+- changed files
+- commands run
+- exit code per command
+- residual risks
+- blockers, if any
+- whether forbidden-path edits were needed
+- whether frozen vocabulary pressure was encountered
+- narrow diff summary
+
+## Lane Runbooks
+
+## Lane A: shared helper and rule freeze
+
+Purpose: add the shared helper and freeze the exact raw-payload classification
+and canonical validation rules in one place before downstream integration or
+documentation work proceeds.
+
+Depends on: none
+
+### Lane A tasks
+
+- `task/c3-a1-helper-seam`
+  Add `anvil/harness/public_subset_validation.py` with exactly two public seams:
+  `classify_public_strategy_surface(raw_payload)` and
+  `validate_public_strategy_payload(raw_payload)`.
+- `task/c3-a2-classification-rules`
+  Encode canonical, compatibility-only, and internal/private classification from
+  the existing frozen registry vocabulary.
+- `task/c3-a3-canonical-validation-rules`
+  Encode canonical allowlist, exclusions, stage-family rules, and canonical
+  planning-phase-order checks.
+- `task/c3-a4-registry-cleanup-if-needed`
+  Apply only additive cleanup in
+  `anvil/harness/public_subset_registry.py` if required for helper reuse.
+
+### Owned edit paths
+
+- `/home/azureuser/__Active_Code/forge/anvil/harness/public_subset_validation.py`
 - `/home/azureuser/__Active_Code/forge/anvil/harness/public_subset_registry.py`
+  only for additive cleanup required by the helper
+
+### Forbidden edits
+
+- `/home/azureuser/__Active_Code/forge/anvil/harness/types.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py`
+- `/home/azureuser/__Active_Code/forge/tests/`
+- `/home/azureuser/__Active_Code/forge/docs/`
+- `/home/azureuser/__Active_Code/forge/README.md`
+- `/home/azureuser/__Active_Code/forge/examples/README.md`
+
+### Definition of done
+
+- helper API matches `PLAN.md`
+- helper owns classification and canonical validation only
+- compatibility-only input is classified explicitly
+- internal/private payloads are classified before canonical-only exclusions
+- no warnings, mutation, graph building, or task-spec logic are added
+- no second rule list is introduced elsewhere
+
+### Lane A gate commands
+
+The parent reruns these before merge:
+
+```bash
+poetry run python -c "from anvil.harness.public_subset_validation import classify_public_strategy_surface, validate_public_strategy_payload; print(classify_public_strategy_surface); print(validate_public_strategy_payload)"
+poetry run pytest -q tests/test_harness_public_subset_contract.py
+```
+
+If `tests/test_harness_public_subset_contract.py` does not yet exercise the new
+helper directly, that is acceptable at this lane. The import sanity command is
+still mandatory because `Lane A` introduces the new module.
+
+### Lane A bounce triggers
+
+- helper grows beyond the two allowed public seams
+- worker introduces file-path heuristics
+- worker tries to move rule ownership into parser or preflight
+- worker needs new public vocabulary not already frozen by `PLAN.md`
+
+## Lane B: parser + preflight integration and loophole audit
+
+Purpose: make parser-owned enforcement real, adapt preflight messaging, and
+prove no direct parse entrypoint can bypass the boundary.
+
+Depends on: merged `Lane A`
+
+### Lane B tasks
+
+- `task/c3-b1-load-frozen-helper`
+  Consume the merged helper and frozen rule summary without duplicating rules.
+- `task/c3-b2-parser-hook`
+  Wire `StrategyConfig.from_dict()` to call the shared helper before typed
+  coercion.
+- `task/c3-b3-preflight-adaptation`
+  Update `validator_preflight_node()` to reuse the helper for compatibility
+  warning and invalid-config adaptation.
+- `task/c3-b4-audit-direct-entrypoints`
+  Audit `prepare_run.py`, `runner.py`, `analysis_review_v1.py`,
+  `strategy_graph.py`, and `planning_runtime.py`; patch only if a real loophole
+  exists.
+
+### Owned edit paths
+
+- `/home/azureuser/__Active_Code/forge/anvil/harness/types.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/nodes/validator_preflight.py`
+
+### Audit-only surfaces
+
+- `/home/azureuser/__Active_Code/forge/anvil/harness/nodes/prepare_run.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/runner.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/subgraphs/analysis_review_v1.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/strategy_graph.py`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/planning_runtime.py`
+
+### Audit return policy
+
+If no patch is needed, `audits/ws-b.json` must still include one record per
+audited file with:
+
+- `file`
+- `loophole_result`: `none` or `found`
+- `reason_no_edit_necessary`
+- `notes`
+
+If a loophole is found and patched, include:
+
+- `file`
+- `loophole_result`: `found`
+- `patch_required`: `true`
+- `why_parser_owned_gate_was_insufficient_without_patch`
+
+### Forbidden edits
+
+- `/home/azureuser/__Active_Code/forge/tests/`
+- `/home/azureuser/__Active_Code/forge/docs/`
+- `/home/azureuser/__Active_Code/forge/README.md`
+- `/home/azureuser/__Active_Code/forge/examples/README.md`
+
+### Definition of done
+
+- `StrategyConfig.from_dict()` is the universal enforcement gate
+- `validator_preflight_node()` adapts helper results without owning a second
+  rule list
+- compatibility-only input remains accepted with explicit warning path
+- invalid canonical-public input can stop before model work
+- internal/private fixture-backed inputs remain accepted
+- every audited file has a recorded loophole result
+
+### Lane B gate commands
+
+The parent reruns these before merge:
+
+```bash
+poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+poetry run pytest -q tests/test_harness_strategy_graph.py
+poetry run pytest -q tests/test_harness_cli_command.py tests/test_harness_standalone_cli.py
+```
+
+Why these are the minimum `Lane B` gate:
+
+- `Lane B` changes parser/preflight behavior that must surface through wiring,
+  graph routing, and CLI invalid-config behavior.
+- `Lane D` will strengthen the regression wall later, but `Lane B` still must
+  pass the existing route-level and CLI-level checks before merge.
+
+### Lane B bounce triggers
+
+- worker introduces a second parser or alternate validation path
+- worker duplicates canonical rule sets
+- worker introduces public-only runtime routing
+- worker needs docs or tests changed to explain incomplete code behavior
+- audit proves a loophole that exceeds the allowed audited surfaces
+
+## Lane C: docs, readmes, and example taxonomy wording
+
+Purpose: align contributor-facing docs and example-surface taxonomy to the live
+C3 behavior without taking ownership of enforcement truth or test truth.
+
+Depends on: merged `Lane A` for vocabulary; merge blocked until `Lane B` is
+merged
+
+### Lane C ownership policy
+
+`Lane C` is intentionally narrowed.
+
+It owns:
+
+- docs
+- readmes
+- example taxonomy wording
+- example-pack explanatory text
+
+It does not own:
+
+- canonical/compatibility/negative strategy-body content truth
+- parser behavior
+- test assertions
+
+Content-shape truth is locked by `Lane A` and `Lane B`, then proven by
+`Lane D`. If `Lane C` discovers that example strategy bodies themselves must
+change to match live enforcement, stop and bounce to the parent instead of
+editing around the mismatch in docs.
+
+### Lane C tasks
+
+- `task/c3-c1-contract-doc-refresh`
+  Update `docs/strategy_dsl_public_subset_contract.md` so it describes live
+  enforcement accurately.
+- `task/c3-c2-front-door-readmes`
+  Update `README.md` and `examples/README.md` to route users to the live bounded
+  public contract correctly.
+- `task/c3-c3-contributor-and-roadmap-alignment`
+  Update `docs/contributing.md` and `docs/roadmap.md` so they reflect current
+  C3 behavior.
+- `task/c3-c4-example-taxonomy-wording`
+  Update only explanatory text under `examples/harness/public_subset/`, such as
+  README/taxonomy wording, without taking ownership of strategy-body truth.
+
+### Owned edit paths
+
 - `/home/azureuser/__Active_Code/forge/docs/strategy_dsl_public_subset_contract.md`
-
-Forbidden paths:
-
-- `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/`
 - `/home/azureuser/__Active_Code/forge/README.md`
 - `/home/azureuser/__Active_Code/forge/examples/README.md`
 - `/home/azureuser/__Active_Code/forge/docs/contributing.md`
-- `/home/azureuser/__Active_Code/forge/tests/`
-
-Tasks:
-
-- `task/c29-a1-add-registry`
-  Add the data-only registry with the exact constant groups from `PLAN.md`
-  section 5.2.
-- `task/c29-a2-write-contract-doc`
-  Add the human-readable contract doc mirroring the registry 1:1.
-- `task/c29-a3-freeze-layering-language`
-  Make the doc explicit about canonical public surface, compatibility-only
-  input, runtime-owned exclusions, and metadata-only fields.
-- `task/c29-a4-freeze-boundary`
-  State plainly that `C2.9` is contract freeze only and that task-spec surface
-  and runtime enforcement are out of scope.
-
-Definition of done:
-
-- Registry contents match `PLAN.md` exactly.
-- Contract doc mirrors the registry exactly.
-- No runtime code is touched.
-- No terminology in A leaves ambiguity for B, C, or D.
-
-### 5.3 Workstream B: classified public example pack
-
-Owner: `WS-B`  
-Purpose: create the clean public example pack that follows the frozen A
-vocabulary exactly.
-
-Owned paths:
-
+- `/home/azureuser/__Active_Code/forge/docs/roadmap.md`
 - `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/README.md`
-- `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/canonical/`
-- `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/compatibility/`
-- `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/negative/`
+- any explanatory markdown under
+  `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/`
 
-Forbidden paths:
+### Forbidden edits
 
-- `/home/azureuser/__Active_Code/forge/anvil/harness/public_subset_registry.py`
-- `/home/azureuser/__Active_Code/forge/docs/strategy_dsl_public_subset_contract.md`
-- `/home/azureuser/__Active_Code/forge/README.md`
-- `/home/azureuser/__Active_Code/forge/examples/README.md`
-- `/home/azureuser/__Active_Code/forge/docs/contributing.md`
+- `/home/azureuser/__Active_Code/forge/anvil/harness/`
 - `/home/azureuser/__Active_Code/forge/tests/`
-- `/home/azureuser/__Active_Code/forge/examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+- canonical/compatibility/negative strategy-body files under
+  `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/`
 
-Tasks:
+### Definition of done
 
-- `task/c29-b1-add-example-pack-readme`
-- `task/c29-b2-add-three-canonical-examples`
-- `task/c29-b3-add-one-compatibility-example`
-- `task/c29-b4-add-five-negative-examples`
-- `task/c29-b5-verify-example-pack-uses-a-freeze`
+- docs describe parser-owned enforcement as live
+- docs describe preflight warning/error adaptation as live
+- canonical public, compatibility-only, and internal/private surfaces are
+  clearly separated
+- no doc or taxonomy wording suggests `analysis_review_v1` is canonical public
+  `C3 v1`
+- no doc suggests `coverage_policy`, `phase_inputs`, `schema_version`, or
+  `subset` belong in canonical public authoring
+- example taxonomy wording is accurate without altering enforcement truth
 
-Definition of done:
+### Lane C gate commands
 
-- All required files from `PLAN.md` section 5.4 exist at the exact paths.
-- Canonical examples use canonical kinds only and carry
-  `dsl_version: c3_strategy_v1`.
-- Canonical examples omit `coverage_policy`, `phase_inputs`, `schema_version`,
-  and `subset`.
-- Canonical non-planning examples omit `runtime_target`.
-- The canonical planning example includes `runtime_target: planning_v1` and the
-  required planning policy refs.
-- The compatibility example is obviously non-canonical.
-- Each negative example maps to one contract violation only.
+The parent reruns these before merge, after `Lane B` is merged:
 
-### 5.4 Workstream C: front-door docs alignment + runnable fixture relabeling
+```bash
+poetry run pytest -q tests/test_docs_surface.py
+```
 
-Owner: `WS-C`  
-Purpose: route readers to the new public contract first while preserving
-existing runnable fixture coverage.
+No broader unique command is required for `Lane C` because this lane is
+wording-only by policy. Content-shape truth is owned by `Lane A+B` and proven by
+`Lane D`, not by `Lane C`.
 
-Owned paths:
+### Lane C bounce triggers
 
-- `/home/azureuser/__Active_Code/forge/README.md`
-- `/home/azureuser/__Active_Code/forge/examples/README.md`
-- `/home/azureuser/__Active_Code/forge/docs/contributing.md`
-- `/home/azureuser/__Active_Code/forge/examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+- docs claim behavior the merged code does not implement
+- worker wants to edit example strategy bodies to make docs easier to align
+- worker wants to relabel internal/private fixture-backed strategies as
+  canonical public authoring
+- worker expands scope beyond wording/taxonomy alignment
 
-Forbidden paths:
+## Lane D: regression wall
 
-- `/home/azureuser/__Active_Code/forge/anvil/harness/public_subset_registry.py`
-- `/home/azureuser/__Active_Code/forge/docs/strategy_dsl_public_subset_contract.md`
-- `/home/azureuser/__Active_Code/forge/examples/harness/public_subset/`
-- `/home/azureuser/__Active_Code/forge/tests/`
+Purpose: prove the merged `A+B+C` contract across parser, preflight, direct
+entrypoints, graph routing, CLI behavior, docs, and example wiring.
 
-Tasks:
+Depends on: merged `Lane B` and merged `Lane C`
 
-- `task/c29-c1-update-root-readme`
-- `task/c29-c2-update-examples-readme`
-- `task/c29-c3-update-contributing-doc`
-- `task/c29-c4-relabel-runnable-planning-fixture`
-- `task/c29-c5-verify-front-door-terminology`
+### Lane D tasks
 
-Definition of done:
+- `task/c3-d1-parser-and-contract-wall`
+  Extend contract and enforcement coverage for canonical accept,
+  compatibility-only accept-with-warning, and negative reject behavior.
+- `task/c3-d2-entrypoint-and-routing-wall`
+  Extend example wiring and strategy graph coverage so direct parse entrypoints
+  and routing behavior prove the same contract.
+- `task/c3-d3-cli-invalid-config-wall`
+  Extend CLI coverage so invalid public input exits non-zero and no model work
+  starts.
+- `task/c3-d4-docs-drift-wall`
+  Extend docs-surface coverage so front-door docs and example taxonomy stay in
+  sync with live enforcement.
 
-- Front-door docs point readers first to
-  `docs/strategy_dsl_public_subset_contract.md` and
-  `examples/harness/public_subset/README.md`.
-- Existing runnable commands remain documented where they already belong.
-- The deterministic planning fixture is clearly labeled internal or
-  fixture-backed and explicitly not the canonical public `C3 v1` example.
-
-### 5.5 Workstream D: contract drift wall tests
-
-Owner: `WS-D`  
-Purpose: make docs, registry, and example pack drift visible immediately.
-
-Owned paths:
+### Owned edit paths
 
 - `/home/azureuser/__Active_Code/forge/tests/test_harness_public_subset_contract.py`
-- `/home/azureuser/__Active_Code/forge/tests/test_docs_surface.py`
 - `/home/azureuser/__Active_Code/forge/tests/test_harness_example_strategy_wiring.py`
+- `/home/azureuser/__Active_Code/forge/tests/test_harness_strategy_graph.py`
+- `/home/azureuser/__Active_Code/forge/tests/test_harness_cli_command.py`
+- `/home/azureuser/__Active_Code/forge/tests/test_harness_standalone_cli.py`
+- `/home/azureuser/__Active_Code/forge/tests/test_docs_surface.py`
+- one focused enforcement file, if added:
+  `/home/azureuser/__Active_Code/forge/tests/test_harness_public_subset_enforcement.py`
 
-Forbidden paths:
+### Forbidden edits
 
 - `/home/azureuser/__Active_Code/forge/anvil/`
 - `/home/azureuser/__Active_Code/forge/docs/`
 - `/home/azureuser/__Active_Code/forge/examples/`
 - `/home/azureuser/__Active_Code/forge/README.md`
 
-Tasks:
+### Definition of done
 
-- `task/c29-d1-add-new-contract-test`
-- `task/c29-d2-extend-docs-surface-test`
-- `task/c29-d3-extend-example-wiring-test`
-- `task/c29-d4-run-focused-pytest-wall`
+- every new public-contract rule has:
+  - one example or inline payload
+  - one parser/preflight assertion
+  - one message assertion
+- direct parse entrypoints are covered
+- internal/private fixture-backed planning preservation is covered
+- CLI invalid-config and no-model-work behavior is covered
+- docs-surface drift is covered
+- tests assert final taxonomy and final wording only
 
-Definition of done:
+### Lane D gate commands
 
-- `tests/test_harness_public_subset_contract.py` asserts the exact contract sets
-  and example-pack rules from `PLAN.md`.
-- `tests/test_docs_surface.py` enforces front-door routing and terminology.
-- `tests/test_harness_example_strategy_wiring.py` enforces coexistence of the
-  new public example pack and the existing runnable fixture tree.
-- No product or runtime logic is changed in this lane.
-
-## 6. Context Control
-
-### 6.1 Parent live working context
-
-The parent keeps only the following in live context during the run:
-
-- `/home/azureuser/__Active_Code/forge/PLAN.md`
-- `/home/azureuser/__Active_Code/forge/ORCH_PLAN.md`
-- `/home/azureuser/__Active_Code/forge/.runs/c29-public-subset-gate-orch/queue.md`
-- `/home/azureuser/__Active_Code/forge/.runs/c29-public-subset-gate-orch/state.json`
-- `/home/azureuser/__Active_Code/forge/.runs/c29-public-subset-gate-orch/contract-freeze.md`
-- the current worker packet being dispatched or reviewed
-- the narrow diff and handoff for the worker being merged
-
-The parent should not keep full-file copies of every lane in active context
-after merge. After integration, the parent reviews the worker summary, inspects
-the narrow diff, reruns the gate, merges, records the result, and closes that
-worker.
-
-### 6.2 Worker packet minimums
-
-Every worker packet must contain:
-
-- worker ID and workstream ID
-- exact task IDs
-- authority path: `/home/azureuser/__Active_Code/forge/PLAN.md`
-- integration branch: `codex/c1b-planning-quality-proof`
-- worktree path and worker branch
-- owned paths
-- forbidden paths
-- relevant `PLAN.md` sections only
-- current `contract-freeze.md` contents if A is already merged
-- lane-specific definition of done
-- lane-specific validation commands
-- reopen triggers
-- required handoff destination under
-  `/home/azureuser/__Active_Code/forge/.runs/c29-public-subset-gate-orch/handoffs/`
-
-### 6.3 Worker return minimums
-
-Every worker return must contain:
-
-- task IDs completed
-- short summary of what changed
-- exact changed files
-- commands run
-- exit codes for each command
-- any blockers or residual risks
-- explicit note whether frozen vocabulary pressure was encountered
-- explicit note whether any forbidden path would be required for full completion
-- a narrow diff summary suitable for parent merge review
-
-### 6.4 Parent closeout of each worker
-
-For each worker, the parent must:
-
-1. Read the return summary
-2. Inspect the narrow diff
-3. Rerun the gate on the integration branch
-4. Merge only if the gate passes and the lane stayed in scope
-5. Update `queue.md`, `state.json`, and `merge-log.md`
-6. Mark the worker closed after merge
-
-## 7. Repo-Local Orchestration State Root
-
-State root:
-
-- `/home/azureuser/__Active_Code/forge/.runs/c29-public-subset-gate-orch/`
-
-### 7.1 Source-of-truth files
-
-- `queue.md`
-- `state.json`
-- `contract-freeze.md`
-- `merge-log.md`
-- `handoffs/`
-- `gates/`
-- `logs/`
-- `sentinels/`
-
-### 7.2 Operational use during the run
-
-- `queue.md`
-  The parent’s task board. Tracks every `task/c29-*` item, owner, status,
-  active lane, reopen reason, and merge state.
-- `state.json`
-  The parent’s machine-readable run state. Tracks active worktrees, current
-  phase, gate results, and worker closure state.
-- `contract-freeze.md`
-  The frozen A vocabulary and exclusions approved by the parent. This is the
-  downstream contract source for B, C, and D during the run.
-- `merge-log.md`
-  The parent’s chronological integration record. Stores merge order, rerun
-  results, gate outcomes, and closeout notes.
-
-### 7.3 Supporting directories
-
-- `handoffs/`
-  One dispatch packet and one return handoff per worker lane.
-- `gates/`
-  Parent rerun commands, command outputs, and gate verdict notes.
-- `logs/`
-  Validation logs from focused pytest runs and any conditional smoke checks.
-- `sentinels/`
-  Lightweight lane and gate status files.
-
-### 7.4 Sentinel set
-
-- `sentinels/ws-a.dispatched`
-- `sentinels/ws-a.ready`
-- `sentinels/ws-a.blocked`
-- `sentinels/ws-a.merged`
-- `sentinels/ws-b.dispatched`
-- `sentinels/ws-b.ready`
-- `sentinels/ws-b.blocked`
-- `sentinels/ws-b.merged`
-- `sentinels/ws-c.dispatched`
-- `sentinels/ws-c.ready`
-- `sentinels/ws-c.blocked`
-- `sentinels/ws-c.merged`
-- `sentinels/ws-d.dispatched`
-- `sentinels/ws-d.ready`
-- `sentinels/ws-d.blocked`
-- `sentinels/ws-d.merged`
-- `sentinels/gate-c29-a-contract-freeze.pass`
-- `sentinels/gate-c29-b-example-pack.pass`
-- `sentinels/gate-c29-c-front-door.pass`
-- `sentinels/gate-c29-d-drift-wall.pass`
-- `sentinels/gate-c29-final.pass`
-
-## 8. Worktree and Branch Plan
-
-Integration worktree:
-
-- path: `/home/azureuser/__Active_Code/forge`
-- branch: `codex/c1b-planning-quality-proof`
-- owner: Parent only
-
-Worker worktree root:
-
-- `/home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/`
-
-Worker branches and worktrees:
-
-- `WS-A`
-  - branch: `codex/c29-public-subset-a-registry-contract`
-  - worktree:
-    `/home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-a-registry-contract`
-- `WS-B`
-  - branch: `codex/c29-public-subset-b-example-pack`
-  - worktree:
-    `/home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-b-example-pack`
-- `WS-C`
-  - branch: `codex/c29-public-subset-c-front-door`
-  - worktree:
-    `/home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-c-front-door`
-- `WS-D`
-  - branch: `codex/c29-public-subset-d-drift-wall`
-  - worktree:
-    `/home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-d-drift-wall`
-
-Worktree creation commands:
+The parent reruns this full focused wall before merge:
 
 ```bash
-mkdir -p /home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate
-
-git -C /home/azureuser/__Active_Code/forge worktree add \
-  /home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-a-registry-contract \
-  -b codex/c29-public-subset-a-registry-contract \
-  codex/c1b-planning-quality-proof
-
-git -C /home/azureuser/__Active_Code/forge worktree add \
-  /home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-b-example-pack \
-  -b codex/c29-public-subset-b-example-pack \
-  codex/c1b-planning-quality-proof
-
-git -C /home/azureuser/__Active_Code/forge worktree add \
-  /home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-c-front-door \
-  -b codex/c29-public-subset-c-front-door \
-  codex/c1b-planning-quality-proof
-
-git -C /home/azureuser/__Active_Code/forge worktree add \
-  /home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/ws-d-drift-wall \
-  -b codex/c29-public-subset-d-drift-wall \
-  codex/c1b-planning-quality-proof
+poetry run pytest -q tests/test_harness_public_subset_contract.py
+poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+poetry run pytest -q tests/test_harness_strategy_graph.py
+poetry run pytest -q tests/test_harness_cli_command.py tests/test_harness_standalone_cli.py
+poetry run pytest -q tests/test_docs_surface.py
 ```
 
-Parent merge commands:
+If a dedicated enforcement file exists, also rerun:
 
 ```bash
-git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c29-public-subset-a-registry-contract
-git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c29-public-subset-b-example-pack
-git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c29-public-subset-c-front-door
-git -C /home/azureuser/__Active_Code/forge merge --no-ff codex/c29-public-subset-d-drift-wall
+poetry run pytest -q tests/test_harness_public_subset_enforcement.py
 ```
 
-## 9. Conflict Flags
+### Lane D bounce triggers
 
-Main cross-lane coupling risks:
+- a failing test reveals a real code or docs mismatch
+- worker needs to patch product code or docs to make tests pass
+- assertions are weakened instead of forcing the source of truth back into
+  alignment
 
-- B and C both depend on A vocabulary. If A terminology shifts after dispatch,
-  reopen B and C rather than drifting locally.
-- B and C together define what D should assert. D must not rewrite product
-  truth to make tests pass.
-- Any docs/example-pack mismatch belongs to the owning content lane. D may
-  expose it, but must not paper over it with weaker assertions.
-- The deterministic planning fixture relabeling in C must stay consistent with
-  the example taxonomy introduced by B.
-- If B introduces example naming or labeling that conflicts with C’s front-door
-  language, reopen the owning lane and fix the source, not the test.
+## Merge Order and Lane Dependencies
 
-## 10. Blocker and Reopen Rules
+### Fixed order
 
-Mandatory reopen triggers:
+1. `Lane A`
+2. `Lane B` and `Lane C` may execute in parallel
+3. merge `Lane B`
+4. merge `Lane C`
+5. `Lane D`
+6. final parent gate
 
-- a worker needs to change a file outside its owned paths
-- `WS-B`, `WS-C`, or `WS-D` discovers that A’s frozen vocabulary must change
-- any lane requires runtime behavior change to complete
-- any lane wants to wire the new registry into runtime behavior
-- any lane wants to add parser enforcement or task-spec scope
-- any lane cannot keep the deterministic planning fixture at its current path
-- a test lane failure reveals a real mismatch between `PLAN.md` and merged
-  artifacts rather than a simple assertion bug
+### Do-not-proceed rules
 
-Parent blocker policy:
+- do not dispatch `Lane B` or `Lane C` until `Lane A` is merged and
+  `contract-freeze.md` exists
+- do not merge `Lane C` until `Lane B` is merged
+- do not dispatch `Lane D` until `Lane B` and `Lane C` are merged
+- do not merge any lane that crosses its owned-path boundary without explicit
+  parent reassignment
 
-- reopen to A if the contract vocabulary itself is wrong
-- reopen to B if example taxonomy or file naming is wrong
-- reopen to C if front-door wording or relabeling is wrong
-- reopen to B and C together only if the blocker is pure terminology drift
-  across both lanes
-- do not let D silently redefine product truth to make tests pass
+## Final Acceptance and Failure Policy
 
-## 11. Tests and Acceptance
+### DONE
 
-### 11.1 Gate checks before B and C dispatch
-
-A is review-gated because the drift wall does not exist yet. The parent must
-rerun these checks on the integration worktree before dispatching B and C:
-
-```bash
-test -f /home/azureuser/__Active_Code/forge/anvil/harness/public_subset_registry.py
-test -f /home/azureuser/__Active_Code/forge/docs/strategy_dsl_public_subset_contract.md
-rg -n "PUBLIC_SUBSET_DSL_VERSION|C3_GRAPH_DSL_KINDS|BROADER_PUBLIC_BUILTIN_KINDS|COMPATIBILITY_ONLY_KINDS|PUBLIC_GRAPH_PRIMITIVES|PUBLIC_TRANSITION_FORMS|PUBLIC_STAGE_FAMILIES|PUBLIC_ROLE_FAMILIES|STAGE_FAMILY_ROLE_BINDINGS|CANONICAL_PLANNING_PHASE_STAGE_TYPES|PLANNING_REQUIRED_POLICY_FIELDS|RUNTIME_OWNED_EXCLUDED_FIELDS|METADATA_ONLY_FIELDS" /home/azureuser/__Active_Code/forge/anvil/harness/public_subset_registry.py
-rg -n "c3_strategy_v1|analysis_review_bounded_v1|analysis_review_trust_v1|deterministic_feature_planning_v1|analysis_review_v1|coverage_policy|phase_inputs|schema_version|subset" /home/azureuser/__Active_Code/forge/docs/strategy_dsl_public_subset_contract.md
-```
-
-### 11.2 Gate checks before D dispatch
-
-The parent must rerun these checks after merging B and C and before dispatching
-D:
-
-```bash
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/README.md
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/canonical/analysis_review_bounded_v1.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/canonical/analysis_review_trust_v1.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/compatibility/analysis_review_v1.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/negative/invalid_kind.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/negative/unknown_top_level_key.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/negative/invalid_stage_family.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/negative/runtime_owned_phase_inputs.yaml
-test -f /home/azureuser/__Active_Code/forge/examples/harness/public_subset/negative/metadata_only_schema_version.yaml
-rg -n "strategy_dsl_public_subset_contract.md|examples/harness/public_subset/README.md" /home/azureuser/__Active_Code/forge/README.md /home/azureuser/__Active_Code/forge/examples/README.md /home/azureuser/__Active_Code/forge/docs/contributing.md
-rg -n "internal|fixture-backed|not the canonical public" /home/azureuser/__Active_Code/forge/examples/harness/strategies/deterministic_feature_planning_v1.yaml
-```
-
-### 11.3 Final parent validation commands
-
-The parent must rerun all focused tests on the integration branch and must not
-claim completion until they all pass on
+The run is `DONE` only when all are true on
 `codex/c1b-planning-quality-proof`:
 
+- canonical public `c3_strategy_v1` examples are accepted by
+  `StrategyConfig.from_dict()`
+- canonical public examples pass preflight cleanly
+- compatibility-only `analysis_review_v1` remains accepted with explicit legacy
+  warning
+- each negative public fixture fails before model work with one targeted
+  invalid-config reason
+- direct parse entrypoints have been audited and no bypass remains
+- internal fixture-backed planning behavior still works
+- accepted canonical specs route through the existing runtime graph families
+  with no second compiler or public-only runtime target
+- CLI exits non-zero for invalid public authoring
+- docs and example taxonomy describe live enforcement accurately
+- task-spec freezing remains explicitly out of scope
+- `Lane D` gate passes
+- final focused gate passes
+- `session-log.md` and `merge-log.md` record a clean closeout
+
+### BLOCKED
+
+The run is `BLOCKED` if any of the following occurs:
+
+- `PLAN.md` changes during execution
+- the current branch is no longer `codex/c1b-planning-quality-proof`
+- a lane requires architecture outside the locked `C3` decisions
+- a real loophole requires scope beyond the audited surfaces
+- unrelated conflicting edits appear in lane-owned files and prevent safe
+  bounded merge
+- the final focused gate does not pass
+
+### BOUNCE BACK
+
+Bounce a lane back instead of integrating around it when:
+
+- the diff crosses owned-path boundaries
+- docs claim behavior that code does not yet implement
+- tests are weakened instead of enforcing truth
+- a worker silently expands scope
+- a lane edits another lane’s source of truth
+- a worker needs to touch forbidden paths for completion
+
+### STOP INSTEAD OF INTEGRATING AROUND A MISMATCH
+
+Stop the run and reopen planning if:
+
+- the helper contract in `Lane A` is insufficient for the plan’s required
+  behavior
+- `Lane B` cannot make parser-owned enforcement universal without introducing a
+  second enforcement path
+- `Lane C` reveals example-surface truth that contradicts merged enforcement
+- `Lane D` exposes a mismatch that cannot be resolved by fixing the owning lane
+  within current scope
+
+## Final Gate
+
+After `Lane D` merges, the parent reruns the final focused suite on the
+integration branch:
+
 ```bash
-cd /home/azureuser/__Active_Code/forge
-poetry run pytest -q tests/test_harness_public_subset_contract.py
-poetry run pytest -q tests/test_docs_surface.py
-poetry run pytest -q tests/test_harness_example_strategy_wiring.py
+poetry run pytest -q \
+  tests/test_harness_public_subset_contract.py \
+  tests/test_harness_example_strategy_wiring.py \
+  tests/test_harness_strategy_graph.py \
+  tests/test_harness_cli_command.py \
+  tests/test_harness_standalone_cli.py \
+  tests/test_docs_surface.py
 ```
 
-Conditional broader smoke tests only if merged diffs unexpectedly touch
-adjacent surfaces:
+If the dedicated enforcement file exists, include it in the final run.
 
-```bash
-cd /home/azureuser/__Active_Code/forge
-poetry run pytest -q tests/test_harness_strategy_graph.py
-poetry run pytest -q tests/test_harness_planning_graph.py
-```
-
-### 11.4 Acceptance checklist
-
-- [ ] `anvil/harness/public_subset_registry.py` exists and is data-only.
-- [ ] `docs/strategy_dsl_public_subset_contract.md` exists and mirrors the
-  registry.
-- [ ] Workstream A landed before any example-pack or docs-alignment work
-  started.
-- [ ] `examples/harness/public_subset/` exists with `canonical/`,
-  `compatibility/`, and `negative/`.
-- [ ] Canonical examples carry `dsl_version: c3_strategy_v1`.
-- [ ] Canonical examples omit runtime-owned and metadata-only fields.
-- [ ] `analysis_review_v1` appears only as compatibility-only, never as
-  canonical.
-- [ ] Front-door docs route readers to the contract doc and public example pack
-  first.
-- [ ] `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
-  remains runnable and is explicitly labeled internal or fixture-backed.
-- [ ] `tests/test_harness_public_subset_contract.py` exists and passes.
-- [ ] `tests/test_docs_surface.py` passes with the new routing rules.
-- [ ] `tests/test_harness_example_strategy_wiring.py` passes with the
-  coexistence rules.
-- [ ] No runtime behavior change was introduced.
-
-## 12. Assumptions
-
-- The current integration branch remains `codex/c1b-planning-quality-proof` for
-  the full execution of this plan.
-- The repo-local worktree root
-  `/home/azureuser/__Active_Code/forge/.worktrees/c29-public-subset-gate/` is
-  available for temporary worker worktrees.
-- The existing `poetry` environment is usable for the focused pytest reruns.
+Do not close the run on partial success. If any acceptance item still requires a
+follow-up to become true, the milestone is not complete.
