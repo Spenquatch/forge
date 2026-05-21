@@ -3637,6 +3637,68 @@ class HarnessRunner:
                 normalized.append(value)
         return normalized
 
+    def _normalize_review_ref(
+        self,
+        value: str,
+        *,
+        admissible_candidates: list[str] | set[str],
+    ) -> tuple[str, bool]:
+        text = str(value or "").strip()
+        if not text:
+            return "", False
+        candidate_list = self._dedupe_preserving_order(list(admissible_candidates))
+        candidate_set = set(candidate_list)
+        canonical = self._normalize_workspace_ref(text)
+        if canonical and canonical in candidate_set:
+            return canonical, canonical != text
+
+        stripped = self._strip_workspace_ref_location_suffix(text)
+        basename_candidate = self._normalize_workspace_ref(stripped)
+        if not basename_candidate or "/" in basename_candidate:
+            return canonical, False
+
+        matches = [
+            item for item in candidate_list if Path(item).name == basename_candidate
+        ]
+        if len(matches) == 1:
+            return matches[0], True
+        if len(matches) > 1:
+            return basename_candidate, False
+        return canonical, False
+
+    def _normalize_review_ref_list(
+        self,
+        values: Any,
+        *,
+        admissible_candidates: list[str] | set[str],
+        field_name: str,
+    ) -> tuple[list[str], list[str]]:
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            return [], []
+        normalized: list[str] = []
+        recovered_values: set[str] = set()
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            value, recovered = self._normalize_review_ref(
+                item,
+                admissible_candidates=admissible_candidates,
+            )
+            if not value:
+                continue
+            normalized.append(value)
+            if recovered:
+                recovered_values.add(value)
+        deduped = self._dedupe_preserving_order(normalized)
+        warnings = [
+            f"{field_name} recovered non-canonical review ref to canonical workspace path: {value}"
+            for value in deduped
+            if value in recovered_values
+        ]
+        return deduped, warnings
+
     @staticmethod
     def _dedupe_preserving_order(values: list[str]) -> list[str]:
         deduped: list[str] = []
@@ -4407,9 +4469,22 @@ class HarnessRunner:
                             )
                         )
                 for field_name in ("checked_files", "verified_evidence_refs"):
-                    values = self._normalize_workspace_ref_list(item.get(field_name))
-                    if values:
-                        values = self._dedupe_preserving_order(values)
+                    bounded_checked_files = [
+                        value
+                        for value in (item.get("checked_files") or [])
+                        if value in files_reviewed
+                    ]
+                    admissible_candidates = (
+                        files_reviewed
+                        if field_name == "checked_files"
+                        else bounded_checked_files
+                    )
+                    values, field_warnings = self._normalize_review_ref_list(
+                        item.get(field_name),
+                        admissible_candidates=admissible_candidates,
+                        field_name=f"recommendation_reviews[{index}].{field_name}",
+                    )
+                    warnings.extend(field_warnings)
                     if field_name in item:
                         item[field_name] = values
                         normalized_refs[
@@ -4487,11 +4562,22 @@ class HarnessRunner:
                         continue
                     item[id_field] = record_id
                 for ref_field_name in ("checked_files", "verified_evidence_refs"):
-                    values = self._normalize_workspace_ref_list(
-                        item.get(ref_field_name)
+                    bounded_checked_files = [
+                        value
+                        for value in (item.get("checked_files") or [])
+                        if value in files_reviewed
+                    ]
+                    admissible_candidates = (
+                        files_reviewed
+                        if ref_field_name == "checked_files"
+                        else bounded_checked_files
                     )
-                    if values:
-                        values = self._dedupe_preserving_order(values)
+                    values, field_warnings = self._normalize_review_ref_list(
+                        item.get(ref_field_name),
+                        admissible_candidates=admissible_candidates,
+                        field_name=f"{field_name}[{index}].{ref_field_name}",
+                    )
+                    warnings.extend(field_warnings)
                     if ref_field_name in item:
                         item[ref_field_name] = values
                         normalized_refs[f"{field_name}[{index}].{ref_field_name}"] = (

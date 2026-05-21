@@ -588,6 +588,7 @@ Those refs are the path-based audit surface for review provenance. `files_review
 
 Additional rules:
 
+- emit those review refs as canonical workspace-relative paths, not basenames or `path:line-range` forms
 - one scoped closure review maps to exactly one ID: one `issue_closure_reviews[*]` entry per `issue_id`, one `topic_closure_reviews[*]` entry per `topic_id`
 - unrelated recommendation review refs do not satisfy global issue/topic closure proof
 - recommendation-linked closures do not need extra scoped proof when their recommendation is already covered by the matching `recommendation_reviews[*]` entry
@@ -649,6 +650,10 @@ Examples of the existing and intended v4 semantic checks:
 - recommendation evidence refs must exist in the workspace snapshot
 - recommendation evidence refs must remain a subset of `files_reviewed`
 - line-qualified refs such as `path:12-18` should canonicalize to workspace paths before semantic validation
+- for review-stage critic/auditor proof refs, the runner may narrowly recover unique non-canonical refs before semantic validation, but only within already bounded context
+- `checked_files` may recover only against current-stage canonical `files_reviewed`
+- `verified_evidence_refs` may recover only against same-record canonicalized `checked_files`
+- ambiguity inside the admissible reviewed set is a hard failure; the runner must leave the ref unresolved rather than guess
 - in bounded mode, oversize evidence lists may be trimmed to cap before semantic validation when the task uses `evidence_cap_policy=trim_to_cap`
 - `review_surface.must_check_files` must stay within cap and remain a subset of `files_reviewed`
 - `review_surface.optional_check_files` must stay within cap

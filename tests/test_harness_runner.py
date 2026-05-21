@@ -3117,6 +3117,30 @@ class _TrustInferenceHarnessAdapter(_AcceptingHarnessAdapter):
         return payload
 
 
+class _TrustLineQualifiedReviewRefHarnessAdapter(_TrustInferenceHarnessAdapter):
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name != "critic":
+            return payload
+        payload["files_reviewed"] = [
+            ".github/workflows/codex-cli-release-watch.yml:10-18",
+            ".github/workflows/claude-code-release-watch.yml:20-28",
+        ]
+        payload["recommendation_reviews"][0]["checked_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml:30-36"
+        ]
+        payload["recommendation_reviews"][0]["verified_evidence_refs"] = [
+            ".github/workflows/codex-cli-release-watch.yml:30-36"
+        ]
+        payload["recommendation_reviews"][1]["checked_files"] = [
+            ".github/workflows/claude-code-release-watch.yml:40-46"
+        ]
+        payload["recommendation_reviews"][1]["verified_evidence_refs"] = [
+            ".github/workflows/claude-code-release-watch.yml:40-46"
+        ]
+        return payload
+
+
 class _TrustAttestationHistoricalIssueReplayHarnessAdapter(
     _TrustInferenceHarnessAdapter
 ):
@@ -3723,6 +3747,15 @@ def _prepare_workspace(tmp_path: Path) -> Path:
         "# Codex CLI parity spec\n",
         encoding="utf-8",
     )
+    return workspace
+
+
+def _prepare_workspace_with_ambiguous_review_refs(tmp_path: Path) -> Path:
+    workspace = _prepare_workspace(tmp_path)
+    (workspace / "pkg").mkdir(parents=True, exist_ok=True)
+    (workspace / "tests").mkdir(parents=True, exist_ok=True)
+    (workspace / "pkg" / "foo.py").write_text("print('pkg')\n", encoding="utf-8")
+    (workspace / "tests" / "foo.py").write_text("print('tests')\n", encoding="utf-8")
     return workspace
 
 
@@ -6386,6 +6419,57 @@ def test_analysis_review_runner_trust_review_normalization_binds_structured_revi
     }
 
 
+def test_analysis_review_runner_recovers_unique_review_refs_once_per_surviving_normalized_value(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustInferenceHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustInferenceHarnessAdapter()._payload_for_role("critic")
+    payload["recommendation_reviews"][0]["checked_files"] = [
+        "codex-cli-release-watch.yml:10-18",
+        "codex-cli-release-watch.yml:30-36",
+    ]
+    payload["recommendation_reviews"][0]["verified_evidence_refs"] = [
+        "codex-cli-release-watch.yml:10-18",
+        "codex-cli-release-watch.yml:30-36",
+    ]
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="critic",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+    )
+
+    assert normalized["recommendation_reviews"][0]["checked_files"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    assert normalized["recommendation_reviews"][0]["verified_evidence_refs"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    assert warnings == [
+        "recommendation_reviews[1].checked_files recovered non-canonical review ref to canonical workspace path: .github/workflows/codex-cli-release-watch.yml",
+        "recommendation_reviews[1].verified_evidence_refs recovered non-canonical review ref to canonical workspace path: .github/workflows/codex-cli-release-watch.yml",
+    ]
+
+
 def test_analysis_review_runner_trust_review_backfills_missing_closure_review_arrays_before_schema_revalidation(
     tmp_path,
     monkeypatch,
@@ -6682,6 +6766,106 @@ def test_analysis_review_runner_coerces_scalar_review_refs_to_single_item_lists(
     )
 
 
+def test_analysis_review_runner_recovers_issue_closure_review_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueLifecycleHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueLifecycleHarnessAdapter()._payload_for_role("auditor")
+    payload["issue_closure_reviews"][0]["checked_files"] = [
+        "codex-cli-release-watch.yml:10-18"
+    ]
+    payload["issue_closure_reviews"][0]["verified_evidence_refs"] = [
+        "codex-cli-release-watch.yml:10-18"
+    ]
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+        prior_open_issue_records=[{"issue_id": "AR-001", "recommendation_index": None}],
+        prior_open_topic_records=[],
+    )
+
+    assert normalized["issue_closure_reviews"][0]["checked_files"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    assert normalized["issue_closure_reviews"][0]["verified_evidence_refs"] == [
+        ".github/workflows/codex-cli-release-watch.yml"
+    ]
+    assert warnings == [
+        "issue_closure_reviews[1].checked_files recovered non-canonical review ref to canonical workspace path: .github/workflows/codex-cli-release-watch.yml",
+        "issue_closure_reviews[1].verified_evidence_refs recovered non-canonical review ref to canonical workspace path: .github/workflows/codex-cli-release-watch.yml",
+    ]
+
+
+def test_analysis_review_runner_does_not_recover_ambiguous_issue_closure_basenames_even_with_unique_prior_surfaced_refs(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace_with_ambiguous_review_refs(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustGlobalIssueLifecycleHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    payload = _TrustGlobalIssueLifecycleHarnessAdapter()._payload_for_role("auditor")
+    payload["files_reviewed"] = ["pkg/foo.py", "tests/foo.py"]
+    payload["issue_closure_reviews"][0]["checked_files"] = ["foo.py:10-18"]
+    payload["issue_closure_reviews"][0]["verified_evidence_refs"] = ["foo.py:10-18"]
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        payload_provenance_mode="payload_hash_and_refs",
+        contract=runner._analysis_contract(),
+        prior_open_issue_records=[
+            {
+                "issue_id": "AR-001",
+                "recommendation_index": None,
+                "_prior_surfaced_refs": ["pkg/foo.py"],
+            }
+        ],
+        prior_open_topic_records=[],
+    )
+
+    assert normalized["issue_closure_reviews"][0]["checked_files"] == ["foo.py"]
+    assert normalized["issue_closure_reviews"][0]["verified_evidence_refs"] == [
+        "foo.py"
+    ]
+    assert warnings == []
+
+
 def test_analysis_review_runner_normalizes_null_review_refs_before_schema_revalidation(
     tmp_path,
     monkeypatch,
@@ -6733,6 +6917,59 @@ def test_analysis_review_runner_normalizes_null_review_refs_before_schema_revali
     assert run_envelope["ok"] is True
     assert run_envelope.get("failure_kind") is None
     assert run_envelope.get("schema_validation_errors") in (None, [])
+
+
+def test_analysis_review_runner_end_to_end_accepts_line_qualified_review_refs_with_deterministic_warnings(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(
+        tmp_path,
+        strategy_kind="analysis_review_trust_v1",
+    )
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _TrustLineQualifiedReviewRefHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_with_warnings"
+    critic_stage = next(
+        stage for stage in summary["agent_stages"] if stage["role_name"] == "critic"
+    )
+    assert critic_stage["ok"] is True
+    assert critic_stage["structured_output"]["files_reviewed"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+    ]
+    assert critic_stage["structured_output"]["recommendation_reviews"][0][
+        "checked_files"
+    ] == [".github/workflows/codex-cli-release-watch.yml"]
+    assert critic_stage["structured_output"]["recommendation_reviews"][0][
+        "verified_evidence_refs"
+    ] == [".github/workflows/codex-cli-release-watch.yml"]
+    assert critic_stage["semantic_validation_warnings"] == [
+        "recommendation_reviews[1].checked_files recovered non-canonical review ref to canonical workspace path: .github/workflows/codex-cli-release-watch.yml",
+        "recommendation_reviews[1].verified_evidence_refs recovered non-canonical review ref to canonical workspace path: .github/workflows/codex-cli-release-watch.yml",
+        "recommendation_reviews[2].checked_files recovered non-canonical review ref to canonical workspace path: .github/workflows/claude-code-release-watch.yml",
+        "recommendation_reviews[2].verified_evidence_refs recovered non-canonical review ref to canonical workspace path: .github/workflows/claude-code-release-watch.yml",
+    ]
+    semantic_payload = load_structured_file(
+        Path(critic_stage["semantic_validation_path"])
+    )
+    assert semantic_payload["ok"] is True
+    assert semantic_payload["skipped"] is False
+    assert semantic_payload["errors"] == []
 
 
 @pytest.mark.parametrize(

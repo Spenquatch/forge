@@ -512,6 +512,18 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
         in critic
     )
     assert (
+        "Emit review refs only as canonical workspace-relative paths such as `.github/workflows/codex-cli-update-snapshot.yml`."
+        in critic
+    )
+    assert (
+        "Do not emit basename-only refs such as `codex-cli-update-snapshot.yml`."
+        in critic
+    )
+    assert (
+        "Do not emit line-qualified refs such as `.github/workflows/codex-cli-update-snapshot.yml:411-416`."
+        in critic
+    )
+    assert (
         "recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict."
         in critic
     )
@@ -534,6 +546,10 @@ def test_analysis_prompts_share_contract_and_confidence_rubric_text(
     assert "Preserve topic IDs for carried-forward or waived prior topics" in auditor
     assert (
         "Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage."
+        in auditor
+    )
+    assert (
+        "Emit `files_reviewed`, `checked_files`, and `verified_evidence_refs` only as canonical workspace-relative paths; never use basenames or `path:line-range` forms in those review ref fields."
         in auditor
     )
     assert (

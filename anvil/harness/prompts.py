@@ -1014,6 +1014,10 @@ def _review_payload_ref_block(contract: AnalysisReviewContract) -> str:
     lines = [
         "Review payload evidence refs:",
         "- files_reviewed should list the concrete workspace files you inspected during this review stage.",
+        "- Emit review refs only as canonical workspace-relative paths such as `.github/workflows/codex-cli-update-snapshot.yml`.",
+        "- Do not emit basename-only refs such as `codex-cli-update-snapshot.yml`.",
+        "- Do not emit line-qualified refs such as `.github/workflows/codex-cli-update-snapshot.yml:411-416`.",
+        "- If line detail matters, keep it in rationale, summary, or other narrative text rather than in the ref field.",
         "- files_reviewed is review context, not proof by itself.",
         "- recommendation_reviews[*].checked_files should name the concrete files you re-checked for that recommendation verdict.",
         "- recommendation_reviews[*].verified_evidence_refs should name the concrete evidence refs you directly re-checked for that recommendation verdict.",
@@ -1425,9 +1429,10 @@ Your job:
 6. Emit each new topic as a structured record with `topic_id`, `severity`, `title`, `evidence`, `repair_hint`, and `recommendation_index`.
 7. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only to classify prior open topics. Do not put IDs from this stage's new `topics` array into those classification arrays.
 8. Populate `files_reviewed` with the concrete workspace files you inspected during this review stage.
-9. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
-10. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
-11. Use the shared confidence rubric below when judging whether confidence is too high or too low.
+9. Emit `files_reviewed`, `checked_files`, and `verified_evidence_refs` only as canonical workspace-relative paths; never use basenames or `path:line-range` forms in those review ref fields.
+10. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
+11. Record `scope_escapes` whenever you inspect files outside the declared review_surface, and give each escape a non-empty reason.
+12. Use the shared confidence rubric below when judging whether confidence is too high or too low.
 
 Decision guidance:
 - Return verdict=revise when the overall draft still needs more work.
@@ -1493,12 +1498,13 @@ Your job:
 4. Only raise a new medium-or-higher issue when it was genuinely missed earlier or created by the revision.
 5. Use `resolved_topic_ids`, `carried_forward_topic_ids`, and `waived_topic_ids` only for prior open topics. Do not classify IDs from this stage's new `topics` array there.
 6. Populate `files_reviewed` with the concrete workspace files you inspected during this audit stage.
-7. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
-8. Review every recommendation individually and return recommendation-level verdicts.
-9. Stay inside each recommendation's bounded review_surface unless you must leave it.
-10. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
-11. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
-12. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
+7. Emit `files_reviewed`, `checked_files`, and `verified_evidence_refs` only as canonical workspace-relative paths; never use basenames or `path:line-range` forms in those review ref fields.
+8. Use `recommendation_reviews` to prove recommendation-linked closures, and use `issue_closure_reviews` / `topic_closure_reviews` only for global closures where `recommendation_index` is null.
+9. Review every recommendation individually and return recommendation-level verdicts.
+10. Stay inside each recommendation's bounded review_surface unless you must leave it.
+11. Record `scope_escapes` whenever you inspect files outside the bounded review surface, and give each escape a non-empty reason.
+12. Follow the contract rule for blocking_class_override_reason when you override the default blocking_class for an issue kind.
+13. Use `accept_partial` when a subset of recommendations is already valid even if the whole draft still needs revision.
 
 Decision guidance:
 - Return verdict=accept when the entire draft is acceptable.
@@ -1573,9 +1579,10 @@ Your job:
 2. Use `bounded_attestation_input` as the frozen bounded-analysis handoff for recommendation order, evidence order, review_surface, and prior ledgers.
 3. Return dense `recommendation_reviews` coverage across every bounded recommendation index from 1..N with no gaps.
 4. For each recommendation verdict, directly re-check the bounded workspace evidence and record that re-check in `verified_evidence_refs` plus `checked_files`.
-5. Use `issue_closure_reviews` and `topic_closure_reviews` only for recommendation_index=null closures; recommendation-linked closures must stay attached to the covered recommendation review.
-6. Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path.
-7. Use the shared confidence rubric below when judging whether the bounded recommendations remain acceptable under trust-mode scrutiny.
+5. Emit `files_reviewed`, `checked_files`, and `verified_evidence_refs` only as canonical workspace-relative paths; never use basenames or `path:line-range` forms in those review ref fields.
+6. Use `issue_closure_reviews` and `topic_closure_reviews` only for recommendation_index=null closures; recommendation-linked closures must stay attached to the covered recommendation review.
+7. Do not generate replacement analysis, replacement recommendations, or any rewritten `bounded_analysis` payload in this path.
+8. Use the shared confidence rubric below when judging whether the bounded recommendations remain acceptable under trust-mode scrutiny.
 
 {_analysis_contract_block(contract)}
 {_bounded_review_policy_block(contract)}

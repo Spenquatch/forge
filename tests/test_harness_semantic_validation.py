@@ -2630,6 +2630,77 @@ def test_trust_review_semantic_validation_rejects_topic_closure_verified_refs_ou
     )
 
 
+def test_trust_review_semantic_validation_rejects_ambiguous_issue_closure_basenames_even_with_unique_prior_surfaced_ref():
+    task = _task(min_recommendations=2)
+    contract = build_analysis_review_contract(
+        task, _strategy("analysis_review_trust_v1")
+    )
+    payload = copy.deepcopy(_fixture()["review_payload_trust_structured_refs_valid"])
+    payload["issues"] = []
+    payload["resolved_issue_ids"] = []
+    payload["carried_forward_issue_ids"] = ["AR-001"]
+    payload["waived_issue_ids"] = []
+    payload["files_reviewed"] = ["pkg/foo.py", "tests/foo.py"]
+    payload["issue_closure_reviews"] = [
+        {
+            "issue_id": "AR-001",
+            "checked_files": ["foo.py"],
+            "verified_evidence_refs": ["foo.py"],
+            "summary": "An ambiguous basename should stay unresolved.",
+        }
+    ]
+    payload["topic_closure_reviews"] = []
+
+    result = validate_analysis_review_payload(
+        payload,
+        role_name="auditor",
+        task=task,
+        contract=contract,
+        workspace_paths={"pkg/foo.py", "tests/foo.py"},
+        prior_open_issue_ids=["AR-001"],
+        prior_open_issue_records=[
+            {
+                "issue_id": "AR-001",
+                "recommendation_index": None,
+                "_prior_surfaced_refs": ["pkg/foo.py"],
+            }
+        ],
+        prior_open_topic_ids=[],
+        expected_recommendation_count=2,
+        payload_provenance={
+            "status": "insufficient",
+            "policy_mode": "payload_hash_and_refs",
+            "normalized_ref_count": 8,
+            "recommendation_review_ref_count": 4,
+            "recommendation_review_ref_field_count": 4,
+            "issue_closure_review_ref_count": 2,
+            "closure_provenance_satisfied": False,
+            "covered_recommendation_indices": [1, 2],
+            "uncovered_recommendation_indices": [],
+            "uncovered_global_issue_ids": ["AR-001"],
+            "uncovered_global_topic_ids": [],
+        },
+    )
+
+    assert result.ok is False
+    assert (
+        "issue_closure_reviews[1].checked_files must be a subset of files_reviewed: foo.py"
+        in result.errors
+    )
+    assert (
+        "issue_closure_reviews[1].checked_files contains path(s) not present in the workspace snapshot: foo.py"
+        in result.errors
+    )
+    assert (
+        "issue_closure_reviews[1].verified_evidence_refs contains path(s) not present in the workspace snapshot: foo.py"
+        in result.errors
+    )
+    assert (
+        "issue_closure_reviews[1].verified_evidence_refs must be a subset of the prior surfaced refs for issue_id AR-001: foo.py"
+        in result.errors
+    )
+
+
 def test_trust_review_semantic_validation_requires_per_verdict_structured_refs():
     task = _task(min_recommendations=2)
     contract = build_analysis_review_contract(
