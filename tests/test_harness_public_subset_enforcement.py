@@ -17,6 +17,7 @@ from anvil.harness.strategy_graph import (
     build_strategy_graph_spec,
     route_after_strategy_selection,
 )
+from anvil.harness.nodes.select_strategy import select_strategy_node
 from anvil.harness.types import StrategyConfig
 
 PUBLIC_SUBSET_ROOT = Path("examples/harness/public_subset")
@@ -192,6 +193,31 @@ def test_internal_planning_fixture_remains_parseable_and_preflight_clean() -> No
     assert result["config_verdict"] == "pass"
     assert "run_verdict" not in result
     assert result["warnings"] == []
+
+
+def test_canonical_trust_public_strategy_survives_preflight_and_selection_without_internal_key_injection() -> None:
+    task_payload = load_structured_file(
+        Path("examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml")
+    )
+    strategy_payload = load_structured_file(
+        Path("examples/harness/public_subset/canonical/analysis_review_trust_v1.yaml")
+    )
+
+    validated = validator_preflight_node(
+        _preflight_state(task_payload, strategy_payload)
+    )
+
+    assert validated["config_verdict"] == "pass"
+    assert "focus_gate" not in validated["strategy_spec"]
+    assert validated["strategy_spec"]["dsl_version"] == "c3_strategy_v1"
+
+    selected = select_strategy_node(dict(validated))
+
+    assert selected["strategy_graph_spec"]["runtime_target"] == "analysis_review_v1"
+    assert (
+        selected["strategy_graph_spec"]["spec_id"]
+        == "analysis_review_trust_v1.focus_gate_off.loops_1_3.trust_attestation_over_bounded"
+    )
 
 
 def test_main_cli_invalid_public_authoring_surfaces_invalid_config_summary_before_model_work(

@@ -153,7 +153,13 @@ def validator_preflight_node(state: HarnessState) -> HarnessState:
             errors.append(reason)
 
     state["task_spec"] = {**dict(state.get("task_spec") or {}), **task_spec.to_dict()}
-    state["strategy_spec"] = {**strategy_spec_dict, **strategy_spec.to_dict()}
+    if strategy_surface == "canonical_public":
+        # Keep canonical public payloads on the authoring surface after preflight.
+        # Injecting internal parser defaults (for example `focus_gate`) back into
+        # state causes later reparses to fail the public-boundary allowlist.
+        state["strategy_spec"] = dict(strategy_spec_dict)
+    else:
+        state["strategy_spec"] = {**strategy_spec_dict, **strategy_spec.to_dict()}
     state["strategy_kind"] = cast(
         Literal[
             "single_pass",
