@@ -436,6 +436,54 @@ def test_harness_run_cli_reports_missing_task_file_without_traceback(
     assert "Traceback" not in captured.err
 
 
+def test_harness_run_cli_keeps_invalid_task_spec_on_direct_error_path(
+    tmp_path: Path, capsys
+) -> None:
+    task_path = tmp_path / "task.yaml"
+    strategy_path = tmp_path / "strategy.yaml"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    task_path.write_text(
+        "id: invalid-task\n"
+        "task_kind: unsupported\n"
+        "objective: Preserve direct task validation failures.\n"
+        "workspace_write_policy:\n"
+        "  mode: forbid\n",
+        encoding="utf-8",
+    )
+    strategy_path.write_text(
+        "name: qa-single-pass\n"
+        "kind: single_pass\n"
+        "roles:\n"
+        "  solver:\n"
+        "    provider: codex_gpt_5_4_mini\n",
+        encoding="utf-8",
+    )
+
+    exit_code = asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                str(task_path),
+                "--strategy",
+                str(strategy_path),
+                "--workspace",
+                str(workspace),
+            ]
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "❌ HARNESS RUN FAILED: task_kind must be one of:" in captured.out
+    assert "run_verdict=invalid_config" not in captured.out
+    assert "report=" not in captured.out
+    assert "summary=" not in captured.out
+    assert captured.err == ""
+
+
 def _write_harness_specs(tmp_path: Path, *, task_kind: str) -> tuple[Path, Path, Path]:
     task_path = tmp_path / "task.yaml"
     strategy_path = tmp_path / "strategy.yaml"

@@ -366,6 +366,52 @@ def test_harness_standalone_cli_reports_yaml_parse_errors_without_traceback(
     assert "Traceback" not in captured.err
 
 
+def test_harness_standalone_cli_keeps_invalid_task_spec_on_direct_error_path(
+    tmp_path: Path, capsys
+) -> None:
+    task_path = tmp_path / "task.yaml"
+    strategy_path = tmp_path / "strategy.yaml"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    task_path.write_text(
+        "id: invalid-task\n"
+        "task_kind: unsupported\n"
+        "objective: Preserve direct task validation failures.\n"
+        "workspace_write_policy:\n"
+        "  mode: forbid\n",
+        encoding="utf-8",
+    )
+    strategy_path.write_text(
+        "name: qa-single-pass\n"
+        "kind: single_pass\n"
+        "roles:\n"
+        "  solver:\n"
+        "    provider: codex_gpt_5_4_mini\n",
+        encoding="utf-8",
+    )
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            str(task_path),
+            "--strategy",
+            str(strategy_path),
+            "--workspace",
+            str(workspace),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "error=task_kind must be one of:" in captured.err
+    assert "run_verdict=invalid_config" not in captured.out
+    assert "report=" not in captured.out
+    assert "summary=" not in captured.out
+    assert captured.out == ""
+
+
 def test_harness_standalone_cli_adds_missing_binary_rescue_guidance(
     monkeypatch, capsys
 ) -> None:

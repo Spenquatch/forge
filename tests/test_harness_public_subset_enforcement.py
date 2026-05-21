@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 
 import anvil.cli as cli_module
 import anvil.harness.cli as harness_cli_module
+from anvil.harness.executor import HarnessLangGraphExecutor
 from anvil.harness.files import load_structured_file
 from anvil.harness.nodes.validator_preflight import validator_preflight_node
 from anvil.harness.public_subset_validation import classify_public_strategy_surface
@@ -127,6 +129,13 @@ def _write_invalid_public_specs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return task_path, strategy_path, workspace
 
 
+def _extract_output_path(output: str, prefix: str) -> Path:
+    for line in output.splitlines():
+        if line.startswith(prefix):
+            return Path(line.split("=", 1)[1].strip())
+    raise AssertionError(f"Could not find {prefix!r} in output:\n{output}")
+
+
 @pytest.mark.parametrize(("fixture_name", "expected_message"), NEGATIVE_CASES)
 def test_negative_public_examples_fail_at_parser_and_preflight_with_targeted_reason(
     fixture_name: str, expected_message: str
@@ -185,7 +194,7 @@ def test_internal_planning_fixture_remains_parseable_and_preflight_clean() -> No
     assert result["warnings"] == []
 
 
-def test_main_cli_invalid_public_authoring_exits_nonzero_before_model_work(
+def test_main_cli_invalid_public_authoring_surfaces_invalid_config_summary_before_model_work(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     task_path, strategy_path, workspace = _write_invalid_public_specs(tmp_path)
@@ -205,15 +214,68 @@ def test_main_cli_invalid_public_authoring_exits_nonzero_before_model_work(
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 2
-    assert "canonical public strategies must declare kind as one of:" in captured.out
+    expected_message = "canonical public strategies must declare kind as one of:"
+
+    assert exit_code == 1
+    assert "run_verdict=invalid_config" in captured.out
+    assert "config_verdict=invalid_config" in captured.out
+    assert f"final_summary={expected_message}" in captured.out
     assert "FORGE_CODEX_BIN" not in captured.out
     assert "OPENAI_API_KEY" not in captured.out
-    assert "verdict=" not in captured.out
+    assert captured.err == ""
+
+    report_path = _extract_output_path(captured.out, "report=")
+    summary_path = _extract_output_path(captured.out, "summary=")
+    assert report_path.exists()
+    assert summary_path.exists()
+
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary_payload["verdict"] == "invalid_config"
+    assert summary_payload["verdicts"]["run_verdict"] == "invalid_config"
+    assert summary_payload["verdicts"]["config_verdict"] == "invalid_config"
+    assert expected_message in summary_payload["final_summary"]
+    assert expected_message in report_path.read_text(encoding="utf-8")
+
+
+def test_main_cli_invalid_public_authoring_json_surfaces_invalid_config_artifacts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    task_path, strategy_path, workspace = _write_invalid_public_specs(tmp_path)
+
+    exit_code = asyncio.run(
+        cli_module.main_async(
+            [
+                "harness-run",
+                "--task",
+                str(task_path),
+                "--strategy",
+                str(strategy_path),
+                "--workspace",
+                str(workspace),
+                "--json",
+            ]
+        )
+    )
+
+    captured = capsys.readouterr()
+    expected_message = "canonical public strategies must declare kind as one of:"
+
+    payload = json.loads(captured.out)
+    assert exit_code == 1
+    assert payload["verdict"] == "invalid_config"
+    assert payload["verdicts"]["run_verdict"] == "invalid_config"
+    assert payload["verdicts"]["config_verdict"] == "invalid_config"
+    assert expected_message in payload["final_summary"]
+    assert expected_message in payload["errors"][0]
+    report_path = Path(payload["artifacts"]["report_md"])
+    summary_path = Path(payload["artifacts"]["summary_json"])
+    assert report_path.exists()
+    assert summary_path.exists()
+    assert expected_message in report_path.read_text(encoding="utf-8")
     assert captured.err == ""
 
 
-def test_standalone_cli_invalid_public_authoring_exits_nonzero_before_model_work(
+def test_standalone_cli_invalid_public_authoring_surfaces_invalid_config_summary_before_model_work(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     task_path, strategy_path, workspace = _write_invalid_public_specs(tmp_path)
@@ -231,11 +293,96 @@ def test_standalone_cli_invalid_public_authoring_exits_nonzero_before_model_work
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 2
-    assert (
-        "error=canonical public strategies must declare kind as one of:"
-        in captured.err
+    expected_message = "canonical public strategies must declare kind as one of:"
+
+    assert exit_code == 1
+    assert "run_verdict=invalid_config" in captured.out
+    assert "config_verdict=invalid_config" in captured.out
+    assert f"final_summary={expected_message}" in captured.out
+    assert "FORGE_CODEX_BIN" not in captured.out
+    assert "OPENAI_API_KEY" not in captured.out
+    assert captured.err == ""
+
+    report_path = _extract_output_path(captured.out, "report=")
+    summary_path = _extract_output_path(captured.out, "summary=")
+    assert report_path.exists()
+    assert summary_path.exists()
+
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary_payload["verdict"] == "invalid_config"
+    assert summary_payload["verdicts"]["run_verdict"] == "invalid_config"
+    assert summary_payload["verdicts"]["config_verdict"] == "invalid_config"
+    assert expected_message in summary_payload["final_summary"]
+    assert expected_message in report_path.read_text(encoding="utf-8")
+
+
+def test_standalone_cli_invalid_public_authoring_json_surfaces_invalid_config_artifacts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    task_path, strategy_path, workspace = _write_invalid_public_specs(tmp_path)
+
+    exit_code = harness_cli_module.main(
+        [
+            "run",
+            "--task",
+            str(task_path),
+            "--strategy",
+            str(strategy_path),
+            "--workspace",
+            str(workspace),
+            "--json",
+        ]
     )
-    assert "FORGE_CODEX_BIN" not in captured.err
-    assert "OPENAI_API_KEY" not in captured.err
-    assert captured.out == ""
+
+    captured = capsys.readouterr()
+    expected_message = "canonical public strategies must declare kind as one of:"
+
+    payload = json.loads(captured.out)
+    assert exit_code == 1
+    assert payload["verdict"] == "invalid_config"
+    assert payload["verdicts"]["run_verdict"] == "invalid_config"
+    assert payload["verdicts"]["config_verdict"] == "invalid_config"
+    assert expected_message in payload["final_summary"]
+    assert expected_message in payload["errors"][0]
+    report_path = Path(payload["artifacts"]["report_md"])
+    summary_path = Path(payload["artifacts"]["summary_json"])
+    assert report_path.exists()
+    assert summary_path.exists()
+    assert expected_message in report_path.read_text(encoding="utf-8")
+    assert captured.err == ""
+
+
+def test_executor_invalid_public_authoring_stops_before_model_work_and_writes_artifacts(
+    tmp_path: Path,
+) -> None:
+    task_path, strategy_path, workspace = _write_invalid_public_specs(tmp_path)
+    out_root = tmp_path / "runs"
+    executor = HarnessLangGraphExecutor(checkpoint="memory")
+
+    state = asyncio.run(
+        executor.execute(
+            task_path=str(task_path),
+            strategy_path=str(strategy_path),
+            workspace=str(workspace),
+            out_root=str(out_root),
+        )
+    )
+
+    expected_message = "canonical public strategies must declare kind as one of:"
+    summary_payload = state["summary_payload"]
+    report_path = Path(summary_payload["artifacts"]["report_md"])
+    summary_path = Path(summary_payload["artifacts"]["summary_json"])
+
+    assert state["run_verdict"] == "invalid_config"
+    assert state["config_verdict"] == "invalid_config"
+    assert state["stop_reason"] == "strategy_spec_parse"
+    assert expected_message in state["summary_text"]
+    assert state["stage_history"] == []
+    assert report_path.exists()
+    assert summary_path.exists()
+    assert expected_message in report_path.read_text(encoding="utf-8")
+
+    summary_json = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary_json["verdict"] == "invalid_config"
+    assert summary_json["verdicts"]["config_verdict"] == "invalid_config"
+    assert expected_message in summary_json["final_summary"]

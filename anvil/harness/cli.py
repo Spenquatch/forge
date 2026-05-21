@@ -85,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _print_summary(summary: dict[str, Any]) -> None:
     verdicts = summary.get("verdicts") or {}
     artifacts = summary.get("artifacts") or {}
+    run_verdict = str(verdicts.get("run_verdict", summary.get("verdict")) or "")
     if _is_planning_summary(summary):
         print(f"terminal_status={summary.get('terminal_status')}")
         stop_reason = str(summary.get("stop_reason") or "").strip()
@@ -93,11 +94,19 @@ def _print_summary(summary: dict[str, Any]) -> None:
         clarification_requests = summary.get("clarification_requests") or []
         if clarification_requests:
             print(f"clarification_requests={len(clarification_requests)}")
-    print(f"run_verdict={verdicts.get('run_verdict', summary.get('verdict'))}")
+    print(f"run_verdict={run_verdict}")
     print(f"content_verdict={verdicts.get('content_verdict')}")
     print(f"validator_verdict={verdicts.get('validator_verdict')}")
     print(f"policy_verdict={verdicts.get('policy_verdict')}")
     print(f"config_verdict={verdicts.get('config_verdict', 'pass')}")
+    if run_verdict == "invalid_config":
+        final_summary = str(summary.get("final_summary") or "").strip()
+        errors = summary.get("errors") or []
+        first_error = str(errors[0]).strip() if errors else ""
+        if final_summary:
+            print(f"final_summary={final_summary}")
+        elif first_error:
+            print(f"final_summary={first_error}")
     print(f"run_dir={artifacts.get('run_dir')}")
     print(f"report={artifacts.get('report_md')}")
     print(f"summary={artifacts.get('summary_json')}")

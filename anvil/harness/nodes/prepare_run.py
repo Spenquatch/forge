@@ -6,7 +6,7 @@ from typing import Any, Literal, cast
 from ..artifacts import create_run_id
 from ..files import load_structured_file
 from ..state import HarnessState, initialize_harness_state
-from ..types import StrategyConfig, TaskSpec
+from ..types import TaskSpec
 
 
 def prepare_run_node(state: dict[str, Any]) -> HarnessState:
@@ -43,27 +43,15 @@ def prepare_run_node(state: dict[str, Any]) -> HarnessState:
 
     try:
         raw_strategy_spec = load_structured_file(strategy_path)
-        strategy_spec = StrategyConfig.from_dict(raw_strategy_spec)
     except FileNotFoundError as exc:
         raise ValueError(f"Strategy spec file not found: {strategy_path}") from exc
     run_id = create_run_id(task_spec.id)
     base["run_id"] = run_id
     base["run_dir"] = str(Path(out_root) / run_id)
     base["task_spec"] = {**dict(raw_task_spec), **task_spec.to_dict()}
-    base["strategy_spec"] = {**dict(raw_strategy_spec), **strategy_spec.to_dict()}
+    base["strategy_spec"] = dict(raw_strategy_spec)
     base["task_kind"] = cast(
         Literal["patch", "analysis_review", "planning"],
         task_spec.task_kind,
-    )
-    base["strategy_kind"] = cast(
-        Literal[
-            "single_pass",
-            "pfr_v1",
-            "analysis_review_bounded_v1",
-            "analysis_review_trust_v1",
-            "analysis_review_v1",
-            "deterministic_feature_planning_v1",
-        ],
-        strategy_spec.kind,
     )
     return base

@@ -30,6 +30,11 @@ async def _wrap_state_node(
 def build_harness_langgraph(*, checkpointer: Optional[Any] = None):
     graph: Any = StateGraph(dict)  # type: ignore[type-var]
 
+    def _after_preflight(state: MutableMapping[str, Any]) -> str:
+        if str(state.get("config_verdict") or "pass") == "invalid_config":
+            return "write_artifacts"
+        return "select_strategy"
+
     def _runtime_target(state: MutableMapping[str, Any]) -> str:
         if str(state.get("config_verdict") or "pass") == "invalid_config":
             return "write_artifacts"
@@ -98,7 +103,14 @@ def build_harness_langgraph(*, checkpointer: Optional[Any] = None):
 
     graph.set_entry_point("prepare_run")
     graph.add_edge("prepare_run", "validator_preflight")
-    graph.add_edge("validator_preflight", "select_strategy")
+    graph.add_conditional_edges(
+        "validator_preflight",
+        _after_preflight,
+        {
+            "select_strategy": "select_strategy",
+            "write_artifacts": "write_artifacts",
+        },
+    )
 
     graph.add_conditional_edges(
         "select_strategy",
