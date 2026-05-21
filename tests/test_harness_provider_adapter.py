@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from anvil.config_loader import ProviderCfg
-from anvil.harness.providers import ForgeProviderAdapter, resolve_provider_name
+from anvil.harness.providers import (
+    ForgeProviderAdapter,
+    resolve_configured_provider_name,
+    resolve_provider_name,
+)
 from anvil.harness.types import RoleConfig, StageRequest
 from anvil.providers.claude_code import ClaudeCodeProvider
 from anvil.providers.codex_cli import CodexCliProvider
@@ -245,6 +249,55 @@ def test_provider_aliases_and_non_cli_json_parsing(tmp_path, monkeypatch):
     assert Path(result.raw_output_path or "").exists()
     assert Path(result.normalized_output_path or "").exists()
     assert Path(result.output_path or "").exists()
+
+
+def test_resolve_configured_provider_name_prefers_model_and_family_defaults(
+    monkeypatch,
+):
+    providers = {
+        "codex_gpt_5_2": ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.codex_cli.CodexCliProvider",
+            binary="codex",
+            model_name="gpt-5.2",
+            models={"gpt-5.2/*": {}},
+        ),
+        "codex_gpt_5_4": ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.codex_cli.CodexCliProvider",
+            binary="codex",
+            model_name="gpt-5.4",
+            models={"gpt-5.4/*": {}},
+        ),
+        "claude_code_sonnet": ProviderCfg(
+            type="cli",
+            class_path="anvil.providers.claude_code.ClaudeCodeProvider",
+            binary="claude",
+            model_name="sonnet",
+            models={"sonnet/*": {}},
+        ),
+    }
+
+    monkeypatch.setattr(
+        "anvil.harness.providers.load_config",
+        lambda: (providers, {"execute": "codex_cli", "critique": "claude_code"}),
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers.get_provider_config",
+        lambda name: (
+            None if name in {"codex_cli", "claude_code"} else providers.get(name)
+        ),
+    )
+    monkeypatch.setattr(
+        "anvil.harness.providers._configured_codex_default_model",
+        lambda: "gpt-5.4",
+    )
+
+    assert resolve_configured_provider_name("codex_cli", model="gpt-5.2") == (
+        "codex_gpt_5_2"
+    )
+    assert resolve_configured_provider_name("codex_cli") == "codex_gpt_5_4"
+    assert resolve_configured_provider_name("claude_code") == "claude_code_sonnet"
 
 
 def test_provider_adapter_decodes_bytes_from_non_cli_provider(tmp_path, monkeypatch):

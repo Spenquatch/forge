@@ -7,7 +7,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
+from anvil.config_loader import ProviderCfg, load_config
 from anvil.providers import get_provider_config, get_provider_exact
+from anvil.providers.codex_cli import _configured_codex_default_model
 
 from .files import write_json, write_text
 from .types import ProviderRun, StageRequest
@@ -25,6 +27,16 @@ ROLE_TO_FORGE_ROLE: dict[str, str] = {
     "patcher": "refine",
     "reviser": "refine",
     "auditor": "review",
+}
+
+FAMILY_PROVIDER_CLASS_PATHS: dict[str, str] = {
+    "codex_cli": "anvil.providers.codex_cli.CodexCliProvider",
+    "claude_code": "anvil.providers.claude_code.ClaudeCodeProvider",
+}
+
+FAMILY_MODEL_PREFERENCES: dict[str, tuple[str, ...]] = {
+    "codex_cli": ("gpt-5.4", "gpt-5.4-mini", "gpt-5.2"),
+    "claude_code": ("sonnet", "haiku"),
 }
 
 
@@ -74,22 +86,30 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         write_text(prompt_path, request.prompt_text)
         write_json(schema_path, request.schema)
 
-        provider = get_provider_exact(self.name)
-        cfg = get_provider_config(self.name)
+        configured_name = resolve_configured_provider_name(
+            self.name,
+            model=request.role_config.model,
+        )
+        provider = get_provider_exact(configured_name)
+        cfg = get_provider_config(configured_name)
         if provider is None or cfg is None:
-            message = f"Provider '{self.requested_name}' resolved to '{self.name}', but it is not configured or could not be initialized."
+            message = (
+                f"Provider '{self.requested_name}' resolved to '{self.name}'"
+                f" and configured target '{configured_name}', but it is not "
+                "configured or could not be initialized."
+            )
             write_text(stdout_path, "")
             write_text(stderr_path, message)
             return ProviderRun(
                 role_name=request.role_name,
-                provider=self.name,
+                provider=configured_name,
                 model=request.role_config.model,
                 access=request.role_config.access,
                 ok=False,
                 exit_code=127,
                 duration_sec=0.0,
                 cwd=request.cwd,
-                command=[self.name],
+                command=[configured_name],
                 stdout_path=str(stdout_path),
                 stderr_path=str(stderr_path),
                 prompt_path=str(prompt_path),
@@ -98,7 +118,11 @@ class ForgeProviderAdapter(BaseProviderAdapter):
                 raw_output_path=None,
                 normalized_output_path=None,
                 structured_output=None,
-                raw_meta={"requested_provider": self.requested_name},
+                raw_meta={
+                    "requested_provider": self.requested_name,
+                    "resolved_provider": self.name,
+                    "configured_provider": configured_name,
+                },
                 error=message,
             )
 
@@ -122,6 +146,7 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         raw_meta: dict[str, Any] = {
             "requested_provider": self.requested_name,
             "resolved_provider": self.name,
+            "configured_provider": configured_name,
             "provider_type": provider_type,
             "mapped_role": mapped_role,
         }
@@ -241,7 +266,7 @@ class ForgeProviderAdapter(BaseProviderAdapter):
         )
         return ProviderRun(
             role_name=request.role_name,
-            provider=self.name,
+            provider=configured_name,
             model=_reported_model_name(provider, request.role_config.model),
             access=request.role_config.access,
             ok=ok,
@@ -277,8 +302,67 @@ def resolve_provider_name(name: str) -> str:
     return PROVIDER_ALIASES.get(lowered, lowered)
 
 
+def resolve_configured_provider_name(name: str, *, model: str | None = None) -> str:
+    resolved_name = resolve_provider_name(name)
+    if get_provider_config(resolved_name) is not None:
+        return resolved_name
+
+    family_class_path = FAMILY_PROVIDER_CLASS_PATHS.get(resolved_name)
+    if not family_class_path:
+        return resolved_name
+
+    providers, _ = load_config()
+    candidates = [
+        (provider_name, cfg)
+        for provider_name, cfg in providers.items()
+        if str(cfg.class_path) == family_class_path
+    ]
+    if not candidates:
+        return resolved_name
+
+    requested_model = _normalize_optional_str(model)
+    if requested_model:
+        for provider_name, cfg in candidates:
+            if _provider_cfg_supports_model(cfg, requested_model):
+                return provider_name
+
+    if resolved_name == "codex_cli":
+        configured_model = _normalize_optional_str(_configured_codex_default_model())
+        if configured_model:
+            for provider_name, cfg in candidates:
+                if _provider_cfg_supports_model(cfg, configured_model):
+                    return provider_name
+
+    for preferred_model in FAMILY_MODEL_PREFERENCES.get(resolved_name, ()):
+        for provider_name, cfg in candidates:
+            if _provider_cfg_supports_model(cfg, preferred_model):
+                return provider_name
+
+    return candidates[0][0]
+
+
 def get_provider(name: str) -> BaseProviderAdapter:
     return ForgeProviderAdapter(name)
+
+
+def _normalize_optional_str(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value).strip() or None
+
+
+def _provider_cfg_supports_model(cfg: ProviderCfg, model: str) -> bool:
+    candidate_model = str(getattr(cfg, "model_name", "") or "").strip()
+    if candidate_model == model:
+        return True
+
+    for model_key in getattr(cfg, "models", {}).keys():
+        key = str(model_key).strip()
+        if key == model:
+            return True
+        if key.endswith("/*") and key[:-2] == model:
+            return True
+    return False
 
 
 def _run_provider_call(
