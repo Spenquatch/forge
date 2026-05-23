@@ -44,6 +44,7 @@ PLANNING_MATCH_LIMIT = 25
 PLANNING_READ_LIMIT = 12
 PLANNING_READ_BYTES_LIMIT = 150 * 1024
 PLANNER_REVIEW_STAGE_TYPE = "planner_review"
+PLANNING_DETERMINISTIC_POSTURE = "canonical_first_pass"
 _TASK_TERMINAL_MODE_RE = re.compile(
     r"planning_fixture_mode\s*[:=]\s*(clarification_needed|failed)",
     re.IGNORECASE,
@@ -183,6 +184,19 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(normalized)
         deduped.append(normalized)
     return deduped
+
+
+def _empty_provider_review_delta(*, summary: str) -> dict[str, Any]:
+    return {
+        "delta_status": "none",
+        "summary": summary,
+        "uncovered_cited_surfaces": [],
+        "behavioral_coverage_gaps": [],
+        "expansion_candidates": [],
+        "follow_up_questions": [],
+        "confidence": 0.0,
+        "preserves_canonical_structure": True,
+    }
 
 
 def _stable_id(prefix: str, index: int, label: str) -> str:
@@ -579,6 +593,124 @@ def _planning_provider_review_schema() -> dict[str, Any]:
             "strengths": {"type": "array", "items": {"type": "string"}},
             "risks": {"type": "array", "items": {"type": "string"}},
             "coverage_challenges": {"type": "array", "items": {"type": "string"}},
+            "provider_review_delta": {
+                "type": "object",
+                "properties": {
+                    "delta_status": {
+                        "type": "string",
+                        "enum": [
+                            "none",
+                            "expansion_recommended",
+                            "clarification_recommended",
+                        ],
+                    },
+                    "summary": {"type": "string"},
+                    "uncovered_cited_surfaces": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "gap_kind": {
+                                    "type": "string",
+                                    "enum": [
+                                        "uncovered",
+                                        "under_planned",
+                                        "evidence_only_needs_attestation",
+                                    ],
+                                },
+                                "reason": {"type": "string"},
+                                "linked_seam_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "linked_workstream_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "linked_slice_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": [
+                                "path",
+                                "gap_kind",
+                                "reason",
+                                "linked_seam_ids",
+                                "linked_workstream_ids",
+                                "linked_slice_ids",
+                            ],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "behavioral_coverage_gaps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "expansion_candidates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "candidate_kind": {
+                                    "type": "string",
+                                    "enum": [
+                                        "seam_expansion",
+                                        "workstream_expansion",
+                                        "slice_expansion",
+                                        "coverage_attestation",
+                                        "clarification",
+                                    ],
+                                },
+                                "summary": {"type": "string"},
+                                "cited_paths": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "attach_to_seam_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "attach_to_workstream_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "attach_to_slice_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": [
+                                "candidate_kind",
+                                "summary",
+                                "cited_paths",
+                                "attach_to_seam_ids",
+                                "attach_to_workstream_ids",
+                                "attach_to_slice_ids",
+                            ],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "follow_up_questions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "preserves_canonical_structure": {"type": "boolean"},
+                },
+                "required": [
+                    "delta_status",
+                    "summary",
+                    "uncovered_cited_surfaces",
+                    "behavioral_coverage_gaps",
+                    "expansion_candidates",
+                    "follow_up_questions",
+                    "confidence",
+                    "preserves_canonical_structure",
+                ],
+                "additionalProperties": False,
+            },
             "follow_up_questions": {"type": "array", "items": {"type": "string"}},
             "referenced_seam_ids": {"type": "array", "items": {"type": "string"}},
             "referenced_workstream_ids": {
@@ -594,6 +726,7 @@ def _planning_provider_review_schema() -> dict[str, Any]:
             "strengths",
             "risks",
             "coverage_challenges",
+            "provider_review_delta",
             "follow_up_questions",
             "referenced_seam_ids",
             "referenced_workstream_ids",
@@ -623,11 +756,16 @@ def _planning_provider_review_payload(
                 (state.get("task_spec") or {}).get("constraints") or []
             ),
         },
+        "deterministic_planning_posture": PLANNING_DETERMINISTIC_POSTURE,
         "repo_evidence_refs": list(state.get("repo_evidence_refs") or []),
         "seams": _list_of_dicts(state.get("planning_seams") or []),
         "workstreams": _list_of_dicts(state.get("planning_workstreams") or []),
         "slices": _list_of_dicts(state.get("planning_slices") or []),
         "coverage_ledger": coverage_rows,
+        "uncovered_delta": _list_of_dicts(state.get("planning_uncovered_delta") or []),
+        "assumptions_register": _list_of_dicts(
+            state.get("planning_assumptions_register") or []
+        ),
         "phase_results": _list_of_dicts(state.get("planning_phase_results") or []),
     }
 
@@ -639,10 +777,13 @@ def _planning_provider_review_prompt(
 ) -> str:
     return "\n".join(
         [
-            "Review the deterministic planning package without changing its canonical structure.",
-            "You may only review, challenge, or attest the package.",
+            "Review the deterministic planning package as a bounded canonical first pass.",
+            "You may only review, challenge, or attest the package without changing its canonical structure.",
             "Do not invent new seam, workstream, or slice ids.",
-            "If you disagree with the package, explain the disagreement in risks or coverage_challenges.",
+            "Do not rewrite or replace canonical seam, workstream, or slice ownership.",
+            "Classify cited surfaces as planned, intentionally evidence-only, uncovered, or under-planned.",
+            "Use provider_review_delta to describe expansion or clarification need without flattening deterministic coverage truth.",
+            "If you disagree with the package, explain the disagreement in risks or coverage_challenges and mirror the actionable result in provider_review_delta.",
             "",
             "Return JSON matching the provided schema.",
             "",
@@ -650,6 +791,101 @@ def _planning_provider_review_prompt(
             json.dumps(review_payload, indent=2, sort_keys=False),
         ]
     )
+
+
+def _normalized_provider_review_delta(
+    review_output: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(review_output, Mapping):
+        return _empty_provider_review_delta(
+            summary="Provider review was not exercised."
+        )
+
+    raw_delta = review_output.get("provider_review_delta")
+    follow_up_questions = _normalize_string_list(
+        review_output.get("follow_up_questions") or []
+    )
+    if not isinstance(raw_delta, Mapping):
+        verdict = str(review_output.get("verdict") or "").strip().lower()
+        behavioral_gaps = _normalize_string_list(
+            review_output.get("coverage_challenges") or []
+        )
+        risks = _normalize_string_list(review_output.get("risks") or [])
+        if verdict in {"accept_with_caveat", "revise"} or behavioral_gaps or risks:
+            return {
+                "delta_status": (
+                    "clarification_recommended"
+                    if follow_up_questions and not (behavioral_gaps or risks)
+                    else "expansion_recommended"
+                ),
+                "summary": str(review_output.get("summary") or "").strip(),
+                "uncovered_cited_surfaces": [],
+                "behavioral_coverage_gaps": behavioral_gaps or risks,
+                "expansion_candidates": [],
+                "follow_up_questions": follow_up_questions,
+                "confidence": float(review_output.get("confidence") or 0.0),
+                "preserves_canonical_structure": True,
+            }
+        return _empty_provider_review_delta(
+            summary="Provider review found no expansion delta."
+        )
+
+    uncovered_cited_surfaces: list[dict[str, Any]] = []
+    for item in _list_of_dicts(raw_delta.get("uncovered_cited_surfaces") or []):
+        uncovered_cited_surfaces.append(
+            {
+                "path": str(item.get("path") or "").strip(),
+                "gap_kind": str(item.get("gap_kind") or "").strip(),
+                "reason": str(item.get("reason") or "").strip(),
+                "linked_seam_ids": _normalize_string_list(
+                    item.get("linked_seam_ids") or []
+                ),
+                "linked_workstream_ids": _normalize_string_list(
+                    item.get("linked_workstream_ids") or []
+                ),
+                "linked_slice_ids": _normalize_string_list(
+                    item.get("linked_slice_ids") or []
+                ),
+            }
+        )
+
+    expansion_candidates: list[dict[str, Any]] = []
+    for item in _list_of_dicts(raw_delta.get("expansion_candidates") or []):
+        expansion_candidates.append(
+            {
+                "candidate_kind": str(item.get("candidate_kind") or "").strip(),
+                "summary": str(item.get("summary") or "").strip(),
+                "cited_paths": _normalize_string_list(item.get("cited_paths") or []),
+                "attach_to_seam_ids": _normalize_string_list(
+                    item.get("attach_to_seam_ids") or []
+                ),
+                "attach_to_workstream_ids": _normalize_string_list(
+                    item.get("attach_to_workstream_ids") or []
+                ),
+                "attach_to_slice_ids": _normalize_string_list(
+                    item.get("attach_to_slice_ids") or []
+                ),
+            }
+        )
+
+    delta_status = str(raw_delta.get("delta_status") or "none").strip() or "none"
+    summary = str(raw_delta.get("summary") or "").strip()
+    return {
+        "delta_status": delta_status,
+        "summary": summary,
+        "uncovered_cited_surfaces": uncovered_cited_surfaces,
+        "behavioral_coverage_gaps": _normalize_string_list(
+            raw_delta.get("behavioral_coverage_gaps") or []
+        ),
+        "expansion_candidates": expansion_candidates,
+        "follow_up_questions": _normalize_string_list(
+            raw_delta.get("follow_up_questions") or follow_up_questions
+        ),
+        "confidence": float(raw_delta.get("confidence") or 0.0),
+        "preserves_canonical_structure": bool(
+            raw_delta.get("preserves_canonical_structure", True)
+        ),
+    }
 
 
 def _planner_role_config(state: Mapping[str, Any]) -> RoleConfig | None:
@@ -744,12 +980,18 @@ def _run_planner_review(
         "model": run.model,
         **dict(run.structured_output),
     }
+    review_delta = _normalized_provider_review_delta(review)
+    review["provider_review_delta"] = review_delta
     stage_result["verdict"] = str(review.get("verdict") or "")
     stage_result["summary"] = str(review.get("summary") or "")
+    stage_result["delta_status"] = str(review_delta.get("delta_status") or "")
     disagreement_count = (
         1
-        if str(review.get("verdict") or "").strip().lower()
-        in {"accept_with_caveat", "revise"}
+        if (
+            str(review_delta.get("delta_status") or "").strip().lower() != "none"
+            or str(review.get("verdict") or "").strip().lower()
+            in {"accept_with_caveat", "revise"}
+        )
         else 0
     )
     return {
@@ -757,6 +999,7 @@ def _run_planner_review(
         "stop_reason": None,
         "provider_stage_result": stage_result,
         "planning_provider_review": review,
+        "planning_provider_review_delta": review_delta,
         "planning_provider_disagreement_count": disagreement_count,
     }
 
@@ -883,8 +1126,12 @@ def _seed_planning_state(
     state["planning_uncovered_delta"] = []
     state["planning_provider_stage_results"] = []
     state["planning_provider_review"] = None
+    state["planning_provider_review_delta"] = _empty_provider_review_delta(
+        summary="Provider review was not exercised."
+    )
     state["planning_provider_failure"] = None
     state["planning_provider_disagreement_count"] = 0
+    state["planning_deterministic_planning_posture"] = PLANNING_DETERMINISTIC_POSTURE
     state["search_pass_count"] = 0
     state["inspected_file_count"] = 0
     state["discovery_budget_escalated"] = False
@@ -2398,6 +2645,10 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
         if outcome.get("planning_provider_review"):
             runtime_state["planning_provider_review"] = dict(
                 outcome["planning_provider_review"]
+            )
+        if outcome.get("planning_provider_review_delta"):
+            runtime_state["planning_provider_review_delta"] = dict(
+                outcome["planning_provider_review_delta"]
             )
         if outcome.get("planning_provider_failure"):
             runtime_state["planning_provider_failure"] = dict(

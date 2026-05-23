@@ -29,7 +29,8 @@ than the canonical public planning example.
   `planning_execution.mode: graph_owned`, and the required planning policy refs
 - `canonical/deterministic_feature_planning_planner_review_v1.yaml`: canonical
   planning example with bounded provider-backed review layered on top of the
-  same deterministic structure contract
+  same deterministic first-pass structure contract; review may emit expansion
+  delta but may not replace canonical seams, workstreams, or slices
 
 ## Compatibility-only example
 

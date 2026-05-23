@@ -84,6 +84,11 @@ Canonical public planning now supports:
   `roles.planner.provider` for bounded read-only provider review layered on top
   of deterministic structure
 
+For planning artifacts and docs, be explicit that deterministic planning is the
+bounded canonical first pass. When planner review is enabled, it may emit
+structured `provider_review_delta` findings, but it must not replace canonical
+seam, workstream, or slice ownership.
+
 Harness strategy YAML uses provider family keys from `config/models.yaml`, including `codex_cli` and `claude_code`. When those families back a run through a local CLI, Forge still respects `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN`; API-backed providers still require credentials such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
 For more runnable task and strategy examples, see [examples/README.md](../examples/README.md).

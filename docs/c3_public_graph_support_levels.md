@@ -72,7 +72,7 @@ The current state is best described as:
 | Planning execution contract | `Supported` | Canonical public planning declares either `planning_execution.mode: graph_owned` or `graph_owned_with_planner_review`; artifacts record the resulting execution contract, and the runtime consumes the compiled stage/phase spec through `strategy_graph_spec` | Planner review is still a bounded post-structure review layer, not a general planner-composition system |
 | `runtime_target: planning_v1` | `Supported` | Planning strategies must declare it, and builder routing sends them to the planning runtime | `planning_v1` still means deterministic planning as the structural owner; provider-backed behavior is layered review, not provider-owned planning |
 | Planning phase order | `Supported` | `rubric_design_doc -> architecture_seam_decomposition -> parallel_workstream_planning -> executable_slice_emission` is parser-enforced | Users cannot yet define alternative bounded planning graphs inside the public subset |
-| Planning artifact shape | `Supported` | Planning runs emit real artifacts such as `PLAN.md`, `plan.json`, `phase_results`, and `coverage_ledger` | The artifacts come from a deterministic planner, not a user-composed graph workflow engine |
+| Planning artifact shape | `Supported` | Planning runs emit real artifacts such as `PLAN.md`, `plan.json`, `phase_results`, deterministic first-pass `coverage_ledger`, and separate `provider_review_delta` when review runs | The artifacts come from a deterministic planner with bounded provider review layered on top, not a user-composed graph workflow engine |
 | Planning role declaration | `Supported` | Deterministic-only canonical planning omits `roles`, while planner-review mode requires exactly `roles.planner` with read-only provider access | The bounded planner role does not yet expand into arbitrary planning-stage families |
 | Model-backed planning execution | `Supported` | Canonical public planning can opt into bounded planner review after deterministic structure derivation, and provider failures fail closed with explicit artifact truth | Provider-backed review cannot replace seams, workstreams, slices, coverage truth, or stop-reason ownership |
 | Strategy graph spec emission | `Partial` | The runtime emits `strategy_graph_spec_v1`, `runtime_target`, `stages`, `phases`, `planning_execution`, `linear_edges`, and terminal outcomes | Planning now consumes the compiled phase/execution subset for real execution, but the broader graph inventory is still not a user-authored public graph grammar |
@@ -94,8 +94,8 @@ The strongest real claim the repo can make today is:
 - Analysis-review bounded and trust kinds route into a real model-backed runtime
   family, including a newer `graph_owned` path behind an execution-mode flag.
 - Planning is a real supported kind with an explicit `planning_execution`
-  contract, and today it resolves to deterministic structure ownership with an
-  optional bounded provider-review layer.
+  contract, and today it resolves to deterministic first-pass structure
+  ownership with an optional bounded provider-review delta layer.
 
 The repo cannot yet honestly claim:
 

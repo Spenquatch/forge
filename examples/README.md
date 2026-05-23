@@ -57,7 +57,10 @@ canonical example,
 `examples/harness/public_subset/canonical/deterministic_feature_planning_planner_review_v1.yaml`,
 shows the bounded provider-backed variant with
 `planning_execution.mode: graph_owned_with_planner_review` and
-`roles.planner.provider`.
+`roles.planner.provider`. In both cases, the deterministic package is the
+bounded canonical first pass; provider review may add `provider_review_delta`
+findings without replacing seams, workstreams, slices, or deterministic
+coverage truth.
 The runnable strategy below remains the internal, fixture-backed harness path
 for deterministic planning regressions:
 
@@ -85,7 +88,7 @@ poetry run python -m anvil.cli harness-run \
 This harness command is distinct from the general orchestration entrypoint
 `poetry run python -m anvil`.
 
-On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json` with C2 coverage, assumptions, and uncovered delta. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and publish `summary.json` only with truthful coverage payloads. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
+On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json` with deterministic first-pass coverage, assumptions, uncovered delta, and provider-review expansion delta when the planner-review mode is exercised. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and publish `summary.json` only with truthful coverage payloads. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
 
 When you want the bounded provider review path instead, swap the strategy file:
 
@@ -98,8 +101,23 @@ poetry run python -m anvil.cli harness-run \
 ```
 
 That provider-backed mode still derives seams, workstreams, and slices
-deterministically first. The planner role only reviews the finished package and
-the run fails closed if the provider cannot execute.
+deterministically first. The planner role only reviews the finished package,
+reports structured expansion delta when it finds under-planned or uncovered
+surfaces, and the run fails closed if the provider cannot execute.
+
+For multi-run tuning work, collect 6-12 provider-reviewed run directories and
+build a structured evaluation report with:
+
+```bash
+poetry run python -m anvil.harness.planning_eval \
+  .forge-harness-runs/run-a \
+  .forge-harness-runs/run-b \
+  --holdout-run-id run-b
+```
+
+That report keeps deterministic first-pass structure separate from recurring
+provider-review delta so heuristics are only promoted when the same miss pattern
+repeats across non-holdout runs.
 
 That runnable planning fixture is internal and fixture-backed, not the
 canonical public `C3 v1` authoring example.

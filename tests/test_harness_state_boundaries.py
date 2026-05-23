@@ -105,6 +105,7 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
                 "primary_cut_summary": "Selected primary cut `src/release`.",
             }
         ],
+        "planning_deterministic_planning_posture": "canonical_first_pass",
         "planning_coverage_status": "clarification_needed",
         "planning_coverage_ledger": [
             {
@@ -128,6 +129,16 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
                 "recommended_next_phase": "clarify",
             }
         ],
+        "planning_provider_review_delta": {
+            "delta_status": "clarification_recommended",
+            "summary": "The deterministic package needs one clarification before provider-backed expansion advice would be meaningful.",
+            "uncovered_cited_surfaces": [],
+            "behavioral_coverage_gaps": [],
+            "expansion_candidates": [],
+            "follow_up_questions": ["Which release train is in scope?"],
+            "confidence": 0.4,
+            "preserves_canonical_structure": True,
+        },
         "artifacts": {"run_dir": str(tmp_path / "run")},
         "run_details": {
             "planning_policy_versions": {
@@ -159,6 +170,7 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
             "primary_cut_summary": "Selected primary cut `src/release`.",
         }
     ]
+    assert state["planning_deterministic_planning_posture"] == "canonical_first_pass"
     assert state["planning_policy_versions"] == {
         "artifact_policy": "planning_package_v1",
         "coverage_policy": "measurable_coverage_v1",
@@ -186,6 +198,9 @@ def test_summary_read_adapter_v1_reads_planning_boundary_fields(tmp_path):
             "recommended_next_phase": "clarify",
         }
     ]
+    assert state["planning_provider_review_delta"]["delta_status"] == (
+        "clarification_recommended"
+    )
     assert state["search_pass_count"] == 2
     assert state["inspected_file_count"] == 7
     assert state["discovery_budget_escalated"] is True

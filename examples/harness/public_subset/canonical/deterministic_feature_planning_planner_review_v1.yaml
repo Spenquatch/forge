@@ -1,4 +1,7 @@
 # Canonical public C3 v1 planning example with bounded provider-backed review.
+# Deterministic planning remains the bounded canonical first pass. Planner
+# review may report expansion delta, but it may not replace canonical seams,
+# workstreams, slices, or deterministic coverage truth.
 dsl_version: c3_strategy_v1
 name: deterministic-feature-planning-planner-review-v1
 kind: deterministic_feature_planning_v1

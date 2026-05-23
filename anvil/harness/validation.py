@@ -266,9 +266,11 @@ _PLANNING_MARKDOWN_SECTION_HEADINGS = (
     "## Architectural Seams",
     "## Parallel Workstreams/Worktrees",
     "## Executable Slices",
-    "## Coverage Ledger",
-    "## Assumptions Register",
-    "## Uncovered Delta",
+    "## Provider Review",
+    "## Provider Review Expansion Delta",
+    "## Deterministic Coverage Ledger",
+    "## Deterministic Assumptions Register",
+    "## Deterministic Uncovered Delta",
 )
 
 
@@ -573,6 +575,63 @@ def validate_planning_success_artifacts(
                     f"uncovered_delta[{index}] references unknown assumption_id: {assumption_id}"
                 )
 
+    provider_review_delta = plan_payload.get("provider_review_delta")
+    if not isinstance(provider_review_delta, dict):
+        errors.append("provider_review_delta must be a structured object.")
+    else:
+        for index, surface_row in enumerate(
+            _dict_records(provider_review_delta.get("uncovered_cited_surfaces")),
+            start=1,
+        ):
+            path = _string_or_empty(surface_row.get("path"))
+            if not path:
+                errors.append(
+                    f"provider_review_delta.uncovered_cited_surfaces[{index}] is missing path."
+                )
+            for seam_id in _string_list(surface_row.get("linked_seam_ids")):
+                if seam_id not in declared_seam_ids:
+                    errors.append(
+                        "provider_review_delta.uncovered_cited_surfaces"
+                        f"[{index}] references unknown seam_id: {seam_id}"
+                    )
+            for workstream_id in _string_list(surface_row.get("linked_workstream_ids")):
+                if workstream_id not in declared_workstream_ids:
+                    errors.append(
+                        "provider_review_delta.uncovered_cited_surfaces"
+                        f"[{index}] references unknown workstream_id: {workstream_id}"
+                    )
+            for slice_id in _string_list(surface_row.get("linked_slice_ids")):
+                if slice_id not in declared_slice_ids:
+                    errors.append(
+                        "provider_review_delta.uncovered_cited_surfaces"
+                        f"[{index}] references unknown slice_id: {slice_id}"
+                    )
+
+        for index, candidate_row in enumerate(
+            _dict_records(provider_review_delta.get("expansion_candidates")),
+            start=1,
+        ):
+            for seam_id in _string_list(candidate_row.get("attach_to_seam_ids")):
+                if seam_id not in declared_seam_ids:
+                    errors.append(
+                        "provider_review_delta.expansion_candidates"
+                        f"[{index}] references unknown seam_id: {seam_id}"
+                    )
+            for workstream_id in _string_list(
+                candidate_row.get("attach_to_workstream_ids")
+            ):
+                if workstream_id not in declared_workstream_ids:
+                    errors.append(
+                        "provider_review_delta.expansion_candidates"
+                        f"[{index}] references unknown workstream_id: {workstream_id}"
+                    )
+            for slice_id in _string_list(candidate_row.get("attach_to_slice_ids")):
+                if slice_id not in declared_slice_ids:
+                    errors.append(
+                        "provider_review_delta.expansion_candidates"
+                        f"[{index}] references unknown slice_id: {slice_id}"
+                    )
+
     heading_positions: list[int] = []
     for heading in _PLANNING_MARKDOWN_SECTION_HEADINGS:
         index = markdown_text.find(heading)
@@ -615,7 +674,7 @@ def validate_planning_success_artifacts(
             [f"- `{_string_or_empty(item.get('slice_id'))}`:" for item in slices],
         ),
         (
-            "## Coverage Ledger",
+            "## Deterministic Coverage Ledger",
             "PLAN.md coverage ledger",
             [
                 f"- `{_string_or_empty(item.get('coverage_id'))}`:"
@@ -623,7 +682,7 @@ def validate_planning_success_artifacts(
             ],
         ),
         (
-            "## Assumptions Register",
+            "## Deterministic Assumptions Register",
             "PLAN.md assumptions register",
             [
                 f"- `{_string_or_empty(item.get('assumption_id'))}`:"
@@ -631,7 +690,7 @@ def validate_planning_success_artifacts(
             ],
         ),
         (
-            "## Uncovered Delta",
+            "## Deterministic Uncovered Delta",
             "PLAN.md uncovered delta",
             [
                 f"- `{_string_or_empty(item.get('delta_id'))}`:"

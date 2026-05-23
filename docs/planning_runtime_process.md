@@ -5,7 +5,9 @@ does today.
 
 It is a bounded, deterministic repository-planning engine. Its canonical owner
 is still the deterministic layer that inspects local workspace evidence and
-emits a structured planning package. When
+emits a structured planning package. That package is the bounded canonical
+first pass, not an automatic claim of full closure across every cited surface.
+When
 `planning_execution.mode: graph_owned_with_planner_review` is selected, the
 runtime adds one bounded provider-backed review stage after deterministic
 structure derivation; that review may annotate or challenge the package, but it
@@ -27,8 +29,8 @@ At a high level, the planner:
 4. Decomposes that cut into architectural seams.
 5. Translates seams into workstreams.
 6. Translates workstreams into executable slices with acceptance criteria.
-7. Emits coverage, assumptions, and truthful stop reasons.
-8. Optionally runs bounded planner review over the finished package.
+7. Emits deterministic first-pass coverage, assumptions, and truthful stop reasons.
+8. Optionally runs bounded planner review over the finished package and records expansion delta separately.
 
 ## Resolution 1: One-Screen Flow
 
@@ -70,7 +72,9 @@ flowchart TD
     E2 --> F["Coverage and reporting"]
     F --> F1["coverage_ledger"]
     F --> F2["assumptions_register"]
-    F --> F3["terminal_status and stop_reason"]
+    F --> F3["uncovered_delta"]
+    F --> F4["provider_review_delta"]
+    F --> F5["terminal_status and stop_reason"]
 ```
 
 ## Resolution 3: Decision and Stop Paths
@@ -92,7 +96,9 @@ flowchart TD
 
 ## Resolution 4: Artifact Shape
 
-The output is a planning package, not model-generated prose.
+The output is a planning package, not model-generated prose. It keeps
+deterministic first-pass truth separate from provider-review expansion
+findings.
 
 ```mermaid
 flowchart TD
@@ -107,6 +113,7 @@ flowchart TD
     B --> B5["coverage_ledger"]
     B --> B6["assumptions_register"]
     B --> B7["uncovered_delta"]
+    B --> B8["provider_review_delta"]
 
     C --> C1["Human-readable plan narrative"]
     C --> C2["Repo evidence grounding"]
@@ -155,11 +162,22 @@ sequenced.
 Each workstream is translated into one or more slices with concrete acceptance
 criteria. These slices are intended to be the next actionable units of work.
 
-### 7. Emit coverage, assumptions, and stop reasons
+### 7. Emit deterministic first-pass coverage, assumptions, and stop reasons
 
 The runtime records what dimensions it believes are covered, what assumptions
 remain, and why it stopped. That is why the package includes machine-readable
 coverage and terminal metadata rather than only freeform narrative.
+
+This deterministic first pass can still leave cited surfaces under-planned or
+evidence-only. That possibility is part of the honesty contract, not a reason
+to flatten the final story into full closure.
+
+### 8. Emit provider-review expansion delta without replacing deterministic ownership
+
+When planner review runs, it reports structured expansion or clarification
+delta in `provider_review_delta`. That delta can cite uncovered or
+under-planned surfaces, but it does not rewrite canonical seam, workstream, or
+slice IDs.
 
 ## Key Output Fields
 
@@ -169,7 +187,9 @@ The most important planning-package fields are:
 - `workstreams`: execution-oriented groupings derived from the seams
 - `slices`: the next executable units of work with acceptance criteria
 - `phase_results`: per-phase success or stop summaries
-- `coverage_ledger`: structured evidence of what the planner covered
+- `coverage_ledger`: structured evidence of what the deterministic first pass covered
+- `uncovered_delta`: deterministic first-pass uncovered or assumption-blocked dimensions
+- `provider_review_delta`: provider-identified expansion or clarification findings layered on top of the deterministic package
 - `PLAN.md`: human-readable plan artifact
 - `plan.json`: machine-readable plan artifact
 
@@ -178,7 +198,7 @@ The most important planning-package fields are:
 The current `planning` kind is best understood as:
 
 - a supported harness/runtime kind
-- a deterministic repo-planning engine
+- a deterministic repo-planning engine whose public artifact truth is a bounded canonical first pass
 - a producer of structured planning artifacts
 - not a provider-backed planner loop
 

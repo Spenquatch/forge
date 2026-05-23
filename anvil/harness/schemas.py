@@ -629,7 +629,7 @@ def planning_slice_schema() -> dict[str, Any]:
     }
 
 
-PLANNING_ARTIFACT_SCHEMA_VERSION = "plan_artifact_v2"
+PLANNING_ARTIFACT_SCHEMA_VERSION = "plan_artifact_v3"
 PLANNING_COVERAGE_DIMENSIONS = (
     "problem_frame",
     "repo_surface",
@@ -797,6 +797,120 @@ def planning_provider_stage_result_schema() -> dict[str, Any]:
     }
 
 
+def planning_provider_review_delta_surface_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "gap_kind": {
+                "type": "string",
+                "enum": [
+                    "uncovered",
+                    "under_planned",
+                    "evidence_only_needs_attestation",
+                ],
+            },
+            "reason": {"type": "string"},
+            "linked_seam_ids": {"type": "array", "items": {"type": "string"}},
+            "linked_workstream_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "linked_slice_ids": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "path",
+            "gap_kind",
+            "reason",
+            "linked_seam_ids",
+            "linked_workstream_ids",
+            "linked_slice_ids",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def planning_provider_review_delta_candidate_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "candidate_kind": {
+                "type": "string",
+                "enum": [
+                    "seam_expansion",
+                    "workstream_expansion",
+                    "slice_expansion",
+                    "coverage_attestation",
+                    "clarification",
+                ],
+            },
+            "summary": {"type": "string"},
+            "cited_paths": {"type": "array", "items": {"type": "string"}},
+            "attach_to_seam_ids": {"type": "array", "items": {"type": "string"}},
+            "attach_to_workstream_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "attach_to_slice_ids": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "candidate_kind",
+            "summary",
+            "cited_paths",
+            "attach_to_seam_ids",
+            "attach_to_workstream_ids",
+            "attach_to_slice_ids",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def planning_provider_review_delta_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "delta_status": {
+                "type": "string",
+                "enum": [
+                    "none",
+                    "expansion_recommended",
+                    "clarification_recommended",
+                ],
+            },
+            "summary": {"type": "string"},
+            "uncovered_cited_surfaces": {
+                "type": "array",
+                "items": planning_provider_review_delta_surface_schema(),
+            },
+            "behavioral_coverage_gaps": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "expansion_candidates": {
+                "type": "array",
+                "items": planning_provider_review_delta_candidate_schema(),
+            },
+            "follow_up_questions": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "preserves_canonical_structure": {"type": "boolean"},
+        },
+        "required": [
+            "delta_status",
+            "summary",
+            "uncovered_cited_surfaces",
+            "behavioral_coverage_gaps",
+            "expansion_candidates",
+            "follow_up_questions",
+            "confidence",
+            "preserves_canonical_structure",
+        ],
+        "additionalProperties": False,
+    }
+
+
 def plan_json_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -842,6 +956,10 @@ def plan_json_schema() -> dict[str, Any]:
                     "deterministic-live",
                     "provider-reviewed",
                 ],
+            },
+            "deterministic_planning_posture": {
+                "type": "string",
+                "enum": ["canonical_first_pass"],
             },
             "execution_contract": {
                 "type": "object",
@@ -925,6 +1043,7 @@ def plan_json_schema() -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": True,
             },
+            "provider_review_delta": planning_provider_review_delta_schema(),
             "provider_failure": {
                 "type": "object",
                 "additionalProperties": True,
@@ -938,6 +1057,7 @@ def plan_json_schema() -> dict[str, Any]:
             "strategy",
             "terminal_status",
             "run_mode",
+            "deterministic_planning_posture",
             "execution_contract",
             "stop_reason",
             "problem_statement",
@@ -958,6 +1078,7 @@ def plan_json_schema() -> dict[str, Any]:
             "uncovered_delta",
             "provider_stage_results",
             "provider_review",
+            "provider_review_delta",
             "provider_failure",
             "provider_disagreement_count",
         ],

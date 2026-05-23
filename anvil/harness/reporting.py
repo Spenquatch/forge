@@ -42,6 +42,7 @@ _FINAL_ANSWER_OMITS_REQUIRED_PREFIX = (
 HARNESS_STATE_SERIALIZATION_VERSION = "harness_state_v1"
 SUMMARY_BOUNDARY_VERSION = "summary_projection_v1"
 PLANNING_RUNTIME_TARGET = "planning_v1"
+PLANNING_DETERMINISTIC_POSTURE = "canonical_first_pass"
 PLANNING_RUN_MODES = (
     "fixture-backed",
     "deterministic-live",
@@ -52,6 +53,23 @@ PLANNING_TERMINAL_STATUSES = {
     "clarification_needed",
     "failed",
 }
+
+
+def _default_provider_review_delta(*, review_exercised: bool) -> dict[str, Any]:
+    return {
+        "delta_status": "none",
+        "summary": (
+            "Provider review found no expansion delta."
+            if review_exercised
+            else "Provider review was not exercised."
+        ),
+        "uncovered_cited_surfaces": [],
+        "behavioral_coverage_gaps": [],
+        "expansion_candidates": [],
+        "follow_up_questions": [],
+        "confidence": 0.0,
+        "preserves_canonical_structure": True,
+    }
 
 
 def artifact_ref(path: str | Path, *, kind: str, description: str) -> dict[str, str]:
@@ -633,6 +651,27 @@ def plan_projection_v1(
         ),
         id_field="delta_id",
     )
+    provider_stage_results = _normalize_planning_runtime_records(
+        (
+            state.get("planning_provider_stage_results")
+            if state.get("planning_provider_stage_results") is not None
+            else seeded_summary.get("planning_provider_stage_results")
+        ),
+        id_field="stage_id",
+    )
+    provider_review_delta = (
+        (
+            copy.deepcopy(state.get("planning_provider_review_delta"))
+            if isinstance(state.get("planning_provider_review_delta"), dict)
+            else None
+        )
+        or (
+            copy.deepcopy(seeded_summary.get("planning_provider_review_delta"))
+            if isinstance(seeded_summary.get("planning_provider_review_delta"), dict)
+            else None
+        )
+        or _default_provider_review_delta(review_exercised=bool(provider_stage_results))
+    )
     payload = {
         "schema_version": PLANNING_ARTIFACT_SCHEMA_VERSION,
         "run_id": _string_or_empty(state.get("run_id") or seeded_summary.get("run_id")),
@@ -644,6 +683,7 @@ def plan_projection_v1(
         "strategy": strategy,
         "terminal_status": terminal_status,
         "run_mode": run_mode,
+        "deterministic_planning_posture": PLANNING_DETERMINISTIC_POSTURE,
         "execution_contract": execution_contract,
         "stop_reason": stop_reason,
         "problem_statement": _string_or_empty(
@@ -698,14 +738,7 @@ def plan_projection_v1(
         "coverage_ledger": coverage_ledger,
         "assumptions_register": assumptions_register,
         "uncovered_delta": uncovered_delta,
-        "provider_stage_results": _normalize_planning_runtime_records(
-            (
-                state.get("planning_provider_stage_results")
-                if state.get("planning_provider_stage_results") is not None
-                else seeded_summary.get("planning_provider_stage_results")
-            ),
-            id_field="stage_id",
-        ),
+        "provider_stage_results": provider_stage_results,
         "provider_review": (
             copy.deepcopy(state.get("planning_provider_review"))
             if isinstance(state.get("planning_provider_review"), dict)
@@ -715,6 +748,7 @@ def plan_projection_v1(
                 else {}
             )
         ),
+        "provider_review_delta": provider_review_delta,
         "provider_failure": (
             copy.deepcopy(state.get("planning_provider_failure"))
             if isinstance(state.get("planning_provider_failure"), dict)
@@ -734,17 +768,31 @@ def plan_projection_v1(
 
 
 def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
+    provider_review_delta = plan_payload.get("provider_review_delta") or {}
     lines = [
         f"# {plan_payload.get('task', {}).get('id') or 'Plan'}",
         "",
         f"- Terminal status: `{plan_payload.get('terminal_status') or 'failed'}`",
         f"- Run mode: `{plan_payload.get('run_mode') or 'deterministic-live'}`",
         (
+            "- Deterministic posture: `"
+            + str(
+                plan_payload.get("deterministic_planning_posture")
+                or PLANNING_DETERMINISTIC_POSTURE
+            )
+            + "`"
+        ),
+        (
             "- Execution contract: `"
             + str(
                 (plan_payload.get("execution_contract") or {}).get("mode")
                 or "graph_owned"
             )
+            + "`"
+        ),
+        (
+            "- Provider review delta: `"
+            + str(provider_review_delta.get("delta_status") or "none")
             + "`"
         ),
         "",
@@ -820,8 +868,48 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
             error = str(item.get("error") or item.get("failure_summary") or "").strip()
             if error:
                 lines.append(f"  Error: {error}")
+    else:
+        lines.extend(
+            ["", "## Provider Review", "- No provider review stage was exercised."]
+        )
 
-    lines.extend(["", "## Coverage Ledger"])
+    lines.extend(["", "## Provider Review Expansion Delta"])
+    delta_status = str(provider_review_delta.get("delta_status") or "none")
+    delta_summary = str(provider_review_delta.get("summary") or "").strip()
+    lines.append(
+        f"- Status: `{delta_status}`" + (f" {delta_summary}" if delta_summary else "")
+    )
+    uncovered_cited_surfaces = (
+        provider_review_delta.get("uncovered_cited_surfaces") or []
+    )
+    if uncovered_cited_surfaces:
+        for item in uncovered_cited_surfaces:
+            lines.append(
+                f"- Cited surface `{item.get('path')}`: `{item.get('gap_kind')}` {item.get('reason') or ''}".rstrip()
+            )
+    behavioral_coverage_gaps = (
+        provider_review_delta.get("behavioral_coverage_gaps") or []
+    )
+    for item in behavioral_coverage_gaps:
+        lines.append(f"- Behavioral gap: {item}")
+    expansion_candidates = provider_review_delta.get("expansion_candidates") or []
+    for item in expansion_candidates:
+        lines.append(
+            f"- Expansion candidate `{item.get('candidate_kind')}`: {item.get('summary') or ''}".rstrip()
+        )
+    follow_up_questions = provider_review_delta.get("follow_up_questions") or []
+    for item in follow_up_questions:
+        lines.append(f"- Follow-up question: {item}")
+    if (
+        not uncovered_cited_surfaces
+        and not behavioral_coverage_gaps
+        and not expansion_candidates
+        and not follow_up_questions
+        and delta_status == "none"
+    ):
+        lines.append("- No provider-review expansion delta remains.")
+
+    lines.extend(["", "## Deterministic Coverage Ledger"])
     coverage_ledger = plan_payload.get("coverage_ledger") or []
     if coverage_ledger:
         for coverage_row in coverage_ledger:
@@ -837,7 +925,7 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
     else:
         lines.append("- No coverage rows emitted.")
 
-    lines.extend(["", "## Assumptions Register"])
+    lines.extend(["", "## Deterministic Assumptions Register"])
     assumptions_register = plan_payload.get("assumptions_register") or []
     if assumptions_register:
         for assumption_row in assumptions_register:
@@ -853,7 +941,7 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
     else:
         lines.append("- No active assumptions remain.")
 
-    lines.extend(["", "## Uncovered Delta"])
+    lines.extend(["", "## Deterministic Uncovered Delta"])
     uncovered_delta = plan_payload.get("uncovered_delta") or []
     if uncovered_delta:
         for delta_row in uncovered_delta:
@@ -892,6 +980,9 @@ def publish_planning_artifacts_v1(
             "planning_terminal_status": terminal_status,
             "planning_stop_reason": plan_payload.get("stop_reason"),
             "planning_run_mode": plan_payload.get("run_mode"),
+            "planning_deterministic_planning_posture": plan_payload.get(
+                "deterministic_planning_posture"
+            ),
             "planning_execution_mode": (
                 plan_payload.get("execution_contract") or {}
             ).get("mode"),
@@ -915,6 +1006,14 @@ def publish_planning_artifacts_v1(
             "planning_provider_review": copy.deepcopy(
                 plan_payload.get("provider_review") or {}
             ),
+            "planning_provider_review_delta": copy.deepcopy(
+                plan_payload.get("provider_review_delta")
+                or _default_provider_review_delta(
+                    review_exercised=bool(
+                        plan_payload.get("provider_stage_results") or []
+                    )
+                )
+            ),
             "planning_provider_failure": copy.deepcopy(
                 plan_payload.get("provider_failure") or {}
             ),
@@ -927,6 +1026,14 @@ def publish_planning_artifacts_v1(
                 plan_payload.get("assumptions_register") or []
             ),
             "uncovered_delta": copy.deepcopy(plan_payload.get("uncovered_delta") or []),
+            "provider_review_delta": copy.deepcopy(
+                plan_payload.get("provider_review_delta")
+                or _default_provider_review_delta(
+                    review_exercised=bool(
+                        plan_payload.get("provider_stage_results") or []
+                    )
+                )
+            ),
             "planning_coverage_status": plan_payload.get("coverage_status"),
             "planning_coverage_ledger": copy.deepcopy(
                 plan_payload.get("coverage_ledger") or []

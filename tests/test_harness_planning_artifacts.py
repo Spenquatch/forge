@@ -58,8 +58,10 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
         },
         "planning_provider_stage_results": [],
         "planning_provider_review": {},
+        "planning_provider_review_delta": {},
         "planning_provider_failure": {},
         "planning_provider_disagreement_count": 0,
+        "planning_deterministic_planning_posture": "canonical_first_pass",
         "planning_terminal_status": terminal_status,
         "planning_stop_reason": (
             "" if terminal_status == "success" else f"{terminal_status}_stop_reason"
@@ -318,9 +320,10 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     plan_payload = json.loads(plan_json_path.read_text(encoding="utf-8"))
     markdown = plan_md_path.read_text(encoding="utf-8")
     assert _soft_validate_schema(plan_payload, plan_json_schema()) == []
-    assert plan_payload["schema_version"] == "plan_artifact_v2"
+    assert plan_payload["schema_version"] == "plan_artifact_v3"
     assert plan_payload["terminal_status"] == "success"
     assert plan_payload["run_mode"] == "deterministic-live"
+    assert plan_payload["deterministic_planning_posture"] == "canonical_first_pass"
     assert plan_payload["execution_contract"] == {
         "family": "planning_v1",
         "mode": "graph_owned",
@@ -328,6 +331,16 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     }
     assert plan_payload["provider_stage_results"] == []
     assert plan_payload["provider_review"] == {}
+    assert plan_payload["provider_review_delta"] == {
+        "delta_status": "none",
+        "summary": "Provider review was not exercised.",
+        "uncovered_cited_surfaces": [],
+        "behavioral_coverage_gaps": [],
+        "expansion_candidates": [],
+        "follow_up_questions": [],
+        "confidence": 0.0,
+        "preserves_canonical_structure": True,
+    }
     assert plan_payload["provider_failure"] == {}
     assert plan_payload["provider_disagreement_count"] == 0
     assert plan_payload["coverage_status"] == "success"
@@ -343,23 +356,35 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
         "acceptance_shape",
         "risk_and_unknowns",
     ]
-    assert markdown.index("## Executable Slices") < markdown.index("## Coverage Ledger")
-    assert markdown.index("## Coverage Ledger") < markdown.index(
-        "## Assumptions Register"
+    assert markdown.index("## Executable Slices") < markdown.index("## Provider Review")
+    assert markdown.index("## Provider Review") < markdown.index(
+        "## Provider Review Expansion Delta"
     )
-    assert markdown.index("## Assumptions Register") < markdown.index(
-        "## Uncovered Delta"
+    assert markdown.index("## Provider Review Expansion Delta") < markdown.index(
+        "## Deterministic Coverage Ledger"
+    )
+    assert markdown.index("## Deterministic Coverage Ledger") < markdown.index(
+        "## Deterministic Assumptions Register"
+    )
+    assert markdown.index("## Deterministic Assumptions Register") < markdown.index(
+        "## Deterministic Uncovered Delta"
     )
     assert summary["planning_terminal_status"] == "success"
     assert summary["planning_run_mode"] == "deterministic-live"
+    assert summary["planning_deterministic_planning_posture"] == (
+        "canonical_first_pass"
+    )
     assert summary["planning_execution_mode"] == "graph_owned"
     assert summary["planning_provider_stage_results"] == []
+    assert summary["planning_provider_review_delta"]["delta_status"] == "none"
     assert summary["planning_phase_results"][0]["primary_cut_summary"] == (
         "Selected primary cut `anvil/harness`."
     )
     assert "- Terminal status: `success`" in markdown
     assert "- Run mode: `deterministic-live`" in markdown
+    assert "- Deterministic posture: `canonical_first_pass`" in markdown
     assert "- Execution contract: `graph_owned`" in markdown
+    assert "- Provider review delta: `none`" in markdown
     assert markdown.index("## Problem Statement") < markdown.index("## Rubric Results")
     assert markdown.index("## Rubric Results") < markdown.index(
         "## Architectural Seams"
@@ -370,6 +395,85 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     assert markdown.index("## Parallel Workstreams/Worktrees") < markdown.index(
         "## Executable Slices"
     )
+
+
+def test_publish_state_artifacts_v1_preserves_deterministic_truth_while_showing_provider_delta(
+    tmp_path: Path,
+):
+    state = _planning_state(tmp_path, terminal_status="success")
+    state["planning_execution_mode"] = "graph_owned_with_planner_review"
+    state["planning_execution_contract"] = {
+        "family": "planning_v1",
+        "mode": "graph_owned_with_planner_review",
+        "provider_participation": "planner_review",
+    }
+    state["planning_provider_stage_results"] = [
+        {
+            "stage_id": "planner_review",
+            "stage_type": "planner_review",
+            "role_name": "planner",
+            "status": "success",
+            "provider": "codex_cli",
+            "model": "gpt-5.4",
+            "verdict": "accept_with_caveat",
+            "summary": "Coverage is credible as a first pass but one cited surface remains under-planned.",
+            "delta_status": "expansion_recommended",
+        }
+    ]
+    state["planning_provider_review"] = {
+        "verdict": "accept_with_caveat",
+        "summary": "Coverage is credible as a first pass but one cited surface remains under-planned.",
+    }
+    state["planning_provider_review_delta"] = {
+        "delta_status": "expansion_recommended",
+        "summary": "One cited runtime surface should be attached to the existing slice instead of being left evidence-only.",
+        "uncovered_cited_surfaces": [
+            {
+                "path": "anvil/harness/report.py",
+                "gap_kind": "under_planned",
+                "reason": "The reporting surface is cited but not represented in slice acceptance.",
+                "linked_seam_ids": ["seam-builder"],
+                "linked_workstream_ids": ["workstream-routing"],
+                "linked_slice_ids": ["slice-routing"],
+            }
+        ],
+        "behavioral_coverage_gaps": [
+            "Acceptance is path-shaped and does not yet attest reporting behavior."
+        ],
+        "expansion_candidates": [
+            {
+                "candidate_kind": "slice_expansion",
+                "summary": "Expand slice-routing acceptance to include reporting behavior coverage.",
+                "cited_paths": ["anvil/harness/report.py"],
+                "attach_to_seam_ids": ["seam-builder"],
+                "attach_to_workstream_ids": ["workstream-routing"],
+                "attach_to_slice_ids": ["slice-routing"],
+            }
+        ],
+        "follow_up_questions": [],
+        "confidence": 0.83,
+        "preserves_canonical_structure": True,
+    }
+    state["planning_provider_disagreement_count"] = 1
+
+    updated = publish_state_artifacts_v1(state)
+    artifacts = updated["summary_payload"]["artifacts"]
+    plan_payload = json.loads(Path(artifacts["plan_json"]).read_text(encoding="utf-8"))
+    markdown = Path(artifacts["plan_md"]).read_text(encoding="utf-8")
+
+    assert all(row["status"] == "covered" for row in plan_payload["coverage_ledger"])
+    assert plan_payload["uncovered_delta"] == []
+    assert plan_payload["provider_review_delta"]["delta_status"] == (
+        "expansion_recommended"
+    )
+    assert (
+        plan_payload["provider_review_delta"]["uncovered_cited_surfaces"][0]["path"]
+        == "anvil/harness/report.py"
+    )
+    assert "## Provider Review Expansion Delta" in markdown
+    assert "## Deterministic Coverage Ledger" in markdown
+    assert "No uncovered delta remains." in markdown
+    assert "under-planned" in markdown
 
 
 def test_publish_state_artifacts_v1_returns_terminal_payload_for_clarification(

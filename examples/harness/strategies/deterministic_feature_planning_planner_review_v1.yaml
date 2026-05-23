@@ -1,7 +1,8 @@
 # Runnable internal planning fixture with bounded provider-backed planner review.
-# Deterministic planning still owns seams, workstreams, slices, and coverage
-# truth. The planner role runs only after deterministic structure derivation and
-# may annotate or challenge the package without replacing canonical structure.
+# Deterministic planning is still the bounded canonical first pass for seams,
+# workstreams, slices, and coverage truth. The planner role runs only after
+# deterministic structure derivation and may annotate or challenge the package
+# without replacing canonical structure.
 name: deterministic-feature-planning-planner-review-v1
 kind: deterministic_feature_planning_v1
 roles:

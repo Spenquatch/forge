@@ -124,8 +124,11 @@ kind with:
 - deterministic-only planning must omit `roles`
 - planner-review planning must declare exactly one role, `roles.planner`, with
   a provider family key and read-only access
+- deterministic planning is the bounded canonical first pass for seams,
+  workstreams, slices, and deterministic coverage truth
 - planner review is advisory only: the runtime invokes it after deterministic
-  seams, workstreams, slices, and coverage have already been derived
+  seams, workstreams, slices, and coverage have already been derived, and it
+  reports expansion delta without replacing canonical structure
 
 Canonical non-planning public authoring:
 

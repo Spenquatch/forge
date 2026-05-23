@@ -8,6 +8,11 @@ from typing import Any
 import pytest
 
 from anvil.harness.builder import build_harness_langgraph
+from anvil.harness.planning_runtime import (
+    _planning_provider_review_payload,
+    _planning_provider_review_prompt,
+    _planning_provider_review_schema,
+)
 from anvil.harness.state import initialize_harness_state
 from anvil.harness.types import ProviderRun
 
@@ -235,6 +240,7 @@ def test_planning_runtime_success_populates_frozen_state_fields(
         "mode": "graph_owned",
         "provider_participation": "none",
     }
+    assert result["planning_deterministic_planning_posture"] == "canonical_first_pass"
     assert result["planning_coverage_status"] == "success"
     assert [item["coverage_id"] for item in result["planning_coverage_ledger"]] == [
         "coverage-01-problem_frame",
@@ -248,6 +254,16 @@ def test_planning_runtime_success_populates_frozen_state_fields(
     assert all(row["status"] == "covered" for row in result["planning_coverage_ledger"])
     assert result["planning_assumptions_register"] == []
     assert result["planning_uncovered_delta"] == []
+    assert result["planning_provider_review_delta"] == {
+        "delta_status": "none",
+        "summary": "Provider review was not exercised.",
+        "uncovered_cited_surfaces": [],
+        "behavioral_coverage_gaps": [],
+        "expansion_candidates": [],
+        "follow_up_questions": [],
+        "confidence": 0.0,
+        "preserves_canonical_structure": True,
+    }
     assert all(
         phase_id
         in {"design_doc", "seam_decomposition", "parallel_planning", "slice_emission"}
@@ -389,6 +405,40 @@ def test_planning_runtime_executes_optional_provider_review_without_replacing_st
                     "coverage_challenges": [
                         "Clarify whether artifact publication needs CLI output examples."
                     ],
+                    "provider_review_delta": {
+                        "delta_status": "expansion_recommended",
+                        "summary": "The package is usable as a first pass but needs one follow-up expansion.",
+                        "uncovered_cited_surfaces": [
+                            {
+                                "path": "anvil/harness/report.py",
+                                "gap_kind": "under_planned",
+                                "reason": "The cited reporting surface is not directly represented in the emitted slice acceptance.",
+                                "linked_seam_ids": ["seam-01-anvil-harness"],
+                                "linked_workstream_ids": [
+                                    "workstream-01-anvil-harness"
+                                ],
+                                "linked_slice_ids": ["slice-01-anvil-harness"],
+                            }
+                        ],
+                        "behavioral_coverage_gaps": [
+                            "Acceptance remains path-shaped and could better call out reporting behavior."
+                        ],
+                        "expansion_candidates": [
+                            {
+                                "candidate_kind": "slice_expansion",
+                                "summary": "Expand the existing slice acceptance to include the reporting behavior.",
+                                "cited_paths": ["anvil/harness/report.py"],
+                                "attach_to_seam_ids": ["seam-01-anvil-harness"],
+                                "attach_to_workstream_ids": [
+                                    "workstream-01-anvil-harness"
+                                ],
+                                "attach_to_slice_ids": ["slice-01-anvil-harness"],
+                            }
+                        ],
+                        "follow_up_questions": [],
+                        "confidence": 0.79,
+                        "preserves_canonical_structure": True,
+                    },
                     "follow_up_questions": [],
                     "referenced_seam_ids": ["seam-01-anvil-harness"],
                     "referenced_workstream_ids": ["workstream-01-anvil-harness"],
@@ -412,14 +462,39 @@ def test_planning_runtime_executes_optional_provider_review_without_replacing_st
         "provider_participation": "planner_review",
     }
     assert result["planning_provider_review"]["verdict"] == "accept_with_caveat"
+    assert result["planning_provider_review_delta"]["delta_status"] == (
+        "expansion_recommended"
+    )
+    assert (
+        result["planning_provider_review_delta"]["preserves_canonical_structure"]
+        is True
+    )
     assert result["planning_provider_disagreement_count"] == 1
     assert len(result["planning_provider_stage_results"]) == 1
     assert result["planning_provider_stage_results"][0]["status"] == "success"
+    assert result["planning_provider_stage_results"][0]["delta_status"] == (
+        "expansion_recommended"
+    )
     assert result["planning_run_mode"] == "provider-reviewed"
     assert result["run_details"]["planning_run_mode"] == "provider-reviewed"
     assert [item["seam_id"] for item in result["planning_seams"]] == [
         "seam-01-anvil-harness"
     ]
+
+
+def test_planner_review_prompt_and_schema_frame_deterministic_first_pass(
+    tmp_path: Path,
+) -> None:
+    state = _planning_graph_state(tmp_path)
+    payload = _planning_provider_review_payload(state)
+    prompt = _planning_provider_review_prompt(state, review_payload=payload)
+    schema = _planning_provider_review_schema()
+
+    assert payload["deterministic_planning_posture"] == "canonical_first_pass"
+    assert "bounded canonical first pass" in prompt
+    assert "planned, intentionally evidence-only, uncovered, or under-planned" in prompt
+    assert "provider_review_delta" in prompt
+    assert "provider_review_delta" in schema["properties"]
 
 
 def test_planning_runtime_fails_closed_when_provider_review_cannot_run(

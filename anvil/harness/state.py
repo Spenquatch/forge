@@ -242,8 +242,10 @@ class HarnessState(TypedDict, total=False):
     planning_uncovered_delta: list[dict[str, Any]]
     planning_provider_stage_results: list[dict[str, Any]]
     planning_provider_review: dict[str, Any] | None
+    planning_provider_review_delta: dict[str, Any]
     planning_provider_failure: dict[str, Any] | None
     planning_provider_disagreement_count: int
+    planning_deterministic_planning_posture: str | None
     search_pass_count: int
     inspected_file_count: int
     discovery_budget_escalated: bool
@@ -348,8 +350,10 @@ def initialize_harness_state(
         planning_uncovered_delta=[],
         planning_provider_stage_results=[],
         planning_provider_review=None,
+        planning_provider_review_delta={},
         planning_provider_failure=None,
         planning_provider_disagreement_count=0,
+        planning_deterministic_planning_posture=None,
         search_pass_count=0,
         inspected_file_count=0,
         discovery_budget_escalated=False,
@@ -843,9 +847,20 @@ def summary_read_adapter_v1(
             summary, "planning_provider_stage_results"
         ),
         planning_provider_review=_summary_dict(summary, "planning_provider_review"),
+        planning_provider_review_delta=_summary_dict(
+            summary, "planning_provider_review_delta"
+        ),
         planning_provider_failure=_summary_dict(summary, "planning_provider_failure"),
         planning_provider_disagreement_count=int(
             _summary_scalar(summary, "planning_provider_disagreement_count") or 0
+        ),
+        planning_deterministic_planning_posture=(
+            None
+            if _summary_scalar(summary, "planning_deterministic_planning_posture")
+            in (None, "")
+            else str(
+                _summary_scalar(summary, "planning_deterministic_planning_posture")
+            )
         ),
         search_pass_count=int(_summary_scalar(summary, "search_pass_count") or 0),
         inspected_file_count=int(_summary_scalar(summary, "inspected_file_count") or 0),

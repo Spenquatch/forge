@@ -1130,6 +1130,11 @@ def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -
         if isinstance(summary.get("planning_provider_stage_results"), list)
         else []
     )
+    provider_review_delta = (
+        summary.get("planning_provider_review_delta")
+        if isinstance(summary.get("planning_provider_review_delta"), dict)
+        else {}
+    )
     repo_evidence_refs = [
         str(item).strip()
         for item in (summary.get("repo_evidence_refs") or [])
@@ -1140,6 +1145,11 @@ def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -
     lines.append("")
     lines.append(f"- Terminal status: `{terminal_status}`")
     lines.append(f"- Run mode: `{run_mode}`")
+    deterministic_posture = str(
+        summary.get("planning_deterministic_planning_posture") or ""
+    ).strip()
+    if deterministic_posture:
+        lines.append(f"- Deterministic posture: `{deterministic_posture}`")
     if execution_mode:
         lines.append(f"- Execution mode: `{execution_mode}`")
     if provider_participation:
@@ -1154,6 +1164,10 @@ def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -
     )
     lines.append(f"- Clarification requests: `{len(clarification_requests)}`")
     lines.append(f"- Provider stages: `{len(provider_stage_results)}`")
+    lines.append(
+        "- Provider review delta: "
+        + f"`{provider_review_delta.get('delta_status', 'none')}`"
+    )
     if provider_stage_results:
         lines.append(
             "- Provider disagreements: "
