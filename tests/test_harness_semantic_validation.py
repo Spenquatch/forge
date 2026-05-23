@@ -100,13 +100,6 @@ def _planning_strategy() -> StrategyConfig:
             "name": "deterministic-feature-planning",
             "kind": DETERMINISTIC_FEATURE_PLANNING_KIND,
             "runtime_target": PLANNING_RUNTIME_TARGET,
-            "roles": {
-                "planner": {
-                    "provider": "codex_cli",
-                    "effort": "high",
-                    "access": "read",
-                }
-            },
             "phases": [
                 {"id": "design_doc", "stage_type": "rubric_design_doc"},
                 {
@@ -124,6 +117,7 @@ def _planning_strategy() -> StrategyConfig:
             "discovery_policy": "bounded_repo_scan_v1",
             "rubric_policy": "design_doc_gate_v1",
             "stop_policy": "clarification_or_stop_v1",
+            "planning_execution": {"mode": "graph_owned"},
         }
     )
 

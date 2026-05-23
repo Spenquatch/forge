@@ -25,7 +25,11 @@ than the canonical public planning example.
 - `canonical/analysis_review_trust_v1.yaml`: canonical trust analysis-review
   example
 - `canonical/deterministic_feature_planning_v1.yaml`: canonical planning example
-  with `runtime_target: planning_v1` and the required planning policy refs
+  with `runtime_target: planning_v1`,
+  `planning_execution.mode: graph_owned`, and the required planning policy refs
+- `canonical/deterministic_feature_planning_planner_review_v1.yaml`: canonical
+  planning example with bounded provider-backed review layered on top of the
+  same deterministic structure contract
 
 ## Compatibility-only example
 
@@ -44,6 +48,10 @@ than the canonical public planning example.
   `phase_inputs` to a public planning example
 - `negative/metadata_only_schema_version.yaml`: adds metadata-only
   `schema_version` as if it were a public authoring field
+- `negative/planning_roles_over_signal.yaml`: reintroduces `roles.planner`
+  while staying in deterministic-only `planning_execution.mode: graph_owned`
+- `negative/planning_provider_review_missing_role.yaml`: selects planner-review
+  mode without declaring `roles.planner.provider`
 
 These negative files document the live rejection surface for canonical public
 authoring. They are not runnable happy-path harness examples.

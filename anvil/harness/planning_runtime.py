@@ -4,19 +4,18 @@ from __future__ import annotations
 
 """Shared planning runtime helpers for the bounded C1 planning family."""
 
+import json
 import re
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .bounded_stage_runtime import StageHandler, run_linear_stage_sequence
 from .files import read_workspace_text, workspace_glob_paths
+from .provider_adapter import get_provider
 from .state import HarnessState
-
-PlanningPhaseHandler = Callable[
-    [MutableMapping[str, Any], dict[str, Any], dict[str, Any], dict[str, str]],
-    dict[str, Any],
-]
+from .types import RoleConfig, StageRequest
 
 PLANNING_PHASE_ORDER = (
     "rubric_design_doc",
@@ -44,6 +43,7 @@ PLANNING_POLICY_FIELDS = (
 PLANNING_MATCH_LIMIT = 25
 PLANNING_READ_LIMIT = 12
 PLANNING_READ_BYTES_LIMIT = 150 * 1024
+PLANNER_REVIEW_STAGE_TYPE = "planner_review"
 _TASK_TERMINAL_MODE_RE = re.compile(
     r"planning_fixture_mode\s*[:=]\s*(clarification_needed|failed)",
     re.IGNORECASE,
@@ -494,9 +494,8 @@ def _run_rubric_design_doc(
     state: MutableMapping[str, Any],
     phase_spec: dict[str, Any],
     payload: dict[str, Any],
-    policy_versions: dict[str, str],
 ) -> dict[str, Any]:
-    del state
+    policy_versions = dict(state.get("planning_policy_versions") or {})
     return _phase_outcome(
         phase_id=str(phase_spec["id"]),
         stage_type=str(phase_spec["stage_type"]),
@@ -509,9 +508,8 @@ def _run_architecture_seam_decomposition(
     state: MutableMapping[str, Any],
     phase_spec: dict[str, Any],
     payload: dict[str, Any],
-    policy_versions: dict[str, str],
 ) -> dict[str, Any]:
-    del state
+    policy_versions = dict(state.get("planning_policy_versions") or {})
     seams = _normalize_planning_items(
         payload.get("planning_seams") or payload.get("seams") or [],
         item_kind="seam",
@@ -531,9 +529,8 @@ def _run_parallel_workstream_planning(
     state: MutableMapping[str, Any],
     phase_spec: dict[str, Any],
     payload: dict[str, Any],
-    policy_versions: dict[str, str],
 ) -> dict[str, Any]:
-    del state
+    policy_versions = dict(state.get("planning_policy_versions") or {})
     workstreams = _normalize_planning_items(
         payload.get("planning_workstreams") or payload.get("workstreams") or [],
         item_kind="workstream",
@@ -553,9 +550,8 @@ def _run_executable_slice_emission(
     state: MutableMapping[str, Any],
     phase_spec: dict[str, Any],
     payload: dict[str, Any],
-    policy_versions: dict[str, str],
 ) -> dict[str, Any]:
-    del state
+    policy_versions = dict(state.get("planning_policy_versions") or {})
     slices = _normalize_planning_items(
         payload.get("planning_slices") or payload.get("slices") or [],
         item_kind="slice",
@@ -571,12 +567,285 @@ def _run_executable_slice_emission(
     )
 
 
-PLANNING_PHASE_REGISTRY: dict[str, PlanningPhaseHandler] = {
+def _planning_provider_review_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "verdict": {
+                "type": "string",
+                "enum": ["accept", "accept_with_caveat", "revise"],
+            },
+            "summary": {"type": "string"},
+            "strengths": {"type": "array", "items": {"type": "string"}},
+            "risks": {"type": "array", "items": {"type": "string"}},
+            "coverage_challenges": {"type": "array", "items": {"type": "string"}},
+            "follow_up_questions": {"type": "array", "items": {"type": "string"}},
+            "referenced_seam_ids": {"type": "array", "items": {"type": "string"}},
+            "referenced_workstream_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "referenced_slice_ids": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": [
+            "verdict",
+            "summary",
+            "strengths",
+            "risks",
+            "coverage_challenges",
+            "follow_up_questions",
+            "referenced_seam_ids",
+            "referenced_workstream_ids",
+            "referenced_slice_ids",
+            "confidence",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def _planning_provider_review_payload(
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    coverage_rows = [
+        {
+            "dimension": str(item.get("dimension") or ""),
+            "status": str(item.get("status") or ""),
+            "summary": str(item.get("summary") or ""),
+        }
+        for item in _list_of_dicts(state.get("planning_coverage_ledger") or [])
+    ]
+    return {
+        "task": {
+            "objective": str((state.get("task_spec") or {}).get("objective") or ""),
+            "acceptance": list((state.get("task_spec") or {}).get("acceptance") or []),
+            "constraints": list(
+                (state.get("task_spec") or {}).get("constraints") or []
+            ),
+        },
+        "repo_evidence_refs": list(state.get("repo_evidence_refs") or []),
+        "seams": _list_of_dicts(state.get("planning_seams") or []),
+        "workstreams": _list_of_dicts(state.get("planning_workstreams") or []),
+        "slices": _list_of_dicts(state.get("planning_slices") or []),
+        "coverage_ledger": coverage_rows,
+        "phase_results": _list_of_dicts(state.get("planning_phase_results") or []),
+    }
+
+
+def _planning_provider_review_prompt(
+    state: Mapping[str, Any],
+    *,
+    review_payload: Mapping[str, Any],
+) -> str:
+    return "\n".join(
+        [
+            "Review the deterministic planning package without changing its canonical structure.",
+            "You may only review, challenge, or attest the package.",
+            "Do not invent new seam, workstream, or slice ids.",
+            "If you disagree with the package, explain the disagreement in risks or coverage_challenges.",
+            "",
+            "Return JSON matching the provided schema.",
+            "",
+            "Deterministic planning package:",
+            json.dumps(review_payload, indent=2, sort_keys=False),
+        ]
+    )
+
+
+def _planner_role_config(state: Mapping[str, Any]) -> RoleConfig | None:
+    strategy_spec = state.get("strategy_spec")
+    if not isinstance(strategy_spec, Mapping):
+        return None
+    roles = strategy_spec.get("roles")
+    if not isinstance(roles, Mapping):
+        return None
+    planner_role = roles.get("planner")
+    if not isinstance(planner_role, Mapping):
+        return None
+    return RoleConfig.from_dict(dict(planner_role))
+
+
+def _append_provider_stage_result(
+    state: MutableMapping[str, Any],
+    provider_stage_result: dict[str, Any],
+) -> None:
+    provider_stage_results = list(state.get("planning_provider_stage_results") or [])
+    provider_stage_results.append(provider_stage_result)
+    state["planning_provider_stage_results"] = provider_stage_results
+
+
+def _run_planner_review(
+    state: MutableMapping[str, Any],
+    phase_spec: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    del payload
+    planner_role = _planner_role_config(state)
+    if planner_role is None:
+        failure = {
+            "stage_id": str(phase_spec.get("id") or "planner_review"),
+            "stage_type": str(
+                phase_spec.get("stage_type") or PLANNER_REVIEW_STAGE_TYPE
+            ),
+            "role_name": "planner",
+            "status": "failed",
+            "provider": "",
+            "error": "planner role is not configured for provider-backed planning review.",
+            "failure_kind": "missing_planner_role",
+        }
+        return {
+            "status": "failed",
+            "stop_reason": "planning_provider_review_missing_planner_role",
+            "provider_stage_result": failure,
+            "planning_provider_failure": failure,
+        }
+
+    review_payload = _planning_provider_review_payload(state)
+    prompt_text = _planning_provider_review_prompt(state, review_payload=review_payload)
+    run_dir = Path(str(state.get("run_dir") or ".forge-harness-runs"))
+    out_dir = run_dir / "artifacts" / "planner_review"
+    request = StageRequest(
+        role_name="planner",
+        role_config=planner_role,
+        prompt_text=prompt_text,
+        schema=_planning_provider_review_schema(),
+        cwd=str(state.get("workspace_root") or ""),
+        out_dir=str(out_dir),
+    )
+    run = get_provider(planner_role.provider).run(request)
+    stage_result = {
+        "stage_id": str(phase_spec.get("id") or "planner_review"),
+        "stage_type": str(phase_spec.get("stage_type") or PLANNER_REVIEW_STAGE_TYPE),
+        "role_name": "planner",
+        "status": "success" if run.ok else "failed",
+        "provider": run.provider,
+        "model": run.model,
+        "error": str(run.error or ""),
+        "failure_kind": str(run.failure_kind or ""),
+        "failure_summary": str(run.failure_summary or ""),
+        "stdout_path": run.stdout_path,
+        "stderr_path": run.stderr_path,
+        "prompt_path": run.prompt_path,
+        "schema_path": run.schema_path,
+        "output_path": run.output_path,
+    }
+    if not run.ok or not isinstance(run.structured_output, dict):
+        stop_reason = str(run.failure_kind or run.error or "planner_review_failed")
+        return {
+            "status": "failed",
+            "stop_reason": f"planning_provider_review_failed:{stop_reason}",
+            "provider_stage_result": stage_result,
+            "planning_provider_failure": dict(stage_result),
+        }
+
+    review = {
+        "stage_id": stage_result["stage_id"],
+        "provider": run.provider,
+        "model": run.model,
+        **dict(run.structured_output),
+    }
+    stage_result["verdict"] = str(review.get("verdict") or "")
+    stage_result["summary"] = str(review.get("summary") or "")
+    disagreement_count = (
+        1
+        if str(review.get("verdict") or "").strip().lower()
+        in {"accept_with_caveat", "revise"}
+        else 0
+    )
+    return {
+        "status": "success",
+        "stop_reason": None,
+        "provider_stage_result": stage_result,
+        "planning_provider_review": review,
+        "planning_provider_disagreement_count": disagreement_count,
+    }
+
+
+PLANNING_STAGE_REGISTRY: dict[str, StageHandler] = {
     "rubric_design_doc": _run_rubric_design_doc,
     "architecture_seam_decomposition": _run_architecture_seam_decomposition,
     "parallel_workstream_planning": _run_parallel_workstream_planning,
     "executable_slice_emission": _run_executable_slice_emission,
+    PLANNER_REVIEW_STAGE_TYPE: _run_planner_review,
 }
+
+
+def _planning_graph_spec(state: Mapping[str, Any]) -> Mapping[str, Any]:
+    graph_spec = state.get("strategy_graph_spec")
+    if isinstance(graph_spec, Mapping):
+        return graph_spec
+    return {}
+
+
+def _planning_phase_specs(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    graph_spec = _planning_graph_spec(state)
+    raw_phases = graph_spec.get("phases")
+    if not isinstance(raw_phases, list):
+        strategy_spec = state.get("strategy_spec")
+        raw_phases = (
+            strategy_spec.get("phases") if isinstance(strategy_spec, Mapping) else []
+        )
+    return [
+        _phase_spec(
+            raw_phases[index - 1] if index - 1 < len(raw_phases) else {},
+            expected_stage_type=expected_stage_type,
+            index=index,
+        )
+        for index, expected_stage_type in enumerate(PLANNING_PHASE_ORDER, start=1)
+    ]
+
+
+def _planning_runtime_stage_specs(
+    state: Mapping[str, Any],
+    *,
+    phase_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    graph_spec = _planning_graph_spec(state)
+    raw_stages = graph_spec.get("stages")
+    compiled_stage_specs: list[dict[str, Any]] = []
+    if isinstance(raw_stages, list):
+        for index, stage in enumerate(raw_stages, start=1):
+            if not isinstance(stage, Mapping):
+                continue
+            stage_type = str(stage.get("stage_type") or "").strip()
+            if not stage_type:
+                continue
+            compiled_stage_specs.append(
+                {
+                    "id": str(stage.get("stage_id") or f"stage_{index}"),
+                    "stage_type": stage_type,
+                    "role_name": str(stage.get("role_name") or ""),
+                }
+            )
+    if compiled_stage_specs:
+        return compiled_stage_specs
+    return [dict(phase_spec) for phase_spec in phase_specs]
+
+
+def _planning_execution_contract(state: Mapping[str, Any]) -> dict[str, str]:
+    graph_spec = _planning_graph_spec(state)
+    planning_execution = graph_spec.get("planning_execution")
+    if not isinstance(planning_execution, Mapping):
+        strategy_spec = state.get("strategy_spec")
+        if isinstance(strategy_spec, Mapping):
+            planning_execution = strategy_spec.get("planning_execution")
+    if isinstance(planning_execution, Mapping):
+        mode = str(planning_execution.get("mode") or "").strip() or "graph_owned"
+        provider_participation = str(
+            planning_execution.get("provider_participation") or ""
+        ).strip()
+    else:
+        mode = "graph_owned"
+        provider_participation = ""
+    if not provider_participation:
+        provider_participation = (
+            "planner_review" if mode == "graph_owned_with_planner_review" else "none"
+        )
+    return {
+        "family": "planning_v1",
+        "mode": mode,
+        "provider_participation": provider_participation,
+    }
 
 
 def _phase_spec(phase: Any, *, expected_stage_type: str, index: int) -> dict[str, Any]:
@@ -595,6 +864,7 @@ def _seed_planning_state(
     state: MutableMapping[str, Any],
     *,
     policy_versions: dict[str, str],
+    execution_contract: Mapping[str, str],
 ) -> None:
     state["planning_terminal_status"] = None
     state["planning_stop_reason"] = None
@@ -605,10 +875,16 @@ def _seed_planning_state(
     state["planning_slices"] = []
     state["planning_phase_results"] = []
     state["planning_policy_versions"] = dict(policy_versions)
+    state["planning_execution_mode"] = str(execution_contract.get("mode") or "")
+    state["planning_execution_contract"] = dict(execution_contract)
     state["planning_coverage_status"] = None
     state["planning_coverage_ledger"] = []
     state["planning_assumptions_register"] = []
     state["planning_uncovered_delta"] = []
+    state["planning_provider_stage_results"] = []
+    state["planning_provider_review"] = None
+    state["planning_provider_failure"] = None
+    state["planning_provider_disagreement_count"] = 0
     state["search_pass_count"] = 0
     state["inspected_file_count"] = 0
     state["discovery_budget_escalated"] = False
@@ -2041,18 +2317,18 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
     mutable_state = state
     task_spec = dict(mutable_state.get("task_spec") or {})
     strategy_spec = dict(mutable_state.get("strategy_spec") or {})
-    phases = list(strategy_spec.get("phases") or [])
-    phase_specs = [
-        _phase_spec(
-            phases[index - 1] if index - 1 < len(phases) else {},
-            expected_stage_type=expected_stage_type,
-            index=index,
-        )
-        for index, expected_stage_type in enumerate(PLANNING_PHASE_ORDER, start=1)
-    ]
+    phase_specs = _planning_phase_specs(mutable_state)
+    runtime_stage_specs = _planning_runtime_stage_specs(
+        mutable_state, phase_specs=phase_specs
+    )
     policy_versions = _lookup_planning_policy_versions(strategy_spec)
+    execution_contract = _planning_execution_contract(mutable_state)
 
-    _seed_planning_state(mutable_state, policy_versions=policy_versions)
+    _seed_planning_state(
+        mutable_state,
+        policy_versions=policy_versions,
+        execution_contract=execution_contract,
+    )
 
     fixture_mode = _task_terminal_mode(task_spec)
     live_phase_payloads: dict[str, dict[str, Any]] = {}
@@ -2069,20 +2345,16 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
 
     run_details = dict(mutable_state.get("run_details") or {})
     run_details["planning_run_mode"] = run_mode
+    run_details["planning_execution_mode"] = execution_contract["mode"]
+    run_details["provider_participation"] = execution_contract["provider_participation"]
     mutable_state["run_details"] = run_details
 
-    for phase_spec in phase_specs:
+    def _payload_resolver(
+        runtime_state: MutableMapping[str, Any], phase_spec: dict[str, Any]
+    ) -> dict[str, Any]:
         stage_type = str(phase_spec["stage_type"])
-        handler = PLANNING_PHASE_REGISTRY.get(stage_type)
-        if handler is None:
-            _apply_terminal_status(
-                mutable_state,
-                terminal_status="failed",
-                stop_reason=f"unsupported_planning_phase:{stage_type}",
-            )
-            _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
-            return state
-
+        if stage_type == PLANNER_REVIEW_STAGE_TYPE:
+            return {}
         if fixture_mode:
             payload = _phase_payload(
                 strategy_spec,
@@ -2099,54 +2371,85 @@ def execute_planning_runtime(state: HarnessState) -> HarnessState:
                     )
                     or payload
                 )
-        else:
-            payload = dict(live_phase_payloads.get(str(phase_spec["id"])) or {})
+            return payload
+        return dict(live_phase_payloads.get(str(phase_spec["id"])) or {})
 
-        outcome = handler(mutable_state, phase_spec, payload, policy_versions)
-
+    def _observe_outcome(
+        runtime_state: MutableMapping[str, Any],
+        phase_spec: dict[str, Any],
+        outcome: dict[str, Any],
+    ) -> None:
         mutable_state["repo_evidence_refs"] = _merge_repo_evidence_refs(
-            list(mutable_state.get("repo_evidence_refs") or []),
+            list(runtime_state.get("repo_evidence_refs") or []),
             list(outcome.get("repo_evidence_refs") or []),
         )
         if outcome.get("planning_seams"):
-            mutable_state["planning_seams"] = list(outcome["planning_seams"])
+            runtime_state["planning_seams"] = list(outcome["planning_seams"])
         if outcome.get("planning_workstreams"):
-            mutable_state["planning_workstreams"] = list(
+            runtime_state["planning_workstreams"] = list(
                 outcome["planning_workstreams"]
             )
         if outcome.get("planning_slices"):
-            mutable_state["planning_slices"] = list(outcome["planning_slices"])
-        mutable_state["search_pass_count"] = int(
-            mutable_state.get("search_pass_count") or 0
+            runtime_state["planning_slices"] = list(outcome["planning_slices"])
+        if outcome.get("provider_stage_result"):
+            _append_provider_stage_result(
+                runtime_state, dict(outcome["provider_stage_result"])
+            )
+        if outcome.get("planning_provider_review"):
+            runtime_state["planning_provider_review"] = dict(
+                outcome["planning_provider_review"]
+            )
+        if outcome.get("planning_provider_failure"):
+            runtime_state["planning_provider_failure"] = dict(
+                outcome["planning_provider_failure"]
+            )
+        runtime_state["planning_provider_disagreement_count"] = int(
+            runtime_state.get("planning_provider_disagreement_count") or 0
+        ) + int(outcome.get("planning_provider_disagreement_count") or 0)
+        runtime_state["search_pass_count"] = int(
+            runtime_state.get("search_pass_count") or 0
         ) + int(outcome.get("search_pass_count") or 0)
-        mutable_state["inspected_file_count"] = int(
-            mutable_state.get("inspected_file_count") or 0
+        runtime_state["inspected_file_count"] = int(
+            runtime_state.get("inspected_file_count") or 0
         ) + int(outcome.get("inspected_file_count") or 0)
-        mutable_state["discovery_budget_escalated"] = bool(
-            mutable_state.get("discovery_budget_escalated")
+        runtime_state["discovery_budget_escalated"] = bool(
+            runtime_state.get("discovery_budget_escalated")
             or outcome.get("discovery_budget_escalated")
         )
-        _append_phase_result(
-            mutable_state,
-            dict(outcome.get("phase_result") or {}),
-        )
+        phase_result = dict(outcome.get("phase_result") or {})
+        if phase_result:
+            _append_phase_result(runtime_state, phase_result)
 
-        status = str(outcome.get("status") or "success")
-        if status != "success":
+    sequence_outcome = run_linear_stage_sequence(
+        mutable_state,
+        stage_specs=runtime_stage_specs,
+        handler_registry=PLANNING_STAGE_REGISTRY,
+        payload_resolver=_payload_resolver,
+        observe_outcome=_observe_outcome,
+    )
+    terminal_status = str(sequence_outcome.get("terminal_status") or "failed")
+    if execution_contract["provider_participation"] != "none":
+        run_mode = "provider-reviewed"
+        run_details = dict(mutable_state.get("run_details") or {})
+        run_details["planning_run_mode"] = run_mode
+        mutable_state["run_details"] = run_details
+        mutable_state["planning_run_mode"] = run_mode
+    if terminal_status != "success":
+        stage_outcome = sequence_outcome.get("stage_outcome")
+        if isinstance(stage_outcome, Mapping):
             mutable_state["clarification_requests"] = list(
-                outcome.get("clarification_requests") or []
+                stage_outcome.get("clarification_requests") or []
             )
-            _apply_terminal_status(
-                mutable_state,
-                terminal_status=status,
-                stop_reason=str(
-                    outcome.get("stop_reason") or f"{phase_spec['id']}_{status}"
-                ),
-            )
-            _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
-            return state
+        _apply_terminal_status(
+            mutable_state,
+            terminal_status=terminal_status,
+            stop_reason=str(sequence_outcome.get("stop_reason") or ""),
+        )
+        _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
+        return state
 
     mutable_state["clarification_requests"] = []
+    mutable_state["planning_run_mode"] = run_mode
     _apply_terminal_status(mutable_state, terminal_status="success", stop_reason=None)
     _derive_planning_coverage(mutable_state, phase_specs=phase_specs)
     return state

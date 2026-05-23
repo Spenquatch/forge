@@ -9,6 +9,7 @@ import pytest
 
 from anvil.harness.builder import build_harness_langgraph
 from anvil.harness.state import initialize_harness_state
+from anvil.harness.types import ProviderRun
 
 
 def _write_workspace_file(workspace: Path, relative_path: str, content: str) -> None:
@@ -116,6 +117,7 @@ def _planning_state(tmp_path: Path) -> dict[str, Any]:
         "discovery_policy": "bounded_repo_scan_v1",
         "rubric_policy": "design_doc_gate_v1",
         "stop_policy": "clarification_or_stop_v1",
+        "planning_execution": {"mode": "graph_owned"},
     }
     state["strategy_kind"] = "deterministic_feature_planning_v1"  # type: ignore[assignment]
     state["config_verdict"] = "pass"
@@ -143,6 +145,7 @@ def _planning_graph_state(
     state["strategy_graph_spec"] = {
         "runtime_target": "planning_v1",
         "post_runtime_action": "write_artifacts",
+        "planning_execution": {"mode": "graph_owned"},
     }
     state["strategy_graph_spec_id"] = "planning_v1.test"
     state["strategy_graph_subset"] = "bounded_strategy_graph_v1"
@@ -226,6 +229,12 @@ def test_planning_runtime_success_populates_frozen_state_fields(
         "rubric_policy": "design_doc_gate_v1",
         "stop_policy": "clarification_or_stop_v1",
     }
+    assert result["planning_execution_mode"] == "graph_owned"
+    assert result["planning_execution_contract"] == {
+        "family": "planning_v1",
+        "mode": "graph_owned",
+        "provider_participation": "none",
+    }
     assert result["planning_coverage_status"] == "success"
     assert [item["coverage_id"] for item in result["planning_coverage_ledger"]] == [
         "coverage-01-problem_frame",
@@ -251,6 +260,253 @@ def test_planning_runtime_success_populates_frozen_state_fields(
     assert result["drafts"] == []
     assert Path(result["summary_payload"]["artifacts"]["summary_json"]).exists()
     assert result["run_details"]["planning_run_mode"] == "deterministic-live"
+    assert result["run_details"]["planning_execution_mode"] == "graph_owned"
+
+
+def test_planning_runtime_consumes_compiled_graph_phase_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _planning_graph_state(tmp_path)
+    state["strategy_spec"] = {
+        **dict(state["strategy_spec"]),
+        "phases": [
+            {"id": "raw_wrong_design", "stage_type": "rubric_design_doc"},
+            {
+                "id": "raw_wrong_seams",
+                "stage_type": "architecture_seam_decomposition",
+            },
+            {
+                "id": "raw_wrong_parallel",
+                "stage_type": "parallel_workstream_planning",
+            },
+            {
+                "id": "raw_wrong_slices",
+                "stage_type": "executable_slice_emission",
+            },
+        ],
+    }
+    state["strategy_graph_spec"] = {
+        **dict(state["strategy_graph_spec"]),
+        "phases": [
+            {"id": "design_doc", "stage_type": "rubric_design_doc"},
+            {
+                "id": "seam_decomposition",
+                "stage_type": "architecture_seam_decomposition",
+            },
+            {
+                "id": "parallel_planning",
+                "stage_type": "parallel_workstream_planning",
+            },
+            {"id": "slice_emission", "stage_type": "executable_slice_emission"},
+        ],
+    }
+
+    result = _run_graph(state, monkeypatch)
+
+    assert [item["phase_id"] for item in result["planning_phase_results"]] == [
+        "design_doc",
+        "seam_decomposition",
+        "parallel_planning",
+        "slice_emission",
+    ]
+
+
+def test_planning_runtime_executes_optional_provider_review_without_replacing_structure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _planning_graph_state(tmp_path)
+    state["strategy_spec"] = {
+        **dict(state["strategy_spec"]),
+        "roles": {"planner": {"provider": "codex_cli", "access": "read"}},
+        "planning_execution": {"mode": "graph_owned_with_planner_review"},
+    }
+    state["strategy_graph_spec"] = {
+        **dict(state["strategy_graph_spec"]),
+        "planning_execution": {
+            "mode": "graph_owned_with_planner_review",
+            "provider_participation": "planner_review",
+            "provider_role_name": "planner",
+        },
+        "stages": [
+            {
+                "stage_id": "design_doc",
+                "role_name": "planner",
+                "stage_type": "rubric_design_doc",
+            },
+            {
+                "stage_id": "seam_decomposition",
+                "role_name": "planner",
+                "stage_type": "architecture_seam_decomposition",
+            },
+            {
+                "stage_id": "parallel_planning",
+                "role_name": "planner",
+                "stage_type": "parallel_workstream_planning",
+            },
+            {
+                "stage_id": "slice_emission",
+                "role_name": "planner",
+                "stage_type": "executable_slice_emission",
+            },
+            {
+                "stage_id": "planner_review",
+                "role_name": "planner",
+                "stage_type": "planner_review",
+            },
+        ],
+    }
+
+    class _FakePlannerAdapter:
+        def run(self, request):
+            assert request.role_name == "planner"
+            assert request.role_config.provider == "codex_cli"
+            return ProviderRun(
+                role_name="planner",
+                provider="codex_cli",
+                model="gpt-5.4",
+                access="read",
+                ok=True,
+                exit_code=0,
+                duration_sec=0.01,
+                cwd=request.cwd,
+                command=["codex"],
+                stdout_path=str(tmp_path / "stdout.txt"),
+                stderr_path=str(tmp_path / "stderr.txt"),
+                prompt_path=str(tmp_path / "prompt.txt"),
+                schema_path=str(tmp_path / "schema.json"),
+                output_path=str(tmp_path / "output.json"),
+                raw_output_path=str(tmp_path / "output.raw.json"),
+                normalized_output_path=str(tmp_path / "output.normalized.json"),
+                structured_output={
+                    "verdict": "accept_with_caveat",
+                    "summary": "The deterministic plan is sound but should call out one residual risk.",
+                    "strengths": ["Repo evidence stays bounded."],
+                    "risks": [
+                        "One acceptance criterion could cite a stronger file anchor."
+                    ],
+                    "coverage_challenges": [
+                        "Clarify whether artifact publication needs CLI output examples."
+                    ],
+                    "follow_up_questions": [],
+                    "referenced_seam_ids": ["seam-01-anvil-harness"],
+                    "referenced_workstream_ids": ["workstream-01-anvil-harness"],
+                    "referenced_slice_ids": ["slice-01-anvil-harness"],
+                    "confidence": 0.79,
+                },
+            )
+
+    monkeypatch.setattr(
+        "anvil.harness.planning_runtime.get_provider",
+        lambda name: _FakePlannerAdapter(),
+    )
+
+    result = _run_graph(state, monkeypatch)
+
+    assert result["planning_terminal_status"] == "success"
+    assert result["planning_execution_mode"] == "graph_owned_with_planner_review"
+    assert result["planning_execution_contract"] == {
+        "family": "planning_v1",
+        "mode": "graph_owned_with_planner_review",
+        "provider_participation": "planner_review",
+    }
+    assert result["planning_provider_review"]["verdict"] == "accept_with_caveat"
+    assert result["planning_provider_disagreement_count"] == 1
+    assert len(result["planning_provider_stage_results"]) == 1
+    assert result["planning_provider_stage_results"][0]["status"] == "success"
+    assert result["planning_run_mode"] == "provider-reviewed"
+    assert result["run_details"]["planning_run_mode"] == "provider-reviewed"
+    assert [item["seam_id"] for item in result["planning_seams"]] == [
+        "seam-01-anvil-harness"
+    ]
+
+
+def test_planning_runtime_fails_closed_when_provider_review_cannot_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _planning_graph_state(tmp_path)
+    state["strategy_spec"] = {
+        **dict(state["strategy_spec"]),
+        "roles": {"planner": {"provider": "codex_cli", "access": "read"}},
+        "planning_execution": {"mode": "graph_owned_with_planner_review"},
+    }
+    state["strategy_graph_spec"] = {
+        **dict(state["strategy_graph_spec"]),
+        "planning_execution": {
+            "mode": "graph_owned_with_planner_review",
+            "provider_participation": "planner_review",
+            "provider_role_name": "planner",
+        },
+        "stages": [
+            {
+                "stage_id": "design_doc",
+                "role_name": "planner",
+                "stage_type": "rubric_design_doc",
+            },
+            {
+                "stage_id": "seam_decomposition",
+                "role_name": "planner",
+                "stage_type": "architecture_seam_decomposition",
+            },
+            {
+                "stage_id": "parallel_planning",
+                "role_name": "planner",
+                "stage_type": "parallel_workstream_planning",
+            },
+            {
+                "stage_id": "slice_emission",
+                "role_name": "planner",
+                "stage_type": "executable_slice_emission",
+            },
+            {
+                "stage_id": "planner_review",
+                "role_name": "planner",
+                "stage_type": "planner_review",
+            },
+        ],
+    }
+
+    class _FailingPlannerAdapter:
+        def run(self, request):
+            return ProviderRun(
+                role_name="planner",
+                provider="codex_cli",
+                model="gpt-5.4",
+                access="read",
+                ok=False,
+                exit_code=1,
+                duration_sec=0.01,
+                cwd=request.cwd,
+                command=["codex"],
+                stdout_path=str(tmp_path / "stdout.txt"),
+                stderr_path=str(tmp_path / "stderr.txt"),
+                prompt_path=str(tmp_path / "prompt.txt"),
+                schema_path=str(tmp_path / "schema.json"),
+                output_path=None,
+                raw_output_path=None,
+                normalized_output_path=None,
+                structured_output=None,
+                error="provider auth missing",
+                failure_kind="auth_missing",
+                failure_summary="provider auth missing",
+            )
+
+    monkeypatch.setattr(
+        "anvil.harness.planning_runtime.get_provider",
+        lambda name: _FailingPlannerAdapter(),
+    )
+
+    result = _run_graph(state, monkeypatch)
+
+    assert result["planning_terminal_status"] == "failed"
+    assert result["planning_stop_reason"] == (
+        "planning_provider_review_failed:auth_missing"
+    )
+    assert result["planning_provider_failure"]["failure_kind"] == "auth_missing"
+    assert result["planning_provider_stage_results"][0]["status"] == "failed"
+    assert result["planning_run_mode"] == "provider-reviewed"
 
 
 def test_planning_runtime_stops_for_clarification_without_fake_downstream_records(

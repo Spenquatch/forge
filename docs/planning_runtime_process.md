@@ -3,9 +3,13 @@
 This document explains what the current `planning` harness runtime actually
 does today.
 
-It is a bounded, deterministic repository-planning engine. It does not run a
-provider-backed planning conversation. Instead, it inspects local workspace
-evidence and emits a structured planning package.
+It is a bounded, deterministic repository-planning engine. Its canonical owner
+is still the deterministic layer that inspects local workspace evidence and
+emits a structured planning package. When
+`planning_execution.mode: graph_owned_with_planner_review` is selected, the
+runtime adds one bounded provider-backed review stage after deterministic
+structure derivation; that review may annotate or challenge the package, but it
+does not replace seams, workstreams, slices, coverage truth, or stop reasons.
 
 Primary implementation entrypoints:
 
@@ -24,6 +28,7 @@ At a high level, the planner:
 5. Translates seams into workstreams.
 6. Translates workstreams into executable slices with acceptance criteria.
 7. Emits coverage, assumptions, and truthful stop reasons.
+8. Optionally runs bounded planner review over the finished package.
 
 ## Resolution 1: One-Screen Flow
 
@@ -182,4 +187,3 @@ either:
 
 - grounded itself fast and emitted a complete planning package, or
 - stopped early with a truthful clarification or failure outcome
-

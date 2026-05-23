@@ -1,6 +1,6 @@
-# Negative contract fixture: runtime-owned phase_inputs.
+# Negative contract fixture: planner review mode requires an explicit planner provider role.
 dsl_version: c3_strategy_v1
-name: runtime-owned-phase-inputs
+name: planning-provider-review-missing-role
 kind: deterministic_feature_planning_v1
 runtime_target: planning_v1
 phases:
@@ -18,8 +18,4 @@ discovery_policy: bounded_repo_scan_v1
 rubric_policy: design_doc_gate_v1
 stop_policy: clarification_or_stop_v1
 planning_execution:
-  mode: graph_owned
-phase_inputs:
-  design_doc:
-    repo_evidence_refs:
-      - PLAN.md
+  mode: graph_owned_with_planner_review

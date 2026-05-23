@@ -10,6 +10,7 @@ from anvil.harness.public_subset_registry import (
     COMPATIBILITY_ONLY_KINDS,
     METADATA_ONLY_FIELDS,
     PLANNING_REQUIRED_POLICY_FIELDS,
+    PUBLIC_PLANNING_EXECUTION_MODES,
     PUBLIC_STAGE_FAMILIES,
     PUBLIC_SUBSET_DSL_VERSION,
     RUNTIME_OWNED_EXCLUDED_FIELDS,
@@ -66,6 +67,44 @@ def _validate_planning_payload(payload: dict[str, Any]) -> None:
             "canonical planning strategies must declare runtime_target "
             f"{CANONICAL_PLANNING_RUNTIME_TARGET!r}."
         )
+    planning_execution = payload.get("planning_execution")
+    if not isinstance(planning_execution, dict):
+        raise ValueError(
+            "canonical planning strategies must declare planning_execution.mode."
+        )
+    mode = _normalized_text(planning_execution.get("mode")).lower()
+    if mode not in PUBLIC_PLANNING_EXECUTION_MODES:
+        raise ValueError(
+            "canonical planning strategies must declare planning_execution.mode as one of: "
+            + ", ".join(PUBLIC_PLANNING_EXECUTION_MODES)
+            + "."
+        )
+    roles = payload.get("roles")
+    roles_mapping = roles if isinstance(roles, dict) else {}
+    has_roles = bool(roles_mapping)
+    if mode == "graph_owned":
+        if has_roles:
+            raise ValueError(
+                "canonical graph-owned planning strategies must omit roles unless "
+                "planning_execution.mode enables planner review."
+            )
+    else:
+        if sorted(roles_mapping) != ["planner"]:
+            raise ValueError(
+                "canonical planner-review strategies must declare exactly one role: 'planner'."
+            )
+        planner_role = roles_mapping.get("planner")
+        if not isinstance(planner_role, dict) or not _normalized_text(
+            planner_role.get("provider")
+        ):
+            raise ValueError(
+                "canonical planner-review strategies must declare roles.planner.provider."
+            )
+        planner_access = _normalized_text(planner_role.get("access")).lower()
+        if planner_access and planner_access != "read":
+            raise ValueError(
+                "canonical planner-review strategies must keep roles.planner.access as 'read'."
+            )
 
     missing_policy_fields = [
         field_name
@@ -101,6 +140,7 @@ def _validate_non_planning_payload(payload: dict[str, Any]) -> None:
 
     planning_only_fields = (
         "phases",
+        "planning_execution",
         *PLANNING_REQUIRED_POLICY_FIELDS,
     )
     first_planning_field = _first_present_field(payload, planning_only_fields)

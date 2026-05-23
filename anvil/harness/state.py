@@ -234,10 +234,16 @@ class HarnessState(TypedDict, total=False):
     planning_slices: list[dict[str, Any]]
     planning_phase_results: list[dict[str, Any]]
     planning_policy_versions: dict[str, Any]
+    planning_execution_mode: str | None
+    planning_execution_contract: dict[str, Any]
     planning_coverage_status: str | None
     planning_coverage_ledger: list[dict[str, Any]]
     planning_assumptions_register: list[dict[str, Any]]
     planning_uncovered_delta: list[dict[str, Any]]
+    planning_provider_stage_results: list[dict[str, Any]]
+    planning_provider_review: dict[str, Any] | None
+    planning_provider_failure: dict[str, Any] | None
+    planning_provider_disagreement_count: int
     search_pass_count: int
     inspected_file_count: int
     discovery_budget_escalated: bool
@@ -334,10 +340,16 @@ def initialize_harness_state(
         planning_slices=[],
         planning_phase_results=[],
         planning_policy_versions={},
+        planning_execution_mode=None,
+        planning_execution_contract={},
         planning_coverage_status=None,
         planning_coverage_ledger=[],
         planning_assumptions_register=[],
         planning_uncovered_delta=[],
+        planning_provider_stage_results=[],
+        planning_provider_review=None,
+        planning_provider_failure=None,
+        planning_provider_disagreement_count=0,
         search_pass_count=0,
         inspected_file_count=0,
         discovery_budget_escalated=False,
@@ -805,6 +817,14 @@ def summary_read_adapter_v1(
             summary, "planning_phase_results"
         ),
         planning_policy_versions=_summary_dict(summary, "planning_policy_versions"),
+        planning_execution_mode=(
+            None
+            if _summary_scalar(summary, "planning_execution_mode") in (None, "")
+            else str(_summary_scalar(summary, "planning_execution_mode"))
+        ),
+        planning_execution_contract=_summary_dict(
+            summary, "planning_execution_contract"
+        ),
         planning_coverage_status=(
             None
             if _summary_scalar(summary, "planning_coverage_status") in (None, "")
@@ -818,6 +838,14 @@ def summary_read_adapter_v1(
         ),
         planning_uncovered_delta=_summary_list_of_dicts(
             summary, "planning_uncovered_delta"
+        ),
+        planning_provider_stage_results=_summary_list_of_dicts(
+            summary, "planning_provider_stage_results"
+        ),
+        planning_provider_review=_summary_dict(summary, "planning_provider_review"),
+        planning_provider_failure=_summary_dict(summary, "planning_provider_failure"),
+        planning_provider_disagreement_count=int(
+            _summary_scalar(summary, "planning_provider_disagreement_count") or 0
         ),
         search_pass_count=int(_summary_scalar(summary, "search_pass_count") or 0),
         inspected_file_count=int(_summary_scalar(summary, "inspected_file_count") or 0),

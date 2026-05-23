@@ -62,6 +62,12 @@ VALID_TRUST_REVIEW_EXECUTION_MODES = {
     "legacy_full_review",
     "attestation_over_bounded",
 }
+PLANNING_GRAPH_OWNED_MODE = "graph_owned"
+PLANNING_GRAPH_OWNED_WITH_PLANNER_REVIEW_MODE = "graph_owned_with_planner_review"
+VALID_PLANNING_EXECUTION_MODES = {
+    PLANNING_GRAPH_OWNED_MODE,
+    PLANNING_GRAPH_OWNED_WITH_PLANNER_REVIEW_MODE,
+}
 VALID_FOCUS_GATE_DEFAULT_PATHS = {"adjudicate", "deliberate"}
 VALID_FOCUS_GATE_CLARIFICATION_POLICIES = {
     "block_for_clarification",
@@ -318,6 +324,43 @@ class StrategyTrustReviewConfig:
                 execution_mode,
             )
         )
+
+
+@dataclass
+class StrategyPlanningExecutionConfig:
+    mode: Literal["graph_owned", "graph_owned_with_planner_review"] = "graph_owned"
+
+    @classmethod
+    def from_dict(
+        cls, data: dict[str, Any] | None
+    ) -> "StrategyPlanningExecutionConfig | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("planning_execution must be a mapping when provided.")
+        _reject_unknown_keys(
+            data,
+            allowed_keys={"mode"},
+            field_name="planning_execution",
+        )
+        mode = str(data.get("mode", "graph_owned")).strip().lower()
+        if mode not in VALID_PLANNING_EXECUTION_MODES:
+            raise ValueError(
+                "planning_execution.mode must be one of: "
+                + ", ".join(sorted(VALID_PLANNING_EXECUTION_MODES))
+                + "."
+            )
+        return cls(
+            mode=cast(Literal["graph_owned", "graph_owned_with_planner_review"], mode)
+        )
+
+    def provider_participation(self) -> str:
+        if self.mode == PLANNING_GRAPH_OWNED_WITH_PLANNER_REVIEW_MODE:
+            return "planner_review"
+        return "none"
+
+    def requires_planner_role(self) -> bool:
+        return self.provider_participation() == "planner_review"
 
 
 @dataclass
@@ -755,6 +798,7 @@ class StrategyConfig:
     discovery_policy: str | None = None
     rubric_policy: str | None = None
     stop_policy: str | None = None
+    planning_execution: StrategyPlanningExecutionConfig | None = None
     validators: list[ValidatorConfig] = field(default_factory=list)
     max_repair_loops: int = 1
     rerun_falsifier_after_patch: bool = True
@@ -815,8 +859,13 @@ class StrategyConfig:
                 "stop_policy",
             )
         }
-        has_planning_only_keys = bool(phases) or any(
-            value is not None for value in planning_policy_refs.values()
+        planning_execution = StrategyPlanningExecutionConfig.from_dict(
+            data.get("planning_execution")
+        )
+        has_planning_only_keys = (
+            bool(phases)
+            or any(value is not None for value in planning_policy_refs.values())
+            or planning_execution is not None
         )
         if runtime_target == PLANNING_RUNTIME_TARGET:
             if kind != DETERMINISTIC_FEATURE_PLANNING_KIND:
@@ -841,6 +890,32 @@ class StrategyConfig:
                 )
             if not phases:
                 raise ValueError("planning strategies must declare phases[].")
+            if planning_execution is None:
+                raise ValueError(
+                    "planning strategies must declare planning_execution.mode."
+                )
+            unsupported_planning_roles = sorted(set(roles) - {"planner"})
+            if unsupported_planning_roles:
+                raise ValueError(
+                    "planning strategies support only the optional 'planner' role; "
+                    f"found unsupported role {unsupported_planning_roles[0]!r}."
+                )
+            planner_role = roles.get("planner")
+            if planning_execution.requires_planner_role():
+                if planner_role is None:
+                    raise ValueError(
+                        "planning_execution.mode 'graph_owned_with_planner_review' "
+                        "requires roles.planner.provider."
+                    )
+                if str(planner_role.access or "read").strip().lower() != "read":
+                    raise ValueError(
+                        "planning planner provider participation must use access 'read'."
+                    )
+            elif planner_role is not None:
+                raise ValueError(
+                    "roles.planner is only supported when "
+                    "planning_execution.mode is 'graph_owned_with_planner_review'."
+                )
             declared_stage_types = tuple(phase.stage_type for phase in phases)
             if len(set(phase.id for phase in phases)) != len(phases):
                 raise ValueError("planning phases must use unique ids.")
@@ -857,7 +932,7 @@ class StrategyConfig:
                 )
             if has_planning_only_keys:
                 raise ValueError(
-                    "phases and planning policy refs are only supported when runtime_target is 'planning_v1'."
+                    "phases, planning_execution, and planning policy refs are only supported when runtime_target is 'planning_v1'."
                 )
         validators = [
             ValidatorConfig.from_dict(v, default_run_when="patch_only")
@@ -874,6 +949,7 @@ class StrategyConfig:
             discovery_policy=planning_policy_refs["discovery_policy"],
             rubric_policy=planning_policy_refs["rubric_policy"],
             stop_policy=planning_policy_refs["stop_policy"],
+            planning_execution=planning_execution,
             validators=validators,
             max_repair_loops=int(data.get("max_repair_loops", 1)),
             rerun_falsifier_after_patch=bool(
@@ -908,6 +984,8 @@ class StrategyConfig:
             "review_loops": self.review_loops.to_dict(),
             "focus_gate": None if self.focus_gate is None else asdict(self.focus_gate),
         }
+        if self.planning_execution is not None:
+            payload["planning_execution"] = asdict(self.planning_execution)
         if self.trust_review is not None:
             payload["trust_review"] = asdict(self.trust_review)
         return payload

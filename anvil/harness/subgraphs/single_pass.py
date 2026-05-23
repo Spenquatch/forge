@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from ..single_pass_runtime import execute_single_pass_runtime
 from ..state import HarnessState
-from ._bridge import run_harness_runner
 
 
 def single_pass_subgraph(state: HarnessState) -> HarnessState:
-    return run_harness_runner(state)
+    return execute_single_pass_runtime(state)

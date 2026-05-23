@@ -91,10 +91,15 @@ CANONICAL_PUBLIC_TOP_LEVEL_FIELDS = (
     "discovery_policy",
     "rubric_policy",
     "stop_policy",
+    "planning_execution",
     "trust_review",
 )
 
 CANONICAL_PLANNING_RUNTIME_TARGET = "planning_v1"
+PUBLIC_PLANNING_EXECUTION_MODES = (
+    "graph_owned",
+    "graph_owned_with_planner_review",
+)
 
 RUNTIME_OWNED_EXCLUDED_FIELDS = (
     "coverage_policy",
@@ -120,6 +125,7 @@ __all__ = (
     "PLANNING_REQUIRED_POLICY_FIELDS",
     "CANONICAL_PUBLIC_TOP_LEVEL_FIELDS",
     "CANONICAL_PLANNING_RUNTIME_TARGET",
+    "PUBLIC_PLANNING_EXECUTION_MODES",
     "RUNTIME_OWNED_EXCLUDED_FIELDS",
     "METADATA_ONLY_FIELDS",
 )

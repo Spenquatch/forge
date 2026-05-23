@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Literal, Mapping, Optional, cast
 
 from anvil.langgraph_compat import close_sqlite_saver, open_sqlite_saver
+from anvil.orchestrator import reload_config
 
 from .builder import build_harness_langgraph
 from .state import HarnessState
@@ -61,6 +62,7 @@ class HarnessLangGraphExecutor:
             Literal["legacy_bridge", "graph_owned"]
         ] = None,
     ) -> HarnessState:
+        reload_config(config_path)
         request: Dict[str, Any] = {
             "task_path": task_path,
             "strategy_path": strategy_path,
@@ -110,6 +112,7 @@ class HarnessLangGraphExecutor:
             Literal["legacy_bridge", "graph_owned"]
         ] = None,
     ) -> AsyncIterator[dict[str, Any]]:
+        reload_config(config_path)
         request: Dict[str, Any] = {
             "task_path": task_path,
             "strategy_path": strategy_path,

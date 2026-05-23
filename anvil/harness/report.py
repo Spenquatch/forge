@@ -1110,12 +1110,24 @@ def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -
 
     terminal_status = _planning_terminal_status(summary) or "unknown"
     run_mode = _planning_run_mode(summary) or "unknown"
+    execution_contract = summary.get("planning_execution_contract")
+    if not isinstance(execution_contract, dict):
+        execution_contract = summary.get("execution_contract")
+    execution_mode = str((execution_contract or {}).get("mode") or "").strip()
+    provider_participation = str(
+        (execution_contract or {}).get("provider_participation") or ""
+    ).strip()
     stop_reason = str(
         summary.get("planning_stop_reason") or summary.get("stop_reason") or ""
     ).strip()
     clarification_requests = (
         summary.get("clarification_requests")
         if isinstance(summary.get("clarification_requests"), list)
+        else []
+    )
+    provider_stage_results = (
+        summary.get("planning_provider_stage_results")
+        if isinstance(summary.get("planning_provider_stage_results"), list)
         else []
     )
     repo_evidence_refs = [
@@ -1128,6 +1140,10 @@ def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -
     lines.append("")
     lines.append(f"- Terminal status: `{terminal_status}`")
     lines.append(f"- Run mode: `{run_mode}`")
+    if execution_mode:
+        lines.append(f"- Execution mode: `{execution_mode}`")
+    if provider_participation:
+        lines.append(f"- Provider participation: `{provider_participation}`")
     if stop_reason:
         lines.append(f"- Stop reason: {stop_reason}")
     lines.append(f"- Search passes: `{summary.get('search_pass_count', 0)}`")
@@ -1137,6 +1153,12 @@ def _append_planning_status_section(lines: list[str], summary: dict[str, Any]) -
         + f"`{summary.get('discovery_budget_escalated', False)}`"
     )
     lines.append(f"- Clarification requests: `{len(clarification_requests)}`")
+    lines.append(f"- Provider stages: `{len(provider_stage_results)}`")
+    if provider_stage_results:
+        lines.append(
+            "- Provider disagreements: "
+            + f"`{summary.get('planning_provider_disagreement_count', 0)}`"
+        )
     lines.append(
         "- Repo evidence refs: "
         + (", ".join(f"`{item}`" for item in repo_evidence_refs) or "none")

@@ -77,6 +77,12 @@ That strategy file remains internal and fixture-backed. The canonical public
 `C3 v1` planning example now lives in the public subset example pack, while the
 fixture-backed strategy remains a regression surface rather than public
 authoring truth.
+Canonical public planning now supports:
+
+- `planning_execution.mode: graph_owned` for deterministic-only planning
+- `planning_execution.mode: graph_owned_with_planner_review` plus
+  `roles.planner.provider` for bounded read-only provider review layered on top
+  of deterministic structure
 
 Harness strategy YAML uses provider family keys from `config/models.yaml`, including `codex_cli` and `claude_code`. When those families back a run through a local CLI, Forge still respects `FORGE_CODEX_BIN` and `FORGE_CLAUDE_BIN`; API-backed providers still require credentials such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 

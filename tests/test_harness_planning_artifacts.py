@@ -27,6 +27,7 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
             "name": "deterministic planning",
             "kind": "deterministic_feature_planning_v1",
             "runtime_target": "planning_v1",
+            "planning_execution": {"mode": "graph_owned"},
             "phases": [
                 {"id": "design_doc", "stage_type": "rubric_design_doc"},
                 {
@@ -47,7 +48,18 @@ def _planning_state(tmp_path: Path, *, terminal_status: str) -> dict[str, object
         "strategy_graph_spec": {
             "runtime_target": "planning_v1",
             "post_runtime_action": "write_artifacts",
+            "planning_execution": {"mode": "graph_owned"},
         },
+        "planning_execution_mode": "graph_owned",
+        "planning_execution_contract": {
+            "family": "planning_v1",
+            "mode": "graph_owned",
+            "provider_participation": "none",
+        },
+        "planning_provider_stage_results": [],
+        "planning_provider_review": {},
+        "planning_provider_failure": {},
+        "planning_provider_disagreement_count": 0,
         "planning_terminal_status": terminal_status,
         "planning_stop_reason": (
             "" if terminal_status == "success" else f"{terminal_status}_stop_reason"
@@ -309,6 +321,15 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     assert plan_payload["schema_version"] == "plan_artifact_v2"
     assert plan_payload["terminal_status"] == "success"
     assert plan_payload["run_mode"] == "deterministic-live"
+    assert plan_payload["execution_contract"] == {
+        "family": "planning_v1",
+        "mode": "graph_owned",
+        "provider_participation": "none",
+    }
+    assert plan_payload["provider_stage_results"] == []
+    assert plan_payload["provider_review"] == {}
+    assert plan_payload["provider_failure"] == {}
+    assert plan_payload["provider_disagreement_count"] == 0
     assert plan_payload["coverage_status"] == "success"
     assert plan_payload["phase_results"][0]["primary_cut_summary"] == (
         "Selected primary cut `anvil/harness`."
@@ -331,11 +352,14 @@ def test_publish_state_artifacts_v1_writes_plan_package_for_success(tmp_path: Pa
     )
     assert summary["planning_terminal_status"] == "success"
     assert summary["planning_run_mode"] == "deterministic-live"
+    assert summary["planning_execution_mode"] == "graph_owned"
+    assert summary["planning_provider_stage_results"] == []
     assert summary["planning_phase_results"][0]["primary_cut_summary"] == (
         "Selected primary cut `anvil/harness`."
     )
     assert "- Terminal status: `success`" in markdown
     assert "- Run mode: `deterministic-live`" in markdown
+    assert "- Execution contract: `graph_owned`" in markdown
     assert markdown.index("## Problem Statement") < markdown.index("## Rubric Results")
     assert markdown.index("## Rubric Results") < markdown.index(
         "## Architectural Seams"

@@ -1,8 +1,12 @@
-# Negative contract fixture: runtime-owned phase_inputs.
+# Negative contract fixture: canonical public planning must not over-signal a planner provider.
 dsl_version: c3_strategy_v1
-name: runtime-owned-phase-inputs
+name: planning-roles-over-signal
 kind: deterministic_feature_planning_v1
 runtime_target: planning_v1
+roles:
+  planner:
+    provider: codex_cli
+    access: read
 phases:
   - id: design_doc
     stage_type: rubric_design_doc
@@ -19,7 +23,3 @@ rubric_policy: design_doc_gate_v1
 stop_policy: clarification_or_stop_v1
 planning_execution:
   mode: graph_owned
-phase_inputs:
-  design_doc:
-    repo_evidence_refs:
-      - PLAN.md

@@ -3,17 +3,16 @@
 # public C3 v1 authoring example.
 # `phase_inputs` below remain fixture-only scaffolding for stop-path regression
 # coverage.
+# `planning_execution.mode: graph_owned` is the typed execution contract for the
+# bounded public planning family. The sibling
+# `deterministic_feature_planning_planner_review_v1.yaml` fixture demonstrates
+# the bounded provider-review mode on the same runtime substrate.
 # The seam/workstream/slice IDs below are not live success truth.
 # The success path must derive structure and coverage truth from live workspace
 # evidence.
 name: deterministic-feature-planning-v1
 kind: deterministic_feature_planning_v1
 runtime_target: planning_v1
-roles:
-  planner:
-    provider: codex_cli
-    effort: high
-    access: read
 phases:
   - id: design_doc
     stage_type: rubric_design_doc
@@ -29,6 +28,8 @@ determinism_policy: stable_structure_v1
 discovery_policy: bounded_repo_scan_v1
 rubric_policy: design_doc_gate_v1
 stop_policy: clarification_or_stop_v1
+planning_execution:
+  mode: graph_owned
 phase_inputs:
   design_doc:
     repo_evidence_refs:

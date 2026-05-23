@@ -51,10 +51,18 @@ Harness strategy YAML uses provider family keys from `config/models.yaml`, such 
 
 The public subset planning example lives in
 `examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml`.
+That canonical public planning surface declares
+`planning_execution.mode: graph_owned` for deterministic planning. A second
+canonical example,
+`examples/harness/public_subset/canonical/deterministic_feature_planning_planner_review_v1.yaml`,
+shows the bounded provider-backed variant with
+`planning_execution.mode: graph_owned_with_planner_review` and
+`roles.planner.provider`.
 The runnable strategy below remains the internal, fixture-backed harness path
 for deterministic planning regressions:
 
 - `examples/harness/strategies/deterministic_feature_planning_v1.yaml`
+- `examples/harness/strategies/deterministic_feature_planning_planner_review_v1.yaml`
 
 Use it with these bounded task fixtures:
 
@@ -78,6 +86,20 @@ This harness command is distinct from the general orchestration entrypoint
 `poetry run python -m anvil`.
 
 On `harness-run`, omitting `--workspace` uses the current working directory, so the canonical repo-root command does not need extra setup. Successful planning runs emit `PLAN.md` and `plan.json` with C2 coverage, assumptions, and uncovered delta. The clarification and failed fixtures exercise the same strategy surface, return exit code `1`, and publish `summary.json` only with truthful coverage payloads. Repeat-run determinism coverage for the bounded planning corpus lives in `tests/test_harness_example_strategy_wiring.py`.
+
+When you want the bounded provider review path instead, swap the strategy file:
+
+```bash
+poetry run python -m anvil.cli harness-run \
+  --task examples/harness/tasks/deterministic_feature_planning_success.yaml \
+  --strategy examples/harness/strategies/deterministic_feature_planning_planner_review_v1.yaml \
+  --out-root .forge-harness-runs \
+  --json
+```
+
+That provider-backed mode still derives seams, workstreams, and slices
+deterministically first. The planner role only reviews the finished package and
+the run fails closed if the provider cannot execute.
 
 That runnable planning fixture is internal and fixture-backed, not the
 canonical public `C3 v1` authoring example.

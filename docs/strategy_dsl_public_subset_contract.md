@@ -111,6 +111,9 @@ Canonical planning public authoring is the `deterministic_feature_planning_v1`
 kind with:
 
 - `runtime_target: planning_v1`
+- `planning_execution.mode: graph_owned` for deterministic-only planning, or
+  `planning_execution.mode: graph_owned_with_planner_review` for deterministic
+  planning plus bounded provider review
 - all required planning policy refs:
   `artifact_policy`, `determinism_policy`, `discovery_policy`,
   `rubric_policy`, and `stop_policy`
@@ -118,11 +121,17 @@ kind with:
 - canonical planning phase order:
   `rubric_design_doc`, `architecture_seam_decomposition`,
   `parallel_workstream_planning`, `executable_slice_emission`
+- deterministic-only planning must omit `roles`
+- planner-review planning must declare exactly one role, `roles.planner`, with
+  a provider family key and read-only access
+- planner review is advisory only: the runtime invokes it after deterministic
+  seams, workstreams, slices, and coverage have already been derived
 
 Canonical non-planning public authoring:
 
 - must omit `runtime_target`
 - must omit `phases`
+- must omit `planning_execution`
 - must omit planning-only policy refs
 
 ## 9. Compatibility-only input
@@ -143,7 +152,14 @@ path remains internal or private for this milestone.
 This includes the runnable harness fixture
 `examples/harness/strategies/deterministic_feature_planning_v1.yaml`, which
 remains useful regression scaffolding but is not the canonical public `C3 v1`
-authoring example.
+authoring example. That internal fixture still declares the same
+`planning_execution.mode: graph_owned` contract, but it keeps
+`coverage_policy` and `phase_inputs` as runtime-owned fixture scaffolding.
+
+The bounded provider-review variant is shown separately in
+`examples/harness/public_subset/canonical/deterministic_feature_planning_planner_review_v1.yaml`
+and the runnable internal example
+`examples/harness/strategies/deterministic_feature_planning_planner_review_v1.yaml`.
 
 Internal and private fixture-backed strategies are preserved; this milestone
 does not relabel them as canonical public authoring.

@@ -69,6 +69,15 @@ On `harness-run`, omitting `--workspace` uses the current working directory, so 
 That planning strategy path remains a runnable internal harness fixture, not
 the canonical public `C3 v1` example. For the live bounded public authoring
 contract, start with the contract doc and public example pack linked above.
+Canonical public planning now supports two truthful planning postures:
+
+- `planning_execution.mode: graph_owned` for deterministic structure only
+- `planning_execution.mode: graph_owned_with_planner_review` with
+  `roles.planner.provider` for bounded read-only provider review after the
+  deterministic structure is complete
+
+In both modes, deterministic planning remains the canonical owner of seams,
+workstreams, slices, coverage truth, and stop reasons.
 
 The deterministic planning surface is intentionally bounded: it plans against
 one existing repo, scans only a limited evidence budget, and stops honestly

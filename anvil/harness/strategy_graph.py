@@ -23,14 +23,18 @@ STRATEGY_GRAPH_SUBSET = "bounded_strategy_graph_v1"
 class StageSpec:
     stage_id: str
     role_name: str
+    stage_type: str | None = None
     capabilities: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "stage_id": self.stage_id,
             "role_name": self.role_name,
             "capabilities": list(self.capabilities),
         }
+        if self.stage_type is not None:
+            payload["stage_type"] = self.stage_type
+        return payload
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,7 @@ class StrategyGraphSpec:
     runtime_target: str
     stages: tuple[StageSpec, ...]
     phases: tuple[PlanningPhaseSpec, ...] = ()
+    planning_execution: dict[str, Any] | None = None
     linear_edges: tuple[LinearEdgeSpec, ...] = ()
     loops: tuple[LoopSpec, ...] = ()
     conditional_branches: tuple[ConditionalBranchSpec, ...] = ()
@@ -139,7 +144,7 @@ class StrategyGraphSpec:
     subset: str = STRATEGY_GRAPH_SUBSET
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "spec_id": self.spec_id,
             "subset": self.subset,
@@ -157,6 +162,9 @@ class StrategyGraphSpec:
             ],
             "post_runtime_action": self.post_runtime_action,
         }
+        if self.planning_execution is not None:
+            payload["planning_execution"] = dict(self.planning_execution)
+        return payload
 
 
 def route_after_strategy_selection(state: Mapping[str, Any]) -> str:
@@ -226,6 +234,7 @@ def _build_single_pass_spec() -> StrategyGraphSpec:
             StageSpec(
                 stage_id="solver",
                 role_name="solver",
+                stage_type="single_pass_solution",
                 capabilities=("produce_solution",),
             ),
         ),
@@ -552,26 +561,68 @@ def _build_planning_spec(
     parsed_strategy = StrategyConfig.from_dict(
         {"kind": strategy_kind, **dict(strategy_spec)}
     )
+    provider_participation = (
+        "none"
+        if parsed_strategy.planning_execution is None
+        else parsed_strategy.planning_execution.provider_participation()
+    )
     phases = tuple(
         PlanningPhaseSpec(phase_id=phase.id, stage_type=phase.stage_type)
         for phase in parsed_strategy.phases
     )
+    stages = [
+        StageSpec(
+            stage_id=phase.phase_id,
+            role_name="planner",
+            stage_type=phase.stage_type,
+            capabilities=(phase.stage_type,),
+        )
+        for phase in phases
+    ]
+    if provider_participation == "planner_review":
+        stages.append(
+            StageSpec(
+                stage_id="planner_review",
+                role_name="planner",
+                stage_type="planner_review",
+                capabilities=("review_planning_package",),
+            )
+        )
+    linear_edge_stage_ids = [stage.stage_id for stage in stages]
     return StrategyGraphSpec(
-        spec_id=f"{strategy_kind}.{PLANNING_RUNTIME_TARGET}",
+        spec_id=".".join(
+            [
+                strategy_kind,
+                PLANNING_RUNTIME_TARGET,
+                (
+                    "planner_review"
+                    if provider_participation == "planner_review"
+                    else "graph_owned"
+                ),
+            ]
+        ),
         strategy_kind=strategy_kind,
         runtime_target=PLANNING_RUNTIME_TARGET,
-        stages=tuple(
-            StageSpec(
-                stage_id=phase.phase_id,
-                role_name="planner",
-                capabilities=(phase.stage_type,),
-            )
-            for phase in phases
-        ),
+        stages=tuple(stages),
         phases=phases,
+        planning_execution=(
+            None
+            if parsed_strategy.planning_execution is None
+            else {
+                "mode": parsed_strategy.planning_execution.mode,
+                "provider_participation": provider_participation,
+                **(
+                    {"provider_role_name": "planner"}
+                    if provider_participation == "planner_review"
+                    else {}
+                ),
+            }
+        ),
         linear_edges=tuple(
-            LinearEdgeSpec(phases[index].phase_id, phases[index + 1].phase_id)
-            for index in range(len(phases) - 1)
+            LinearEdgeSpec(
+                linear_edge_stage_ids[index], linear_edge_stage_ids[index + 1]
+            )
+            for index in range(len(linear_edge_stage_ids) - 1)
         ),
         terminal_outcomes=(
             TerminalOutcomeSpec(

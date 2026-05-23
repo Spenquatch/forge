@@ -1,7 +1,11 @@
-# Negative contract fixture: runtime-owned phase_inputs.
+# Canonical public C3 v1 planning example with bounded provider-backed review.
 dsl_version: c3_strategy_v1
-name: runtime-owned-phase-inputs
+name: deterministic-feature-planning-planner-review-v1
 kind: deterministic_feature_planning_v1
+roles:
+  planner:
+    provider: codex_cli
+    access: read
 runtime_target: planning_v1
 phases:
   - id: design_doc
@@ -18,8 +22,4 @@ discovery_policy: bounded_repo_scan_v1
 rubric_policy: design_doc_gate_v1
 stop_policy: clarification_or_stop_v1
 planning_execution:
-  mode: graph_owned
-phase_inputs:
-  design_doc:
-    repo_evidence_refs:
-      - PLAN.md
+  mode: graph_owned_with_planner_review

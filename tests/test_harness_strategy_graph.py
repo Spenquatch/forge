@@ -40,13 +40,6 @@ def _planning_strategy_payload() -> dict[str, object]:
         "name": "deterministic-feature-planning",
         "kind": DETERMINISTIC_FEATURE_PLANNING_KIND,
         "runtime_target": PLANNING_RUNTIME_TARGET,
-        "roles": {
-            "planner": {
-                "provider": "codex_cli",
-                "effort": "high",
-                "access": "read",
-            }
-        },
         "phases": [
             {"id": "design_doc", "stage_type": "rubric_design_doc"},
             {
@@ -64,7 +57,15 @@ def _planning_strategy_payload() -> dict[str, object]:
         "discovery_policy": "bounded_repo_scan_v1",
         "rubric_policy": "design_doc_gate_v1",
         "stop_policy": "clarification_or_stop_v1",
+        "planning_execution": {"mode": "graph_owned"},
     }
+
+
+def _planning_provider_review_strategy_payload() -> dict[str, object]:
+    payload = dict(_planning_strategy_payload())
+    payload["roles"] = {"planner": {"provider": "codex_cli", "access": "read"}}
+    payload["planning_execution"] = {"mode": "graph_owned_with_planner_review"}
+    return payload
 
 
 def _preflight_state(
@@ -132,6 +133,43 @@ def test_planning_strategy_config_requires_explicit_runtime_target():
         )
 
 
+def test_planning_strategy_config_requires_explicit_planning_execution_mode():
+    with pytest.raises(
+        ValueError,
+        match="planning strategies must declare planning_execution.mode",
+    ):
+        StrategyConfig.from_dict(
+            {
+                key: value
+                for key, value in _planning_strategy_payload().items()
+                if key != "planning_execution"
+            }
+        )
+
+
+def test_planning_strategy_config_requires_planner_role_for_provider_review_mode():
+    with pytest.raises(ValueError, match="requires roles.planner.provider"):
+        StrategyConfig.from_dict(
+            {
+                **_planning_strategy_payload(),
+                "planning_execution": {"mode": "graph_owned_with_planner_review"},
+            }
+        )
+
+
+def test_planning_strategy_config_rejects_planner_role_without_review_mode():
+    with pytest.raises(
+        ValueError,
+        match="roles.planner is only supported when planning_execution.mode is 'graph_owned_with_planner_review'",
+    ):
+        StrategyConfig.from_dict(
+            {
+                **_planning_strategy_payload(),
+                "roles": {"planner": {"provider": "codex_cli", "access": "read"}},
+            }
+        )
+
+
 def test_planning_strategy_config_rejects_out_of_order_declared_phases():
     payload = _planning_strategy_payload()
     payload["phases"] = [
@@ -157,6 +195,7 @@ def test_single_pass_graph_spec_is_linear_and_terminal():
     assert spec.runtime_target == "single_pass"
     assert spec.spec_id == "single_pass.direct"
     assert [stage.stage_id for stage in spec.stages] == ["solver"]
+    assert [stage.stage_type for stage in spec.stages] == ["single_pass_solution"]
     assert spec.linear_edges == ()
     assert spec.loops == ()
     assert [outcome.outcome_id for outcome in spec.terminal_outcomes] == [
@@ -276,6 +315,10 @@ def test_planning_graph_spec_emits_runtime_target_phases_and_post_runtime_action
 
     assert spec["runtime_target"] == PLANNING_RUNTIME_TARGET
     assert spec["phases"] == strategy["phases"]
+    assert spec["planning_execution"] == {
+        "mode": "graph_owned",
+        "provider_participation": "none",
+    }
     assert [stage["stage_id"] for stage in spec["stages"]] == [
         "design_doc",
         "seam_decomposition",
@@ -283,6 +326,33 @@ def test_planning_graph_spec_emits_runtime_target_phases_and_post_runtime_action
         "slice_emission",
     ]
     assert spec["post_runtime_action"] == "write_artifacts"
+
+
+def test_planning_graph_spec_emits_optional_provider_review_stage():
+    spec = build_strategy_graph_spec(
+        DETERMINISTIC_FEATURE_PLANNING_KIND,
+        _planning_provider_review_strategy_payload(),
+    ).to_dict()
+
+    assert spec["spec_id"] == (
+        f"{DETERMINISTIC_FEATURE_PLANNING_KIND}.{PLANNING_RUNTIME_TARGET}.planner_review"
+    )
+    assert spec["planning_execution"] == {
+        "mode": "graph_owned_with_planner_review",
+        "provider_participation": "planner_review",
+        "provider_role_name": "planner",
+    }
+    assert [stage["stage_type"] for stage in spec["stages"]] == [
+        "rubric_design_doc",
+        "architecture_seam_decomposition",
+        "parallel_workstream_planning",
+        "executable_slice_emission",
+        "planner_review",
+    ]
+    assert spec["linear_edges"][-1] == {
+        "from_stage_id": "slice_emission",
+        "to_stage_id": "planner_review",
+    }
 
 
 def test_validator_preflight_rejects_invalid_planning_declarations_before_model_work():
@@ -373,10 +443,14 @@ def test_select_strategy_node_stamps_planning_graph_metadata():
 
     assert state["config_verdict"] == "pass"
     assert state["strategy_graph_spec_id"] == (
-        f"{DETERMINISTIC_FEATURE_PLANNING_KIND}.{PLANNING_RUNTIME_TARGET}"
+        f"{DETERMINISTIC_FEATURE_PLANNING_KIND}.{PLANNING_RUNTIME_TARGET}.graph_owned"
     )
     assert state["strategy_graph_spec"]["runtime_target"] == PLANNING_RUNTIME_TARGET
     assert state["strategy_graph_spec"]["post_runtime_action"] == "write_artifacts"
     assert (
         state["strategy_graph_spec"]["phases"] == _planning_strategy_payload()["phases"]
     )
+    assert state["strategy_graph_spec"]["planning_execution"] == {
+        "mode": "graph_owned",
+        "provider_participation": "none",
+    }

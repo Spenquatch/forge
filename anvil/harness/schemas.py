@@ -776,6 +776,27 @@ def planning_uncovered_delta_row_schema() -> dict[str, Any]:
     }
 
 
+def planning_provider_stage_result_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "stage_id": {"type": "string"},
+            "stage_type": {"type": "string"},
+            "role_name": {"type": "string"},
+            "status": {"type": "string", "enum": ["success", "failed"]},
+            "provider": {"type": "string"},
+            "model": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "verdict": {"type": "string"},
+            "summary": {"type": "string"},
+            "error": {"type": "string"},
+            "failure_kind": {"type": "string"},
+            "failure_summary": {"type": "string"},
+        },
+        "required": ["stage_id", "stage_type", "role_name", "status", "provider"],
+        "additionalProperties": True,
+    }
+
+
 def plan_json_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -821,6 +842,25 @@ def plan_json_schema() -> dict[str, Any]:
                     "deterministic-live",
                     "provider-reviewed",
                 ],
+            },
+            "execution_contract": {
+                "type": "object",
+                "properties": {
+                    "family": {"type": "string", "enum": ["planning_v1"]},
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "graph_owned",
+                            "graph_owned_with_planner_review",
+                        ],
+                    },
+                    "provider_participation": {
+                        "type": "string",
+                        "enum": ["none", "planner_review"],
+                    },
+                },
+                "required": ["family", "mode", "provider_participation"],
+                "additionalProperties": False,
             },
             "stop_reason": {"type": "string"},
             "problem_statement": {"type": "string"},
@@ -877,6 +917,19 @@ def plan_json_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": planning_uncovered_delta_row_schema(),
             },
+            "provider_stage_results": {
+                "type": "array",
+                "items": planning_provider_stage_result_schema(),
+            },
+            "provider_review": {
+                "type": "object",
+                "additionalProperties": True,
+            },
+            "provider_failure": {
+                "type": "object",
+                "additionalProperties": True,
+            },
+            "provider_disagreement_count": {"type": "integer", "minimum": 0},
         },
         "required": [
             "schema_version",
@@ -885,6 +938,7 @@ def plan_json_schema() -> dict[str, Any]:
             "strategy",
             "terminal_status",
             "run_mode",
+            "execution_contract",
             "stop_reason",
             "problem_statement",
             "clarification_requests",
@@ -902,6 +956,10 @@ def plan_json_schema() -> dict[str, Any]:
             "coverage_ledger",
             "assumptions_register",
             "uncovered_delta",
+            "provider_stage_results",
+            "provider_review",
+            "provider_failure",
+            "provider_disagreement_count",
         ],
         "additionalProperties": True,
     }

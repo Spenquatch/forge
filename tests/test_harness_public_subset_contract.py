@@ -13,6 +13,7 @@ from anvil.harness.public_subset_registry import (
     METADATA_ONLY_FIELDS,
     PLANNING_REQUIRED_POLICY_FIELDS,
     PUBLIC_GRAPH_PRIMITIVES,
+    PUBLIC_PLANNING_EXECUTION_MODES,
     PUBLIC_ROLE_FAMILIES,
     PUBLIC_STAGE_FAMILIES,
     PUBLIC_SUBSET_DSL_VERSION,
@@ -60,6 +61,7 @@ def _contract_violations(payload: dict[str, object]) -> list[str]:
         "discovery_policy",
         "rubric_policy",
         "stop_policy",
+        "planning_execution",
         "trust_review",
         "coverage_policy",
         "phase_inputs",
@@ -80,12 +82,26 @@ def _contract_violations(payload: dict[str, object]) -> list[str]:
         violations.append("top_level_key")
 
     roles = payload.get("roles")
+    planning_execution = payload.get("planning_execution")
+    planning_mode = (
+        str(planning_execution.get("mode") or "")
+        if isinstance(planning_execution, dict)
+        else ""
+    )
     if isinstance(roles, dict):
         invalid_stage_families = {
-            str(role_name) for role_name in roles if str(role_name) not in PUBLIC_STAGE_FAMILIES
+            str(role_name)
+            for role_name in roles
+            if str(role_name) not in PUBLIC_STAGE_FAMILIES
         }
         if invalid_stage_families:
             violations.append("stage_family")
+        if (
+            kind == DETERMINISTIC_FEATURE_PLANNING_KIND
+            and roles
+            and planning_mode == "graph_owned"
+        ):
+            violations.append("planning_roles")
 
     if any(field in payload for field in RUNTIME_OWNED_EXCLUDED_FIELDS):
         violations.append("runtime_owned")
@@ -144,6 +160,10 @@ def test_public_subset_registry_matches_locked_c29_contract_sets():
     }
     assert CANONICAL_PLANNING_PHASE_STAGE_TYPES == PLANNING_PHASE_STAGE_TYPES
     assert CANONICAL_PLANNING_PHASE_STAGE_TYPES == PLANNING_PHASE_ORDER
+    assert PUBLIC_PLANNING_EXECUTION_MODES == (
+        "graph_owned",
+        "graph_owned_with_planner_review",
+    )
     assert PLANNING_REQUIRED_POLICY_FIELDS == tuple(
         field for field in PLANNING_POLICY_FIELDS if field != "coverage_policy"
     )
@@ -160,7 +180,9 @@ def test_public_subset_registry_stays_aligned_with_current_runtime_evidence():
     single_pass_spec = build_strategy_graph_spec("single_pass", {}).to_dict()
     assert single_pass_spec["schema_version"] == STRATEGY_GRAPH_SCHEMA_VERSION
     assert single_pass_spec["subset"] == STRATEGY_GRAPH_SUBSET
-    assert tuple(field for field in METADATA_ONLY_FIELDS if field in single_pass_spec) == (
+    assert tuple(
+        field for field in METADATA_ONLY_FIELDS if field in single_pass_spec
+    ) == (
         "schema_version",
         "subset",
     )
@@ -194,6 +216,7 @@ def test_contract_doc_mirrors_registry_and_boundary_language():
         "analysis_review_v1",
         "coverage_policy",
         "phase_inputs",
+        "planning_execution",
         "schema_version",
         "subset",
         "runtime_target: planning_v1",
@@ -216,6 +239,8 @@ def test_canonical_examples_follow_the_frozen_public_subset_rules():
         / "analysis_review_trust_v1.yaml",
         "deterministic_feature_planning_v1.yaml": CANONICAL_ROOT
         / "deterministic_feature_planning_v1.yaml",
+        "deterministic_feature_planning_planner_review_v1.yaml": CANONICAL_ROOT
+        / "deterministic_feature_planning_planner_review_v1.yaml",
     }
 
     for path in canonical_examples.values():
@@ -234,15 +259,31 @@ def test_canonical_examples_follow_the_frozen_public_subset_rules():
     planning = _load_example(
         canonical_examples["deterministic_feature_planning_v1.yaml"]
     )
+    planning_provider_review = _load_example(
+        canonical_examples["deterministic_feature_planning_planner_review_v1.yaml"]
+    )
 
     assert "runtime_target" not in bounded
     assert "runtime_target" not in trust
     assert planning["runtime_target"] == PLANNING_RUNTIME_TARGET
+    assert planning["planning_execution"] == {"mode": "graph_owned"}
+    assert "roles" not in planning
+    assert planning_provider_review["planning_execution"] == {
+        "mode": "graph_owned_with_planner_review"
+    }
+    assert planning_provider_review["roles"] == {
+        "planner": {"provider": "codex_cli", "access": "read"}
+    }
     assert tuple(phase["stage_type"] for phase in planning["phases"]) == (
         CANONICAL_PLANNING_PHASE_STAGE_TYPES
     )
+    assert (
+        tuple(phase["stage_type"] for phase in planning_provider_review["phases"])
+        == CANONICAL_PLANNING_PHASE_STAGE_TYPES
+    )
     for field in PLANNING_REQUIRED_POLICY_FIELDS:
         assert field in planning
+        assert field in planning_provider_review
 
 
 def test_compatibility_example_is_explicitly_non_canonical():
@@ -263,6 +304,7 @@ def test_negative_examples_each_map_to_exactly_one_contract_violation():
         NEGATIVE_ROOT / "invalid_stage_family.yaml": "stage_family",
         NEGATIVE_ROOT / "runtime_owned_phase_inputs.yaml": "runtime_owned",
         NEGATIVE_ROOT / "metadata_only_schema_version.yaml": "metadata_only",
+        NEGATIVE_ROOT / "planning_roles_over_signal.yaml": "planning_roles",
     }
 
     for path, expected_violation in expected_violations.items():

@@ -11,19 +11,22 @@ import anvil.cli as cli_module
 import anvil.harness.cli as harness_cli_module
 from anvil.harness.executor import HarnessLangGraphExecutor
 from anvil.harness.files import load_structured_file
+from anvil.harness.nodes.select_strategy import select_strategy_node
 from anvil.harness.nodes.validator_preflight import validator_preflight_node
 from anvil.harness.public_subset_validation import classify_public_strategy_surface
 from anvil.harness.strategy_graph import (
     build_strategy_graph_spec,
     route_after_strategy_selection,
 )
-from anvil.harness.nodes.select_strategy import select_strategy_node
 from anvil.harness.types import StrategyConfig
 
 PUBLIC_SUBSET_ROOT = Path("examples/harness/public_subset")
+CANONICAL_ROOT = PUBLIC_SUBSET_ROOT / "canonical"
 COMPATIBILITY_ROOT = PUBLIC_SUBSET_ROOT / "compatibility"
 NEGATIVE_ROOT = PUBLIC_SUBSET_ROOT / "negative"
-PLANNING_FIXTURE = Path("examples/harness/strategies/deterministic_feature_planning_v1.yaml")
+PLANNING_FIXTURE = Path(
+    "examples/harness/strategies/deterministic_feature_planning_v1.yaml"
+)
 
 LEGACY_WARNING = (
     "Strategy kind analysis_review_v1 is deprecated and now resolves to "
@@ -56,6 +59,14 @@ NEGATIVE_CASES = (
         "metadata_only_schema_version.yaml",
         "canonical public strategies must not declare metadata-only field "
         "'schema_version'.",
+    ),
+    (
+        "planning_roles_over_signal.yaml",
+        "canonical graph-owned planning strategies must omit roles unless planning_execution.mode enables planner review.",
+    ),
+    (
+        "planning_provider_review_missing_role.yaml",
+        "canonical planner-review strategies must declare exactly one role: 'planner'.",
     ),
 )
 
@@ -195,9 +206,13 @@ def test_internal_planning_fixture_remains_parseable_and_preflight_clean() -> No
     assert result["warnings"] == []
 
 
-def test_canonical_trust_public_strategy_survives_preflight_and_selection_without_internal_key_injection() -> None:
+def test_canonical_trust_public_strategy_survives_preflight_and_selection_without_internal_key_injection() -> (
+    None
+):
     task_payload = load_structured_file(
-        Path("examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml")
+        Path(
+            "examples/harness/tasks/recommend_release_workflow_artifact_improvements.yaml"
+        )
     )
     strategy_payload = load_structured_file(
         Path("examples/harness/public_subset/canonical/analysis_review_trust_v1.yaml")
@@ -218,6 +233,35 @@ def test_canonical_trust_public_strategy_survives_preflight_and_selection_withou
         selected["strategy_graph_spec"]["spec_id"]
         == "analysis_review_trust_v1.focus_gate_off.loops_1_3.trust_attestation_over_bounded"
     )
+
+
+def test_canonical_planner_review_strategy_survives_preflight_and_selection() -> None:
+    task_payload = _planning_task_spec()
+    strategy_payload = load_structured_file(
+        CANONICAL_ROOT / "deterministic_feature_planning_planner_review_v1.yaml"
+    )
+
+    validated = validator_preflight_node(
+        _preflight_state(task_payload, strategy_payload)
+    )
+    selected = select_strategy_node(dict(validated))
+
+    assert validated["config_verdict"] == "pass"
+    assert selected["strategy_graph_spec"]["runtime_target"] == "planning_v1"
+    assert selected["strategy_graph_spec"]["planning_execution"] == {
+        "mode": "graph_owned_with_planner_review",
+        "provider_participation": "planner_review",
+        "provider_role_name": "planner",
+    }
+    assert [
+        stage["stage_type"] for stage in selected["strategy_graph_spec"]["stages"]
+    ] == [
+        "rubric_design_doc",
+        "architecture_seam_decomposition",
+        "parallel_workstream_planning",
+        "executable_slice_emission",
+        "planner_review",
+    ]
 
 
 def test_main_cli_invalid_public_authoring_surfaces_invalid_config_summary_before_model_work(

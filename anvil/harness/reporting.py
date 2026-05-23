@@ -453,6 +453,68 @@ def _planning_run_mode(
     return "deterministic-live"
 
 
+def _planning_execution_contract(
+    state: dict[str, Any],
+    *,
+    seeded_summary: dict[str, Any],
+) -> dict[str, str]:
+    for candidate in (
+        state.get("planning_execution_contract"),
+        seeded_summary.get("execution_contract"),
+        seeded_summary.get("planning_execution_contract"),
+    ):
+        if isinstance(candidate, dict) and candidate:
+            return {
+                "family": _string_or_empty(candidate.get("family")) or "planning_v1",
+                "mode": _string_or_empty(candidate.get("mode")) or "graph_owned",
+                "provider_participation": (
+                    _string_or_empty(candidate.get("provider_participation")) or "none"
+                ),
+            }
+
+    strategy_graph_spec = state.get("strategy_graph_spec")
+    if isinstance(strategy_graph_spec, dict):
+        planning_execution = strategy_graph_spec.get("planning_execution")
+        if isinstance(planning_execution, dict):
+            mode = _string_or_empty(planning_execution.get("mode")) or "graph_owned"
+            return {
+                "family": "planning_v1",
+                "mode": mode,
+                "provider_participation": (
+                    _string_or_empty(planning_execution.get("provider_participation"))
+                    or (
+                        "planner_review"
+                        if mode == "graph_owned_with_planner_review"
+                        else "none"
+                    )
+                ),
+            }
+
+    strategy = state.get("strategy_spec")
+    if isinstance(strategy, dict):
+        planning_execution = strategy.get("planning_execution")
+        if isinstance(planning_execution, dict):
+            mode = _string_or_empty(planning_execution.get("mode")) or "graph_owned"
+            return {
+                "family": "planning_v1",
+                "mode": mode,
+                "provider_participation": (
+                    _string_or_empty(planning_execution.get("provider_participation"))
+                    or (
+                        "planner_review"
+                        if mode == "graph_owned_with_planner_review"
+                        else "none"
+                    )
+                ),
+            }
+
+    return {
+        "family": "planning_v1",
+        "mode": "graph_owned",
+        "provider_participation": "none",
+    }
+
+
 def plan_projection_v1(
     state: dict[str, Any],
     *,
@@ -473,13 +535,20 @@ def plan_projection_v1(
         if isinstance(state.get("strategy_spec"), dict)
         else {}
     )
+    strategy_graph_spec = (
+        copy.deepcopy(state.get("strategy_graph_spec"))
+        if isinstance(state.get("strategy_graph_spec"), dict)
+        else {}
+    )
     runtime_target = _planning_runtime_target(state, seeded_summary=seeded_summary)
     raw_phase_results = (
         state.get("planning_phase_results")
         if state.get("planning_phase_results") is not None
         else seeded_summary.get("phase_results")
     )
-    raw_phases = strategy_spec.get("phases")
+    raw_phases = strategy_graph_spec.get("phases")
+    if not isinstance(raw_phases, list):
+        raw_phases = strategy_spec.get("phases")
     if not isinstance(raw_phases, list):
         raw_phases = ((seeded_summary.get("strategy") or {}).get("phases")) or []
     phases = _normalized_string_list(raw_phases)
@@ -500,6 +569,9 @@ def plan_projection_v1(
     }
     terminal_status = _planning_terminal_status(state, seeded_summary=seeded_summary)
     run_mode = _planning_run_mode(state, seeded_summary=seeded_summary)
+    execution_contract = _planning_execution_contract(
+        state, seeded_summary=seeded_summary
+    )
     coverage_status = _normalize_planning_terminal_coverage_status(
         state,
         seeded_summary=seeded_summary,
@@ -572,6 +644,7 @@ def plan_projection_v1(
         "strategy": strategy,
         "terminal_status": terminal_status,
         "run_mode": run_mode,
+        "execution_contract": execution_contract,
         "stop_reason": stop_reason,
         "problem_statement": _string_or_empty(
             seeded_summary.get("problem_statement") or task.get("objective")
@@ -625,6 +698,37 @@ def plan_projection_v1(
         "coverage_ledger": coverage_ledger,
         "assumptions_register": assumptions_register,
         "uncovered_delta": uncovered_delta,
+        "provider_stage_results": _normalize_planning_runtime_records(
+            (
+                state.get("planning_provider_stage_results")
+                if state.get("planning_provider_stage_results") is not None
+                else seeded_summary.get("planning_provider_stage_results")
+            ),
+            id_field="stage_id",
+        ),
+        "provider_review": (
+            copy.deepcopy(state.get("planning_provider_review"))
+            if isinstance(state.get("planning_provider_review"), dict)
+            else (
+                copy.deepcopy(seeded_summary.get("planning_provider_review"))
+                if isinstance(seeded_summary.get("planning_provider_review"), dict)
+                else {}
+            )
+        ),
+        "provider_failure": (
+            copy.deepcopy(state.get("planning_provider_failure"))
+            if isinstance(state.get("planning_provider_failure"), dict)
+            else (
+                copy.deepcopy(seeded_summary.get("planning_provider_failure"))
+                if isinstance(seeded_summary.get("planning_provider_failure"), dict)
+                else {}
+            )
+        ),
+        "provider_disagreement_count": _coerce_non_negative_int(
+            state.get("planning_provider_disagreement_count")
+            if state.get("planning_provider_disagreement_count") is not None
+            else seeded_summary.get("planning_provider_disagreement_count")
+        ),
     }
     return payload
 
@@ -635,6 +739,14 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
         "",
         f"- Terminal status: `{plan_payload.get('terminal_status') or 'failed'}`",
         f"- Run mode: `{plan_payload.get('run_mode') or 'deterministic-live'}`",
+        (
+            "- Execution contract: `"
+            + str(
+                (plan_payload.get("execution_contract") or {}).get("mode")
+                or "graph_owned"
+            )
+            + "`"
+        ),
         "",
         "## Problem Statement",
         plan_payload.get("problem_statement") or "- None provided.",
@@ -691,6 +803,23 @@ def render_plan_markdown_v1(plan_payload: dict[str, Any]) -> str:
                 )
     else:
         lines.append("- No executable slices emitted.")
+
+    provider_stage_results = plan_payload.get("provider_stage_results") or []
+    if provider_stage_results:
+        lines.extend(["", "## Provider Review"])
+        for item in provider_stage_results:
+            lines.append(
+                f"- `{item.get('stage_id')}` via `{item.get('provider') or 'unknown'}`: "
+                f"{item.get('status') or 'unknown'}"
+            )
+            summary = str(item.get("summary") or "").strip()
+            verdict = str(item.get("verdict") or "").strip()
+            if verdict or summary:
+                detail = ": ".join(part for part in (verdict, summary) if part)
+                lines.append(f"  Detail: {detail}")
+            error = str(item.get("error") or item.get("failure_summary") or "").strip()
+            if error:
+                lines.append(f"  Error: {error}")
 
     lines.extend(["", "## Coverage Ledger"])
     coverage_ledger = plan_payload.get("coverage_ledger") or []
@@ -763,6 +892,12 @@ def publish_planning_artifacts_v1(
             "planning_terminal_status": terminal_status,
             "planning_stop_reason": plan_payload.get("stop_reason"),
             "planning_run_mode": plan_payload.get("run_mode"),
+            "planning_execution_mode": (
+                plan_payload.get("execution_contract") or {}
+            ).get("mode"),
+            "planning_execution_contract": copy.deepcopy(
+                plan_payload.get("execution_contract") or {}
+            ),
             "planning_seams": copy.deepcopy(plan_payload.get("seams") or []),
             "planning_workstreams": copy.deepcopy(
                 plan_payload.get("workstreams") or []
@@ -773,6 +908,18 @@ def publish_planning_artifacts_v1(
             ),
             "planning_policy_versions": copy.deepcopy(
                 plan_payload.get("policy_versions") or {}
+            ),
+            "planning_provider_stage_results": copy.deepcopy(
+                plan_payload.get("provider_stage_results") or []
+            ),
+            "planning_provider_review": copy.deepcopy(
+                plan_payload.get("provider_review") or {}
+            ),
+            "planning_provider_failure": copy.deepcopy(
+                plan_payload.get("provider_failure") or {}
+            ),
+            "planning_provider_disagreement_count": int(
+                plan_payload.get("provider_disagreement_count") or 0
             ),
             "coverage_status": plan_payload.get("coverage_status"),
             "coverage_ledger": copy.deepcopy(plan_payload.get("coverage_ledger") or []),

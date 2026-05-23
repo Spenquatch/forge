@@ -44,7 +44,7 @@ The current state is best described as:
 - public grammar: partially real
 - analysis-review runtime execution: substantially real, including model-backed
   execution and a newer graph-owned path
-- planning execution: real, but deterministic rather than model-backed
+- planning execution: real, graph-owned, and explicitly deterministic
 - generic user graph composition: not real yet
 
 ## Support Matrix
@@ -53,7 +53,7 @@ The current state is best described as:
 |---|---|---|---|
 | `dsl_version: c3_strategy_v1` | `Supported` | Canonical public payloads must declare it, and validation rejects incorrect values | Nothing major at the parser boundary |
 | Public surface classification | `Supported` | Raw payloads are classified as `canonical_public`, `compatibility_only`, or `internal_or_private` | Nothing major for the current contract |
-| Canonical public kind registry | `Partial` | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, and `deterministic_feature_planning_v1` are frozen in the public registry and validated | Analysis-review kinds already map into a shared real runtime family. Planning still maps into a deterministic-only runtime rather than a fully provider-backed public family |
+| Canonical public kind registry | `Partial` | `analysis_review_bounded_v1`, `analysis_review_trust_v1`, and `deterministic_feature_planning_v1` are frozen in the public registry and validated | Analysis-review kinds already map into a shared real runtime family. Planning maps into one bounded runtime family with two explicit execution postures rather than a broader user-authored graph family |
 | Compatibility-only `analysis_review_v1` | `Supported` | Accepted only without `dsl_version`, warned in preflight, and treated as legacy | Long-term migration/removal policy is still a product decision |
 | Unknown top-level key rejection | `Supported` | Canonical public payloads reject unsupported top-level keys | Nothing major for the current parser-owned gate |
 | Runtime-owned field exclusion | `Supported` | Canonical public payloads reject `coverage_policy` and `phase_inputs` | Nothing major for the current parser-owned gate |
@@ -69,15 +69,17 @@ The current state is best described as:
 | Analysis-review execution-mode flag | `Supported` | CLI/state wiring supports `--analysis-review-execution-mode legacy_bridge|graph_owned`, and `graph_owned` runs the newer native subgraph path | This execution-mode switch is not yet generalized as a public graph-builder composition control |
 | Trust execution-mode knob | `Supported` | `trust_review.execution_mode` is a typed parsed input with real runtime consequences: `legacy_full_review` or `attestation_over_bounded` | It is a narrow trust-lane mode switch, not a general public execution-mode taxonomy for all graph families |
 | Planning required policy refs | `Supported` | Planning strategies must declare the required planning policy refs, and parsing enforces that | Policy values are still string labels rather than a richer public registry with compatibility/version semantics |
-| `runtime_target: planning_v1` | `Supported` | Planning strategies must declare it, and builder routing sends them to the planning runtime | `planning_v1` currently means deterministic planning runtime, not provider-backed planning execution |
+| Planning execution contract | `Supported` | Canonical public planning declares either `planning_execution.mode: graph_owned` or `graph_owned_with_planner_review`; artifacts record the resulting execution contract, and the runtime consumes the compiled stage/phase spec through `strategy_graph_spec` | Planner review is still a bounded post-structure review layer, not a general planner-composition system |
+| `runtime_target: planning_v1` | `Supported` | Planning strategies must declare it, and builder routing sends them to the planning runtime | `planning_v1` still means deterministic planning as the structural owner; provider-backed behavior is layered review, not provider-owned planning |
 | Planning phase order | `Supported` | `rubric_design_doc -> architecture_seam_decomposition -> parallel_workstream_planning -> executable_slice_emission` is parser-enforced | Users cannot yet define alternative bounded planning graphs inside the public subset |
 | Planning artifact shape | `Supported` | Planning runs emit real artifacts such as `PLAN.md`, `plan.json`, `phase_results`, and `coverage_ledger` | The artifacts come from a deterministic planner, not a user-composed graph workflow engine |
-| Planning role declaration | `Partial` | Canonical planning examples declare `roles.planner.provider` and the parser accepts the role config | The current `planning_v1` runtime does not consume that provider declaration to execute model-backed planning stages |
-| Model-backed planning execution | `Not supported` | None | The declared planner/provider surface does not yet drive provider-backed planning runtime behavior |
-| Strategy graph spec emission | `Runtime-only` | The runtime emits `strategy_graph_spec_v1`, `runtime_target`, `stages`, `linear_edges`, and terminal outcomes | These are emitted/internal graph metadata, not yet the same thing as a user-authored public graph grammar |
+| Planning role declaration | `Supported` | Deterministic-only canonical planning omits `roles`, while planner-review mode requires exactly `roles.planner` with read-only provider access | The bounded planner role does not yet expand into arbitrary planning-stage families |
+| Model-backed planning execution | `Supported` | Canonical public planning can opt into bounded planner review after deterministic structure derivation, and provider failures fail closed with explicit artifact truth | Provider-backed review cannot replace seams, workstreams, slices, coverage truth, or stop-reason ownership |
+| Strategy graph spec emission | `Partial` | The runtime emits `strategy_graph_spec_v1`, `runtime_target`, `stages`, `phases`, `planning_execution`, `linear_edges`, and terminal outcomes | Planning now consumes the compiled phase/execution subset for real execution, but the broader graph inventory is still not a user-authored public graph grammar |
 | `post_runtime_action` routing | `Runtime-only` | Builder routing does honor emitted `post_runtime_action` | Users do not declare it directly in the canonical public surface |
 | `subset=bounded_strategy_graph_v1` | `Runtime-only` | Emitted as metadata on graph specs | It is descriptive metadata, not an enforceable public execution grammar |
 | Broader built-in kinds `single_pass` and `pfr_v1` | `Partial` | They are real runnable built-ins and remain publicly visible | They are broader built-ins, not the same thing as the `C3` bounded graph DSL surface |
+| Reusable bounded stage-sequence substrate | `Partial` | Planning and `single_pass` now both execute through the same compiled bounded stage substrate, and repo tests cover both families | This is a real reuse proof, not yet a full user-facing custom graph family |
 | Generic user composition of predefined nodes and edges | `Not supported` | None in canonical public config | This is the main missing product surface if the goal is a true config-driven graph workflow builder |
 | User-authored bounded loops and branches | `Not supported` | None in canonical public config | The contract names these forms, but users cannot yet wire them together into new public workflows |
 | Public validator contract | `Not supported` | Validators exist in broader strategy config machinery | Canonical public `C3` authoring does not yet expose validators as part of the supported public subset |
@@ -91,8 +93,9 @@ The strongest real claim the repo can make today is:
 - Forge validates a real `C3` public subset at the parser boundary.
 - Analysis-review bounded and trust kinds route into a real model-backed runtime
   family, including a newer `graph_owned` path behind an execution-mode flag.
-- Planning is a real supported kind, but today it resolves to a deterministic
-  planning runtime.
+- Planning is a real supported kind with an explicit `planning_execution`
+  contract, and today it resolves to deterministic structure ownership with an
+  optional bounded provider-review layer.
 
 The repo cannot yet honestly claim:
 
@@ -100,7 +103,7 @@ The repo cannot yet honestly claim:
   nodes, edges, transitions, and role families
 - public graph primitives are already a first-class user-authored execution
   grammar
-- planning's declared provider surface already means model-backed execution
+- planner-provider declarations unlock arbitrary planning behavior
 - users can yet treat the documented node/edge/transition vocabulary as a fully
   general public graph builder
 
@@ -113,9 +116,10 @@ largest missing pieces are:
    node/edge/transition vocabulary.
 2. A generic compiler/runtime path that executes those authored graph shapes
    using bounded existing families.
-3. A truthful cross-family execution-mode contract, especially for planning.
-4. Provider-backed planning behavior if the declared planner/provider surface is
-   meant to be operational rather than decorative.
+3. A truthful cross-family execution-mode contract beyond the current bounded
+   planning and analysis-review families.
+4. Provider-backed planning behavior if planner-provider stages are ever meant
+   to re-enter the canonical public planning surface.
 
 ## Practical Reading Of C2.9
 

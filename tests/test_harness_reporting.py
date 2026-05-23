@@ -3644,6 +3644,11 @@ def test_render_report_includes_planning_terminal_alignment_section():
             "artifacts": {},
             "planning_terminal_status": "success",
             "planning_run_mode": "deterministic-live",
+            "planning_execution_contract": {
+                "family": "planning_v1",
+                "mode": "graph_owned",
+                "provider_participation": "none",
+            },
             "repo_evidence_refs": [
                 "anvil/harness/reporting.py",
                 "anvil/harness/report.py",
@@ -3662,6 +3667,8 @@ def test_render_report_includes_planning_terminal_alignment_section():
     assert "- Planning run mode: `deterministic-live`" in overview
     assert "- Terminal status: `success`" in planning_status
     assert "- Run mode: `deterministic-live`" in planning_status
+    assert "- Execution mode: `graph_owned`" in planning_status
+    assert "- Provider participation: `none`" in planning_status
     assert (
         "- Repo evidence refs: `anvil/harness/reporting.py`, `anvil/harness/report.py`"
         in planning_status

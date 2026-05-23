@@ -466,7 +466,9 @@ def test_planning_example_strategy_matches_frozen_surface_and_graph_metadata(
     assert parsed.kind == raw_strategy["kind"]
     assert parsed.runtime_target == raw_strategy["runtime_target"]
     assert raw_strategy["coverage_policy"] == "measurable_coverage_v1"
-    assert list(parsed.roles) == ["planner"]
+    assert parsed.roles == {}
+    assert parsed.planning_execution is not None
+    assert parsed.planning_execution.mode == "graph_owned"
     assert [phase.id for phase in parsed.phases] == [
         "design_doc",
         "seam_decomposition",
@@ -483,6 +485,10 @@ def test_planning_example_strategy_matches_frozen_surface_and_graph_metadata(
     assert spec["strategy_kind"] == "deterministic_feature_planning_v1"
     assert spec["runtime_target"] == "planning_v1"
     assert spec["post_runtime_action"] == "write_artifacts"
+    assert spec["planning_execution"] == {
+        "mode": "graph_owned",
+        "provider_participation": "none",
+    }
     assert [stage["stage_id"] for stage in spec["stages"]] == [
         "design_doc",
         "seam_decomposition",
@@ -507,6 +513,9 @@ def test_public_subset_example_pack_coexists_with_runnable_planning_fixture():
     public_example = Path(
         "examples/harness/public_subset/canonical/deterministic_feature_planning_v1.yaml"
     )
+    provider_review_example = Path(
+        "examples/harness/public_subset/canonical/deterministic_feature_planning_planner_review_v1.yaml"
+    )
     compatibility_example = Path(
         "examples/harness/public_subset/compatibility/analysis_review_v1.yaml"
     )
@@ -514,6 +523,7 @@ def test_public_subset_example_pack_coexists_with_runnable_planning_fixture():
     fixture_text = fixture_path.read_text(encoding="utf-8")
 
     assert public_example.is_file()
+    assert provider_review_example.is_file()
     assert compatibility_example.is_file()
     assert fixture_path.is_file()
     assert "internal" in fixture_text
@@ -521,14 +531,23 @@ def test_public_subset_example_pack_coexists_with_runnable_planning_fixture():
     assert "not the canonical" in fixture_text
 
     public_payload = load_structured_file(public_example)
+    provider_review_payload = load_structured_file(provider_review_example)
     fixture_payload = load_structured_file(fixture_path)
     compatibility_payload = load_structured_file(compatibility_example)
 
     assert public_payload["dsl_version"] == PUBLIC_SUBSET_DSL_VERSION
+    assert provider_review_payload["dsl_version"] == PUBLIC_SUBSET_DSL_VERSION
     assert public_payload["kind"] == fixture_payload["kind"]
+    assert provider_review_payload["kind"] == fixture_payload["kind"]
     assert public_payload["runtime_target"] == fixture_payload["runtime_target"]
+    assert (
+        provider_review_payload["runtime_target"] == fixture_payload["runtime_target"]
+    )
     assert "coverage_policy" not in public_payload
     assert "phase_inputs" not in public_payload
+    assert provider_review_payload["roles"] == {
+        "planner": {"provider": "codex_cli", "access": "read"}
+    }
     assert compatibility_payload["kind"] == "analysis_review_v1"
 
 
@@ -564,7 +583,8 @@ def test_planning_example_surface_describes_bounded_live_and_fixture_modes():
     assert "Runnable internal planning fixture for one existing repo." in strategy_text
     assert "fixture-only scaffolding" in strategy_text
     assert "not the canonical" in strategy_text
-    assert "provider: codex_cli" in strategy_text
+    assert "planning_execution:" in strategy_text
+    assert "provider: codex_cli" not in strategy_text
 
     assert "live workspace evidence" in str(success_payload.get("notes") or "")
     assert "one existing repo" in str(success_payload.get("notes") or "")
