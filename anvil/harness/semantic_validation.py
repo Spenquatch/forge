@@ -1822,6 +1822,7 @@ def _validated_checked_files(
     field_name: str,
     require_non_empty: bool,
     workspace_paths: set[str],
+    max_items: int | None = _FOCUS_MAX_CHECKED_FILES,
 ) -> list[str]:
     if not isinstance(checked_files, list):
         result.errors.append(f"{field_name} must be a list.")
@@ -1829,9 +1830,9 @@ def _validated_checked_files(
     normalized_checked_files = _canonical_workspace_paths(checked_files)
     if require_non_empty and not normalized_checked_files:
         result.errors.append(f"{field_name} must contain at least one non-empty path.")
-    if len(normalized_checked_files) > _FOCUS_MAX_CHECKED_FILES:
+    if max_items is not None and len(normalized_checked_files) > max_items:
         result.errors.append(
-            f"{field_name} must contain at most {_FOCUS_MAX_CHECKED_FILES} item(s)."
+            f"{field_name} must contain at most {max_items} item(s)."
         )
     duplicates = sorted(
         {
@@ -1971,6 +1972,7 @@ def _validated_focus_adapter_plan(
         field_name="adapter_plan.downstream_primary_seam_paths",
         require_non_empty=False,
         workspace_paths=workspace_paths,
+        max_items=None,
     )
     downstream_primary_seam_paths = canonical_seam_path_list(
         downstream_primary_seam_paths
@@ -2344,6 +2346,7 @@ def _validate_bounded_attestation_focus_decision(
             field_name="focus_decision.adapter_plan.downstream_primary_seam_paths",
             require_non_empty=False,
             workspace_paths=workspace_paths,
+            max_items=None,
         )
 
 

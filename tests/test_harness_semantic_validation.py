@@ -802,6 +802,59 @@ def test_focus_decision_semantic_validation_rejects_selected_path_handoff_drift(
     )
 
 
+def test_focus_decision_semantic_validation_allows_wide_downstream_primary_seam_handoff():
+    selected_paths = [
+        ".github/workflows/agent-api-codex-stream-exec-smoke.yml",
+        ".github/workflows/agent-maintenance-open-pr.yml",
+        ".github/workflows/agent-maintenance-release-watch.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/claude-code-live-stream-json-smoke.yml",
+        ".github/workflows/claude-code-promote.yml",
+        ".github/workflows/claude-code-update-snapshot.yml",
+    ]
+    selected_focus_id = canonical_seam_id_for_paths(selected_paths)
+    payload = {
+        "gate_path": "adjudicate",
+        "focus_type": "seam",
+        "decision_state": "selected",
+        "decision_basis": "request_only",
+        "selected_focus_id": selected_focus_id,
+        "selected_focus_summary": "CI/CD automation workflow seam.",
+        "selected_focus_paths": list(selected_paths),
+        "confidence": 0.88,
+        "confidence_band": "high",
+        "files_hint_disposition": "absent",
+        "checked_files": [],
+        "candidates": [
+            {
+                "focus_id": selected_focus_id,
+                "focus_summary": "CI/CD automation workflow seam.",
+                "candidate_paths": list(selected_paths),
+                "why_candidate": "The task explicitly targets the workflow cluster.",
+                "evidence_refs": [],
+                "score": 0.88,
+            }
+        ],
+        "question": {"prompt": "", "options": []},
+        "warnings": [],
+        "adapter_plan": {
+            "primary_focus_id": selected_focus_id,
+            "secondary_focus_ids": [],
+            "downstream_primary_seam_id": selected_focus_id,
+            "downstream_primary_seam_paths": list(selected_paths),
+            "adaptation_basis": "selected_focus_paths",
+        },
+    }
+
+    result = validate_focus_decision_payload(
+        payload,
+        workspace_paths=set(selected_paths),
+    )
+
+    assert result.ok is True
+    assert result.errors == []
+
+
 def test_focus_decision_semantic_validation_rejects_repo_probe_without_deliberate_checked_files():
     payload = _focus_decision_payload("selected")
     payload["decision_basis"] = "repo_probe"

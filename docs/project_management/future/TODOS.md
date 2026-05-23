@@ -11,6 +11,8 @@ These are intentionally **not** the first implementation slice for the current b
 - Explore whether bounded and trust should diverge earlier in generation strategy, not just in validation/verdict posture, so the two modes feel operationally distinct.
 - Revisit whether the current single unified runner is still the right long-term shape after the topic-ledger and review-evidence work lands.
 - Validate that bounded vs trust is a product distinction users actually feel, not just an internal contract distinction with cleaner caveat language.
+- After the next planning-runtime packet lands, decide whether the long-term public execution contract should stay inside `planning_v1` as explicit execution modes or graduate into a broader cross-family graph execution taxonomy.
+- Once planning provider semantics are made truthful, add a second bounded reusable topology proof so the repo can demonstrate graph-surface reuse beyond analysis-review plus one special planning lane.
 
 ### Prompt and contract cleanup
 

@@ -2329,6 +2329,34 @@ class _PartialAcceptanceHarnessAdapter(_AcceptingHarnessAdapter):
         return super()._payload_for_role(role_name)
 
 
+class _ReviserPrimarySeamPromotionHarnessAdapter(_PartialAcceptanceHarnessAdapter):
+    def _primary_seam(self, *, payload: dict[str, object]) -> dict[str, object]:
+        if str(payload.get("status") or "").strip() == "revised":
+            return {
+                "seam_id": _PRIMARY_SEAM_ID,
+                "summary": "The governing release-watch seam widens to the parity spec after revision.",
+                "why_primary": "The revision promotes the nearest governing parity spec into the primary seam.",
+                "paths": list(_PRIMARY_SEAM_PATHS),
+            }
+        return super()._primary_seam(payload=payload)
+
+    def _payload_for_role(self, role_name: str):
+        payload = super()._payload_for_role(role_name)
+        if role_name != "reviser_round_1" or not isinstance(payload, dict):
+            return payload
+        payload["files_reviewed"] = [
+            ".github/workflows/codex-cli-release-watch.yml",
+            ".github/workflows/claude-code-release-watch.yml",
+        ]
+        payload["recommendations"][0]["review_surface"]["must_check_files"] = [
+            ".github/workflows/codex-cli-release-watch.yml"
+        ]
+        payload["recommendations"][2]["review_surface"]["must_check_files"] = [
+            ".github/workflows/claude-code-release-watch.yml"
+        ]
+        return payload
+
+
 class _HallucinatedEvidenceHarnessAdapter(_AcceptingHarnessAdapter):
     def _base_analysis(self, *, revised: bool) -> dict:
         payload = super()._base_analysis(revised=revised)
@@ -5866,6 +5894,67 @@ def test_analysis_review_runner_canonicalizes_relabeled_trust_seams_to_match_bou
     ]
 
 
+def test_analysis_review_runner_rebinds_non_expanding_recommendation_back_to_primary_seam(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    payload = _build_corroboration_analysis_payload(revised=False)
+    payload = _TrustCorroborationHarnessAdapter()._apply_analysis_seams(payload)
+    payload["recommendations"][0]["seam_id"] = _SECONDARY_RELEASE_WATCH_SEAM_ID
+    payload["recommendations"][0]["seam_expansion_reason"] = ""
+    payload["recommendations"][0]["review_surface"]["optional_check_files"] = []
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="proposer",
+        payload_provenance_mode="none",
+        contract=runner._analysis_contract(),
+    )
+
+    assert normalized["recommendations"][0]["seam_id"] == (
+        _CORROBORATION_PRIMARY_CANONICAL_SEAM_ID
+    )
+    assert normalized["recommendations"][0]["seam_expansion_reason"] == ""
+    assert warnings == [
+        "recommendations[1].seam_id reverted to primary_seam because its cited review context never widened beyond primary_seam.paths."
+    ]
+
+
+def test_analysis_review_runner_derives_missing_non_primary_seam_expansion_reason_from_context(
+    tmp_path,
+):
+    runner = _make_analysis_status_runner(
+        tmp_path,
+        strategy_kind="analysis_review_bounded_v1",
+    )
+    payload = _build_corroboration_analysis_payload(revised=False)
+    payload = _TrustCorroborationHarnessAdapter()._apply_analysis_seams(payload)
+    payload["recommendations"][2]["seam_expansion_reason"] = ""
+
+    normalized, _, warnings = runner._normalize_analysis_review_payload(
+        payload,
+        role_name="proposer",
+        payload_provenance_mode="none",
+        contract=runner._analysis_contract(),
+    )
+
+    assert normalized["recommendations"][2]["seam_id"] == (
+        _SECONDARY_SNAPSHOT_CANONICAL_SEAM_ID
+    )
+    assert normalized["recommendations"][2]["seam_expansion_reason"] == (
+        "This recommendation widens beyond primary_seam to inspect: "
+        ".github/workflows/claude-code-release-watch.yml, "
+        ".github/workflows/claude-code-update-snapshot.yml, "
+        ".github/workflows/codex-cli-update-snapshot.yml"
+    )
+    assert warnings == [
+        "recommendations[3].seam_expansion_reason was derived from cited off-primary review context."
+    ]
+
+
 def test_analysis_review_runner_publishable_pair_can_still_drift_on_canonical_seam_context(
     tmp_path,
     monkeypatch,
@@ -9353,6 +9442,64 @@ def test_analysis_review_runner_preserves_proposer_payload_when_reviser_fails(
     assert len(summary["bounded_review_summary"]["review_stages"]) == 1
     assert (
         summary["bounded_review_summary"]["review_stages"][0]["role_name"] == "critic"
+    )
+
+
+def test_analysis_review_runner_reviser_promotes_primary_seam_paths_into_review_context(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = _prepare_workspace(tmp_path)
+    task_path, strategy_path = _write_task_and_strategy(tmp_path, min_recommendations=2)
+
+    monkeypatch.setattr("anvil.harness.runner.reload_config", lambda path: ({}, {}))
+    monkeypatch.setattr(
+        "anvil.harness.runner.get_provider",
+        lambda name: _ReviserPrimarySeamPromotionHarnessAdapter(),
+    )
+
+    runner = HarnessRunner(
+        task_path=task_path,
+        strategy_path=strategy_path,
+        workspace=workspace,
+        out_root=tmp_path / "runs",
+    )
+    summary = runner.run()
+
+    assert summary["verdict"] == "accepted_partial"
+    reviser_stage = next(
+        stage
+        for stage in summary["agent_stages"]
+        if stage["role_name"] == "reviser_round_1"
+    )
+    reviser_payload = reviser_stage["structured_output"]
+    assert reviser_payload["files_reviewed"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        ".github/workflows/claude-code-release-watch.yml",
+        "docs/project_management/next/codex-cli-parity/C1-spec.md",
+    ]
+    assert reviser_payload["primary_seam"]["paths"] == list(_PRIMARY_SEAM_PATHS)
+    assert reviser_payload["recommendations"][0]["review_surface"]["must_check_files"] == [
+        ".github/workflows/codex-cli-release-watch.yml",
+        "docs/project_management/next/codex-cli-parity/C1-spec.md",
+    ]
+    assert reviser_payload["recommendations"][2]["review_surface"]["must_check_files"] == [
+        ".github/workflows/claude-code-release-watch.yml",
+        ".github/workflows/codex-cli-release-watch.yml",
+        "docs/project_management/next/codex-cli-parity/C1-spec.md",
+    ]
+    assert reviser_stage.get("semantic_validation_errors") in (None, [])
+    assert (
+        "Reviser primary_seam.paths widened beyond files_reviewed; appended promoted primary seam paths into files_reviewed."
+        in reviser_stage["semantic_validation_warnings"]
+    )
+    assert (
+        "recommendations[1].review_surface.must_check_files was widened to cover promoted primary_seam.paths."
+        in reviser_stage["semantic_validation_warnings"]
+    )
+    assert (
+        "recommendations[3].review_surface.must_check_files was widened to cover promoted primary_seam.paths."
+        in reviser_stage["semantic_validation_warnings"]
     )
 
 

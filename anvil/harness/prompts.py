@@ -735,7 +735,9 @@ def _seam_selection_guidance_block(contract: AnalysisReviewContract) -> str:
         (
             "- Bind every recommendation with `recommendations[*].seam_id`; when "
             "that seam expands beyond the primary seam, populate "
-            "`recommendations[*].seam_expansion_reason`."
+            "`recommendations[*].seam_expansion_reason`. If a recommendation never "
+            "cites or inspects any file outside `primary_seam.paths`, keep it bound "
+            "to `primary_seam` instead of inventing a secondary seam."
         ),
         (
             f"- default bounded cap is "
@@ -816,6 +818,12 @@ def _role_specific_seam_review_guidance_block(role: str) -> str:
             (
                 "- In the reviser stage, keep at least one recommendation bound "
                 "to `primary_seam` after rebinding."
+            ),
+            (
+                "- In the reviser stage, if you promote a file into "
+                "`primary_seam.paths`, also carry that file into `files_reviewed` "
+                "and the relevant recommendation `review_surface.must_check_files` "
+                "for every recommendation that stays bound to `primary_seam`."
             ),
         ],
     }

@@ -4640,6 +4640,9 @@ class HarnessRunner:
 
         self._canonicalize_analysis_payload_seams(
             normalized=normalized,
+            role_name=canonical_role_name,
+            normalized_refs=normalized_refs,
+            warnings=warnings,
         )
 
         scope_escapes = normalized.get("scope_escapes")
@@ -4677,6 +4680,9 @@ class HarnessRunner:
         self,
         *,
         normalized: dict[str, Any],
+        role_name: str,
+        normalized_refs: dict[str, Any],
+        warnings: list[str],
     ) -> None:
         primary_seam = normalized.get("primary_seam")
         secondary_seams = normalized.get("secondary_seams_considered")
@@ -4687,6 +4693,8 @@ class HarnessRunner:
         seam_entries: list[dict[str, Any]] = [primary_seam]
         seam_entries.extend(item for item in secondary_seams if isinstance(item, dict))
         primary_canonical_seam_id: str | None = None
+        primary_paths: list[str] = []
+        seam_paths_by_id: dict[str, list[str]] = {}
 
         old_to_canonical: dict[str, str] = {}
         ambiguous_old_ids: set[str] = set()
@@ -4700,8 +4708,10 @@ class HarnessRunner:
                 canonical_seam_id = canonical_seam_id_for_paths(normalized_paths)
                 old_seam_id = str(seam.get("seam_id") or "").strip()
                 seam["seam_id"] = canonical_seam_id
+                seam_paths_by_id[canonical_seam_id] = normalized_paths
                 if seam is primary_seam:
                     primary_canonical_seam_id = canonical_seam_id
+                    primary_paths = normalized_paths
                 if old_seam_id:
                     existing = old_to_canonical.get(old_seam_id)
                     if existing is not None and existing != canonical_seam_id:
@@ -4715,7 +4725,7 @@ class HarnessRunner:
         if not isinstance(recommendations, list):
             return
 
-        for item in recommendations:
+        for index, item in enumerate(recommendations, start=1):
             if not isinstance(item, dict):
                 continue
             old_seam_id = str(item.get("seam_id") or "").strip()
@@ -4728,6 +4738,96 @@ class HarnessRunner:
                 and recommendation_seam_id == primary_canonical_seam_id
             ):
                 item["seam_expansion_reason"] = ""
+                continue
+
+            if not (
+                primary_canonical_seam_id
+                and recommendation_seam_id
+                and recommendation_seam_id in seam_paths_by_id
+            ):
+                continue
+
+            seam_expansion_reason = str(item.get("seam_expansion_reason") or "").strip()
+            if seam_expansion_reason:
+                continue
+
+            primary_path_set = set(primary_paths)
+            referenced_paths = self._recommendation_workspace_refs(item)
+            referenced_outside_primary = [
+                value for value in referenced_paths if value not in primary_path_set
+            ]
+            if not referenced_outside_primary:
+                item["seam_id"] = primary_canonical_seam_id
+                item["seam_expansion_reason"] = ""
+                warnings.append(
+                    f"recommendations[{index}].seam_id reverted to primary_seam because its cited review context never widened beyond primary_seam.paths."
+                )
+                continue
+
+            item["seam_expansion_reason"] = (
+                "This recommendation widens beyond primary_seam to inspect: "
+                + ", ".join(self._dedupe_preserving_order(referenced_outside_primary))
+            )
+            warnings.append(
+                f"recommendations[{index}].seam_expansion_reason was derived from cited off-primary review context."
+            )
+
+        if role_name != "reviser" or not primary_paths:
+            return
+
+        files_reviewed = self._normalize_workspace_ref_list(normalized.get("files_reviewed"))
+        merged_files_reviewed = self._dedupe_preserving_order(
+            [*files_reviewed, *primary_paths]
+        )
+        if merged_files_reviewed != files_reviewed:
+            normalized["files_reviewed"] = merged_files_reviewed
+            normalized_refs["files_reviewed"] = merged_files_reviewed
+            warnings.append(
+                "Reviser primary_seam.paths widened beyond files_reviewed; appended promoted primary seam paths into files_reviewed."
+            )
+
+        for index, item in enumerate(recommendations, start=1):
+            if not isinstance(item, dict):
+                continue
+            recommendation_seam_id = str(item.get("seam_id") or "").strip()
+            if recommendation_seam_id != primary_canonical_seam_id:
+                continue
+            review_surface = item.get("review_surface")
+            if not isinstance(review_surface, dict):
+                continue
+            must_check_files = self._normalize_workspace_ref_list(
+                review_surface.get("must_check_files")
+            )
+            merged_must_check_files = self._dedupe_preserving_order(
+                [*must_check_files, *primary_paths]
+            )
+            if merged_must_check_files == must_check_files:
+                continue
+            review_surface["must_check_files"] = merged_must_check_files
+            normalized_refs[
+                f"recommendations[{index}].review_surface.must_check_files"
+            ] = merged_must_check_files
+            warnings.append(
+                f"recommendations[{index}].review_surface.must_check_files was widened to cover promoted primary_seam.paths."
+            )
+
+    def _recommendation_workspace_refs(self, recommendation: dict[str, Any]) -> list[str]:
+        refs: list[str] = []
+        for field_name in (
+            "evidence",
+            "verified_evidence_refs",
+            "checked_files",
+            "affected_files",
+        ):
+            refs.extend(self._normalize_workspace_ref_list(recommendation.get(field_name)))
+
+        review_surface = recommendation.get("review_surface")
+        if isinstance(review_surface, dict):
+            for field_name in ("must_check_files", "optional_check_files"):
+                refs.extend(
+                    self._normalize_workspace_ref_list(review_surface.get(field_name))
+                )
+        return self._dedupe_preserving_order(refs)
 
     @staticmethod
     def _canonical_stage_role_name(role_name: str) -> str:
